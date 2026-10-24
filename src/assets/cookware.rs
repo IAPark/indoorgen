@@ -89,7 +89,8 @@ impl Pan {
             let _taper = r.log_uniform(0.3, 0.8);
             let _rot = r.uniform(-std::f64::consts::PI / 6.0, 0.0);
             pan.bar_x_offset = pan.bar_radius * r.uniform(-0.1, 0.1);
-            let _gd = r.log_uniform(0.5, 1.0) * pan.thickness;
+            pan.has_guard = !pan.has_bar;
+            pan.guard_depth = r.log_uniform(0.5, 1.0) * pan.thickness;
             pan.scale = r.log_uniform(0.1, 0.15);
         }
         pan.seed = a.randint(0, 1_000_000) as u64;
@@ -136,6 +137,8 @@ impl Factory for Pan {
             x_guard: self.x_guard,
             guard_depth: self.guard_depth,
             n,
+            fill_offset: 0,
+            has_handle: self.has_handle,
         };
         let m = super::pangeom::pan_unit_mesh(&p)?;
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -159,40 +162,38 @@ impl Factory for Pan {
         let s = self.scale;
         Some(([lo[0] * s, lo[1] * s, 0.0], [hi[0] * s, hi[1] * s, (hi[2] - zmin) * s]))
     }
-    fn asset(&self, _i: u64) -> Asset {
+    fn asset(&self, i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let body = spec("pan", weighted(&mut r, CUP), self.seed);
-        let handle_m = spec("pan_handle", weighted(&mut r, CUP), self.seed + 1);
+        let mut ri = inst_rng(self.fseed, i);
+        let n = 4 * (ri.log_uniform(4.0, 8.0) as usize);
+        let off = ri.randint(0, (n / 4) as i64) as usize;
+        let p = super::pangeom::PanParams {
+            r_expand: self.r_expand,
+            r_mid: self.r_mid,
+            depth: self.depth,
+            x_handle: self.x_handle,
+            z_handle: self.z_handle,
+            z_handle_mid: self.z_handle_mid,
+            s_handle: self.s_handle,
+            thickness: self.thickness,
+            has_guard: self.has_guard,
+            x_guard: self.x_guard,
+            guard_depth: self.guard_depth,
+            n,
+            fill_offset: off,
+            has_handle: self.has_handle,
+        };
+        let mut m = super::pangeom::pan_unit_mesh(&p).expect("pan");
+        // origin2lowest(vertical): lowest z -> 0; scale
+        // PotFactory.create_asset has no origin2lowest
+        let zmin = if self.pot { 0.0 } else { m.pos.iter().map(|q| q[2] as f32).fold(f32::INFINITY, f32::min) };
+        let s = self.scale as f32;
+        for q in m.pos.iter_mut() {
+            *q = [(q[0] as f32 * s) as f64, (q[1] as f32 * s) as f64, ((q[2] as f32 - zmin) * s) as f64];
+        }
         let mut a = Asset::default();
-        let s = self.scale;
-        let prof: Vec<(f64, f64)> = chaikin_open(&[(0.0, 0.0), (1.0, 0.0), (self.r_mid, self.depth / 2.0), (self.r_expand, self.depth)], 2)
-            .into_iter().map(|(x, z)| (x * s, z * s)).collect();
-        let m = Mesh::vessel(0.0, 0.0, &prof, (self.thickness * s).max(0.003), 40);
-        let b = m.bounds();
-        a.mesh(m, &body, Some(b));
-        let top = self.depth * s;
-        if self.has_handle {
-            let (x0, x1) = (self.r_expand * s, (self.r_expand + self.x_handle) * s);
-            let w = 0.12 * s;
-            let h = Mesh::cuboid([x0 - 0.002, -w / 2.0, top - 0.012 * s * 3.0], [x1, w / 2.0, top]);
-            let hb = h.bounds();
-            a.mesh(h, &handle_m, Some(hb));
-        }
-        if self.has_bar {
-            for sgn in [-1.0, 1.0] {
-                let rr = self.bar_radius * s;
-                let cx = sgn * (self.r_expand * s + rr * 0.8);
-                let z = self.bar_height * s;
-                let n = 14;
-                let pts: Vec<V3> = (0..=n).map(|k| { let t = 2.0 * PI * k as f64 / n as f64; [cx + sgn * rr * 0.6 * t.cos() - sgn * rr * 0.6, 0.0, z + rr * 0.9 * t.sin()] }).collect();
-                for k in 0..n {
-                    let l = limb(pts[k], pts[k + 1], rr * 0.2, rr * 0.2, true);
-                    let lb = l.bounds();
-                    a.mesh(l, &handle_m, Some(lb));
-                }
-            }
-        }
-        let _ = self.pot;
+        a.mesh(m, &body, None);
         a
     }
 }

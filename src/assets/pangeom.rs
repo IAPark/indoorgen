@@ -20,6 +20,8 @@ pub struct PanParams {
     pub x_guard: f64,
     pub guard_depth: f64,
     pub n: usize,
+    pub fill_offset: usize,
+    pub has_handle: bool,
 }
 
 fn face_normal(m: &Mesh, f: &[u32]) -> V3 {
@@ -150,12 +152,56 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
             m.faces.push(vec![id(k + 1, i), id(k + 1, pv(i)), id(k, pv(i)), id(k, i)]);
         }
     }
-    // bottom cap: fan around a centre vertex, normal pointing down
-    let c = m.pos.len() as u32;
-    m.pos.push([0.0, 0.0, 0.0]);
-    for i in 0..n {
-        m.faces.push(vec![id(0, i + 1), id(0, i), c]);
+    // bottom cap: fill_grid on the base ring (loop rotated by `offset`), quads split by BEAUTY, normals pointing down
+    {
+        // python fills the unrotated ring (bpy circle: (-sin phi, cos phi), phi accumulated in f32); the start vertex is the first one with
+        // the largest f32 angle deviation, then rotated by `offset`
+        let phid = 2.0f32 * std::f32::consts::PI / n as f32;
+        let mut phi = 0.0f32;
+        let c32: Vec<[f32; 3]> = (0..n).map(|_| { let v = [-phi.sin(), phi.cos(), 0.0f32]; phi += phid; v }).collect();
+        let mut best = (-1.0f32, 0usize);
+        for i in 0..n {
+            let a = (std::f32::consts::PI - crate::bm::query::angle_v3v3v3(c32[(i + n - 1) % n], c32[i], c32[(i + 1) % n])).abs();
+            if a > best.0 || i == 0 {
+                best = (a, i);
+            }
+        }
+        let start = (best.1 + p.fill_offset) % n;
+        let ring: Vec<V3> = (0..n).map(|i| m.pos[id(0, (i + start) % n) as usize]).collect();
+        let idx: Vec<u32> = (0..n).map(|i| id(0, (i + start) % n)).collect();
+        let mut grid = super::bpyops::fill_grid_loop_ex(&ring, true);
+        let nz: f64 = grid.faces.iter().map(|f| super::bpyops::face_normal(&grid, f)[2]).sum();
+        if nz > 0.0 {
+            for f in grid.faces.iter_mut() {
+                f.reverse();
+            }
+        }
+        // grid vertices on the ring map to the ring vertices; the rest are new
+        let mut gmap = vec![0u32; grid.pos.len()];
+        for (gi, gp) in grid.pos.iter().enumerate() {
+            let hit = ring.iter().position(|rp| rp == gp);
+            gmap[gi] = match hit {
+                Some(k) => idx[k],
+                None => {
+                    m.pos.push(*gp);
+                    (m.pos.len() - 1) as u32
+                }
+            };
+        }
+        for f in &grid.faces {
+            let q = [m.pos[gmap[f[0] as usize] as usize], m.pos[gmap[f[1] as usize] as usize], m.pos[gmap[f[2] as usize] as usize], m.pos[gmap[f[3] as usize] as usize]];
+            let q32 = q.map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]);
+            let v = |k: usize| gmap[f[k] as usize];
+            if super::polyfill::quad_split_24_beauty(q32) {
+                m.faces.push(vec![v(0), v(1), v(2)]);
+                m.faces.push(vec![v(0), v(2), v(3)]);
+            } else {
+                m.faces.push(vec![v(0), v(1), v(3)]);
+                m.faces.push(vec![v(1), v(2), v(3)]);
+            }
+        }
     }
+    if p.has_handle {
     // handle: edge with the largest u.x + v.x + u.z + v.z
     let mut best = (f64::NEG_INFINITY, 0u32, 0u32, 0usize);
     let mut ecount: HashMap<(u32, u32), (u32, u32, usize)> = HashMap::default();
@@ -202,6 +248,7 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
         }
     }
     extrude(&mut m, &mut a, &mut b, [1e-3, 0.0, 0.0]);
+    }
     round32(&mut m);
     dbg_bbox("handle", &m);
     let mut m = solidify(&m, p.thickness, 1.0);
