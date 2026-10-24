@@ -71,3 +71,48 @@ pub fn compare(name: &str, rv: &[[f32; 3]], rf: &[Vec<u32>], r: &Stage, tol: f64
     println!("{} {}", if ok { "PASS" } else { "FAIL" }, line);
     ok
 }
+
+/// write RCv1 (+edges) like tools/pytrace.py; used by MONOTRACE=dir debugging hooks
+pub fn write(path: &str, v: &[[f32; 3]], f: &[Vec<u32>], e: &[[u32; 2]]) {
+    let hdr = serde_json::json!({"nv": v.len(), "nf": f.len(), "too_big": false}).to_string();
+    let mut b: Vec<u8> = vec![];
+    b.extend_from_slice(b"RCv1");
+    b.extend_from_slice(&(hdr.len() as u32).to_le_bytes());
+    b.extend_from_slice(hdr.as_bytes());
+    for p in v {
+        for k in 0..3 {
+            b.extend_from_slice(&p[k].to_le_bytes());
+        }
+    }
+    for fc in f {
+        b.extend_from_slice(&(fc.len() as u32).to_le_bytes());
+    }
+    for fc in f {
+        for &i in fc {
+            b.extend_from_slice(&i.to_le_bytes());
+        }
+    }
+    b.extend_from_slice(b"EDG1");
+    b.extend_from_slice(&(e.len() as u32).to_le_bytes());
+    for x in e {
+        b.extend_from_slice(&x[0].to_le_bytes());
+        b.extend_from_slice(&x[1].to_le_bytes());
+    }
+    let _ = std::fs::write(path, b);
+}
+
+thread_local! {
+    static TRACE_N: std::cell::Cell<usize> = std::cell::Cell::new(0);
+}
+
+/// MONOTRACE=dir: dump a stage as `{dir}/NNN_{kind}_out.bin` (counter advanced per call, like pytrace.py's modifier counter)
+pub fn trace(kind: &str, v: &[[f32; 3]], f: &[Vec<u32>], e: &[[u32; 2]]) {
+    if let Ok(dir) = std::env::var("MONOTRACE") {
+        let n = TRACE_N.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            n
+        });
+        write(&format!("{dir}/{n:03}_{kind}_out.bin"), v, f, e);
+    }
+}
