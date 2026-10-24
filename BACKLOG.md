@@ -16,10 +16,10 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 ## Bathroom / kitchen (worker: bath)
 | id | item | status | notes |
 |---|---|---|---|
-| K1 | Toilet mesh | todo | storage agent started `toiletx.rs` (uses bridge_ex SURFACE mode) |
-| K2 | BathroomSink, StandingSink | todo | placeholders exact |
-| K3 | Bathtub (alcove + freestanding) mesh | todo | bounds exact |
-| K4 | Kitchen SinkFactory mesh | todo | bounds exact (ksink.rs) |
+| K1 | Toilet mesh | partial | refcmp 4/6 pass (mean 1e-7). open: seed 3 (has_seat_cut boolean not done), seed 4 (solidify NON_MANIFOLD vertices on fold geometry differ <=7e-4 -> stand ring/bevel max 1.5e-3). code: toiletx.rs, bathkit.rs |
+| K2 | BathroomSink, StandingSink | partial | bathsink.rs; vertex counts equal, 2/6 pass each; remaining misses are ONLY the 1cm drain-hole position (mirror-symmetric face tie decided by f32 noise in Blender; max err 5e-3, mean 5e-6) |
+| K3 | Bathtub (alcove + freestanding) mesh | done (5/6) | bathtub.rs; freestanding+base/legs and alcove pass (mean<=1e-7); seed 2 alcove has a sliver at a boolean chord (max 1e-2 local, mean 7e-6) |
+| K4 | Kitchen SinkFactory mesh | done 6/6 | gn template data/gn/ksink.json + TapFactory (taps.rs, data/gn/tap.json; 6/6) |
 | K5 | TV / Monitor | todo | |
 | K6 | Pan, Pot (+Lid) meshes | todo | bounds exact |
 | K7 | KitchenSpace / KitchenIsland countertop slab + top cabinets | todo | |

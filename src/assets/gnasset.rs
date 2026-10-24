@@ -92,6 +92,24 @@ impl GnTemplate {
         gn::load::load_groups(j)
     }
 
+    /// evaluate a group with every input at its (patched) interface default; returns the geometry outputs by name (instances realized)
+    pub fn run_group(&self, group: &str) -> Result<Vec<(String, GGeom)>, String> {
+        let groups = self.instantiate(&Params::default());
+        let g = groups.map.get(group).ok_or("missing group")?;
+        let objects = gn::Objects::default();
+        let outs = gn::eval(&groups, group, &HashMap::default(), &objects)?;
+        let mut res = vec![];
+        for (k, o) in g.outputs.iter().enumerate() {
+            if o.ty != Ty::Geo {
+                continue;
+            }
+            if let gn::Value::G(gg) = &outs[k].1 {
+                res.push((o.name.clone(), gn::meshops::realize_instances(&(**gg).clone(), 1000)));
+            }
+        }
+        Ok(res)
+    }
+
     /// evaluate the first recorded step (modifier) with the given parameters; returns the first geometry output
     pub fn run(&self, params: &Params) -> Result<GGeom, String> {
         let groups = self.instantiate(params);
