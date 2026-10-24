@@ -373,6 +373,10 @@ impl BedSpec {
         match self.leg_decor {
             0 => {
                 let g = divide(&m, self.dot_distance, r);
+                if let Ok(p) = std::env::var("BEDDUMP") {
+                    let j = serde_json::json!({"verts": g.pos, "polys": g.faces});
+                    std::fs::write(p, j.to_string()).ok();
+                }
                 coil(&g, self, r)
             }
             1 => {

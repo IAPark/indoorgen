@@ -413,10 +413,14 @@ pub fn smooth(m: &Mesh, fac: f64, iterations: usize) -> Mesh {
 
 /// mattress.make_coiled; `radius_u` / `smooth_f` are the two stream draws (uniform(.06,.08), uniform(.5,1))
 pub fn make_coiled(m: &Mesh, dot_distance: f64, dot_depth: f64, dot_size: f64, radius_u: f64, smooth_f: f64) -> Mesh {
-    let a = poke(m);
-    let b = tris_to_quads(&a);
-    let c = poke(&b);
-    let d = poke(&c);
+    let d = if std::env::var("COIL_OLD").is_ok() {
+        let a = poke(m);
+        let b = tris_to_quads(&a);
+        let c = poke(&b);
+        poke(&c)
+    } else {
+        poke_chain_bm(m)
+    };
     let deg = degrees(&d);
     let verts: Vec<u32> = (0..d.pos.len() as u32).filter(|&v| deg[v as usize] == 16).collect();
     let radius = dot_distance * radius_u;
@@ -434,4 +438,36 @@ pub fn make_coiled(m: &Mesh, dot_distance: f64, dot_depth: f64, dot_size: f64, r
         return t;
     }
     smooth(&t, smooth_f, 5)
+}
+
+/// poke / tris_convert_to_quads / poke / poke on a BMesh in one edit session (float32, Blender's pairing and element order)
+pub fn poke_chain_bm(m: &Mesh) -> Mesh {
+    use crate::bm::BMesh;
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut ce: Vec<Vec<u32>> = vec![];
+    for f in &m.faces {
+        let mut fe = vec![];
+        for c in 0..f.len() {
+            let (a, b) = (f[c], f[(c + 1) % f.len()]);
+            let k = (a.min(b), a.max(b));
+            let id = *emap.entry(k).or_insert_with(|| {
+                edges.push([a, b]);
+                (edges.len() - 1) as u32
+            });
+            fe.push(id);
+        }
+        ce.push(fe);
+    }
+    let mut bm = BMesh::from_mesh(&pos, &edges, &m.faces, &ce);
+    crate::bm::hull::poke_all(&mut bm);
+    crate::bm::hull::tris_to_quads_all(&mut bm);
+    crate::bm::hull::poke_all(&mut bm);
+    crate::bm::hull::poke_all(&mut bm);
+    let (p, _e, f) = bm.to_mesh();
+    let mut o = Mesh::new();
+    o.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    o.faces = f;
+    o
 }

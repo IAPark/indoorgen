@@ -49,7 +49,11 @@ pub const POTTING_SOIL: Table = &[("terrain.Mud", 1.0), ("terrain.Sand", 1.0), (
 /// weighted_sample(table)() : class chosen + instantiated (constructor draws only)
 /// REFSTUB=1 (refcmp): python reference meshes were cached with `weighted_sample` stubbed, i.e. material choice and construction draw nothing
 pub fn ref_stub() -> bool {
-    std::env::var("REFSTUB").is_ok()
+    std::env::var("REFSTUB").map(|v| v != "2").unwrap_or(false)
+}
+/// REFSTUB=2 (refcmp, caches with header ws_draws): the weighted choice draws, the chosen class is a stub (no init / call draws)
+pub fn ref_stub_choice_only() -> bool {
+    std::env::var("REFSTUB").map(|v| v == "2").unwrap_or(false)
 }
 
 pub fn sample_init(r: &mut Rng, t: Table) -> &'static str {
@@ -58,6 +62,9 @@ pub fn sample_init(r: &mut Rng, t: Table) -> &'static str {
     }
     let w: Vec<f64> = t.iter().map(|x| x.1).collect();
     let name = t[weighted_index(r, &w)].0;
+    if ref_stub_choice_only() {
+        return name;
+    }
     init(r, name);
     name
 }
@@ -68,6 +75,9 @@ pub fn sample_call(r: &mut Rng, t: Table) -> &'static str {
         return t[0].0;
     }
     let name = sample_init(r, t);
+    if ref_stub_choice_only() {
+        return name;
+    }
     call(r, name);
     name
 }

@@ -278,6 +278,8 @@ OPS = {
     "displace": mod_op("DISPLACE", dict(strength=1.0, mid_level=0.5, direction="NORMAL", texture_coords="LOCAL",
                                          texture={"type": "CLOUDS", "noise_scale": 0.25})),
     "convex_hull": op_convex_hull,
+    "poke": op_face("mesh.poke", dict()),
+    "tris_to_quads": op_face("mesh.tris_convert_to_quads", dict()),
     "modifier": op_modifier,
 }
 

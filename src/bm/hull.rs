@@ -53,7 +53,7 @@ pub struct HullParams {
 }
 impl Default for HullParams {
     fn default() -> Self {
-        let d = 40.0f32 * (std::f32::consts::PI / 180.0);
+        let d = 40.0f32 * ((std::f64::consts::PI / 180.0) as f32);
         HullParams { use_existing_faces: true, delete_unused: true, make_holes: false, join_triangles: true, face_threshold: d, shape_threshold: d }
     }
 }
@@ -344,7 +344,7 @@ fn edge_quad_verts(bm: &BMesh, e: usize) -> [usize; 4] {
 
 /// bmo_join_triangles_exec (no uv/vcol/seam/sharp/material delimiting)
 pub fn join_triangles(bm: &mut BMesh, faces: &[usize], angle_face: f32, angle_shape: f32) {
-    let deg180 = 180.0f32 * (std::f32::consts::PI / 180.0);
+    let deg180 = 180.0f32 * ((std::f64::consts::PI / 180.0) as f32);
     let do_face = angle_face < deg180;
     let cos_face = angle_face.cos();
     let do_shape = angle_shape < deg180;
@@ -398,6 +398,11 @@ pub fn join_triangles(bm: &mut BMesh, faces: &[usize], angle_face: f32, angle_sh
         jedges.push((e, quad_calc_error(c[0], c[1], c[2], c[3])));
     }
     qsort(&mut jedges, &|a: &(usize, f32), b: &(usize, f32)| if a.1 < b.1 { -1 } else if a.1 > b.1 { 1 } else { 0 });
+    if std::env::var("JTDBG").is_ok() {
+        for &(e, w) in &jedges {
+            eprintln!("JT {} {} {:e} {:08x}", bm.edges[e].v1, bm.edges[e].v2, w, w.to_bits());
+        }
+    }
     for &(e, _) in &jedges {
         let l_a = bm.edges[e].l;
         let l_b = bm.loops[l_a].rn;
@@ -583,4 +588,43 @@ pub fn faces_join(bm: &mut BMesh, faces: &[usize]) -> usize {
         bm.vert_kill(v);
     }
     f_new
+}
+
+/// bpy.ops.mesh.poke() on every face (center_mode MEDIAN_WEIGHTED, offset 0)
+pub fn poke_all(bm: &mut BMesh) {
+    for f in bm.face_ids() {
+        let ls = bm.loops_of_face(f);
+        let k = ls.len();
+        // BM_face_calc_center_median_weighted
+        let mut cent = [0.0f32; 3];
+        let mut totw = 0.0f32;
+        let prev_l = ls[k - 1];
+        let mut w_prev = bm.edge_calc_length(bm.loops[prev_l].e);
+        for &l in &ls {
+            let w_curr = bm.edge_calc_length(bm.loops[l].e);
+            let w = w_curr + w_prev;
+            cent = q::madd(cent, bm.verts[bm.loops[l].v].co, w);
+            totw += w;
+            w_prev = w_curr;
+        }
+        if totw != 0.0 {
+            cent = q::mul(cent, 1.0 / totw);
+        }
+        let vc = bm.vert_create(cent, None);
+        for i in 0..k {
+            let v1 = bm.loops[ls[i]].v;
+            let v2 = bm.loops[ls[(i + 1) % k]].v;
+            bm.face_create_verts(&[v1, v2, vc], Some(f), true);
+        }
+        bm.face_kill(f);
+    }
+    bm.normals_update();
+}
+
+/// bpy.ops.mesh.tris_convert_to_quads() with all faces selected (default 40 degree limits)
+pub fn tris_to_quads_all(bm: &mut BMesh) {
+    let d = HullParams::default();
+    let faces = bm.face_ids();
+    join_triangles(bm, &faces, d.face_threshold, d.shape_threshold);
+    bm.normals_update();
 }

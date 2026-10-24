@@ -89,6 +89,7 @@ pub mod voxelremesh;
 pub mod monocot;
 pub mod bpymod;
 pub mod solidnm;
+pub mod solidx;
 pub mod bpyx;
 pub mod bevmod;
 pub mod toiletx;
