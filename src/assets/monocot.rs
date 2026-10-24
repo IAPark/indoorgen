@@ -546,6 +546,13 @@ impl Growth {
 
     /// banana / taro cut_leaf
     fn cut_leaf(&self, mut obj: LMesh, r: &mut Rng) -> LMesh {
+        if let Ok(f) = std::env::var("CUTIN") {
+            if let Some(st) = super::stagefile::read(&f) {
+                if st.v.len() == obj.v.len() {
+                    obj.v = st.v;
+                }
+            }
+        }
         let n = self.n_cuts as usize;
         let sel: Vec<usize> = (0..obj.v.len()).filter(|&i| obj.v[i][1].abs() < 0.08 && obj.v[i][1].abs() > 0.01).collect();
         let mut pos: Vec<usize> = sel.iter().copied().filter(|&i| obj.v[i][1] > 0.0).collect();
@@ -573,24 +580,27 @@ impl Growth {
             pairs.push((nc[k], nc[k + 1]));
         }
         let (sa, ca) = (self.cut_angle.sin(), self.cut_angle.cos());
+        let (sa32, ca32) = (sa as f32, ca as f32);
         for (i1, i2) in pairs {
-            let (x1, y1) = (pts[i1][0] as f64, pts[i1][1] as f64);
-            let (x2, y2) = (pts[i2][0] as f64, pts[i2][1] as f64);
-            let coeff = if y1 > 0.0 { 1.0f64 } else { -1.0 };
+            let (x1, y1) = (pts[i1][0], pts[i1][1]);
+            let (x2, y2) = (pts[i2][0], pts[i2][1]);
+            let coeff32 = if y1 > 0.0 { 1.0f32 } else { -1.0 };
             let ratio = r.uniform(-2.0, 0.4);
             let exponent = r.uniform(1.2, 1.6);
-            if std::env::var("LEAFDBG").is_ok() {
-                eprintln!("  cut ratio {ratio} exp {exponent} x1 {x1} y1 {y1}");
-            }
-            let m1 = x1 * sa - y1 * ca * coeff;
-            let m2 = x2 * sa - y2 * ca * coeff;
-            let den = ((x1 - x2).powi(2) + (y1 - y2).powi(2) + 0.1).sqrt();
+            // numpy 1.26 promotion: float32 arrays with python / float64 scalars stay float32; scalar-only expressions are float64
+            let m1 = ((x1 as f64 * sa - y1 as f64 * ca * coeff32 as f64) as f32) as f32;
+            let m2 = ((x2 as f64 * sa - y2 as f64 * ca * coeff32 as f64) as f32) as f32;
+            let dx = x1 - x2;
+            let dy = y1 - y2;
+            let den = (((dx * dx + dy * dy) as f64 + 0.1).sqrt()) as f32;
+            let ratio32 = ratio as f32;
+            let exp32 = exponent as f32;
             for p in obj.v.iter_mut() {
-                let (x, y) = (p[0] as f64, p[1] as f64);
-                let m = x * sa - y * ca * coeff;
-                let dist = ((x - x1) * (y1 - y2) + (y - y1) * (x1 - x2)) / den;
-                if m1 < m && m < m2 && dist * coeff < 0.0 {
-                    p[2] = (p[2] as f64 + ratio * dist.abs().powf(exponent)) as f32;
+                let (x, y) = (p[0], p[1]);
+                let m = x * sa32 - y * ca32 * coeff32;
+                let dist = ((x - x1) * dy + (y - y1) * dx) / den;
+                if m1 < m && m < m2 && dist * coeff32 < 0.0 {
+                    p[2] += ratio32 * dist.abs().powf(exp32);
                 }
             }
         }
