@@ -22,6 +22,8 @@ pub struct PanParams {
     pub n: usize,
     pub fill_offset: usize,
     pub has_handle: bool,
+    /// handle hole: (centre x, radius)
+    pub hole: Option<(f64, f64)>,
 }
 
 fn face_normal(m: &Mesh, f: &[u32]) -> V3 {
@@ -156,16 +158,18 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
     {
         // python fills the unrotated ring (bpy circle: (-sin phi, cos phi), phi accumulated in f32); the start vertex is the first one with
         // the largest f32 angle deviation, then rotated by `offset`
-        let phid = 2.0f32 * std::f32::consts::PI / n as f32;
-        let mut phi = 0.0f32;
-        let c32: Vec<[f32; 3]> = (0..n).map(|_| { let v = [-phi.sin(), phi.cos(), 0.0f32]; phi += phid; v }).collect();
+        // BM_mesh_edgeloops_find starts the loop list at e->v1 of the first mesh edge (vertex 1) and walks forward: 1, 2, .., n-1, 0
+        let c32: Vec<[f32; 3]> = (0..n).map(|i| { let (s, c) = super::cabnodes::sin_cos_from_fraction(i, n); [-s, c, 0.0f32] }).collect();
         let mut best = (-1.0f32, 0usize);
-        for i in 0..n {
+        for j in 0..n {
+            let i = (1 + j) % n;
             let a = (std::f32::consts::PI - crate::bm::query::angle_v3v3v3(c32[(i + n - 1) % n], c32[i], c32[(i + 1) % n])).abs();
-            if a > best.0 || i == 0 {
-                best = (a, i);
+            if a > best.0 || j == 0 {
+                best = (a, j);
             }
         }
+        // `best.1` counts along the loop list; the ring below is indexed by vertex: list position j <-> vertex (1 + j) % n
+        best.1 = (1 + best.1) % n;
         let start = (best.1 + p.fill_offset) % n;
         let ring: Vec<V3> = (0..n).map(|i| m.pos[id(0, (i + start) % n) as usize]).collect();
         let idx: Vec<u32> = (0..n).map(|i| id(0, (i + start) % n)).collect();
@@ -201,6 +205,7 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
             }
         }
     }
+    dbg_bbox("filled", &m);
     if p.has_handle {
     // handle: edge with the largest u.x + v.x + u.z + v.z
     let mut best = (f64::NEG_INFINITY, 0u32, 0u32, 0usize);
@@ -266,8 +271,13 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
     dbg_bbox("guard", &m);
     let m = subsurf(&m, 1, true);
     dbg_bbox("simple1", &m);
-    let m = subsurf(&m, 3, false);
+    let mut m = subsurf(&m, 3, false);
     dbg_bbox("cc3", &m);
+    if let Some((cx, r)) = p.hole {
+        round32(&mut m);
+        m = super::prismcut::prism_difference(&m, &super::prismcut::cylinder_corners(cx, r));
+        dbg_bbox("hole", &m);
+    }
     Some(m)
 }
 
