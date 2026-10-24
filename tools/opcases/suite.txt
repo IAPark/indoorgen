@@ -43,6 +43,10 @@ subsurf_cube|subsurf|cube|{"levels":1}
 subsurf_cube_2|subsurf|cube|{"levels":2}
 subsurf_lshape|subsurf|lshape|{"levels":1}
 subsurf_fold|subsurf|fold|{"levels":1}|none
+subsurf_fold_2|subsurf|fold|{"levels":2}
+subsurf_fold_pc|subsurf|fold|{"levels":2,"boundary_smooth":"PRESERVE_CORNERS"}
+subsurf_ring_open|subsurf|ring_open|{"levels":2}
+subsurf_grid|subsurf|grid|{"levels":1}
 subsurf_simple|subsurf|slab|{"levels":2,"subdivision_type":"SIMPLE"}
 subdivide_cube|subdivide|cube|{}
 subdivide_fold|subdivide|fold|{}
