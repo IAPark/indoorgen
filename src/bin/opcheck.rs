@@ -288,9 +288,7 @@ fn from_gn(r: &infinigen::gn::geom::Mesh) -> Mesh {
 }
 
 fn r_boolean(c: &Case, p: &Value) -> Res {
-    if ps(p, "solver", "EXACT") != "EXACT" {
-        return Err("boolean: only solver EXACT (BSP csg, surface-equal); FAST not ported".into());
-    }
+    use infinigen::exbool::exact_boolean::*;
     let o = c.j.get("other").ok_or("case needs \"other\"")?;
     let mut om = mesh_of(&o["verts"], &o["polys"], true);
     if let Some(l) = o.get("loc") {
@@ -302,7 +300,27 @@ fn r_boolean(c: &Case, p: &Value) -> Res {
         }
     }
     let op = ps(p, "operation", "DIFFERENCE");
-    Ok(from_gn(&infinigen::gn::csg::mesh_boolean(op, &gn_of(&c.mesh), &[&gn_of(&om)])))
+    match ps(p, "solver", "EXACT") {
+        "EXACT" => {
+            let bop = match op {
+                "UNION" => BoolOp::Union,
+                "INTERSECT" => BoolOp::Intersect,
+                _ => BoolOp::Difference,
+            };
+            let inp = |m: &Mesh| BoolInput { verts: m.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect(), faces: m.faces.clone() };
+            let r = exact_boolean(&[inp(&c.mesh), inp(&om)], bop, pb(p, "use_self", false), pb(p, "use_hole_tolerant", false));
+            let mut m = Mesh::new();
+            m.pos = r.verts.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+            m.faces = r.faces;
+            Ok(m)
+        }
+        "FAST" => {
+            let id = infinigen::gn::geom::M4_ID;
+            let (a, b) = (gn_of(&c.mesh), gn_of(&om));
+            Ok(from_gn(&infinigen::gn::fbool::mesh_boolean_float(op, &[(&a, id), (&b, id)])))
+        }
+        s => Err(format!("solver {s}")),
+    }
 }
 
 fn r_triangulate(c: &Case, p: &Value) -> Res {

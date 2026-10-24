@@ -62,11 +62,12 @@ subsurf_grid|subsurf|grid|{"levels":1}|surface
 subsurf_simple|subsurf|slab|{"levels":2,"subdivision_type":"SIMPLE"}|surface
 subdivide_cube|subdivide|cube|{}
 subdivide_fold|subdivide|fold|{}
-bool_diff_box|boolean|cube_box|{"operation":"DIFFERENCE"}|none
-bool_union_box|boolean|cube_box|{"operation":"UNION"}|none
-bool_inter_box|boolean|cube_box|{"operation":"INTERSECT"}|none
-bool_diff_hole|boolean|cube_hole|{"operation":"DIFFERENCE"}|none
-bool_fast_diff|boolean|cube_box|{"operation":"DIFFERENCE","solver":"FAST"}
+bool_diff_box|boolean|cube_box|{"operation":"DIFFERENCE"}|exact
+bool_union_box|boolean|cube_box|{"operation":"UNION"}|exact
+bool_inter_box|boolean|cube_box|{"operation":"INTERSECT"}|exact
+bool_self_diff|boolean|cube_box|{"operation":"DIFFERENCE","use_self":true}|exact
+bool_diff_hole|boolean|cube_hole|{"operation":"DIFFERENCE"}|exact
+bool_fast_diff|boolean|cube_box|{"operation":"DIFFERENCE","solver":"FAST"}|surface
 tri_cube|triangulate|cube|{}
 tri_sheared|triangulate|sheared|{}
 tri_lshape|triangulate|lshape|{}
