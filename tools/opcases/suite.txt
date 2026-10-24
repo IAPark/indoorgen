@@ -85,4 +85,8 @@ displace_grid_stucci|displace|grid|{"strength":0.2,"direction":"Z","texture":{"t
 hull_pts|convex_hull|pts|{"_tol":0.0002}|none
 hull_cube|convex_hull|sheared|{"_tol":0.0002}
 remesh_sharp_cube|remesh|cube|{"mode":"SHARP","octree_depth":4}
-remesh_voxel_cube|remesh|cube|{"mode":"VOXEL","voxel_size":0.1}
+remesh_voxel_cube|remesh|cube|{"mode":"VOXEL","voxel_size":0.1}|none
+remesh_voxel_cube_fine|remesh|cube|{"mode":"VOXEL","voxel_size":0.037}|surface
+remesh_voxel_lshape|remesh|lshape|{"mode":"VOXEL","voxel_size":0.06}|none
+remesh_voxel_ring|remesh|ring|{"mode":"VOXEL","voxel_size":0.05}|none
+remesh_voxel_sheared|remesh|sheared|{"mode":"VOXEL","voxel_size":0.043}|surface

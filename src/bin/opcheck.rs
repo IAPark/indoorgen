@@ -384,7 +384,7 @@ fn r_displace(c: &Case, p: &Value) -> Res {
     }
     let dir = match ps(p, "direction", "NORMAL") { "X" => DispDir::X, "Y" => DispDir::Y, "Z" => DispDir::Z, "NORMAL" => DispDir::Normal, d => return Err(format!("direction {d}")) };
     let mut v: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    displace(&mut v, &c.mesh.faces, &tex, pf(p, "strength", 1.0), pf(p, "mid_level", 0.5), dir, None);
+    displace(&mut v, &c.mesh.faces, Some(&tex), pf(p, "strength", 1.0), pf(p, "mid_level", 0.5), dir, None);
     let mut m = c.mesh.clone();
     m.pos = v.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     Ok(m)
@@ -397,8 +397,23 @@ fn r_convex_hull(c: &Case, _p: &Value) -> Res {
 
 fn r_remesh(c: &Case, p: &Value) -> Res {
     let mode = ps(p, "mode", "VOXEL");
+    if mode == "VOXEL" {
+        // decor worker's surface-nets approximation of OpenVDB (vertex/face order is not OpenVDB's)
+        let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+        let mut tris: Vec<[u32; 3]> = vec![];
+        for f in &c.mesh.faces {
+            for k in 1..f.len() - 1 {
+                tris.push([f[0], f[k], f[k + 1]]);
+            }
+        }
+        let r = infinigen::assets::voxelremesh::voxel_remesh(&pos, &tris, pf(p, "voxel_size", 0.1) as f32);
+        let mut m = Mesh::new();
+        m.pos = r.v.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+        m.faces = r.f;
+        return Ok(m);
+    }
     if mode != "SHARP" {
-        return Err(format!("remesh: mode {mode} not ported (only SHARP via dualcon)"));
+        return Err(format!("remesh: mode {mode} not ported"));
     }
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
     let (v, q) = infinigen::assets::dualcon::dualcon(&pos, &c.mesh.faces, 2, pi(p, "octree_depth", 4) as i32, pf(p, "scale", 0.9) as f32, pf(p, "sharpness", 1.0) as f32);

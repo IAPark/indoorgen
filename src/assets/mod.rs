@@ -85,6 +85,7 @@ pub mod stagecmp;
 pub mod stagefile;
 pub mod dualcon;
 pub mod leafkit;
+pub mod voxelremesh;
 pub mod monocot;
 pub mod bpymod;
 pub mod solidnm;
