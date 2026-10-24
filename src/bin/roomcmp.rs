@@ -88,7 +88,7 @@ fn main() {
                 let tri: Vec<Vec<u32>> = out.tris.iter().map(|t| t.to_vec()).collect();
                 cmp_stage("tri", &RawMesh { pos: out.pos.clone(), edges: vec![], faces: tri }, &py["tri"]);
                 // fixture
-                let fv: Vec<[f32; 3]> = o["verts_local"].as_array().unwrap().iter().map(f3).collect();
+                let fv: Vec<[f32; 3]> = o["verts_world"].as_array().unwrap().iter().map(f3).collect();
                 let fp: Vec<Vec<u32>> = o["polys"].as_array().unwrap().iter().map(|f| f.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as u32).collect()).collect();
                 let mut ok = fv == out.pos;
                 if !ok { let i = fv.iter().zip(&out.pos).position(|(a, b)| a != b); println!("fixture: verts differ at {:?} (len {} vs {})", i.map(|i| (i, fv[i], out.pos[i])), fv.len(), out.pos.len()); }
@@ -96,6 +96,44 @@ fn main() {
                 if fp != rt { ok = false; let i = fp.iter().zip(&rt).position(|(a, b)| a != b); println!("fixture: polys differ at {:?} (len {} vs {})", i.map(|i| (i, &fp[i], &rt[i])), fp.len(), rt.len()); }
                 if ok { println!("fixture: MATCH"); }
             }
+        }
+        "all" => {
+            // roomcmp all <Room> <seed>: full Rust pipeline (plan -> solidify -> exact room meshes) vs the fixture
+            use infinigen::furn::geom::{CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
+            let (room, seed): (&str, u64) = (a[2].as_str(), a[3].parse().unwrap());
+            let c = consts(seed);
+            let cfg = infinigen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+            let solver = infinigen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
+            let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "solve_rooms"]));
+            let st = solver.solve(&mut r);
+            let fx = load(&format!("{}/work/ref/traces/case_{}_{}_state0.json", std::env::var("HOME").unwrap(), room, seed));
+            let mut all_ok = true;
+            for (name, obj) in st.valid_rooms() {
+                let poly = obj.polygon.as_ref().unwrap();
+                let ext = infinigen::rooms::shell::ext_centers(&st, &name);
+                let tris = infinigen::rooms::shell::solid_room_exact(&c, poly, &ext);
+                let o = &fx["objs"][name.as_str()];
+                if o.is_null() { println!("{name}: not in fixture"); all_ok = false; continue; }
+                let Some(tris) = tris else { println!("{name}: solid_room_exact failed"); all_ok = false; continue };
+                let fv: Vec<[f32; 3]> = o["verts_world"].as_array().unwrap().iter().map(f3).collect();
+                let names = o["tagmasks"]["face_names"].as_array().unwrap();
+                let polys = o["polys"].as_array().unwrap();
+                let mut msg = None;
+                if polys.len() != tris.len() { msg = Some(format!("tri count rust {} fixture {}", tris.len(), polys.len())); }
+                for (i, (t, p)) in tris.iter().zip(polys).enumerate() {
+                    if msg.is_some() { break; }
+                    let ix: Vec<usize> = p.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect();
+                    let fvv: Vec<[f64; 3]> = ix.iter().map(|&k| [fv[k][0] as f64, fv[k][1] as f64, fv[k][2] as f64]).collect();
+                    if fvv[..] != t.v[..] { msg = Some(format!("tri {i} positions differ: rust {:?} fixture {:?}", t.v, fvv)); break; }
+                    let mut bits = 0u32;
+                    for part in names[i].as_str().unwrap().split('.') {
+                        bits |= match part { "interior" => INTERIOR, "visible" => VISIBLE, "support" => SUPPORT, "ceiling" => CEILING, "wall" => WALL, _ => 0 };
+                    }
+                    if bits != t.tags { msg = Some(format!("tri {i} tags differ: rust {:#x} fixture {:#x} ({})", t.tags, bits, names[i])); }
+                }
+                match msg { None => println!("{name}: MATCH ({} tris)", tris.len()), Some(m) => { all_ok = false; println!("{name}: {m}"); } }
+            }
+            println!("{}", if all_ok { "ALL MATCH" } else { "MISMATCH" });
         }
         _ => eprintln!("usage"),
     }

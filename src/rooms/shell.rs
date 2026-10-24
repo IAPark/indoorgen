@@ -247,7 +247,7 @@ pub fn room_geom(c: &RoomConstants, m: &RoomMeshes) -> ObjGeom {
     g
 }
 
-fn ext_centers(state: &RoomState, name: &str) -> Vec<P2> {
+pub fn ext_centers(state: &RoomState, name: &str) -> Vec<P2> {
     let mut out = vec![];
     for (k, o) in state.objs.iter() {
         if room_type(k) != EXTERIOR {
@@ -293,7 +293,64 @@ fn edge_holes(cutters: &[Cutter], name: &str, p0: P2, p1: P2, target: f64) -> Ve
 /// not visible) + inner cavity (visible; the polygon inset by wall_thickness/2 with even/mitre offset).  Face tags come
 /// from the prism face centres (floor / ceiling / wall) and from the proximity of the face centre to the exterior edges
 /// (interior flag); the inner faces copy them.  (Cutters are subtracted only from a mesh copy, not from the solver object.)
-pub fn solid_room(c: &RoomConstants, _name: &str, poly: &G, _cutters: &[Cutter], ext: &[P2]) -> Vec<crate::furn::geom::Tri> {
+pub fn solid_room(c: &RoomConstants, name: &str, poly: &G, cutters: &[Cutter], ext: &[P2]) -> Vec<crate::furn::geom::Tri> {
+    if std::env::var_os("OLDROOM_SOLID").is_none() {
+        if let Some(t) = solid_room_exact(c, poly, ext) {
+            return t;
+        }
+    }
+    solid_room_approx(c, name, poly, cutters, ext)
+}
+
+/// rings (exterior first, closing point dropped) of `orient(segmentize(canonicalize(poly), door_width))`
+pub fn room_rings(c: &RoomConstants, poly: &G) -> Option<Vec<Vec<P2>>> {
+    let pc = c.canonicalize(poly).ok()?;
+    let outer_poly = segmentize(&pc, c.door_width);
+    let mut rings: Vec<Vec<P2>> = vec![];
+    for part in parts(&outer_poly) {
+        if !is_polygon(&part) || area(&part) <= 0.0 {
+            continue;
+        }
+        if !rings.is_empty() {
+            return None; // python expects a single polygon
+        }
+        let part = orient(&part);
+        let mut rs = vec![exterior(&part)];
+        rs.extend(interiors(&part));
+        rings = rs.into_iter().map(|mut r| { r.pop(); r }).collect();
+    }
+    if rings.is_empty() {
+        None
+    } else {
+        Some(rings)
+    }
+}
+
+/// python-exact room mesh (vertex / triangle order, float32 positions, per-face tags), see `pyroom::make_room`
+pub fn solid_room_exact(c: &RoomConstants, poly: &G, ext: &[P2]) -> Option<Vec<crate::furn::geom::Tri>> {
+    use crate::furn::geom::{Tri, CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
+    use super::pyroom::*;
+    let rings = room_rings(c, poly)?;
+    let out = std::panic::catch_unwind(|| make_room(&rings, c.wall_thickness, c.wall_height, ext)).ok()?;
+    let p3 = |i: u32| -> V3 { let p = out.pos[i as usize]; [p[0] as f64, p[1] as f64, p[2] as f64] };
+    Some(
+        out.tris
+            .iter()
+            .zip(&out.tags)
+            .map(|(t, &g)| {
+                let mut tags = 0u32;
+                for (bit, flag) in [(T_INTERIOR, INTERIOR), (T_CEILING, CEILING), (T_SUPPORT, SUPPORT), (T_WALL, WALL), (T_VISIBLE, VISIBLE)] {
+                    if g & bit != 0 {
+                        tags |= flag;
+                    }
+                }
+                Tri { v: [p3(t[0]), p3(t[1]), p3(t[2])], tags }
+            })
+            .collect(),
+    )
+}
+
+pub fn solid_room_approx(c: &RoomConstants, _name: &str, poly: &G, _cutters: &[Cutter], ext: &[P2]) -> Vec<crate::furn::geom::Tri> {
     use crate::furn::geom::{Tri, CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
     let wt = c.wall_thickness;
     let h = c.wall_height;
