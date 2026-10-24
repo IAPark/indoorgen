@@ -21,11 +21,11 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | K3 | Bathtub (alcove + freestanding) mesh | done (5/6) | bathtub.rs; freestanding+base/legs and alcove pass (mean<=1e-7); seed 2 alcove has a sliver at a boolean chord (max 1e-2 local, mean 7e-6) |
 | K4 | Kitchen SinkFactory mesh | done 6/6 | gn template data/gn/ksink.json + TapFactory (taps.rs, data/gn/tap.json; 6/6) |
 | K5 | TV / Monitor | partial | tvx.rs: Monitor 6/6, TV 3/6 (the has_depth_extrude variant: bridge of the opened bevel loop to the plane differs in places, max 8e-3; screen boolean uses the BSP csg so no exact vertex order) |
-| K6 | Pan, Pot (+Lid) meshes | todo | bounds exact |
+| K6 | Pan, Pot (+Lid) meshes | partial | cage with exact fill_grid cap (f32 corner pick + offset) + beauty tris, handle, solidify, guard, subsurf: Pan seeds 3,4 and Pot 1,3,4 pass (mean<=2e-8). open: handle hole (boolean, 60% of pans: only the 1cm hole region differs, mean 1e-6..5e-5) and Pot bars (torus boolean + split, 50% of pots); Lid not started |
 | K7 | KitchenSpace / KitchenIsland countertop slab + top cabinets | done 12/12 | shelves.rs assemble(): exact cabinets (frame params persist across instances of one factory object: cabdoor::kitchen_cabinet_gmesh_ex) + slab |
-| K8 | Oven gas variant (`use_gas=1`): exact boolean + bevel | todo | needs F2 |
-| K9 | Microwave: Mesh Boolean (FLOAT solver) mismatch | todo | needs F2 |
-| K10 | Aquarium contents (plants/corals) | todo | low priority |
+| K8 | Oven gas variant (`use_gas=1`): exact boolean + bevel | skipped | F2 not on master |
+| K9 | Microwave: Mesh Boolean (FLOAT solver) mismatch | skipped | F2 not on master |
+| K10 | Aquarium contents (plants/corals) | todo (not started) | low priority |
 | K11 | Scenes used the approximate `asset()` even where `exact()` existed. FIXED (orchestrator): `assets::scene_asset()` uses exact geometry + nearest-part materials, used by `RealAssets::visual/solver_asset` and refcmp (use `--raw` for plain asset()). KitchenCabinet, SingleCabinet, SimpleDesk, SidetableDesk, Hardware now PASS. Still failing: KitchenSpace/KitchenIsland/Sink/Monitor/TV/Pan/Pot | partly done | high value: kitchens are judged sparse/odd |
 
 ## Decor / plants (worker: decor)
@@ -64,3 +64,15 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 |---|---|---|---|
 | E1 | First blind pass (2026-10-24, 11 rooms x cornerA, 3 sonnet judges, neutral prompt): **Rust preferred 8/33 = 24%** | done | losses: camera inside objects (garbled close-up, black near-clip triangle) -> render camera fixed for both sides; Rust beds are slabs (S1); dark Rust bathroom floors/lighting (Bathroom 4 lum 43 vs 87); sparse-looking Rust rooms (LivingRoom 4, Bedroom 4); 'floating' rugs (both sides) |
 | E2 | Second pass after S1/D1-D5 + camera fix: re-render BOTH sides (camera code changed), 14 rooms x 2 views, 3 judges | todo | |
+
+
+## Notes from worker bath (2026-10-24)
+- Shared fixes: BEVEL modifier wrapper now sets BMVert.no from Mesh::vert_normals (angle weights safe_acos_approx) -- bevel of folded geometry was wrong
+  without it (`bevmod::set_mesh_vert_normals`, `bevel_sharp_op` = bpy.ops.mesh.bevel on sharp edges). `subsurf::subsurf_bl` = Blender output layout (faces start corner, vertex order)
+  via gweld::subdivide. GN: Bezier TrimCurve keeps the Bezier (de Casteljau), CurveToMesh passes a mesh without curves through.
+- refcache.py: `weighted_sample` stub now consumes the original's random draws (REFCACHE_STUB=1 for the old behaviour); classes whose constructor draws
+  geometry parameters AFTER a weighted_sample (BevelSharp amount in Bathtub, ...) differ otherwise. Regenerate caches of such classes.
+- refcmp triangulates n-gons with polyfill (fan triangulation of concave n-gons gave false 1e-3 errors); `DUMPRS=dir refcmp` dumps rust/python meshes
+  (tools/nnhash.py a.json b.json = vertex nearest-neighbour check that ignores triangulation). tools/bevsub.py + bin bevsub, tools/bridgetest.py + bin bridgecmp:
+  run Blender's BEVEL modifier / bridge_edge_loops and the Rust port on the same {v,p} input (shrink a failure with tools/subsel.py / subfaces.py).
+- Known ties decided by float noise in Blender (not reproducible): drain-hole face choice in sinks/tubs (find_hole), fill_grid start vertex when the loop corners tie.

@@ -45,6 +45,10 @@ pub fn build(t: &Tv, r: &mut Rng) -> TvBuilt {
         let n0 = open.pos.len() as u32;
         let mut m = join(&[&open, &plane]);
         let shape = -r.uniform(0.0, 0.4);
+        if let Ok(d) = std::env::var("BRIDGEDUMP") {
+            let js = serde_json::json!({"v": m.pos, "p": m.faces, "loops": [loops[0], [n0, n0 + 1, n0 + 3, n0 + 2]], "cuts": 32, "shape": shape});
+            std::fs::write(format!("{d}/tv_bridge_in.json"), js.to_string()).unwrap();
+        }
         let la = loops[0].clone();
         let lb = vec![n0, n0 + 1, n0 + 3, n0 + 2];
         super::bridge::bridge_two_loops(&mut m, la, lb, 32, shape);

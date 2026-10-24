@@ -128,7 +128,9 @@ pub fn make_plane(t: &Toilet, tube: &Mesh) -> Mesh {
 pub fn make_seat(t: &Toilet, plane: &Mesh) -> (Mesh, Mesh) {
     let mut seat = super::bpyops::solidify(plane, t.extrude_height, 1.0);
     if t.has_seat_cut {
-        // TODO exact boolean (cube cutter) once F2 lands
+        // cutter cube (scale thickness) at (0, -thickness / 2 - size_mid * size, 0): BOOLEAN DIFFERENCE (BSP csg here: surface-equal)
+        let cutter = cube_scaled([t.thickness; 3], [0.0, -t.thickness / 2.0 - t.size_mid * t.size, 0.0]);
+        seat = boolean("DIFFERENCE", &seat, &cutter);
     }
     seat = bevel_def(&seat, 0.1, 2);
     // cover: fill the hole inside the seat
