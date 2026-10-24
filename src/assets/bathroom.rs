@@ -2,7 +2,7 @@
 use super::*;
 use crate::materials::*;
 use super::cabnodes::{ExactMesh, GMesh};
-use super::{bathfree, gweld, hwexact};
+use super::{bathfree, gweld, hwexact, toiletx};
 
 pub fn handles(c: &str) -> bool {
     matches!(c, "ToiletFactory" | "BathtubFactory" | "BathroomSinkFactory" | "StandingSinkFactory" | "HardwareFactory")
@@ -45,6 +45,7 @@ pub struct Toilet {
     pub seat_thickness: f64,
     pub has_seat_cut: bool,
     pub hw_cap: f64,
+    pub fseed: u64,
 }
 
 impl Toilet {
@@ -80,7 +81,7 @@ impl Toilet {
         let hw_radius = r.uniform(0.015, 0.02);
         let hw_length = r.uniform(0.04, 0.05);
         let hw_side = r.f64() < 0.5;
-        Toilet { size, width, height, size_mid, curve_scale, depth, tube_scale, thickness, extrude_height, stand_depth, stand_scale, bottom_offset, back_thickness, back_size, back_scale, seat_size, tank_width, tank_height, tank_size, tank_cap_height, tank_cap_extrude, cover_rotation, handle, hw_radius, hw_length, hw_side, seed: r.randint(0, 1_000_000) as u64, curve_scales, seat_thickness, has_seat_cut, hw_cap }
+        Toilet { size, width, height, size_mid, curve_scale, depth, tube_scale, thickness, extrude_height, stand_depth, stand_scale, bottom_offset, back_thickness, back_size, back_scale, seat_size, tank_width, tank_height, tank_size, tank_cap_height, tank_cap_extrude, cover_rotation, handle, hw_radius, hw_length, hw_side, seed: r.randint(0, 1_000_000) as u64, curve_scales, seat_thickness, has_seat_cut, hw_cap, fseed: 0 }
     }
     pub fn mid_offset(&self) -> f64 {
         (1.0 - self.size_mid) * self.size
@@ -158,118 +159,15 @@ impl Factory for Toilet {
         a.cuboid([lo[0], lo[1], lo[2]], [hi[0], hi[1], hi[2]], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
-    fn asset(&self, _i: u64) -> Asset {
-        let mut r = Rng::seeded(self.seed);
+    fn asset(&self, i: u64) -> Asset {
         let ceramic = spec_material("toilet_ceramic", serde_json::json!({"cls": "ceramic.Ceramic", "kwargs": {}, "seed": self.seed}), [0.9, 0.9, 0.9]);
         let metal = spec_material("toilet_hw", serde_json::json!({"cls": "metal.MetalBasic", "kwargs": {}, "seed": self.seed + 1}), [0.7, 0.7, 0.72]);
-        let _ = &mut r;
-        let out = self.outline();
-        let n = 12;
+        let mut r = inst_rng(self.fseed, i);
+        let p = toiletx::build(self, &mut r);
+        let body = super::bathkit::join(&[&p.tube, &p.seat, &p.cover, &p.stand, &p.back, &p.tank]);
         let mut a = Asset::default();
-        // bowl funnel: inner surface, outer shell (thickness), rim
-        let rings: Vec<Vec<V3>> = (0..=n).map(|k| self.ring(k as f64 / n as f64, &out)).collect();
-        let outer: Vec<Vec<V3>> = rings.iter().map(|rg| expand(rg, self.thickness, 0.0)).collect();
-        let mut bowl = Mesh::new();
-        loft(&rings, &mut bowl, true);
-        loft(&outer, &mut bowl, false);
-        let top_in = expand(&rings[0], 0.0, self.extrude_height);
-        let top_out = expand(&rings[0], self.thickness, self.extrude_height);
-        loft(&[rings[0].clone(), top_in.clone()], &mut bowl, true);
-        loft(&[top_in, top_out.clone()], &mut bowl, false);
-        loft(&[top_out, outer[0].clone()], &mut bowl, false);
-        // close the bottom of the funnel
-        let last = outer.last().unwrap();
-        let cb = [last.iter().map(|p| p[0]).sum::<f64>() / last.len() as f64, last.iter().map(|p| p[1]).sum::<f64>() / last.len() as f64, last[0][2]];
-        for i in 0..last.len() {
-            bowl.add_tri(last[i], last[(i + 1) % last.len()], cb);
-        }
-        let bb = bowl.bounds();
-        a.mesh(bowl, &ceramic, Some(bb));
-        // stand: from the funnel at stand_depth to a scaled outline at the floor
-        let u = (self.stand_depth / self.depth).min(1.0);
-        let top = expand(&self.ring(u, &out), self.thickness * 0.6, 0.0);
-        let by = self.tube_scale * (1.0 - self.size_mid) * self.size / 2.0 * self.bottom_offset;
-        let bottom: Vec<V3> = out.iter().map(|p| [p[0] * self.stand_scale, p[1] * self.stand_scale + by, -self.height]).collect();
-        let mid: Vec<V3> = top.iter().zip(bottom.iter()).map(|(t, b)| [(t[0] + b[0]) / 2.0, (t[1] + b[1]) / 2.0, (t[2] + b[2]) / 2.0]).collect();
-        let mut stand = Mesh::new();
-        loft(&[top, mid, bottom.clone()], &mut stand, false);
-        let cb = [bottom.iter().map(|p| p[0]).sum::<f64>() / bottom.len() as f64, bottom.iter().map(|p| p[1]).sum::<f64>() / bottom.len() as f64, -self.height];
-        for i in 0..bottom.len() {
-            stand.add_tri(bottom[i], cb, bottom[(i + 1) % bottom.len()]);
-        }
-        let sb = stand.bounds();
-        a.mesh(stand, &ceramic, Some(sb));
-        // seat ring (slightly outside the rim) and lifted cover
-        let top_z = self.extrude_height;
-        let ring_o = expand(&rings[0], self.thickness * 1.05, top_z + self.extrude_height);
-        let ring_i = expand(&rings[0], -self.thickness * 0.4, top_z + self.extrude_height);
-        let seat_m = {
-            let mut m = Mesh::new();
-            let lo: Vec<V3> = ring_o.iter().map(|p| [p[0], p[1], top_z]).collect();
-            loft(&[lo, ring_o.clone()], &mut m, false);
-            loft(&[ring_o.clone(), ring_i.clone()], &mut m, false);
-            m
-        };
-        let sb = seat_m.bounds();
-        a.mesh(seat_m, &ceramic, Some(sb));
-        // cover: filled outline rotated about the hinge at the back of the seat
-        let hinge_y = self.mid_offset() + self.seat_size - self.extrude_height / 2.0;
-        let cos = self.cover_rotation.cos();
-        let sin = self.cover_rotation.sin();
-        let cover: Vec<V3> = ring_o
-            .iter()
-            .map(|p| {
-                let dy = p[1] - hinge_y;
-                [p[0], hinge_y + dy * cos, self.extrude_height * 1.5 + dy * sin]
-            })
-            .collect();
-        let cover2: Vec<V3> = cover.iter().map(|p| [p[0], p[1], p[2] + self.extrude_height]).collect();
-        let cc = [cover.iter().map(|p| p[0]).sum::<f64>() / cover.len() as f64, cover.iter().map(|p| p[1]).sum::<f64>() / cover.len() as f64, cover.iter().map(|p| p[2]).sum::<f64>() / cover.len() as f64];
-        let mut cm = Mesh::new();
-        loft(&[cover.clone(), cover2.clone()], &mut cm, false);
-        for i in 0..cover.len() {
-            let j = (i + 1) % cover.len();
-            cm.add_tri(cover2[i], cover2[j], [cc[0], cc[1], cc[2] + self.extrude_height]);
-            cm.add_tri(cover[j], cover[i], cc);
-        }
-        let cbb = cm.bounds();
-        a.mesh(cm, &ceramic, Some(cbb));
-        // back block between bowl and tank
-        let by0 = self.mid_offset() - self.back_thickness;
-        let bw = self.width / 2.0 * self.back_scale * 1.1;
-        let back = rounded(Mesh::cuboid([-bw, by0, -self.depth * 0.9], [bw, self.mid_offset() + self.back_size, self.extrude_height]), 0.0);
-        let bk = back.bounds();
-        a.mesh(back, &ceramic, Some(bk));
-        // tank + cap
-        let ty1 = self.mid_offset() + self.back_size;
-        let (tx, ty0) = (self.tank_width / 2.0, ty1 - self.tank_size);
-        let tank = Mesh::cuboid([-tx, ty0, 0.0], [tx, ty1, self.tank_height]);
-        let tb = tank.bounds();
-        a.mesh(tank, &ceramic, Some(tb));
-        let ce = self.tank_cap_extrude;
-        let cap = Mesh::cuboid([-tx - ce, ty0 - ce, self.tank_height], [tx + ce, ty1 + ce, self.tank_height + self.tank_cap_height]);
-        let cpb = cap.bounds();
-        a.mesh(cap, &ceramic, Some(cpb));
-        // hardware
-        let zc = self.tank_height + self.tank_cap_height;
-        if self.handle {
-            let (hx, hy) = if self.hw_side { (-tx + self.hw_radius + 0.015, ty0) } else { (-tx, ty0 + self.hw_radius + 0.015) };
-            let hz = self.tank_height - self.hw_radius - 0.025;
-            let rod = Mesh::cylinder(0.0, 0.0, -0.01, 0.01, self.hw_radius, 12);
-            let mut rod = rod;
-            for p in rod.pos.iter_mut() {
-                *p = [hx + p[0], hy - 0.01 + p[2] * 0.0, hz + p[1]];
-            }
-            let rb = rod.bounds();
-            a.mesh(rod, &metal, Some(rb));
-            let lever = Mesh::cuboid([hx - self.hw_length, hy - 0.02, hz - 0.005], [hx, hy - 0.01, hz + 0.005]);
-            let lb = lever.bounds();
-            a.mesh(lever, &metal, Some(lb));
-        } else {
-            let btn = Mesh::cylinder(0.0, (ty0 + ty1) / 2.0, zc - 0.002, zc + 0.004, self.hw_radius, 12);
-            let bb2 = btn.bounds();
-            a.mesh(btn, &metal, Some(bb2));
-        }
+        a.mesh(body, &ceramic, None);
+        a.mesh(p.hw, &metal, None);
         a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
         a
     }
@@ -280,21 +178,26 @@ fn rounded(m: Mesh, _r: f64) -> Mesh {
 }
 
 pub struct Bathtub {
-    width: f64,
-    size: f64,
-    depth: f64,
-    alcove: bool,
-    has_curve: bool,
-    has_legs: bool,
-    thickness: f64,
-    disp_x: [f64; 2],
-    disp_y: f64,
-    leg_height: f64,
-    leg_radius: f64,
-    hole_radius: f64,
-    seed: u64,
-    taper: f64,
-    fseed: u64,
+    pub width: f64,
+    pub size: f64,
+    pub depth: f64,
+    pub alcove: bool,
+    pub has_curve: bool,
+    pub has_legs: bool,
+    pub thickness: f64,
+    pub disp_x: [f64; 2],
+    pub disp_y: f64,
+    pub leg_height: f64,
+    pub leg_radius: f64,
+    pub hole_radius: f64,
+    pub seed: u64,
+    pub taper: f64,
+    pub fseed: u64,
+    pub leg_side: f64,
+    pub leg_y_scale: f64,
+    pub leg_sub: i64,
+    pub alcove_levels: usize,
+    pub stretch: f64,
 }
 
 impl Bathtub {
@@ -310,17 +213,18 @@ impl Bathtub {
         let disp_x = [r.uniform(0.0, 0.2), r.uniform(0.0, 0.2)];
         let disp_y = r.uniform(0.0, 0.1);
         let leg_height = r.uniform(0.2, 0.3) * depth;
-        let _leg_side = r.uniform(0.05, 0.1);
+        let leg_side = r.uniform(0.05, 0.1);
         let leg_radius = r.uniform(0.02, 0.03);
-        let _leg_y_scale = r.f64();
-        let _leg_subsurf_level = r.randint(0, 3);
+        let leg_y_scale = r.f64();
+        let leg_sub = r.randint(0, 3);
         let taper = r.uniform(-0.1, 0.1);
-        let _stretch = r.uniform(-0.2, 0.2);
+        let stretch = r.uniform(-0.2, 0.2);
+        let mut alcove_levels = 1usize;
         if alcove {
-            let _alcove_levels = r.randint(1, 3);
+            alcove_levels = r.randint(1, 3) as usize;
         }
         let hole_radius = r.uniform(0.015, 0.02);
-        Bathtub { width, size, depth, alcove, has_curve, has_legs, thickness, disp_x, disp_y, leg_height, leg_radius, hole_radius, seed: r.randint(0, 1_000_000) as u64, taper, fseed: 0 }
+        Bathtub { width, size, depth, alcove, has_curve, has_legs, thickness, disp_x, disp_y, leg_height, leg_radius, hole_radius, seed: r.randint(0, 1_000_000) as u64, taper, fseed: 0, leg_side, leg_y_scale, leg_sub, alcove_levels, stretch }
     }
     /// make_box_contour(t, i)
     fn contour(&self, t: f64, i: f64) -> Vec<[f64; 2]> {
@@ -389,94 +293,14 @@ impl Factory for Bathtub {
         a.cuboid([-self.size, 0.0, 0.0], [0.0, self.width, self.depth], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
-    fn asset(&self, _i: u64) -> Asset {
-        use super::geomkit::chaikin;
+    fn asset(&self, i: u64) -> Asset {
         let ceramic = spec_material("tub_ceramic", serde_json::json!({"cls": "ceramic.Ceramic", "kwargs": {}, "seed": self.seed}), [0.92, 0.92, 0.92]);
         let metal = spec_material("tub_metal", serde_json::json!({"cls": "metal.MetalBasic", "kwargs": {}, "seed": self.seed + 1}), [0.7, 0.7, 0.72]);
-        let (w, s, d, t) = (self.width, self.size, self.depth, self.thickness);
+        let mut r = inst_rng(self.fseed, i);
+        let b = super::bathtub::build(self, &mut r);
         let mut a = Asset::default();
-        let mut hole_at = [w / 2.0, s / 2.0, 0.0];
-        let ci = if self.has_curve { 1.0 } else { 0.0 };
-        if self.alcove {
-            // solid base box with a rounded basin cut into it
-            let mut m = Mesh::new();
-            // python cuts with a prism from z=t (contour i=+1) to z=2*depth (i=-1): at the rim z=depth it is i=0
-            let cav_lo = chaikin(&self.contour(t, ci * (1.0 - t / d)), 3);
-            let cav_hi = chaikin(&self.contour(t, 0.0), 3);
-            let (cx, cy) = (w / 2.0, s / 2.0);
-            // outer ring: each cavity-rim point projected radially onto the outer rectangle
-            let outer: Vec<[f64; 2]> = cav_hi
-                .iter()
-                .map(|p| {
-                    let (dx, dy) = (p[0] - cx, p[1] - cy);
-                    let k = (cx / dx.abs().max(1e-9)).min(cy / dy.abs().max(1e-9));
-                    [cx + dx * k, cy + dy * k]
-                })
-                .collect();
-            let (r_top, r_bot) = (ring3(&outer, d), ring3(&outer, 0.0));
-            loft(&[r_top.clone(), r_bot.clone()], &mut m, true);
-            cap_fan(&r_bot, false, &mut m);
-            let rim_in = ring3(&cav_hi, d);
-            loft(&[r_top, rim_in], &mut m, true);
-            let k = 6;
-            let rings: Vec<Vec<V3>> = (0..=k)
-                .map(|q| {
-                    let u = q as f64 / k as f64;
-                    cav_lo.iter().zip(cav_hi.iter()).map(|(a0, a1)| [a0[0] + (a1[0] - a0[0]) * u, a0[1] + (a1[1] - a0[1]) * u, t + (d - t) * u]).collect()
-                })
-                .collect();
-            loft(&rings, &mut m, false);
-            cap_fan(&rings[0], true, &mut m);
-            let b = m.bounds();
-            a.mesh(m, &ceramic, Some(b));
-            hole_at = [w / 2.0, s / 2.0, t];
-        } else {
-            // freestanding bowl: rounded rectangle rings shrinking toward a rounded bottom
-            let leg_h = if self.has_legs { self.leg_height } else { 0.0 };
-            let base_h = if self.has_legs { 0.0 } else { self.leg_height };
-            let z0 = leg_h + base_h;
-            let h = d - z0;
-            let rim = chaikin(&self.contour(0.0, 0.0), 3);
-            let c = [w / 2.0, s / 2.0];
-            let n = 10;
-            let ring_at = |u: f64, off: f64| -> Vec<V3> {
-                // u=0 bottom .. 1 rim: ellipse-quadrant profile
-                let sc = (1.0 - (1.0 - u).powi(2) * 0.45).sqrt().min(1.0);
-                let sc = 0.45 + 0.55 * sc;
-                rim.iter().map(|p| {
-                    let (dx, dy) = (p[0] - c[0], p[1] - c[1]);
-                    let l = (dx * dx + dy * dy).sqrt().max(1e-9);
-                    [c[0] + dx * sc + dx / l * off, c[1] + dy * sc + dy / l * off, z0 + h * u]
-                }).collect()
-            };
-            let inner: Vec<Vec<V3>> = (0..=n).map(|q| ring_at(q as f64 / n as f64, -t)).collect();
-            let outer: Vec<Vec<V3>> = (0..=n).map(|q| ring_at(q as f64 / n as f64, 0.0)).collect();
-            let mut m = Mesh::new();
-            loft(&outer, &mut m, false);
-            loft(&inner, &mut m, true);
-            loft(&[inner[n].clone(), outer[n].clone()], &mut m, true);
-            cap_fan(&outer[0], false, &mut m);
-            cap_fan(&inner[0], true, &mut m);
-            let b = m.bounds();
-            a.mesh(m, &ceramic, Some(b));
-            if self.has_legs {
-                for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-                    let x = c[0] + sx * w * 0.30;
-                    let y = c[1] + sy * s * 0.28;
-                    let lg = super::geomkit::limb([x, y, self.leg_radius], [x * 0.98 + c[0] * 0.02, y, z0 + 0.04], self.leg_radius, self.leg_radius, true);
-                    let lb = lg.bounds();
-                    a.mesh(lg, &metal, Some(lb));
-                }
-            } else {
-                let base = super::geomkit::extrude(&chaikin(&self.contour(0.02, 0.0), 3).iter().map(|p| { let (dx, dy) = (p[0] - c[0], p[1] - c[1]); [c[0] + dx * 0.55, c[1] + dy * 0.55] }).collect::<Vec<_>>(), 0.0, z0 + 0.02);
-                let bb = base.bounds();
-                a.mesh(base, &ceramic, Some(bb));
-            }
-            hole_at = [c[0] - w * 0.1, c[1], z0 + t];
-        }
-        let hole = Mesh::cylinder(hole_at[0], hole_at[1], hole_at[2], hole_at[2] + 0.006, self.hole_radius, 14);
-        let hb = hole.bounds();
-        a.mesh(hole, &metal, Some(hb));
+        a.mesh(b.body, &ceramic, None);
+        a.mesh(b.hole, &metal, None);
         a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
         a
     }
@@ -796,7 +620,11 @@ impl Factory for Hardware {
 
 pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
     Some(match c {
-        "ToiletFactory" => Box::new(Toilet::new(rng)),
+        "ToiletFactory" => {
+            let mut t = Toilet::new(rng);
+            t.fseed = fseed;
+            Box::new(t)
+        }
         "BathtubFactory" => {
             let mut b = Bathtub::new(rng);
             b.fseed = fseed;

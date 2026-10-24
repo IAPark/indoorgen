@@ -83,6 +83,8 @@ pub mod solidnm;
 pub mod bpyx;
 pub mod bevmod;
 pub mod toiletx;
+pub mod bathkit;
+pub mod bathtub;
 pub mod solid;
 pub mod windows;
 pub mod shelves;

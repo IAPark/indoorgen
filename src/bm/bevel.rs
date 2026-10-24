@@ -3487,6 +3487,9 @@ impl<'a> Bp<'a> {
         let th2 = angle_v3v3v3(self.co(vb), self.co(vc), self.co(vd));
         let sin1 = th1.sin();
         let sin2 = th2.sin();
+        if std::env::var("BEVDBG2").is_ok() {
+            eprintln!("  gco eb={} ka={} kb={} kc={} th1={:e} th2={:e} tan1={:e} tan2={:e} lenB={:e}", eb, ka, kb, kc, th1, th2, th1.tan(), th2.tan(), self.bm.edge_calc_length(self.ehs[eb].e));
+        }
         if (ka > 0.0) as i32 + (kb > 0.0) as i32 + (kc > 0.0) as i32 >= 2 {
             let tan1 = th1.tan();
             let tan2 = th2.tan();
@@ -3531,6 +3534,9 @@ impl<'a> Bp<'a> {
             }
             for i in 0..self.bvs[bv].edgecount {
                 let c = self.geometry_collide_offset(self.bvs[bv].e0 + i);
+                if std::env::var("BEVDBG").is_ok() && c < self.offset {
+                    eprintln!("collide v{} i{} c={:e} co={:?}", v, i, c, self.bm.verts[v].co);
+                }
                 if c < limited_offset {
                     limited_offset = c;
                 }
