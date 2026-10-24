@@ -171,7 +171,8 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
         // `best.1` counts along the loop list; the ring below is indexed by vertex: list position j <-> vertex (1 + j) % n
         best.1 = (1 + best.1) % n;
         let start = (best.1 + p.fill_offset) % n;
-        let ring: Vec<V3> = (0..n).map(|i| m.pos[id(0, (i + start) % n) as usize]).collect();
+        // python fills the unrotated f32 ring and rotates (by pi/n) afterwards: grid positions and the beauty split use the unrotated values
+        let ring: Vec<V3> = (0..n).map(|i| { let q = c32[(i + start) % n]; [q[0] as f64, q[1] as f64, 0.0] }).collect();
         let idx: Vec<u32> = (0..n).map(|i| id(0, (i + start) % n)).collect();
         let mut grid = super::bpyops::fill_grid_loop_ex(&ring, true);
         let nz: f64 = grid.faces.iter().map(|f| super::bpyops::face_normal(&grid, f)[2]).sum();
@@ -180,21 +181,21 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
                 f.reverse();
             }
         }
-        // grid vertices on the ring map to the ring vertices; the rest are new
+        // grid vertices on the ring map to the ring vertices; the rest are new (rotated)
+        let (rs_, rc_) = (rot.sin(), rot.cos());
         let mut gmap = vec![0u32; grid.pos.len()];
         for (gi, gp) in grid.pos.iter().enumerate() {
             let hit = ring.iter().position(|rp| rp == gp);
             gmap[gi] = match hit {
                 Some(k) => idx[k],
                 None => {
-                    m.pos.push(*gp);
+                    m.pos.push([gp[0] * rc_ - gp[1] * rs_, gp[0] * rs_ + gp[1] * rc_, gp[2]]);
                     (m.pos.len() - 1) as u32
                 }
             };
         }
         for f in &grid.faces {
-            let q = [m.pos[gmap[f[0] as usize] as usize], m.pos[gmap[f[1] as usize] as usize], m.pos[gmap[f[2] as usize] as usize], m.pos[gmap[f[3] as usize] as usize]];
-            let q32 = q.map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]);
+            let q32 = [0, 1, 2, 3].map(|k| { let p = grid.pos[f[k] as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] });
             let v = |k: usize| gmap[f[k] as usize];
             if super::polyfill::quad_split_24_beauty(q32) {
                 m.faces.push(vec![v(0), v(1), v(2)]);

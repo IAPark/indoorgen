@@ -354,6 +354,7 @@ pub fn prism_difference(m: &Mesh, corners: &[V2]) -> Mesh {
     for pl in pierce.iter_mut() {
         let mut v: Vec<(f64, Key)> = pl.iter().map(|&k| (cx.key_pos(k)[2], k)).collect();
         v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v.dedup_by(|a, b| a.1 == b.1);
         *pl = v.into_iter().map(|x| x.1).collect();
     }
     for i in 0..nc {
