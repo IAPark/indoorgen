@@ -71,6 +71,20 @@ fn main() {
     report("seatsol", (&ss.pos, &ss.faces), &j, "m13_SOLIDIFY");
     report("seat", (&p.seat.pos, &p.seat.faces), &j, "seat");
     report("cover", (&p.cover.pos, &p.cover.faces), &j, "cover");
+    if std::env::var("STANDSCAN").is_ok() {
+        let mut r2 = infinigen::assets::inst_rng(seed, inst);
+        let a = r2.uniform(0.1, 0.2);
+        let b = r2.uniform(0.0, 0.15);
+        println!("draws: bridge {a} stand {b}");
+        let order: Vec<u32> = toiletx::build_curve(&t).order;
+        let (pv, pf) = load(&j, "stand").unwrap();
+        for k in 0..=30 {
+            let sh = 0.005 * k as f64;
+            let m = toiletx::make_stand_shape(&t, &tube, &st.bottom, sh, &order);
+            let d = surface_dist(&m.pos, &m.faces, &pv, &pf, 3000);
+            println!("shape {sh:.3}: {:?}", d);
+        }
+    }
     report("stand", (&p.stand.pos, &p.stand.faces), &j, "stand");
     report("back", (&p.back.pos, &p.back.faces), &j, "back");
     report("tank", (&p.tank.pos, &p.tank.faces), &j, "tank");

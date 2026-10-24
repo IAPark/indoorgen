@@ -179,6 +179,11 @@ pub fn make_seat(t: &Toilet, plane: &Mesh) -> (Mesh, Mesh) {
 }
 
 pub fn make_stand(t: &Toilet, tube: &Mesh, bottom: &[V3], r: &mut Rng, order: &[u32]) -> Mesh {
+    let shape = r.uniform(0.0, 0.15);
+    make_stand_shape(t, tube, bottom, shape, order)
+}
+
+pub fn make_stand_shape(t: &Toilet, tube: &Mesh, bottom: &[V3], shape: f64, order: &[u32]) -> Mesh {
     let mut best = (f64::MAX, (0u32, 0u32));
     for (a, b) in edge_list(&tube.faces) {
         let (pa, pb) = (f32c(tube.pos[a as usize]), f32c(tube.pos[b as usize]));
@@ -199,7 +204,6 @@ pub fn make_stand(t: &Toilet, tube: &Mesh, bottom: &[V3], r: &mut Rng, order: &[
     let mut m = Mesh::new();
     m.pos = ring.iter().map(|&v| tube.pos[v as usize]).collect();
     m.pos.extend_from_slice(bottom);
-    let shape = r.uniform(0.0, 0.15);
     let la: Vec<u32> = (0..n).collect();
     let lb: Vec<u32> = order.iter().map(|&i| i + n).collect();
     bridge_two_loops_ex(&mut m, la, lb, 64, shape, false);
