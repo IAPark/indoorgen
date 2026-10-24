@@ -375,35 +375,6 @@ impl BMesh {
         self.faces[f].no = [-n[0], -n[1], -n[2]];
     }
 
-    /// bmesh_face_swap_data
-    pub fn face_swap_data(&mut self, fa: usize, fb: usize) {
-        let mut l = self.faces[fa].l_first;
-        let first_a = l;
-        loop {
-            self.loops[l].f = fb;
-            l = self.loops[l].n;
-            if l == first_a {
-                break;
-            }
-        }
-        let mut l = self.faces[fb].l_first;
-        let first_b = l;
-        loop {
-            self.loops[l].f = fa;
-            l = self.loops[l].n;
-            if l == first_b {
-                break;
-            }
-        }
-        let (a, b) = (self.faces[fa].clone(), self.faces[fb].clone());
-        let (idx_a, idx_b) = (a.idx, b.idx);
-        self.faces[fa] = b;
-        self.faces[fb] = a;
-        // swap back the index (and the data block)
-        self.faces[fa].idx = idx_a;
-        self.faces[fb].idx = idx_b;
-    }
-
     /// BM_edge_in_face
     pub fn edge_in_face(&self, e: usize, f: usize) -> bool {
         let first = self.edges[e].l;

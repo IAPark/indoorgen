@@ -1,6 +1,10 @@
 //! Minimal BMesh (Blender's half-edge mesh) with the same element ordering semantics: disk cycles, radial cycles, and mempool
 //! slot reuse (freed slots are reused LIFO, iteration is in slot order), as needed to reproduce Blender's bmesh operators exactly.
 pub mod bevel;
+pub mod bvh;
+pub mod edgenet;
+pub mod isect;
+pub mod kern;
 pub mod qsort;
 pub mod query;
 pub mod rotate;

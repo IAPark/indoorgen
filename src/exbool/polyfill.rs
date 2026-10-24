@@ -228,7 +228,7 @@ struct HalfEdge {
 
 const UMAX: u32 = u32::MAX;
 
-fn quad_rotate_calc(v1: [f32; 2], v2: [f32; 2], v3: [f32; 2], v4: [f32; 2], lock_degenerate: bool) -> (f32, f32) {
+pub fn quad_rotate_calc(v1: [f32; 2], v2: [f32; 2], v3: [f32; 2], v4: [f32; 2], lock_degenerate: bool) -> (f32, f32) {
     let eps_zero_area = 1e-12f32;
     let area_2x_234 = cross_tri_v2(v2, v3, v4);
     let area_2x_241 = cross_tri_v2(v2, v4, v1);

@@ -1170,8 +1170,11 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             if let Some(g1) = first {
                 if let Some(m1) = &g1.mesh {
                     let ms: Vec<&Mesh> = others.iter().filter_map(|g| g.mesh.as_ref()).collect();
+                    let float = node.ps("solver") == "FLOAT" && std::env::var_os("GNBOOLEXACT").is_none();
                     let exact = node.ps("solver") != "FLOAT" || std::env::var_os("GNBOOLEXACT").is_some();
-                    o.mesh = Some(if exact && std::env::var_os("GNBOOLBSP").is_none() {
+                    o.mesh = Some(if float && std::env::var_os("GNBOOLBSP").is_none() {
+                        super::fbool::mesh_boolean_float(op, m1, &ms)
+                    } else if exact && std::env::var_os("GNBOOLBSP").is_none() {
                         let (us, ht) = (ev.cb(ni, "Self Intersection").unwrap_or(false), ev.cb(ni, "Hole Tolerant").unwrap_or(false));
                         super::csg::mesh_boolean_exact(op, m1, &ms, us, ht)
                     } else {

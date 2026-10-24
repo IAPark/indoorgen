@@ -874,6 +874,10 @@ fn propagate_face_attrs(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8
     }
 }
 
+pub fn propagate_face_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
+    propagate_face_attrs(m, first, others, src)
+}
+
 /// Blender's EXACT solver (exbool port: vertex, face and edge order identical to Blender 4.2)
 pub fn mesh_boolean_exact(op: &str, first: &Mesh, others: &[&Mesh], use_self: bool, hole_tolerant: bool) -> Mesh {
     use crate::exbool::exact_boolean::{exact_boolean, BoolInput, BoolOp};
