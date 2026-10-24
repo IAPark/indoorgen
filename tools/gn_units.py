@@ -1091,8 +1091,12 @@ def field2_cases():
     return out
 
 
-def _boolean(b, op, m1, others):
-    n = b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": "EXACT"}, **{"Mesh 1": m1})
+def _boolean(b, op, m1, others, solver="EXACT"):
+    if solver == "FLOAT" and op != "DIFFERENCE" and m1 is not None:
+        # UNION / INTERSECT take all operands through the multi-input "Mesh 2" socket
+        others = [m1] + list(others)
+        m1 = None
+    n = b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": solver}, **({"Mesh 1": m1} if m1 is not None else {}))
     for o in others:
         b.ng.links.new(b.out_sock(o), n.inputs["Mesh 2"])
     return n
@@ -1159,15 +1163,72 @@ def mesh2_cases():
         return b.n("GeometryNodeTransform", Geometry=(c, "Mesh"), Translation=t, Rotation=rot)
     for op in ("UNION", "INTERSECT", "DIFFERENCE"):
         case(f"MeshBoolean.{op}.cubes", lambda b, op=op: b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": "EXACT"}, Mesh_1=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Mesh_2=[(cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4)), "Geometry")]) if False else _boolean(b, op, cube_at(b, (1, 1, 1), (0, 0, 0)), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))]))
-    def thin(b, n=(4, 6, 10)):
+    def thin(b, n=(4, 6, 10), solver="EXACT"):
         c = b.n("GeometryNodeMeshCube", Size=(0.012, 0.05, 0.1), Vertices__X=n[0], Vertices__Y=n[1], Vertices__Z=n[2])
         cy = b.n("GeometryNodeMeshCylinder", Radius=0.004, Depth=0.1)
         t = b.n("GeometryNodeTransform", Geometry=(cy, "Mesh"), Translation=(0, 0, 0.02), Rotation=(0.0, 1.5708, 0.0), Scale=(1.2, 1, 1))
-        return _boolean(b, "DIFFERENCE", c, [t])
+        return _boolean(b, "DIFFERENCE", c, [t], solver)
     case("MeshBoolean.DIFFERENCE.thin", thin)
     case("MeshBoolean.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2)))
     case("MeshBoolean.DIFFERENCE.hole", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)]))
     case("MeshBoolean.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))]))
+    # FLOAT solver (BMesh intersect)
+    for op in ("UNION", "INTERSECT", "DIFFERENCE"):
+        case(f"MeshBoolean.FLOAT.{op}.cubes", lambda b, op=op: _boolean(b, op, cube_at(b, (1, 1, 1), (0, 0, 0)), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
+        case(f"MeshBoolean.FLOAT.{op}.cylcube", lambda b, op=op: _boolean(b, op, cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.7, Depth=1.0)], "FLOAT"))
+        case(f"MeshBoolean.FLOAT.{op}.sphere", lambda b, op=op: _boolean(b, op, b.n("GeometryNodeMeshUVSphere", Segments=12, Rings=8, Radius=1.0), [cube_at(b, (1.2, 1.2, 1.2), (0.5, 0.3, 0.2), (0.0, 0.0, 0.3))], "FLOAT"))
+    for nv_ in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16):
+        case(f"MeshBoolean.FLOATH.hole{nv_}", lambda b, nv_=nv_: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=nv_, Radius=0.4, Depth=4.0)], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.hole", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.holegrid", lambda b: _boolean(b, "DIFFERENCE", b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))], "FLOAT"))
+    case("MeshBoolean.FLOAT.UNION.multi", lambda b: _boolean(b, "UNION", None, [cube_at(b, (1, 1, 1), (0, 0, 0)), cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4)), cube_at(b, (1, 1, 1), (-0.3, 0.1, 0.5), (0.4, 0.1, 0.2))], "FLOAT"))
+    def inst_cutters(b, nx=4, nz=3):
+        # Microwave-style button grid: a small cube -> instance -> DuplicateElements (INSTANCE) x2 -> SetPosition offsets
+        c = cube_at(b, (0.03, 0.03, 0.01), (0.1, 0.0, 0.05))
+        gi = b.n("GeometryNodeGeometryToInstance")
+        b.ng.links.new(b.out_sock((c, "Geometry")), gi.inputs["Geometry"])
+        d1 = b.n("GeometryNodeDuplicateElements", {"domain": "INSTANCE"}, Geometry=(gi, "Instances"), Amount=nx)
+        off1 = b.n("ShaderNodeCombineXYZ", X=b.math("MULTIPLY", (d1, "Duplicate Index"), 0.04))
+        sp1 = b.n("GeometryNodeSetPosition", Geometry=(d1, "Geometry"), Offset=off1)
+        d2 = b.n("GeometryNodeDuplicateElements", {"domain": "INSTANCE"}, Geometry=(sp1, "Geometry"), Amount=nz)
+        off2 = b.n("ShaderNodeCombineXYZ", Z=b.math("MULTIPLY", (d2, "Duplicate Index"), 0.02))
+        sp2 = b.n("GeometryNodeSetPosition", Geometry=(d2, "Geometry"), Offset=off2)
+        return d2, sp2
+    def mk_inst(b):
+        base = cube_at(b, (0.5, 0.2, 0.3), (0.2, 0.0, 0.1))
+        d2, sp2 = inst_cutters(b)
+        return _boolean(b, "DIFFERENCE", base, [(d2, "Geometry"), sp2], "FLOAT")
+    case("MeshBoolean.FLOAT.DIFFERENCE.instances", mk_inst)
+    def mk_pattr(b):
+        c = b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4)
+        st = b.store((c, "Mesh"), (b.index(), "Index"), "pi", "POINT", "INT")
+        # (an edge attribute would be compared by index, but Blender's edge order depends on heap addresses)
+        st3 = b.store((st, "Geometry"), (b.index(), "Index"), "fi", "FACE", "INT")
+        return _boolean(b, "DIFFERENCE", st3, [b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.4, Depth=4.0)], "FLOAT")
+    case("MeshBoolean.FLOAT.DIFFERENCE.pattr", mk_pattr)
+    def usph(b, seg=24, rings=12, r=1.0, t=(0, 0, 0)):
+        sp = b.n("GeometryNodeMeshUVSphere", Segments=seg, Rings=rings, Radius=r)
+        return b.n("GeometryNodeTransform", Geometry=(sp, "Mesh"), Translation=t)
+    for op in ("UNION", "INTERSECT", "DIFFERENCE"):
+        case(f"MeshBoolean.FLOATX.{op}.spheres", lambda b, op=op: _boolean(b, op, usph(b), [usph(b, 20, 10, 0.8, (0.7, 0.2, 0.1))], "FLOAT"))
+        case(f"MeshBoolean.FLOATX.{op}.sphcyl", lambda b, op=op: _boolean(b, op, usph(b, 32, 16), [b.n("GeometryNodeMeshCylinder", Vertices=24, Radius=0.35, Depth=3.0)], "FLOAT"))
+        case(f"MeshBoolean.FLOATX.{op}.gridcyl", lambda b, op=op: _boolean(b, op, b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=6, Vertices__Y=6, Vertices__Z=6), [cube_at(b, (0.8, 0.8, 3.0), (0.25, 0.1, 0.0)), b.n("GeometryNodeMeshCylinder", Vertices=16, Radius=0.3, Depth=3.0)], "FLOAT"))
+    case("MeshBoolean.FLOATX.DIFFERENCE.cone", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCone", Vertices=12, Radius__Top=0.1, Radius__Bottom=0.8, Depth=3.0)], "FLOAT"))
+    case("MeshBoolean.FLOATX.DIFFERENCE.cyls", lambda b: _boolean(b, "DIFFERENCE", b.n("GeometryNodeMeshCylinder", Vertices=32, Radius=1.0, Depth=1.0), [b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.3, Depth=3.0), cube_at(b, (0.3, 3.0, 0.3), (0.5, 0, 0.1))], "FLOAT"))
+    def cube_uv(b, size, res):
+        c = b.n("GeometryNodeMeshCube", Size=size, Vertices__X=res, Vertices__Y=res, Vertices__Z=res)
+        return b.store((c, "Mesh"), (c, "UV Map"), "uv_map", "CORNER", "FLOAT_VECTOR")
+    def mk_uv(b):
+        a = cube_uv(b, (2, 2, 2), 4)
+        a = b.store((a, "Geometry"), (b.index(), "Index"), "ci", "CORNER", "INT")
+        cyl = b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.4, Depth=4.0)
+        return _boolean(b, "DIFFERENCE", a, [cyl], "FLOAT")
+    case("MeshBoolean.FLOAT.DIFFERENCE.cornerattr", mk_uv)
+    case("MeshBoolean.FLOAT.DIFFERENCE.cornerattr2", lambda b: _boolean(b, "DIFFERENCE", cube_uv(b, (2, 2, 2), 3), [cube_uv(b, (0.8, 0.8, 3.0), 2)], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.thin", lambda b: thin(b, solver="FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2), "FLOAT"))
+    case("MeshBoolean.FLOAT.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
     case("MeshBoolean.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))]))
     def two_cubes(b):
         c1 = b.n("GeometryNodeMeshCube", Size=(1, 1, 1))

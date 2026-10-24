@@ -20,6 +20,10 @@ pub struct PanParams {
     pub x_guard: f64,
     pub guard_depth: f64,
     pub n: usize,
+    pub fill_offset: usize,
+    pub has_handle: bool,
+    /// handle hole: (centre x, radius)
+    pub hole: Option<(f64, f64)>,
 }
 
 fn face_normal(m: &Mesh, f: &[u32]) -> V3 {
@@ -150,12 +154,60 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
             m.faces.push(vec![id(k + 1, i), id(k + 1, pv(i)), id(k, pv(i)), id(k, i)]);
         }
     }
-    // bottom cap: fan around a centre vertex, normal pointing down
-    let c = m.pos.len() as u32;
-    m.pos.push([0.0, 0.0, 0.0]);
-    for i in 0..n {
-        m.faces.push(vec![id(0, i + 1), id(0, i), c]);
+    // bottom cap: fill_grid on the base ring (loop rotated by `offset`), quads split by BEAUTY, normals pointing down
+    {
+        // python fills the unrotated ring (bpy circle: (-sin phi, cos phi), phi accumulated in f32); the start vertex is the first one with
+        // the largest f32 angle deviation, then rotated by `offset`
+        // BM_mesh_edgeloops_find starts the loop list at e->v1 of the first mesh edge (vertex 1) and walks forward: 1, 2, .., n-1, 0
+        let c32: Vec<[f32; 3]> = (0..n).map(|i| { let (s, c) = super::cabnodes::sin_cos_from_fraction(i, n); [-s, c, 0.0f32] }).collect();
+        let mut best = (-1.0f32, 0usize);
+        for j in 0..n {
+            let i = (1 + j) % n;
+            let a = (std::f32::consts::PI - crate::bm::query::angle_v3v3v3(c32[(i + n - 1) % n], c32[i], c32[(i + 1) % n])).abs();
+            if a > best.0 || j == 0 {
+                best = (a, j);
+            }
+        }
+        // `best.1` counts along the loop list; the ring below is indexed by vertex: list position j <-> vertex (1 + j) % n
+        best.1 = (1 + best.1) % n;
+        let start = (best.1 + p.fill_offset) % n;
+        // python fills the unrotated f32 ring and rotates (by pi/n) afterwards: grid positions and the beauty split use the unrotated values
+        let ring: Vec<V3> = (0..n).map(|i| { let q = c32[(i + start) % n]; [q[0] as f64, q[1] as f64, 0.0] }).collect();
+        let idx: Vec<u32> = (0..n).map(|i| id(0, (i + start) % n)).collect();
+        let mut grid = super::bpyops::fill_grid_loop_ex(&ring, true);
+        let nz: f64 = grid.faces.iter().map(|f| super::bpyops::face_normal(&grid, f)[2]).sum();
+        if nz > 0.0 {
+            for f in grid.faces.iter_mut() {
+                f.reverse();
+            }
+        }
+        // grid vertices on the ring map to the ring vertices; the rest are new (rotated)
+        let (rs_, rc_) = (rot.sin(), rot.cos());
+        let mut gmap = vec![0u32; grid.pos.len()];
+        for (gi, gp) in grid.pos.iter().enumerate() {
+            let hit = ring.iter().position(|rp| rp == gp);
+            gmap[gi] = match hit {
+                Some(k) => idx[k],
+                None => {
+                    m.pos.push([gp[0] * rc_ - gp[1] * rs_, gp[0] * rs_ + gp[1] * rc_, gp[2]]);
+                    (m.pos.len() - 1) as u32
+                }
+            };
+        }
+        for f in &grid.faces {
+            let q32 = [0, 1, 2, 3].map(|k| { let p = grid.pos[f[k] as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] });
+            let v = |k: usize| gmap[f[k] as usize];
+            if super::polyfill::quad_split_24_beauty(q32) {
+                m.faces.push(vec![v(0), v(1), v(2)]);
+                m.faces.push(vec![v(0), v(2), v(3)]);
+            } else {
+                m.faces.push(vec![v(0), v(1), v(3)]);
+                m.faces.push(vec![v(1), v(2), v(3)]);
+            }
+        }
     }
+    dbg_bbox("filled", &m);
+    if p.has_handle {
     // handle: edge with the largest u.x + v.x + u.z + v.z
     let mut best = (f64::NEG_INFINITY, 0u32, 0u32, 0usize);
     let mut ecount: HashMap<(u32, u32), (u32, u32, usize)> = HashMap::default();
@@ -202,6 +254,7 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
         }
     }
     extrude(&mut m, &mut a, &mut b, [1e-3, 0.0, 0.0]);
+    }
     round32(&mut m);
     dbg_bbox("handle", &m);
     let mut m = solidify(&m, p.thickness, 1.0);
@@ -219,8 +272,13 @@ pub fn pan_unit_mesh(p: &PanParams) -> Option<Mesh> {
     dbg_bbox("guard", &m);
     let m = subsurf(&m, 1, true);
     dbg_bbox("simple1", &m);
-    let m = subsurf(&m, 3, false);
+    let mut m = subsurf(&m, 3, false);
     dbg_bbox("cc3", &m);
+    if let Some((cx, r)) = p.hole {
+        round32(&mut m);
+        m = super::prismcut::prism_difference(&m, &super::prismcut::cylinder_corners(cx, r));
+        dbg_bbox("hole", &m);
+    }
     Some(m)
 }
 

@@ -198,8 +198,13 @@ dependencies = [
  "indexmap",
  "md5",
  "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
  "parry3d-f64",
  "rayon",
+ "robust",
  "serde",
  "serde_json",
 ]

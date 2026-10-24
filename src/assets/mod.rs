@@ -51,6 +51,7 @@ pub mod gweld;
 pub mod hwexact;
 pub mod bathfree;
 pub mod pangeom;
+pub mod prismcut;
 pub mod ksink;
 pub mod books;
 pub mod textdraw;
@@ -94,6 +95,9 @@ pub mod bevmod;
 pub mod toiletx;
 pub mod bathkit;
 pub mod bathtub;
+pub mod taps;
+pub mod bathsink;
+pub mod tvx;
 pub mod solid;
 pub mod windows;
 pub mod shelves;
@@ -194,7 +198,7 @@ impl Asset {
 
     pub fn bbox_geom(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
-        ObjGeom::cuboid(lo, hi, 0)
+        crate::furn::geom::cuboid_py(lo, hi, 0, 0)
     }
 }
 
@@ -233,6 +237,7 @@ pub fn unseeded() -> Option<Vec<f64>> {
 pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> {
     let mut rng = Rng::seeded(factory_seed);
     match class {
+        "TapFactory" => Some(Box::new(taps::TapFactory { fseed: factory_seed })),
         c if shelves::handles(c) => shelves::make(c, &mut rng, factory_seed),
         c if succulent::handles(c) => succulent::make(c, &mut rng, factory_seed),
         c if balloon::handles(c) => balloon::make(c, &mut rng, factory_seed),
@@ -285,7 +290,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
 /// bounding box placeholder of the final asset (uses the float32 exact mesh when the class is ported at topology level)
 pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
     if let Some((lo, hi)) = f.bounds_hint(inst) {
-        return ObjGeom::cuboid(lo, hi, 0);
+        return crate::furn::geom::cuboid_py(lo, hi, 1, 0);
     }
     if let Some(e) = f.exact(inst) {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -295,9 +300,10 @@ pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
                 hi[k] = hi[k].max(v[k]);
             }
         }
-        return ObjGeom::cuboid(lo, hi, 0);
+        return crate::furn::geom::cuboid_py(lo, hi, 1, 0);
     }
-    f.asset(inst).bbox_geom()
+    let (lo, hi) = f.asset(inst).bounds();
+    crate::furn::geom::cuboid_py(lo, hi, 1, 0)
 }
 
 
@@ -362,6 +368,15 @@ pub struct RealAssets {
 
 impl Assets for RealAssets {
     fn placeholder(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
+        self.placeholder_raw(class, factory_seed, inst_seed, kind).map(round_geom_f32)
+    }
+    fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
+        make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom())
+    }
+}
+
+impl RealAssets {
+    pub fn placeholder_raw(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
         if let Some(f) = make_factory(class, factory_seed) {
             return Some(match kind {
                 PlaceholderKind::Real => match f.placeholder(inst_seed) {
@@ -385,12 +400,6 @@ impl Assets for RealAssets {
         }
         self.fallback.placeholder(class, factory_seed, inst_seed, kind)
     }
-    fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
-        make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom())
-    }
-}
-
-impl RealAssets {
     /// final visual asset for a generated object (real port if available, otherwise a recipe in the sampled bbox)
     pub fn visual(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Asset {
         if let Some(f) = make_factory(class, factory_seed) {
@@ -403,4 +412,21 @@ impl RealAssets {
         let mut rng = inst_rng(factory_seed, inst_seed);
         proxy::proxy_asset(class, lo, hi, &mut rng)
     }
+}
+
+/// python meshes are float32: round every coordinate (and the bounds) to f32
+pub fn round_geom_f32(mut g: ObjGeom) -> ObjGeom {
+    let r = |v: &mut V3| {
+        for k in 0..3 {
+            v[k] = v[k] as f32 as f64;
+        }
+    };
+    for t in g.tris.iter_mut() {
+        for v in t.v.iter_mut() {
+            r(v);
+        }
+    }
+    r(&mut g.lo);
+    r(&mut g.hi);
+    g
 }

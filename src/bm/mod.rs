@@ -1,7 +1,15 @@
 //! Minimal BMesh (Blender's half-edge mesh) with the same element ordering semantics: disk cycles, radial cycles, and mempool
 //! slot reuse (freed slots are reused LIFO, iteration is in slot order), as needed to reproduce Blender's bmesh operators exactly.
 pub mod bevel;
+pub mod bvh;
+pub mod cdata;
+pub mod edgenet;
+pub mod isect;
+pub mod kern;
+pub mod qsort;
 pub mod query;
+pub mod rotate;
+pub mod scanfill;
 
 pub const NONE: usize = usize::MAX;
 pub type V3 = [f32; 3];
@@ -23,9 +31,13 @@ pub struct BMVert {
     pub api: u8,
     pub idx: i32,
     pub alive: bool,
+    /// free user payload (0 = none), copied from the example vertex by `vert_create`
+    pub user: usize,
 }
 #[derive(Clone, Default, Debug)]
 pub struct BMEdge {
+    /// free user payload (0 = none), copied from the example edge by `edge_create` / attribute copies
+    pub user: usize,
     pub v1: usize,
     pub v2: usize,
     /// disk links (next, prev) around v1 / v2
@@ -60,6 +72,8 @@ pub struct BMFace {
     pub api: u8,
     pub idx: i32,
     pub alive: bool,
+    /// free user payload (copied by attribute copies, swapped by `face_swap_data`)
+    pub user: usize,
 }
 
 #[derive(Default)]
@@ -75,6 +89,8 @@ pub struct BMesh {
     pub totvert: usize,
     pub totedge: usize,
     pub totface: usize,
+    /// loop (corner) custom data (empty unless a tool sets layers)
+    pub ld: cdata::LoopData,
 }
 
 impl BMesh {
@@ -84,11 +100,12 @@ impl BMesh {
 
     // ------------------------------------------------------------------ create
     pub fn vert_create(&mut self, co: V3, example: Option<usize>) -> usize {
-        let mut v = BMVert { co, no: [0.0; 3], e: NONE, flag: 0, api: 0, idx: -1, alive: true };
+        let mut v = BMVert { co, no: [0.0; 3], e: NONE, flag: 0, api: 0, idx: -1, alive: true, user: 0 };
         if let Some(ex) = example {
             // BM_elem_attrs_copy: hflag (without select) and normal
             v.flag = self.verts[ex].flag & !ELEM_SELECT;
             v.no = self.verts[ex].no;
+            v.user = self.verts[ex].user;
         }
         self.totvert += 1;
         match self.vfree.pop() {
@@ -110,9 +127,10 @@ impl BMesh {
                 return e;
             }
         }
-        let mut e = BMEdge { v1, v2, d1: [NONE; 2], d2: [NONE; 2], l: NONE, flag: ELEM_SMOOTH | ELEM_DRAW, api: 0, idx: -1, alive: true };
+        let mut e = BMEdge { user: 0, v1, v2, d1: [NONE; 2], d2: [NONE; 2], l: NONE, flag: ELEM_SMOOTH | ELEM_DRAW, api: 0, idx: -1, alive: true };
         if let Some(ex) = example {
             e.flag = self.edges[ex].flag & !ELEM_SELECT;
+            e.user = self.edges[ex].user;
         }
         self.totedge += 1;
         let id = match self.efree.pop() {
@@ -132,7 +150,7 @@ impl BMesh {
 
     fn loop_create(&mut self, v: usize, e: usize, f: usize) -> usize {
         let l = BMLoop { v, e, f, rn: NONE, rp: NONE, n: NONE, p: NONE, flag: 0, idx: -1, alive: true };
-        match self.lfree.pop() {
+        let i = match self.lfree.pop() {
             Some(i) => {
                 self.loops[i] = l;
                 i
@@ -141,7 +159,9 @@ impl BMesh {
                 self.loops.push(l);
                 self.loops.len() - 1
             }
-        }
+        };
+        self.ld.reset(i);
+        i
     }
 
     /// BM_face_create (edges given)
@@ -156,7 +176,7 @@ impl BMesh {
                 return f;
             }
         }
-        let f = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true };
+        let f = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true, user: 0 };
         self.totface += 1;
         let fid = match self.ffree.pop() {
             Some(i) => {
@@ -190,11 +210,15 @@ impl BMesh {
 
     /// BM_face_split (bmesh_kernel_split_face_make_edge): returns (new face, loop of the new face on the new edge)
     pub fn face_split(&mut self, f: usize, l_v1: usize, l_v2: usize) -> (usize, usize) {
+        self.face_split_ex(f, l_v1, l_v2, false)
+    }
+    /// BM_face_split with `no_double` (reuses an existing edge between the two verts)
+    pub fn face_split_ex(&mut self, f: usize, l_v1: usize, l_v2: usize, no_double: bool) -> (usize, usize) {
         let v1 = self.loops[l_v1].v;
         let v2 = self.loops[l_v2].v;
-        let e = self.edge_create(v1, v2, None, false);
+        let e = self.edge_create(v1, v2, None, no_double);
         // bm_face_create__sfme
-        let nf = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true };
+        let nf = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true, user: 0 };
         self.totface += 1;
         let f2 = match self.ffree.pop() {
             Some(i) => {
@@ -304,7 +328,9 @@ impl BMesh {
 
     pub fn elem_attrs_copy_face(&mut self, src: usize, dst: usize) {
         let (flag, no, mat) = (self.faces[src].flag, self.faces[src].no, self.faces[src].mat_nr);
+        let user = self.faces[src].user;
         let d = &mut self.faces[dst];
+        d.user = user;
         d.flag = (d.flag & ELEM_SELECT) | (flag & !ELEM_SELECT);
         d.no = no;
         d.mat_nr = mat;
@@ -316,9 +342,25 @@ impl BMesh {
         d.no = no;
     }
     pub fn elem_attrs_copy_edge(&mut self, src: usize, dst: usize) {
-        let flag = self.edges[src].flag;
+        let (flag, user) = (self.edges[src].flag, self.edges[src].user);
         let d = &mut self.edges[dst];
         d.flag = (d.flag & ELEM_SELECT) | (flag & !ELEM_SELECT);
+        d.user = user;
+    }
+
+    /// bmesh_face_swap_data: swap the loop cycles / len / normal / flags of two faces (the element slots stay put)
+    pub fn face_swap_data(&mut self, a: usize, b: usize) {
+        for l in self.loops_of_face(a) {
+            self.loops[l].f = b;
+        }
+        for l in self.loops_of_face(b) {
+            self.loops[l].f = a;
+        }
+        let idx_a = self.faces[a].idx;
+        let idx_b = self.faces[b].idx;
+        self.faces.swap(a, b);
+        self.faces[a].idx = idx_a;
+        self.faces[b].idx = idx_b;
     }
 
     // ------------------------------------------------------------------ disk / radial cycles

@@ -8,10 +8,22 @@ use crate::dhash::HashMap;
 
 /// `angle`: Some(radians) for limit_method ANGLE (default 30 degrees), None for NONE (all manifold edges)
 pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32) -> Result<Mesh, String> {
+    bevel_modifier_ex(m, width, segments, angle, clamp, profile, None)
+}
+
+/// like `bevel_modifier`; `edge_order`: the Blender mesh's edge list (vertex pairs in edge index order, e.g. `mesh.edges`), used instead of the
+/// first-use order of the face corners (matters for the vertex/face order of the result)
+pub fn bevel_modifier_ex(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
     let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
     // edges in first-use order of the face corners (BKE mesh edge calculation order)
     let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
     let mut edges: Vec<[u32; 2]> = vec![];
+    if let Some(eo) = edge_order {
+        for e in eo {
+            emap.insert((e[0].min(e[1]), e[0].max(e[1])), edges.len() as u32);
+            edges.push(*e);
+        }
+    }
     let mut ce: Vec<Vec<u32>> = vec![];
     for f in &m.faces {
         let mut fe = vec![];
@@ -80,7 +92,7 @@ fn safe_acos_approx(x: f32) -> f32 {
 
 /// `BKE_mesh_to_bmesh_ex(calc_vert_normal)`: BMVert.no = Mesh::vert_normals() (angle weighted (safe_acos_approx) sum of the Newell
 /// face normals), not BMesh's own vertex normals. Matters for the vertex-normal sign tests of the bevel (folded geometry).
-fn set_mesh_vert_normals(bm: &mut BMesh, pos: &[[f32; 3]], faces: &[Vec<u32>]) {
+pub fn set_mesh_vert_normals(bm: &mut BMesh, pos: &[[f32; 3]], faces: &[Vec<u32>]) {
     let norm = |v: [f32; 3]| -> [f32; 3] {
         let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         if l > 0.0 {
@@ -122,4 +134,49 @@ fn set_mesh_vert_normals(bm: &mut BMesh, pos: &[[f32; 3]], faces: &[Vec<u32>]) {
     for v in 0..pos.len() {
         bm.verts[v].no = if has[v] { norm(acc[v]) } else { norm(pos[v]) };
     }
+}
+
+/// `bpy.ops.mesh.bevel(affect=EDGES, offset_type=WIDTH|OFFSET, ...)` on the edges whose two face normals differ by more than `sharp`
+/// radians (`edges_select_sharp`). Operator defaults: clamp_overlap False, loop_slide True, profile 0.5.
+pub fn bevel_sharp_op(m: &Mesh, sharp: f32, width: f64, segments: i32, width_mode: bool) -> Result<Mesh, String> {
+    use crate::bm::bevel::{bevel_edges, BevelOpts, OffsetType};
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut ce: Vec<Vec<u32>> = vec![];
+    let mut efaces: Vec<Vec<usize>> = vec![];
+    for (fi, f) in m.faces.iter().enumerate() {
+        let mut fe = vec![];
+        for c in 0..f.len() {
+            let (a, b) = (f[c], f[(c + 1) % f.len()]);
+            let k = (a.min(b), a.max(b));
+            let id = *emap.entry(k).or_insert_with(|| {
+                edges.push([k.0, k.1]);
+                efaces.push(vec![]);
+                (edges.len() - 1) as u32
+            });
+            efaces[id as usize].push(fi);
+            fe.push(id);
+        }
+        ce.push(fe);
+    }
+    let mut bm = BMesh::from_mesh(&pos, &edges, &m.faces, &ce);
+    set_mesh_vert_normals(&mut bm, &pos, &m.faces);
+    let mut sel = vec![];
+    for (ei, fs) in efaces.iter().enumerate() {
+        if fs.len() == 2 {
+            let a = bm.faces[fs[0]].no;
+            let b = bm.faces[fs[1]].no;
+            if crate::bm::query::angle_normalized_v3v3(a, b).abs() > sharp {
+                sel.push(ei);
+            }
+        }
+    }
+    let o = BevelOpts { offset: width as f32, offset_type: if width_mode { OffsetType::Width } else { OffsetType::Offset }, segments, profile: 0.5, limit_offset: false, loop_slide: true, mat_nr: -1 };
+    bevel_edges(&mut bm, &sel, &o)?;
+    let (p, _e, f) = bm.to_mesh();
+    let mut out = Mesh::new();
+    out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    out.faces = f;
+    Ok(out)
 }

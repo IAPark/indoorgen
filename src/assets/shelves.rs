@@ -583,6 +583,80 @@ impl KitchenSpace {
     }
 }
 
+impl KitchenSpace {
+    fn cabinet(&self, dims: [f64; 3], drawer_only: bool, inst: u64, prev: Option<(f64, f64, f64, f64)>) -> (cabnodes::GMesh, (f64, f64, f64, f64)) {
+        let mut r = Rng::seeded(self.factory_seed);
+        let n = ((dims[1] / 0.45) as usize).max(1);
+        let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
+        let s = np_sum(&ws);
+        let widths: Vec<f64> = ws.iter().map(|w| w / s * dims[1]).collect();
+        let mut ri = inst_rng(self.factory_seed, inst);
+        let spec = cabdoor::KcSpec { dims, widths, drawer_only };
+        cabdoor::kitchen_cabinet_gmesh_ex(&mut ri, &spec, Default::default(), prev)
+    }
+
+    fn translated(mut g: cabnodes::GMesh, t: [f64; 3]) -> cabnodes::GMesh {
+        for p in g.v.iter_mut() {
+            for k in 0..3 {
+                p[k] = p[k] + t[k] as f32;
+            }
+        }
+        g
+    }
+
+    /// KitchenSpaceFactory.create_asset(i): bottom cabinet + countertop (geometry_nodes_add_cabinet_top), three top cabinets, joined and
+    /// (non-island) scaled to `dimensions`
+    fn assemble(&self, inst: u64) -> cabnodes::GMesh {
+        let [x, y, z] = self.dims;
+        let bottom = self.bottom_cabinet();
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for v in &bottom.v {
+            for k in 0..3 {
+                lo[k] = lo[k].min(v[k]);
+                hi[k] = hi[k].max(v[k]);
+            }
+        }
+        let (xr, yr) = ((hi[0] - lo[0]) as f64, (hi[1] - lo[1]) as f64);
+        let top = super::tableparts::table_top_exact(4, xr * 1.414, yr / xr, 0.01, 0.05, 0.01);
+        let mut slab = cabnodes::GMesh::new();
+        slab.v = top.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        slab.p = top.faces.clone();
+        slab.tag = vec![0; slab.p.len()];
+        let slab = Self::translated(slab, [0.0, ((lo[1] + hi[1]) / 2.0) as f64, hi[2] as f64]);
+        let mut parts = vec![bottom, slab];
+        if !self.island {
+            let mut r = inst_rng(self.factory_seed, inst);
+            let tmw = r.uniform(1.0, 1.3);
+            let ctw = (y - tmw) / 2.0 - 0.05;
+            let th = self.top_h;
+            // left and right share one KitchenCabinetFactory object: the second instance reuses the first one's frame parameters
+            let (left, rnd) = self.cabinet([x / 2.0, ctw, th], false, 0, None);
+            let (right, _) = self.cabinet([x / 2.0, ctw, th], false, 1, Some(rnd));
+            let (mid, _) = self.cabinet([x * 0.66, tmw, th * 0.8], false, 0, None);
+            parts.push(Self::translated(left, [-x / 4.0, 0.0, z - th]));
+            parts.push(Self::translated(right, [-x / 4.0, y - ctw, z - th]));
+            parts.push(Self::translated(mid, [-x / 6.0, y / 2.0 - tmw / 2.0, z - th * 0.8]));
+        }
+        let mut g = hwexact::join_fwd(&parts);
+        if !self.island {
+            let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+            for v in &g.v {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(v[k]);
+                    hi[k] = hi[k].max(v[k]);
+                }
+            }
+            let dims = [x as f32, y as f32, z as f32];
+            for v in g.v.iter_mut() {
+                for k in 0..3 {
+                    v[k] = v[k] * (dims[k] / (hi[k] - lo[k]));
+                }
+            }
+        }
+        g
+    }
+}
+
 /// numpy float64 pairwise sum (n < 128: 8-way unrolled blocks)
 pub fn np_sum(a: &[f64]) -> f64 {
     let n = a.len();
@@ -667,28 +741,13 @@ impl Factory for KitchenSpace {
         e.names = names;
         Some(e)
     }
-    fn asset(&self, _i: u64) -> Asset {
-        let [x, y, z] = self.dims;
+    fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
+        Some(self.assemble(i).to_exact())
+    }
+    fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
-        let mut r = Rng::seeded(self.factory_seed ^ 0x5bd1);
-        let shelf_mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
-        let counter = mat("countertop", [0.75, 0.74, 0.72], 0.3);
-        // bottom cabinets (origin at one end, y from 0 to length)
-        let kc = KitchenCabinet::with_dims(&mut r, Some([x, y - 0.15, self.bottom_h]));
-        let mut kc2 = kc;
-        kc2.mat = shelf_mat.clone();
-        kc2.build(&mut a, [0.0, y / 2.0, 0.0]);
-        a.board([-x / 2.0 * 1.04, 0.0, self.bottom_h], [x / 2.0 * 1.04, y, self.bottom_h + 0.04], &counter);
-        if !self.island {
-            let top_mid = r.uniform(1.0, 1.3);
-            let tw = (y - top_mid) / 2.0 - 0.05;
-            for (y0, w) in [(0.0, tw), (y - tw, tw)] {
-                let k = KitchenCabinet::with_dims(&mut r, Some([x / 2.0, w, self.top_h]));
-                k.build(&mut a, [-x / 4.0 + x / 4.0 - x / 4.0, y0 + w / 2.0, z - self.top_h]);
-            }
-            let k = KitchenCabinet::with_dims(&mut r, Some([x * 0.66, top_mid, self.top_h * 0.8]));
-            k.build(&mut a, [-x / 6.0 + x * 0.33 - x * 0.33, y / 2.0, z - self.top_h * 0.8]);
-        }
+        let g = self.assemble(i);
+        a.mesh(g.to_mesh(), &mat("kitchen", [0.7, 0.62, 0.5], 0.5), None);
         a
     }
     fn placeholder(&self, _i: u64) -> Option<Asset> {

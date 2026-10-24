@@ -19,12 +19,30 @@ fn main() {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
         for v in &verts { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } }
         let kind = if usage.has_usage(&class, "RealPlaceholder") { PlaceholderKind::Real } else if usage.has_usage(&class, "AssetAsPlaceholder") { PlaceholderKind::AssetAsPlaceholder } else if usage.has_usage(&class, "PlaceholderBBox") { PlaceholderKind::BboxOfPlaceholder } else { PlaceholderKind::BboxOfAsset };
+        if std::env::var_os("PHKIND").is_some() { eprintln!("KIND {} {:?}", class, kind as u8); }
         let e = stats.entry(class.clone()).or_default();
         e.0 += 1;
         let real = infinigen::assets::make_factory(&class, fs).is_some();
         if let (true, Some(g)) = (real, assets.placeholder(&class, fs, inst, kind)) {
             let d = (0..3).map(|k| (g.lo[k] - lo[k]).abs().max((g.hi[k] - hi[k]).abs())).fold(0.0, f64::max);
-            if d < 1e-4 { e.1 += 1; }
+            if std::env::var_os("PHTAGS").is_some() {
+                let names = j["face_names"].as_array().cloned().unwrap_or_default();
+                let polys = j["polys"].as_array().unwrap();
+                let mut bad = 0;
+                for (pi, poly) in polys.iter().enumerate() {
+                    let ix: Vec<usize> = poly.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect();
+                    let c: [f64; 3] = std::array::from_fn(|k| (verts[ix[0]][k] + verts[ix[1]][k] + verts[ix[2]][k]) / 3.0);
+                    let mut bits = 0u32;
+                    if !names.is_empty() { for part in names[pi].as_str().unwrap().split('.') { let mut cc = part.to_string(); if let Some(f) = cc.get_mut(0..1) { f.make_ascii_uppercase(); } bits |= infinigen::furn::geom::subpart_bit(&cc); } }
+                    let m = bits & (infinigen::furn::geom::BACK | infinigen::furn::geom::FRONT | infinigen::furn::geom::TOP | infinigen::furn::geom::BOTTOM | infinigen::furn::geom::SIDE);
+                    let found = g.tris.iter().find(|t| (0..3).all(|k| ((t.v[0][k] + t.v[1][k] + t.v[2][k]) / 3.0 - c[k]).abs() < 1e-5));
+                    match found { Some(t) => { if t.tags & (infinigen::furn::geom::BACK | infinigen::furn::geom::FRONT | infinigen::furn::geom::TOP | infinigen::furn::geom::BOTTOM | infinigen::furn::geom::SIDE) != m { bad += 1; } } None => bad += 1 }
+                }
+                if bad > 0 && std::env::var_os("PHTAGS").unwrap() == "2" { for (pi, poly) in polys.iter().enumerate() { let ix: Vec<usize> = poly.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(); let c: [f64; 3] = std::array::from_fn(|k| (verts[ix[0]][k] + verts[ix[1]][k] + verts[ix[2]][k]) / 3.0); let f = g.tris.iter().find(|t| (0..3).all(|k| ((t.v[0][k] + t.v[1][k] + t.v[2][k]) / 3.0 - c[k]).abs() < 1e-5)); eprintln!("  py {:?} c {:?} rust {:?}", names.get(pi), c, f.map(|t| t.tags)); } }
+                if bad > 0 { eprintln!("TAGDIFF {} fs {} inst {} bad {}/{}", class, fs, inst, bad, polys.len()); }
+            }
+            if std::env::var("PHV").ok().as_deref() == Some(class.as_str()) && d > 1e-9 { eprintln!("{} fs {} inst {} d {:e} lo {:?} {:?} hi {:?} {:?}", class, fs, inst, d, lo, g.lo, hi, g.hi); }
+            if d < std::env::var("PHTOL").ok().and_then(|s| s.parse().ok()).unwrap_or(1e-4) { e.1 += 1; }
             e.2 = e.2.max(d);
         } else { e.3 += 1; }
     }

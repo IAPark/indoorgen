@@ -356,9 +356,8 @@ pub fn triangulate(m: &Mesh) -> Mesh {
         if f.len() <= 3 {
             o.faces.push(f.clone());
         } else if f.len() == 4 {
-            let d02 = len3(sub3(m.pos[f[0] as usize], m.pos[f[2] as usize]));
-            let d13 = len3(sub3(m.pos[f[1] as usize], m.pos[f[3] as usize]));
-            if d02 <= d13 {
+            let c = |i: usize| { let p = m.pos[f[i] as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] };
+            if super::polyfill::quad_split_24_beauty([c(0), c(1), c(2), c(3)]) {
                 o.faces.push(vec![f[0], f[1], f[2]]);
                 o.faces.push(vec![f[0], f[2], f[3]]);
             } else {
@@ -366,8 +365,9 @@ pub fn triangulate(m: &Mesh) -> Mesh {
                 o.faces.push(vec![f[1], f[2], f[3]]);
             }
         } else {
-            for i in 1..f.len() - 1 {
-                o.faces.push(vec![f[0], f[i], f[i + 1]]);
+            let co: Vec<[f32; 3]> = f.iter().map(|&v| { let p = m.pos[v as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] }).collect();
+            for t in super::polyfill::triangulate_ngon(&co) {
+                o.faces.push(vec![f[t[0] as usize], f[t[1] as usize], f[t[2] as usize]]);
             }
         }
     }
