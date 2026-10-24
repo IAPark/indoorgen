@@ -54,4 +54,5 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 ## Evaluation (orchestrator)
 | id | item | status | notes |
 |---|---|---|---|
-| E1 | Spot-check renders, then blind A/B judging with >= 2 judges per room | todo | after S1, D1-D5 land |
+| E1 | First blind pass (2026-10-24, 11 rooms x cornerA, 3 sonnet judges, neutral prompt): **Rust preferred 8/33 = 24%** | done | losses: camera inside objects (garbled close-up, black near-clip triangle) -> render camera fixed for both sides; Rust beds are slabs (S1); dark Rust bathroom floors/lighting (Bathroom 4 lum 43 vs 87); sparse-looking Rust rooms (LivingRoom 4, Bedroom 4); 'floating' rugs (both sides) |
+| E2 | Second pass after S1/D1-D5 + camera fix: re-render BOTH sides (camera code changed), 14 rooms x 2 views, 3 judges | todo | |
