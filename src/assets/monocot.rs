@@ -64,6 +64,22 @@ fn log_uniform(r: &mut Rng, lo: f64, hi: f64) -> f64 {
 }
 
 impl Growth {
+    fn banana_block(&mut self, r: &mut Rng) {
+        self.stem_offset = r.uniform(0.6, 1.0);
+        self.angle = r.uniform(PI / 4.0, PI / 3.0);
+        self.z_scale = r.uniform(1.0, 1.5);
+        self.z_drag = r.uniform(0.1, 0.2);
+        self.min_y = r.uniform(PI * 0.05, PI * 0.1);
+        self.max_y = r.uniform(PI * 0.25, PI * 0.45);
+        self.leaf_range = (r.uniform(0.5, 0.7), 1.0);
+        self.count = log_uniform(r, 16.0, 24.0) as i64;
+        self.scale_curve = vec![(0.0, r.uniform(0.4, 1.0)), (1.0, r.uniform(0.6, 1.0))];
+        self.radius = r.uniform(0.04, 0.06);
+        self.bud_angle = r.uniform(PI / 8.0, PI / 6.0);
+        self.cut_angle = self.bud_angle + r.uniform(PI / 20.0, PI / 12.0);
+        self.freq = log_uniform(r, 100.0, 300.0);
+        self.n_cuts = if r.uniform(0.0, 1.0) < 0.8 { r.randint(6, 10) } else { 0 };
+    }
     fn grasses_block(&mut self, r: &mut Rng) {
         self.stem_offset = r.uniform(1.5, 2.0);
         self.angle = r.uniform(PI / 6.0, PI / 3.0);
@@ -177,6 +193,21 @@ impl Growth {
                     _ => {}
                 }
             }
+            Kind::Banana | Kind::Taro => {
+                g.banana_block(&mut r);
+                if kind == Kind::Taro {
+                    let mut r = Rng::seeded(fs);
+                    g.stem_offset = r.uniform(0.05, 0.1);
+                    g.radius = r.uniform(0.02, 0.04);
+                    g.z_drag = r.uniform(0.2, 0.3);
+                    g.bud_angle = r.uniform(PI * 0.6, PI * 0.7);
+                    g.freq = log_uniform(&mut r, 10.0, 20.0);
+                    g.count = log_uniform(&mut r, 12.0, 16.0) as i64;
+                    g.n_cuts = if r.uniform(0.0, 1.0) < 0.5 { r.randint(1, 2) } else { 0 };
+                    g.min_y = r.uniform(-PI * 0.25, -PI * 0.05);
+                    g.max_y = r.uniform(-PI * 0.05, 0.0);
+                }
+            }
             _ => unimplemented!("monocot kind {:?}", kind),
         }
         g
@@ -235,13 +266,13 @@ pub fn decorate_leaf(m: &mut LMesh, r: &mut Rng, y_ratio: f64, y_bend: f64, z_be
     geo_ext(m, r, 0.2, 2.0);
     m.trace("geo_geo_extension");
     let tex = stucci(noise_scale);
-    displace(&mut m.v, &m.f, &tex, strength, 0.5, DispDir::Normal, None);
+    displace(&mut m.v, &m.f, Some(&tex), strength, 0.5, DispDir::Normal, None);
     m.trace("DISPLACE");
     let dims = m.dimensions();
     for (d, w) in [(DispDir::X, dims[0]), (DispDir::Y, dims[1])] {
         let tex = stucci(noise_scale);
         let s = r.uniform(0.01, 0.02) * w as f64;
-        displace(&mut m.v, &m.f, &tex, s, 0.5, d, None);
+        displace(&mut m.v, &m.f, Some(&tex), s, 0.5, d, None);
         m.trace("DISPLACE");
     }
     if leftmost {
@@ -314,11 +345,176 @@ impl Growth {
                 decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
                 obj
             }
+            Kind::Banana => {
+                let b = self.bud_angle;
+                let x = [0.0, 0.2 * b.cos(), r.uniform(0.8, 1.2), 2.0];
+                let y = [0.0, 0.2 * b.sin(), r.uniform(0.2, 0.25), 0.0];
+                let mut obj = leaf(&x, &y, Some(face_size));
+                obj = self.cut_leaf(obj, r);
+                self.displace_veins(&mut obj, r);
+                decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
+                obj
+            }
+            Kind::Taro => {
+                let b = self.bud_angle;
+                let x = [0.0, 0.2 * b.cos(), r.uniform(0.4, 1.0), r.uniform(0.8, 1.0)];
+                let y = [0.0, 0.2 * b.sin(), r.uniform(0.25, 0.3), 0.0];
+                let mut obj = leaf(&x, &y, Some(face_size));
+                obj = self.cut_leaf(obj, r);
+                self.displace_veins(&mut obj, r);
+                decorate_leaf(&mut obj, r, 2.0, PI / 6.0, PI / 6.0, 0.1, 0.02, false);
+                let branch = self.build_branch(r);
+                let mut o = LMesh::join(&[&obj, &branch]);
+                // origin2lowest
+                let mut i = 0;
+                for (k, p) in o.v.iter().enumerate() {
+                    if p[2] < o.v[i][2] {
+                        i = k;
+                    }
+                }
+                let l = [-o.v[i][0], -o.v[i][1], -o.v[i][2]];
+                for p in o.v.iter_mut() {
+                    p[0] += l[0];
+                    p[1] += l[1];
+                    p[2] += l[2];
+                }
+                o
+            }
             _ => unimplemented!("leaf of {:?}", self.kind),
         }
     }
 
+    fn build_branch(&self, r: &mut Rng) -> LMesh {
+        let offset = r.uniform(0.2, 0.3);
+        let length = r.uniform(1.0, 2.0);
+        let x = [0.0, -0.05, -offset - r.uniform(0.01, 0.02), -offset];
+        let z = [0.0, 0.0, -length + 0.1, -length];
+        let anchors: Vec<[f64; 3]> = (0..4).map(|i| [x[i], 0.0, z[i]]).collect();
+        let bm = bezier_mesh(&anchors, &[]);
+        bm.trace("WELD");
+        let line: Vec<[f64; 3]> = bm.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+        let rad = r.uniform(0.02, 0.03);
+        let tube = super::gnhelpers::geo_radius(&[line], rad, 32, 0.004);
+        let mut m = LMesh { v: tube.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), f: tube.faces.clone(), e: vec![] };
+        m.ensure_face_edges();
+        m.trace("geo_geo_radius");
+        m
+    }
+
+    /// banana / taro cut_leaf
+    fn cut_leaf(&self, mut obj: LMesh, r: &mut Rng) -> LMesh {
+        let n = self.n_cuts as usize;
+        let sel: Vec<usize> = (0..obj.v.len()).filter(|&i| obj.v[i][1].abs() < 0.08 && obj.v[i][1].abs() > 0.01).collect();
+        let mut pos: Vec<usize> = sel.iter().copied().filter(|&i| obj.v[i][1] > 0.0).collect();
+        let mut neg: Vec<usize> = sel.iter().copied().filter(|&i| obj.v[i][1] < 0.0).collect();
+        let keys: Vec<f32> = pos.iter().map(|&i| obj.v[i][0]).collect();
+        pos = np_argsort_f32(&keys).into_iter().map(|k| pos[k]).collect();
+        let keys: Vec<f32> = neg.iter().map(|&i| obj.v[i][0]).collect();
+        neg = np_argsort_f32(&keys).into_iter().map(|k| neg[k]).collect();
+        let choose = |r: &mut Rng, src: &Vec<usize>| -> Vec<usize> {
+            let mut perm: Vec<usize> = (0..src.len()).collect();
+            r.shuffle(&mut perm);
+            perm.iter().take(n).map(|&k| src[k]).collect()
+        };
+        let pc = choose(r, &pos);
+        let nc = choose(r, &neg);
+        if std::env::var("LEAFDBG").is_ok() {
+            eprintln!("cut_leaf: pos {} neg {} chosen pos {:?}", pos.len(), neg.len(), pc.iter().map(|&i| (obj.v[i][0], obj.v[i][1])).collect::<Vec<_>>());
+        }
+        let pts: Vec<[f32; 3]> = obj.v.clone();
+        let mut pairs: Vec<(usize, usize)> = vec![];
+        for k in 0..pc.len().saturating_sub(1) {
+            pairs.push((pc[k], pc[k + 1]));
+        }
+        for k in 0..nc.len().saturating_sub(1) {
+            pairs.push((nc[k], nc[k + 1]));
+        }
+        let (sa, ca) = (self.cut_angle.sin(), self.cut_angle.cos());
+        for (i1, i2) in pairs {
+            let (x1, y1) = (pts[i1][0] as f64, pts[i1][1] as f64);
+            let (x2, y2) = (pts[i2][0] as f64, pts[i2][1] as f64);
+            let coeff = if y1 > 0.0 { 1.0f64 } else { -1.0 };
+            let ratio = r.uniform(-2.0, 0.4);
+            let exponent = r.uniform(1.2, 1.6);
+            if std::env::var("LEAFDBG").is_ok() {
+                eprintln!("  cut ratio {ratio} exp {exponent} x1 {x1} y1 {y1}");
+            }
+            let m1 = x1 * sa - y1 * ca * coeff;
+            let m2 = x2 * sa - y2 * ca * coeff;
+            let den = ((x1 - x2).powi(2) + (y1 - y2).powi(2) + 0.1).sqrt();
+            for p in obj.v.iter_mut() {
+                let (x, y) = (p[0] as f64, p[1] as f64);
+                let m = x * sa - y * ca * coeff;
+                let dist = ((x - x1) * (y1 - y2) + (y - y1) * (x1 - x2)) / den;
+                if m1 < m && m < m2 && dist * coeff < 0.0 {
+                    p[2] = (p[2] as f64 + ratio * dist.abs().powf(exponent)) as f32;
+                }
+            }
+        }
+        let del: Vec<bool> = obj
+            .e
+            .iter()
+            .map(|e| {
+                let (a, b) = (obj.v[e[0] as usize], obj.v[e[1] as usize]);
+                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() > 0.02
+            })
+            .collect();
+        obj.delete_edges(&del)
+    }
+
+    fn displace_veins(&self, obj: &mut LMesh, r: &mut Rng) {
+        let n = obj.v.len();
+        let weights: Vec<f32>;
+        if self.kind == Kind::Taro {
+            // point_normal_up: flip faces whose normal points down
+            for fc in obj.f.iter_mut() {
+                let mut nz = 0.0f32;
+                let k = fc.len();
+                for i in 0..k {
+                    let (a, b) = (obj.v[fc[i] as usize], obj.v[fc[(i + 1) % k] as usize]);
+                    nz += (a[0] - b[0]) * (a[1] + b[1]);
+                }
+                // Newell z = sum (x_i - x_{i+1}) (y_i + y_{i+1}) ... sign matches the polygon normal
+                if nz < 0.0 {
+                    fc[1..].reverse();
+                }
+            }
+            let ph = r.uniform(0.0, PI * 2.0);
+            let oy = r.uniform(0.1, 0.2);
+            let ox = r.uniform(0.1, 0.4);
+            let thr: Vec<f64> = (0..n).map(|_| r.uniform(0.98, 0.99)).collect();
+            let thr2: Vec<f64> = (0..n).map(|_| r.uniform(0.002, 0.008)).collect();
+            weights = (0..n)
+                .map(|i| {
+                    let (x, y) = (obj.v[i][0] as f64, obj.v[i][1] as f64);
+                    let a = (y - if y > 0.0 { -1.0 } else { 1.0 } * oy).atan2(x - ox);
+                    let branch = (ph + a * self.freq).cos() > thr[i];
+                    let lf = y.abs() < thr2[i];
+                    if branch || lf { 1.0 } else { 0.0 }
+                })
+                .collect();
+        } else {
+            let thr: Vec<f64> = (0..n).map(|_| r.uniform(0.85, 0.9)).collect();
+            let thr2: Vec<f64> = (0..n).map(|_| r.uniform(0.002, 0.008)).collect();
+            let (sa, ca) = (self.cut_angle.sin(), self.cut_angle.cos());
+            weights = (0..n)
+                .map(|i| {
+                    let (x, y) = (obj.v[i][0] as f64, obj.v[i][1] as f64);
+                    let branch = ((y.abs() * ca - x * sa) * self.freq).cos() > thr[i];
+                    let lf = y.abs() < thr2[i];
+                    if branch || lf { 1.0 } else { 0.0 }
+                })
+                .collect();
+        }
+        let strength = -r.uniform(5e-3, 8e-3);
+        displace(&mut obj.v, &obj.f, None, strength, 0.0, DispDir::Normal, Some(&weights));
+        obj.trace("DISPLACE");
+    }
+
     fn build_instance(&self, r: &mut Rng, face_size: f64) -> LMesh {
+        if self.kind == Kind::Taro {
+            return self.build_leaf(r, face_size);
+        }
         let mut o = self.build_leaf(r, face_size);
         origin2leftmost(&mut o);
         let dx = -(0.01f32);
@@ -406,7 +602,7 @@ impl Growth {
             }
         }
         let tex = stucci(0.1);
-        displace(&mut m.v, &m.f, &tex, 0.01, 0.5, DispDir::Normal, None);
+        displace(&mut m.v, &m.f, Some(&tex), 0.01, 0.5, DispDir::Normal, None);
         m.trace("DISPLACE");
         m
     }
@@ -518,7 +714,7 @@ impl Growth {
         let mut m = LMesh { v: sp.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), f: sp.faces.clone(), e: vec![] };
         m.ensure_face_edges();
         let tex = stucci(0.01);
-        displace(&mut m.v, &m.f, &tex, 0.02, 0.5, DispDir::Normal, None);
+        displace(&mut m.v, &m.f, Some(&tex), 0.02, 0.5, DispDir::Normal, None);
         m.trace("DISPLACE");
         let rx = r.uniform(0.0, PI * 0.2) as f32 as f64;
         let (c, s) = (rx.cos() as f32, rx.sin() as f32);

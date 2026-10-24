@@ -95,6 +95,55 @@ impl LMesh {
         }
         o
     }
+    /// bmesh.ops.delete(context=EDGES): the edges and their faces go, then endpoint vertices left without edges
+    pub fn delete_edges(&self, del: &[bool]) -> LMesh {
+        let key = |a: u32, b: u32| (a.min(b), a.max(b));
+        let mut dead: HashMap<(u32, u32), ()> = HashMap::default();
+        for (i, e) in self.e.iter().enumerate() {
+            if del[i] {
+                dead.insert(key(e[0], e[1]), ());
+            }
+        }
+        let mut o = LMesh::default();
+        let mut tagged = vec![false; self.v.len()];
+        for (i, e) in self.e.iter().enumerate() {
+            if del[i] {
+                tagged[e[0] as usize] = true;
+                tagged[e[1] as usize] = true;
+            }
+        }
+        let mut deg = vec![0u32; self.v.len()];
+        let mut ekeep: Vec<[u32; 2]> = vec![];
+        for (i, e) in self.e.iter().enumerate() {
+            if !del[i] {
+                ekeep.push(*e);
+                deg[e[0] as usize] += 1;
+                deg[e[1] as usize] += 1;
+            }
+        }
+        let mut fkeep: Vec<&Vec<u32>> = vec![];
+        for fc in &self.f {
+            let k = fc.len();
+            if (0..k).all(|i| !dead.contains_key(&key(fc[i], fc[(i + 1) % k]))) {
+                fkeep.push(fc);
+            }
+        }
+        let mut map = vec![u32::MAX; self.v.len()];
+        for (i, p) in self.v.iter().enumerate() {
+            if tagged[i] && deg[i] == 0 {
+                continue;
+            }
+            map[i] = o.v.len() as u32;
+            o.v.push(*p);
+        }
+        for fc in fkeep {
+            o.f.push(fc.iter().map(|&i| map[i as usize]).collect());
+        }
+        for e in ekeep {
+            o.e.push([map[e[0] as usize], map[e[1] as usize]]);
+        }
+        o
+    }
     /// keep only the listed vertices (order kept); faces and edges fully inside survive
     pub fn keep_verts(&self, keep: &[bool]) -> LMesh {
         let del: Vec<bool> = keep.iter().map(|k| !k).collect();
@@ -438,51 +487,171 @@ pub fn solidify(m: &LMesh, thickness: f32) -> LMesh {
 
 /// geo node SampleNearestSurface of a point attribute (barycentric interpolation at the closest point of the corner triangles)
 pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, F3)> {
-    use parry3d_f64::math::Point;
-    use parry3d_f64::query::PointQuery;
-    use parry3d_f64::shape::TriMesh;
     let tris = super::dualcon::corner_tris(&src.v, &src.f);
-    let pts: Vec<Point<f64>> = src.v.iter().map(|p| Point::new(p[0] as f64, p[1] as f64, p[2] as f64)).collect();
-    let tm = TriMesh::new(pts.clone(), tris.clone()).unwrap();
+    // uniform grid over triangle bounding boxes
+    let (lo, hi) = src.bounds();
+    let ext = (0..3).map(|k| hi[k] - lo[k]).fold(0.0f32, f32::max).max(1e-6);
+    let cell = (ext / 24.0).max(0.01);
+    let key = |p: F3| -> [i64; 3] { [0, 1, 2].map(|k| ((p[k] - lo[k]) / cell).floor() as i64) };
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    for (ti, t) in tris.iter().enumerate() {
+        let ps = [src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]];
+        let mut a = ps[0];
+        let mut b = ps[0];
+        for p in &ps {
+            for k in 0..3 {
+                a[k] = a[k].min(p[k]);
+                b[k] = b[k].max(p[k]);
+            }
+        }
+        let (ka, kb) = (key(a), key(b));
+        for x in ka[0]..=kb[0] {
+            for y in ka[1]..=kb[1] {
+                for z in ka[2]..=kb[2] {
+                    grid.entry([x, y, z]).or_default().push(ti as u32);
+                }
+            }
+        }
+    }
     at.iter()
         .map(|q| {
-            let qp = Point::new(q[0] as f64, q[1] as f64, q[2] as f64);
-            let (proj, feat) = tm.project_local_point_and_get_feature(&qp);
-            let fi = match feat {
-                parry3d_f64::shape::FeatureId::Face(i) => (i % tris.len() as u32) as usize,
-                _ => {
-                    // vertex / edge features: find a triangle holding the closest point
-                    let mut best = (f64::MAX, 0usize);
-                    for (ti, t) in tris.iter().enumerate() {
-                        let tri = parry3d_f64::shape::Triangle::new(pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]);
-                        let pr = tri.project_local_point(&qp, true);
-                        let d = (pr.point - proj.point).norm_squared();
-                        if d < best.0 {
-                            best = (d, ti);
+            let kq = key(*q);
+            let mut best = (f32::MAX, usize::MAX, [0f32; 3]);
+            let mut rr = 1i64;
+            loop {
+                for x in kq[0] - rr..=kq[0] + rr {
+                    for y in kq[1] - rr..=kq[1] + rr {
+                        for z in kq[2] - rr..=kq[2] + rr {
+                            if rr > 1 && (x - kq[0]).abs().max((y - kq[1]).abs()).max((z - kq[2]).abs()) < rr {
+                                continue;
+                            }
+                            if let Some(l) = grid.get(&[x, y, z]) {
+                                for &ti in l {
+                                    let t = tris[ti as usize];
+                                    let r = closest_on_tri_f32(*q, src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]);
+                                    let d = sub3(r, *q);
+                                    let d2 = dot3(d, d);
+                                    let area = |t: [u32; 3]| {
+                                        let (a, b, c) = (src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]);
+                                        let (u, v) = (sub3(b, a), sub3(c, a));
+                                        let cr = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                                        dot3(cr, cr)
+                                    };
+                                    // equal distance (point on a shared edge / in a coplanar region): prefer the larger triangle, slivers give noisy weights
+                                    let tie = best.1 != usize::MAX && (d2 - best.0).abs() <= 1e-13;
+                                    if (!tie && d2 < best.0) || (tie && area(t) > area(tris[best.1])) {
+                                        best = (d2, ti as usize, r);
+                                    }
+                                }
+                            }
                         }
                     }
-                    best.1
                 }
-            };
-            let t = tris[fi];
-            let (a, b, c) = (pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]);
-            let p = proj.point;
-            let (v0, v1, v2) = (b - a, c - a, p - a);
-            let d00 = v0.dot(&v0);
-            let d01 = v0.dot(&v1);
-            let d11 = v1.dot(&v1);
-            let d20 = v2.dot(&v0);
-            let d21 = v2.dot(&v1);
-            let den = d00 * d11 - d01 * d01;
-            let (w1, w2) = if den.abs() < 1e-30 { (0.0, 0.0) } else { ((d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den) };
-            let w0 = 1.0 - w1 - w2;
-            let pa = src.v[t[0] as usize];
-            let pb = src.v[t[1] as usize];
-            let pc = src.v[t[2] as usize];
-            let pos = [0, 1, 2].map(|k| (w0 * pa[k] as f64 + w1 * pb[k] as f64 + w2 * pc[k] as f64) as f32);
-            ((w0 * val[t[0] as usize] as f64 + w1 * val[t[1] as usize] as f64 + w2 * val[t[2] as usize] as f64) as f32, pos)
+                if best.1 != usize::MAX && best.0.sqrt() <= cell * (rr as f32) {
+                    break;
+                }
+                rr += 1;
+                if rr > 40 {
+                    break;
+                }
+            }
+            let t = tris[best.1];
+            let (v1, v2, v3) = (src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]);
+            let w = interp_weights_tri_f32(v1, v2, v3, best.2);
+            let pos = [0, 1, 2].map(|k| v1[k] * w[0] + v2[k] * w[1] + v3[k] * w[2]);
+            let v = val[t[0] as usize] * w[0] + val[t[1] as usize] * w[1] + val[t[2] as usize] * w[2];
+            (v, pos)
         })
         .collect()
+}
+
+fn sub3(a: F3, b: F3) -> F3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn dot3(a: F3, b: F3) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// BLI closest_on_tri_to_point_v3 (float32)
+pub fn closest_on_tri_f32(p: F3, v1: F3, v2: F3, v3: F3) -> F3 {
+    let ab = sub3(v2, v1);
+    let mut ac = sub3(v3, v1);
+    let ap = sub3(p, v1);
+    let d1 = dot3(ab, ap);
+    let d2 = dot3(ac, ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return v1;
+    }
+    let bp = sub3(p, v2);
+    let d3 = dot3(ab, bp);
+    let d4 = dot3(ac, bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return v2;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return [v1[0] + ab[0] * v, v1[1] + ab[1] * v, v1[2] + ab[2] * v];
+    }
+    let cp = sub3(p, v3);
+    let d5 = dot3(ab, cp);
+    let d6 = dot3(ac, cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return v3;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return [v1[0] + ac[0] * w, v1[1] + ac[1] * w, v1[2] + ac[2] * w];
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        let mut r = sub3(v3, v2);
+        for k in 0..3 {
+            r[k] *= w;
+            r[k] += v2[k];
+        }
+        return r;
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    for k in 0..3 {
+        ac[k] *= w;
+    }
+    [v1[0] + ab[0] * v + ac[0], v1[1] + ab[1] * v + ac[1], v1[2] + ab[2] * v + ac[2]]
+}
+
+/// BLI interp_weights_tri_v3 (float32)
+pub fn interp_weights_tri_f32(v1: F3, v2: F3, v3: F3, co: F3) -> [f32; 3] {
+    let n1 = sub3(v1, v2);
+    let n2 = sub3(v2, v3);
+    let mut n = [n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]];
+    let d = dot3(n, n);
+    if d > 1.0e-35 {
+        let inv = 1.0 / d.sqrt();
+        for k in 0..3 {
+            n[k] *= inv;
+        }
+    } else {
+        n = [0.0; 3];
+    }
+    let (xn, yn, zn) = (n[0].abs(), n[1].abs(), n[2].abs());
+    let (i, j) = if zn >= xn && zn >= yn { (0, 1) } else if yn >= xn && yn >= zn { (0, 2) } else { (1, 2) };
+    let area = |a: F3, b: F3, c: F3| 0.5 * ((a[i] - b[i]) * (b[j] - c[j]) + (a[j] - b[j]) * (c[i] - b[i]));
+    let mut w = [area(v2, v3, co), area(v3, v1, co), area(v1, v2, co)];
+    let wtot = w[0] + w[1] + w[2];
+    if wtot != 0.0 {
+        let inv = 1.0 / wtot;
+        for k in 0..3 {
+            w[k] *= inv;
+        }
+        if w.iter().all(|x| x.is_finite()) {
+            return w;
+        }
+    }
+    [1.0 / 3.0; 3]
 }
 
 /// draw.remesh_fill(obj, resolution): solidify, sharp dual-contouring remesh, drop the vertices nearest the offset copy
@@ -647,4 +816,79 @@ pub fn bsd_qsort<T: Copy>(a: &mut [T], cmp: &dyn Fn(&T, &T) -> i32) {
         let s = pn - d2;
         bsd_qsort(&mut a[s..], cmp);
     }
+}
+
+/// numpy 1.26 `np.argsort(float32 array)` (kind quicksort = introsort on the index array; the tie order matters for lattice data)
+pub fn np_argsort_f32(v: &[f32]) -> Vec<usize> {
+    let num = v.len();
+    let mut idx: Vec<usize> = (0..num).collect();
+    if num < 2 {
+        return idx;
+    }
+    let less = |a: f32, b: f32| a < b || (b != b && a == a);
+    let mut stack: Vec<(usize, usize)> = vec![];
+    let (mut pl, mut pr) = (0usize, num - 1);
+    loop {
+        while pr as i64 - pl as i64 > 16 {
+            let pm = pl + ((pr - pl) >> 1);
+            if less(v[idx[pm]], v[idx[pl]]) {
+                idx.swap(pm, pl);
+            }
+            if less(v[idx[pr]], v[idx[pm]]) {
+                idx.swap(pr, pm);
+            }
+            if less(v[idx[pm]], v[idx[pl]]) {
+                idx.swap(pm, pl);
+            }
+            let vp = v[idx[pm]];
+            let mut pi = pl;
+            let mut pj = pr - 1;
+            idx.swap(pm, pj);
+            loop {
+                loop {
+                    pi += 1;
+                    if !less(v[idx[pi]], vp) {
+                        break;
+                    }
+                }
+                loop {
+                    pj -= 1;
+                    if !less(vp, v[idx[pj]]) {
+                        break;
+                    }
+                }
+                if pi >= pj {
+                    break;
+                }
+                idx.swap(pi, pj);
+            }
+            let pk = pr - 1;
+            idx.swap(pi, pk);
+            if pi - pl < pr - pi {
+                stack.push((pi + 1, pr));
+                pr = pi - 1;
+            } else {
+                stack.push((pl, pi - 1));
+                pl = pi + 1;
+            }
+        }
+        for pi in pl + 1..=pr {
+            let vi = idx[pi];
+            let vp = v[vi];
+            let mut pj = pi;
+            while pj > pl && less(vp, v[idx[pj - 1]]) {
+                idx[pj] = idx[pj - 1];
+                pj -= 1;
+            }
+            idx[pj] = vi;
+        }
+        match stack.pop() {
+            None => break,
+            Some((l, r)) => {
+                pl = l;
+                pr = r;
+            }
+        }
+    }
+    idx
 }
