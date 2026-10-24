@@ -12,6 +12,10 @@ fn load(j: &Value, k: &str) -> Option<(Vec<[f64; 3]>, Vec<Vec<u32>>)> {
 }
 
 fn report(name: &str, got: (&[[f64; 3]], &[Vec<u32>]), j: &Value, key: &str) {
+    if let Ok(d) = std::env::var("DUMP") {
+        let js = serde_json::json!({"v": got.0, "p": got.1});
+        std::fs::write(format!("{d}/{name}.json"), js.to_string()).unwrap();
+    }
     let Some((v, f)) = load(j, key) else { println!("{name}: no stage {key}"); return };
     let ok_counts = format!("verts {}/{} faces {}/{}", got.0.len(), v.len(), got.1.len(), f.len());
     // wire stages (no faces): compare vertices directly
@@ -57,4 +61,19 @@ fn main() {
         println!("verts at clip z: rust {} py {}", nz, nzp);
     }
     report("tube", (&tube.pos, &tube.faces), &j, "tube");
+    let mut r = infinigen::assets::inst_rng(seed, inst);
+    let t0 = std::time::Instant::now();
+    let p = toiletx::build(&t, &mut r);
+    println!("build {:.2}s", t0.elapsed().as_secs_f64());
+    let plane = toiletx::make_plane(&t, &tube);
+    report("plane", (&plane.pos, &plane.faces), &j, "plane");
+    let ss = infinigen::assets::bpyops::solidify(&plane, t.extrude_height, 1.0);
+    report("seatsol", (&ss.pos, &ss.faces), &j, "m13_SOLIDIFY");
+    report("seat", (&p.seat.pos, &p.seat.faces), &j, "seat");
+    report("cover", (&p.cover.pos, &p.cover.faces), &j, "cover");
+    report("stand", (&p.stand.pos, &p.stand.faces), &j, "stand");
+    report("back", (&p.back.pos, &p.back.faces), &j, "back");
+    report("tank", (&p.tank.pos, &p.tank.faces), &j, "tank");
+    report("hw", (&p.hw.pos, &p.hw.faces), &j, "hw");
+    report("tubebev", (&p.tube.pos, &p.tube.faces), &j, "m29_BEVEL");
 }
