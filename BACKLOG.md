@@ -31,7 +31,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 ## Decor / plants (worker: decor)
 | id | item | status | notes |
 |---|---|---|---|
-| D1 | Monocot plant kind (LargePlantContainer is monocot-only) | todo | needs voxel remesh? legacy texture displace (legacynoise.rs started) |
+| D1 | Monocot plant kind (LargePlantContainer is monocot-only) | doing(decor) | `monocot.rs` + `leafkit.rs` + `dualcon.rs` (exact REMESH SHARP port, bit-equal) + `bpymod.rs` (SIMPLE_DEFORM/DISPLACE exact) + data/gn/monocot_flower.json. MonocotFactory vs python (surface mean): Agave s0 2e-6, Maize s1 3e-6 / s2 4e-6, Grasses s5 1e-6, Tussock s7 8e-6, Agave s3 4e-6; vertex counts within 0.01-0.1% (python 3.6M verts at face_size .003, too big for refcache; check with `tools/monocheck.sh SEED`, stage tracer `tools/pytrace.py` + `stagediff`). Open: Banana/Taro (np.argsort tie order of f32 lattice x depends on Blender's BM scanfill triangulation of the leaf outline -> need BLI_scanfill port; cut pattern differs), Wheat (needs voxel REMESH), Veratrum (spin loop+remesh_fill on non-planar), Agave cut_plane (cut_prob>0). Tools: tools/stagepick.sh, tools/pycontainer.py |
 | D2 | Fern | todo | |
 | D3 | Cactus | todo | voxel REMESH |
 | D4 | Mushroom | todo | |
