@@ -87,6 +87,7 @@ pub mod dualcon;
 pub mod leafkit;
 pub mod monocot;
 pub mod cactus;
+pub mod fern;
 pub mod mushroom;
 pub mod voxelremesh;
 pub mod bpymod;
@@ -283,6 +284,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if seating::handles(c) => seating::make(c, &mut rng, factory_seed),
         c if monocot::handles(c) => monocot::make(c, &mut rng, factory_seed),
         c if mushroom::handles(c) => mushroom::make(c, &mut rng, factory_seed),
+        c if fern::handles(c) => fern::make(c, &mut rng, factory_seed),
         c if cactus::handles(c) => cactus::make(c, &mut rng, factory_seed),
         c if plants::handles(c) => plants::make(c, &mut rng, factory_seed),
         _ => None,

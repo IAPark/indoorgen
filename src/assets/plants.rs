@@ -479,6 +479,10 @@ impl Factory for PlantContainer {
                 plant = pa.parts[0].mesh.clone();
                 leaf_mat = pa.parts[0].mat.clone();
             }
+            Kind::Fern => {
+                plant = super::fern::FernFactory::new(self.factory_seed).mesh(i);
+                leaf_mat = Material::diffuse(&format!("fern:{i}"), [0.1, 0.35, 0.1], 0.6);
+            }
             k => {
                 let g = Growth::new(k, &mut r);
                 plant = g.build(&mut r);
