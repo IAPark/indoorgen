@@ -613,6 +613,11 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
             }
         }
         if let Some(k) = kbest {
+            if std::env::var("BRIDGEDBG").is_ok() {
+                let mut ls: Vec<(f32, usize)> = (0..n).map(|k| { let mut l = 0.0f32; for i in 0..n { l += dist32(pos0[a.v[i] as usize], pos0[bx[(k + i) % n] as usize]); } (l, k) }).collect();
+                ls.sort_by(|x, y| x.partial_cmp(y).unwrap());
+                eprintln!("bridge best rotations: {:?}", &ls[..4.min(ls.len())]);
+            }
             bx.rotate_left(k);
         }
     }

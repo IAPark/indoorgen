@@ -110,18 +110,18 @@ pub fn solidify(m: &Mesh, thickness: f64, offset: f64) -> Mesh {
     out
 }
 
-fn mean_value_weights(c: [[f64; 2]; 4], co: [f64; 2]) -> [f64; 4] {
-    let dirs: Vec<[f64; 2]> = c.iter().map(|v| [v[0] - co[0], v[1] - co[1]]).collect();
-    let lens: Vec<f64> = dirs.iter().map(|d| (d[0] * d[0] + d[1] * d[1]).sqrt()).collect();
-    let eps = f32::EPSILON as f64;
+/// barycentric_weights_v2_quad in float32 (blenlib math_geom, no FMA contraction in the shipped binary)
+fn mean_value_weights32(c: [[f32; 2]; 4], co: [f32; 2]) -> [f32; 4] {
+    let dirs: Vec<[f32; 2]> = c.iter().map(|v| [v[0] - co[0], v[1] - co[1]]).collect();
+    let lens: Vec<f32> = dirs.iter().map(|d| (d[0] * d[0] + d[1] * d[1]).sqrt()).collect();
     for i in 0..4 {
-        if lens[i] < eps {
+        if lens[i] < f32::EPSILON {
             let mut w = [0.0; 4];
             w[i] = 1.0;
             return w;
         }
     }
-    let t = |i1: usize, i2: usize| -> f64 {
+    let t = |i1: usize, i2: usize| -> f32 {
         let area = dirs[i1][0] * dirs[i2][1] - dirs[i1][1] * dirs[i2][0];
         if area != 0.0 {
             (((lens[i1] * lens[i2]) - (dirs[i1][0] * dirs[i2][0] + dirs[i1][1] * dirs[i2][1])) / area).abs()
@@ -131,20 +131,25 @@ fn mean_value_weights(c: [[f64; 2]; 4], co: [f64; 2]) -> [f64; 4] {
     };
     let tt = [t(0, 1), t(1, 2), t(2, 3), t(3, 0)];
     let mut w = [(tt[3] + tt[0]) / lens[0], (tt[0] + tt[1]) / lens[1], (tt[1] + tt[2]) / lens[2], (tt[2] + tt[3]) / lens[3]];
-    let wtot: f64 = w.iter().sum();
-    if wtot != 0.0 {
-        for x in w.iter_mut() {
-            *x /= wtot;
-        }
-        if w.iter().all(|x| x.is_finite()) {
-            return w;
-        }
+    let wtot = ((w[0] + w[1]) + w[2]) + w[3];
+    let r = 1.0f32 / wtot;
+    for x in w.iter_mut() {
+        *x *= r;
+    }
+    if w.iter().all(|x| x.is_finite()) {
+        return w;
     }
     [0.25; 4]
 }
 
 /// bpy.ops.mesh.fill_grid(use_interp_simple=True) on a single closed edge loop (cyclic vertex list `lp`, even length)
 pub fn fill_grid_loop(lp: &[V]) -> Mesh {
+    fill_grid_loop_ex(lp, false)
+}
+
+/// `first_is_best`: the loop is already rotated so that its first vertex is the corner Blender selects (bpy fill_grid: first vertex with
+/// the maximum f32 angle deviation, offset applied); the f64 angle search below is skipped
+pub fn fill_grid_loop_ex(lp: &[V], first_is_best: bool) -> Mesh {
     let n = lp.len();
     let half = n / 2;
     // corner angles |pi - angle(prev, v, next)|
@@ -159,7 +164,7 @@ pub fn fill_grid_loop(lp: &[V]) -> Mesh {
         .collect();
     let mut best = 0;
     for i in 0..n {
-        if ang[i] > ang[best] {
+        if !first_is_best && ang[i] > ang[best] {
             best = i;
         }
     }
@@ -184,27 +189,28 @@ pub fn fill_grid_loop(lp: &[V]) -> Mesh {
     let mut grid: Vec<Option<V>> = vec![None; xtot * ytot];
     let xy = |x: usize, y: usize| x + y * xtot;
     for y in 0..ytot {
-        grid[xy(0, y)] = Some(l[span - y]);
-        grid[xy(xtot - 1, y)] = Some(l[half + y]);
+        // bm_grid_fill: left rail = second half of the loop, right rail = first `ytot` vertices (bit-exact vs python, see tools/pancap)
+        grid[xy(0, y)] = Some(l[half + (ytot - 1 - y)]);
+        grid[xy(xtot - 1, y)] = Some(l[y]);
     }
     for x in 0..xtot {
-        grid[xy(x, 0)] = Some(l[span + x]);
-        grid[xy(x, ytot - 1)] = Some(l[(n - x) % n]);
+        grid[xy(x, 0)] = Some(l[(n - (xtot - 1 - x)) % n]);
+        grid[xy(x, ytot - 1)] = Some(l[span + xtot - 1 - x]);
     }
-    let xs = 1.0 / (xtot - 1) as f64;
-    let ys = 1.0 / (ytot - 1) as f64;
+    let xs = 1.0f32 / (xtot - 1) as f32;
+    let ys = 1.0f32 / (ytot - 1) as f32;
     for y in 1..ytot - 1 {
         for x in 1..xtot - 1 {
-            let (xf, yf) = (xs * x as f64, ys * y as f64);
-            let w = mean_value_weights([[xf, 0.0], [0.0, yf], [xf, 1.0], [1.0, yf]], [xf, yf]);
+            let (xf, yf) = (xs * x as f32, ys * y as f32);
+            let w = mean_value_weights32([[xf, 0.0], [0.0, yf], [xf, 1.0], [1.0, yf]], [xf, yf]);
             let p = [grid[xy(x, 0)].unwrap(), grid[xy(0, y)].unwrap(), grid[xy(x, ytot - 1)].unwrap(), grid[xy(xtot - 1, y)].unwrap()];
-            let mut co = [0.0; 3];
+            let mut co = [0.0f32; 3];
             for k in 0..4 {
                 for c in 0..3 {
-                    co[c] += p[k][c] * w[k];
+                    co[c] += (p[k][c] as f32) * w[k];
                 }
             }
-            grid[xy(x, y)] = Some(co);
+            grid[xy(x, y)] = Some([co[0] as f64, co[1] as f64, co[2] as f64]);
         }
     }
     let mut m = Mesh::new();

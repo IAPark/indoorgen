@@ -1121,6 +1121,89 @@ pub fn subdivide_curve(c: &Curves, cuts: &[Val]) -> Curves {
     o
 }
 
+/// Trim of an open Bezier spline keeps it a Bezier spline: the cut points are located on the evaluated polyline (index + factor),
+/// converted to segment parameters and the control points / handles are split with de Casteljau (geometry/trim_curves.cc).
+fn trim_bezier(c: &Curves, k: usize, e: &EvalCurve, sa: usize, fa: f32, sb: usize, fb: f32, o: &mut Curves) {
+    let r = c.range(k);
+    let lerp = |a: V3, b: V3, t: f32| -> V3 { [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] };
+    let seg_param = |idx: usize, f: f32| -> (usize, f32) {
+        let idx = idx.min(e.interp.len() - 1);
+        let (seg, t0) = e.interp[idx];
+        let res = bezier_seg_res(c, k, seg, seg + 1) as f32;
+        let nseg = r.len() - 1;
+        let (seg, t) = (seg, t0 + f / res);
+        if seg >= nseg {
+            (nseg - 1, 1.0)
+        } else {
+            (seg, t.min(1.0))
+        }
+    };
+    let (seg_a, ta) = seg_param(sa, fa);
+    let (seg_b, tb) = seg_param(sb, fb);
+    let cub = |i: usize| (c.pos[r.start + i], c.hr[r.start + i], c.hl[r.start + i + 1], c.pos[r.start + i + 1]);
+    // split cubic (p0,h0,h1,p1) at t -> left (p0,a,b,m), right (m,c,e,p1)
+    let split = |q: (V3, V3, V3, V3), t: f32| -> ((V3, V3, V3, V3), (V3, V3, V3, V3)) {
+        let (p0, h0, h1, p1) = q;
+        let a = lerp(p0, h0, t);
+        let qq = lerp(h0, h1, t);
+        let ee = lerp(h1, p1, t);
+        let b = lerp(a, qq, t);
+        let cc = lerp(qq, ee, t);
+        let m = lerp(b, cc, t);
+        ((p0, a, b, m), (m, cc, ee, p1))
+    };
+    // (pos, handle_left, handle_right, radius, tilt)
+    let mut pts: Vec<(V3, V3, V3, f32, f32)> = vec![];
+    let rad = |i: usize, j: usize, t: f32| (c.radius[r.start + i] + (c.radius[r.start + j] - c.radius[r.start + i]) * t, c.tilt[r.start + i] + (c.tilt[r.start + j] - c.tilt[r.start + i]) * t);
+    if seg_a == seg_b {
+        let (left, _) = split(cub(seg_a), tb);
+        let tt = if tb > 0.0 { ta / tb } else { 0.0 };
+        let (_, right) = split(left, tt);
+        let (ra, rb) = (rad(seg_a, seg_a + 1, ta), rad(seg_a, seg_a + 1, tb));
+        pts.push((right.0, right.0, right.1, ra.0, ra.1));
+        pts.push((right.3, right.2, right.3, rb.0, rb.1));
+    } else {
+        let (_, right) = split(cub(seg_a), ta);
+        let ra = rad(seg_a, seg_a + 1, ta);
+        pts.push((right.0, right.0, right.1, ra.0, ra.1));
+        for i in seg_a + 1..=seg_b {
+            let (pos, mut hl, mut hr) = (c.pos[r.start + i], c.hl[r.start + i], c.hr[r.start + i]);
+            if i == seg_a + 1 {
+                hl = right.2;
+            }
+            let mut rd = (c.radius[r.start + i], c.tilt[r.start + i]);
+            if i == seg_b {
+                let (left, _) = split(cub(seg_b), tb);
+                // this point keeps its position; the trimmed end is a new point at tb
+                pts.push((pos, hl, hr, rd.0, rd.1));
+                let re = rad(seg_b, seg_b + 1, tb);
+                if let Some(l) = pts.last_mut() {
+                    l.2 = left.1;
+                }
+                let _ = &mut hr;
+                pts.push((left.3, left.2, left.3, re.0, re.1));
+                rd = re;
+                let _ = rd;
+            } else {
+                pts.push((pos, hl, hr, rd.0, rd.1));
+            }
+        }
+    }
+    for (p, hl, hr, rd, tl) in &pts {
+        o.pos.push(*p);
+        o.hl.push(*hl);
+        o.hr.push(*hr);
+        o.htl.push(0);
+        o.htr.push(0);
+        o.radius.push(*rd);
+        o.tilt.push(*tl);
+    }
+    o.kind.push(CKind::Bezier);
+    o.cyclic.push(false);
+    o.res.push(c.res[k]);
+    o.off.push(o.pos.len() as u32);
+}
+
 pub fn trim_curve(c: &Curves, sel: &[bool], start: &[Val], end: &[Val], by_len: bool) -> Curves {
     let mut o = Curves::new();
     o.has_radius = c.has_radius;
@@ -1147,6 +1230,10 @@ pub fn trim_curve(c: &Curves, sel: &[bool], start: &[Val], end: &[Val], by_len: 
         }
         let (sa, fa) = sample_at_length(&acc, a);
         let (sb, fb) = sample_at_length(&acc, b);
+        if c.kind[k] == CKind::Bezier && !c.cyclic[k] && r.len() > 1 {
+            trim_bezier(c, k, &e, sa, fa, sb, fb, &mut o);
+            continue;
+        }
         // samples: start, interior evaluated points, end
         let mut samples = vec![(sa, fa)];
         for i in (sa + 1)..=sb {

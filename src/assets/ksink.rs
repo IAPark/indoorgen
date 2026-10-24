@@ -15,6 +15,8 @@ pub struct KSink {
     margin: f64,
     tap_margin: f64,
     protrude: f64,
+    curvature: f64,
+    fseed: u64,
 }
 
 impl KSink {
@@ -22,14 +24,14 @@ impl KSink {
         let mut r = rng.clone();
         let width = r.uniform(0.4, 1.0);
         let depth = r.uniform(0.4, 0.5);
-        let _curvature = r.uniform(1.0, 1.0);
+        let curvature = r.uniform(1.0, 1.0);
         let upper = r.uniform(0.2, 0.4);
         let lower = r.uniform(0.0, 0.01);
         let hole_radius = r.uniform(0.02, 0.05);
         let margin = r.uniform(0.02, 0.05);
         let tap_margin = r.uniform(0.1, 0.12);
         let protrude = r.uniform(0.01, 0.025);
-        KSink { width, depth, upper, lower, hole_radius, margin, tap_margin, protrude }
+        KSink { width, depth, upper, lower, hole_radius, margin, tap_margin, protrude, curvature, fseed: 0 }
     }
     /// bounds of the "Geometry" output of nodegroup_sink_geometry (float32 like Blender)
     fn geo_bounds(&self) -> (V3, V3) {
@@ -56,26 +58,40 @@ impl Factory for KSink {
         a.cuboid(lo, hi, &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
-    fn asset(&self, _i: u64) -> Asset {
-        let (lo, hi) = self.geo_bounds();
-        let mut a = Asset::default();
+    fn asset(&self, i: u64) -> Asset {
+        use super::gnasset::GnTemplate;
+        use serde_json::json;
+        static TPL: std::sync::OnceLock<GnTemplate> = std::sync::OnceLock::new();
+        let tpl = TPL.get_or_init(|| GnTemplate::parse(include_str!("../../data/gn/ksink.json")));
+        let mut t = tpl.clone_template();
+        let vals = [self.width, self.depth, self.curvature, self.upper, self.lower, self.hole_radius, self.margin, self.tap_margin];
+        for (k, v) in vals.iter().enumerate() {
+            t.set_group_default("nodegroup_sink_geometry", &format!("Socket_{k}"), json!(*v));
+        }
+        let outs = t.run_group("nodegroup_sink_geometry").expect("sink gn");
         let m = mat("sink", [0.75, 0.75, 0.77], 0.3);
-        // counter plate with a recessed basin: four border boards around the basin opening
-        let (bx, by) = (self.depth / 2.0, self.width / 2.0);
-        let sh = (self.tap_margin + self.margin) / 2.56;
-        let z0 = self.lower;
-        a.cuboid([lo[0], lo[1], z0], [-bx + sh, hi[1], hi[2]], &m);
-        a.cuboid([bx + sh, lo[1], z0], [hi[0], hi[1], hi[2]], &m);
-        a.cuboid([-bx + sh, lo[1], z0], [bx + sh, -by, hi[2]], &m);
-        a.cuboid([-bx + sh, by, z0], [bx + sh, hi[1], hi[2]], &m);
-        a.cuboid([-bx + sh, -by, z0 - 0.01], [bx + sh, by, z0], &m);
+        let mut a = Asset::default();
+        for (_, g) in &outs {
+            a.mesh(super::gnhelpers::to_mesh(g), &m, None);
+        }
+        // tap child at (-Depth / 2, 0, Upper Height)
+        let mut tm = super::taps::tap_mesh(self.fseed, i);
+        let loc = [(-self.depth / 2.0) as f32, 0.0f32, self.upper as f32];
+        for p in tm.pos.iter_mut() {
+            *p = [(p[0] as f32 + loc[0]) as f64, (p[1] as f32 + loc[1]) as f64, (p[2] as f32 + loc[2]) as f64];
+        }
+        a.mesh(tm, &m, None);
         a
     }
 }
 
-pub fn make(c: &str, rng: &mut Rng, _fseed: u64) -> Option<Box<dyn Factory>> {
+pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
     match c {
-        "SinkFactory" => Some(Box::new(KSink::new(rng))),
+        "SinkFactory" => {
+            let mut k = KSink::new(rng);
+            k.fseed = fseed;
+            Some(Box::new(k))
+        }
         _ => None,
     }
 }

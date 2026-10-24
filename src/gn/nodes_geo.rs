@@ -372,6 +372,8 @@ pub fn geo_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             }
             let mut o = Geometry::default();
             o.inst = c.inst.clone();
+            // keep_only_during_modify({MESH}): a mesh component without curves passes through
+            o.mesh = c.mesh.clone();
             if let Some(cv) = &c.curves {
                 o.mesh = Some(curve_to_mesh(cv, prof.curves.as_ref(), caps));
             }

@@ -45,7 +45,16 @@ def main():
     specs += [x for x in a if ":" in x and not x.startswith("--")]
     import bpy
     import infinigen.core.util.random as R
-    R.weighted_sample = lambda *a, **k: _D
+    _orig_ws = R.weighted_sample
+    def _ws(*a, **k):
+        # consume the same random draws as the real weighted_sample (the constructor stream continues after it), return a stub class
+        if os.environ.get("REFCACHE_STUB") != "1":
+            try:
+                _orig_ws(*a, **k)
+            except Exception:
+                pass
+        return _D
+    R.weighted_sample = _ws
     import infinigen.core.surface as S
     S.assign_material = lambda *a, **k: None
     for spec in specs:
@@ -90,7 +99,7 @@ def main():
                 sizes = np.concatenate(sizes) if sizes else np.zeros(0, np.uint32)
                 idx = np.concatenate(idx) if idx else np.zeros(0, np.uint32)
                 too_big = len(V) > 600_000
-                hdr = dict(cls=cls, module=mod, fseed=s, inst=inst, nv=int(len(V)), nf=int(len(sizes)), secs=round(time.time() - t0, 3), objects=nobj, too_big=too_big)
+                hdr = dict(cls=cls, module=mod, fseed=s, inst=inst, ws_draws=os.environ.get("REFCACHE_STUB") != "1", nv=int(len(V)), nf=int(len(sizes)), secs=round(time.time() - t0, 3), objects=nobj, too_big=too_big)
                 hb = json.dumps(hdr).encode()
                 with open(path, "wb") as fh:
                     fh.write(b"RCv1"); fh.write(struct.pack("<I", len(hb))); fh.write(hb)

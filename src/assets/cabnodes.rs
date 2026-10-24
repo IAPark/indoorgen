@@ -577,26 +577,38 @@ pub fn bookcase_gmesh(q: &super::shelves::BookParams) -> GMesh {
 
 /// BLI sin_cos_from_fraction(numerator, denominator): octant-symmetric float sin/cos (used by BMesh circle creation)
 pub fn sin_cos_from_fraction(k: usize, n: usize) -> (f32, f32) {
-    let (mut kk, mut ss, mut sc, mut sw) = (k as i64, 1.0f32, 1.0f32, false);
-    let nn = n as i64;
-    if kk * 2 > nn {
-        kk = nn - kk;
-        ss = -1.0;
+    // blenlib/intern/math_rotation.c: map the numerator into the primary octant (all in integer arithmetic), then one sinf / cosf
+    let mut numerator = (k * 8) as i64;
+    let octant = numerator / n as i64;
+    let denominator = (n * 8) as i64;
+    let mut cos_sign = 1.0f32;
+    let mut swap = false;
+    match octant {
+        0 => {}
+        1 | 2 => {
+            numerator = denominator / 4 - numerator;
+            swap = true;
+        }
+        3 | 4 => {
+            numerator = denominator / 2 - numerator;
+            cos_sign = -1.0;
+        }
+        5 | 6 => {
+            numerator = numerator - denominator * 3 / 4;
+            swap = true;
+            cos_sign = -1.0;
+        }
+        _ => {
+            numerator = numerator - denominator;
+        }
     }
-    if kk * 4 > nn {
-        kk = nn / 2 - kk;
-        sc = -1.0;
+    let angle = (2.0f64 * std::f64::consts::PI) as f32 * (numerator as f32 / denominator as f32);
+    let (s, c) = (angle.sin(), angle.cos() * cos_sign);
+    if swap {
+        (c, s)
+    } else {
+        (s, c)
     }
-    if kk * 8 > nn {
-        kk = nn / 4 - kk;
-        sw = true;
-    }
-    let phi = 2.0f32 * std::f32::consts::PI * kk as f32 / n as f32;
-    let (mut s, mut c) = (phi.sin(), phi.cos());
-    if sw {
-        std::mem::swap(&mut s, &mut c);
-    }
-    (ss * s, sc * c)
 }
 
 /// cell_shelf.py geometry_nodes (float32, vertex order exact). has_base_frame = False, has_backboard = False, tag_support = True.

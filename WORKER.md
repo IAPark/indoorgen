@@ -25,7 +25,28 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
 - RNG order of a python factory: `~/work/ref/scripts/rnglog.py module.Class seed`.
 - Only ONE python/Blender process at a time (4 shared cores).
 
+## Debugging one op (Blender op vs the Rust port, seconds per iteration)
+- `tools/opsuite.sh [-b] [-f] [-v] [id-substr...]` runs the regression table `tools/opcases/suite.txt` (63 cases, Blender results cached in
+  `tools/opcases/<id>.blender.json`, so no Blender needed on reruns; `-f` re-runs Blender). Levels: exact > verts (vertex order exact, face
+  order differs) > surface (same surface, any order) > none; each line has a floor so the suite is green unless something regressed.
+- One op by hand: `~/work/infinigen-ref/.venv/bin/python tools/opcheck.py bevel --in tools/opcases/lshape.json --params '{"offset":0.05,"segments":2}' --out /tmp/r.json`
+  (`--list` shows ops: bevel, bevel_mod, solidify, bridge, fill_grid, subsurf, subdivide, boolean, triangulate(_op), beautify_fill, remove_doubles,
+  remesh, displace, convex_hull, and generic `modifier`), then `target/fast/opcheck bevel --in tools/opcases/lshape.json --params '...' --blender /tmp/r.json`.
+  It prints counts, exact-order max error, face identity, NN vertex match, sampled surface distance and the FIRST differing vertex/face with its
+  neighbourhood (indices + coords of both meshes). Exit 0 ok / 1 mismatch / 2 unsupported by the Rust port. Case format: header of tools/opcheck.py.
+- Add an op: python `def op_x(c,p)` + OPS entry in tools/opcheck.py, Rust `fn r_x(&Case,&Value)->Res` + row in OPS of src/bin/opcheck.rs.
+  Add a case: `tools/opcases/gen.py` + a line in suite.txt (`id|op|case|params|[floor]`).
+- Whole asset, per stage: `python tools/stagedump.py seating.chairs.chair.ChairFactory 0 tmp/sd` dumps the mesh after every bpy.ops.mesh / modifier
+  apply / join (+ the BEFORE mesh and selection as an opcheck case). Pick the first stage where the Rust asset diverges, then
+  `target/fast/opcheck <op> --in tmp/sd/NNN_*.case.json --blender tmp/sd/NNN_*.json` shows which op port is wrong and where. (Output is big: keep it in tmp/.)
+- Blender orders the edges of a mesh by its own rule; opcheck passes the recorded `in_edges` to the Rust bevel so the vertex order can match.
+
 ## Rules that bit us before
+- Placeholder / bounding-box geometry must be float32-bit-exact vs python (`PHTOL=1e-12 target/fast/phcheck <oracle>`):
+  the solver's lockstep depends on it (1e-7 differences still change placement). Treat it as part of "done" for any asset.
+- If you delegate to a sub-agent, give it its OWN worktree (`tools/newworker.sh <name>`); two agents in one worktree interleave commits.
+- macOS tools: BSD `sed -i ''` (not GNU), no `timeout`; prefer small python edits for multi-line changes.
+- Object counts per room are chaotic per seed; judge solver/room changes with `tools/countbench.sh` (means over all rooms).
 - Use `crate::dhash::{HashMap, HashSet}` (`HashMap::default()`), never std RandomState maps (nondeterministic output).
 - Reuse before writing: bevel = `src/bm/bevel.rs` (exact bmesh bevel) / `src/assets/bevelfull.rs` (modifier); bridge loops =
   `src/assets/bridge.rs`; fill_grid/solidify = `src/assets/bpyops.rs`; subdivision = `src/subdiv.rs`, gn SubdivisionSurface;
