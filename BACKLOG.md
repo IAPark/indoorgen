@@ -80,25 +80,27 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 - Known ties decided by float noise in Blender (not reproducible): drain-hole face choice in sinks/tubs (find_hole), fill_grid start vertex when the loop corners tie.
 
 
-## F6 op harness results (tools worker, 2026-10-24; `tools/opsuite.sh`, 63 cases on cube/sheared/slab/L-shape/ring/folded strip/grid/...)
+## F6 op harness results (tools worker, 2026-10-24; `tools/opsuite.sh`, 87 cases on cube/sheared/slab/L-shape/ring/folded strip/grid/...)
 Rust op vs Blender 4.2 on the same input (exact = vertex order + face lists identical, verts = vertex order identical but face order differs,
-surface = same surface/vertex set in another order, tol 1e-5):
+surface = same surface/vertex set in another order, tol 1e-5). Second pass fixed the mismatches of the first.
 | op | Rust impl | result |
 |---|---|---|
-| bpy.ops.mesh.bevel (edges; offset/width, segments, profile, clamp) | bm/bevel.rs | exact 9/9 (cube, sheared, slab, L, ring, fold). affect=VERTICES not ported |
+| bpy.ops.mesh.bevel (edges and VERTICES; offset/width/depth/percent, segments, profile, clamp) | bm/bevel.rs (`bm_mesh_bevel_ex(.., vertex_only)`) | exact 22/22 (cube, sheared, slab, L, ring, fold) |
 | BEVEL modifier (ANGLE/NONE, clamp, segments) | bevmod.rs | exact 7/7 (needs Blender's edge order, `bevel_modifier_ex`) |
 | SOLIDIFY simple | bpyops::solidify | verts 5/5: vertices exact, face ORDER differs from Blender |
 | SOLIDIFY NON_MANIFOLD (none/flat/round) | solidnm.rs | surface 5/5: surface equal, vertex order differs (Blender interleaves copies) |
-| bridge_edge_loops | bridge.rs | squares 0 cuts: verts (face order); with cuts 0/3: cut-layer positions differ for unequal/rotated loops (oct, 2 cuts: Blender z=0.2074,0.5926 vs Rust 0.274,0.526); LINEAR/smoothness unsupported |
-| fill_grid | bpyops::fill_grid_loop | surface 2/2 (rect12, oct8; order differs, standalone grid) |
-| SUBSURF Catmull-Clark / simple | subsurf.rs | cube, 2 levels, L: surface (order differs); open folded strip: NONE (boundary vertices differ, e.g. corner 0.0833 vs 0.164); simple: surface |
+| bridge_edge_loops (PATH / LINEAR / SURFACE, smoothness, profile_shape(_factor), cuts) | bridge.rs `bridge_pair_opts` | surface 9/11 (positions match to 1e-5; the old mismatch was the harness' smoothness=0; Rust always used smoothness 1 = Blender default, now a parameter). Vertex/face order not Blender's. ring_open (two concentric coplanar loops, centres coincide) is numerically degenerate: none |
+| fill_grid | bpyops::fill_grid_loop | surface 2/2 (order differs, standalone grid) |
+| SUBSURF Catmull-Clark (boundary_smooth ALL / PRESERVE_CORNERS) / simple | subsurf.rs `subsurf_bs` | surface 9/9 incl. open strips: ALL treats valence-2 boundary corners as creased (they move) and OpenSubdiv's limit position of such a corner is p + 21/128*((a-p)+(b-p)); PRESERVE_CORNERS pins them. `subsurf()` default is now ALL (the modifier default); refcmp unchanged on Chair/Cup/Jar/Vase/Towel/Pillow/Cutlery/Bathtub/Sink/Toilet |
 | subdivide (1 cut) | simple_subsurf | surface 2/2 |
-| BOOLEAN EXACT diff/union/intersect | gn/csg.rs (BSP) | surface fails 4/4: extra collinear/T vertices (28 vs 16 verts), Blender merges coplanar faces; FAST not ported |
-| TRIANGULATE modifier / quads_convert_to_tris (BEAUTY, FIXED, SHORTEST; ngon BEAUTY) | gn nodes_mesh::triangulate | exact 8/8 |
+| BOOLEAN EXACT diff/union/intersect | gn/csg.rs (BSP) | none 4/4 (extra collinear/T vertices, Blender merges coplanar faces) -> frame worker (F2/F3); FAST not ported; cases bool_* in the suite |
+| TRIANGULATE modifier / quads_convert_to_tris | gn nodes_mesh::triangulate | exact 8/8 |
+| beautify_fill (AREA metric, face subsets) | bridge.rs `beautify_loop` (+ polyfill::bm_rotate_beauty_area; src/bm/rotate.rs from the frame worker is an alternative) | exact 3/3 incl. Blender's face slot reuse order (join/kill/split) |
 | remove_doubles | blops.rs | exact |
 | DISPLACE (CLOUDS, STUCCI; normal / axis) | bpymod.rs + legtex.rs | exact 3/3 |
-| REMESH SHARP | dualcon.rs | exact; VOXEL not ported |
-| convex_hull | gn bullet hull | surface within 2e-4 on a cube; random points: faces differ (24 vs 22: Blender joins coplanar triangles) |
-| beautify_fill | -- | no Rust op |
-Next steps this table suggests: bridge cut positions for unequal loops (bridge.rs), SUBSURF boundary rules for open meshes, solidify face order,
-vertex-only bevel, voxel remesh/beautify_fill, boolean coplanar merge + collinear vertex cleanup.
+| REMESH SHARP | dualcon.rs | exact |
+| REMESH VOXEL | voxelremesh.rs (decor worker's surface nets, copied byte-identical from work/decor so the merge is clean) | surface 2/5: fails when mesh faces lie exactly on voxel-grid planes (cube 1.0 @ 0.1, L-shape, ring: 488 vs 728 verts etc.): OpenVDB's tie behaviour on the lattice; generic (unaligned) boxes match -> decor D3 |
+| convex_hull | gn bullet hull | cube surface within 2e-4; random points: faces differ (Blender joins coplanar triangles) -> frame worker |
+Next steps this table suggests: exact vertex/face order of bridge cut layers (slot-order simulation as in beautify_loop), solidify face order,
+solidnm vertex order, voxel remesh on lattice-aligned input (decor), boolean coplanar merge + collinear vertex cleanup (frame).
+selfcheck after these changes: green (determinism, lockstep placement, phcheck: 1 class with failures, not touched by this work).
