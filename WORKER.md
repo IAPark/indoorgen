@@ -48,6 +48,7 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
   your tmp/ or a pinned path, not in the repo if large (>5 MB). Match the version Blender 4.2 / the python wheels use, and the compile flags
   that matter for float results (arm64 clang contracts a*b+c into FMA by default: `-ffp-contract=on`; that is how python-fcl behaves).
 - Keep a pure-Rust path only if a port already exists and is exact.
+- Blender itself (bpy or its internals) is ONLY the reference/test oracle (refcache, opcheck, gn_check, the bed cloth sim at render time). Never call or link Blender from generation code (user decision 2026-10-24).
 
 ## Rules that bit us before
 - Placeholder / bounding-box geometry must be float32-bit-exact vs python (`PHTOL=1e-12 target/fast/phcheck <oracle>`):
