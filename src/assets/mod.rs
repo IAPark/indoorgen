@@ -92,6 +92,7 @@ pub mod bathkit;
 pub mod bathtub;
 pub mod taps;
 pub mod bathsink;
+pub mod tvx;
 pub mod solid;
 pub mod windows;
 pub mod shelves;

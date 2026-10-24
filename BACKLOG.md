@@ -20,9 +20,9 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | K2 | BathroomSink, StandingSink | partial | bathsink.rs; vertex counts equal, 2/6 pass each; remaining misses are ONLY the 1cm drain-hole position (mirror-symmetric face tie decided by f32 noise in Blender; max err 5e-3, mean 5e-6) |
 | K3 | Bathtub (alcove + freestanding) mesh | done (5/6) | bathtub.rs; freestanding+base/legs and alcove pass (mean<=1e-7); seed 2 alcove has a sliver at a boolean chord (max 1e-2 local, mean 7e-6) |
 | K4 | Kitchen SinkFactory mesh | done 6/6 | gn template data/gn/ksink.json + TapFactory (taps.rs, data/gn/tap.json; 6/6) |
-| K5 | TV / Monitor | todo | |
+| K5 | TV / Monitor | partial | tvx.rs: Monitor 6/6, TV 3/6 (the has_depth_extrude variant: bridge of the opened bevel loop to the plane differs in places, max 8e-3; screen boolean uses the BSP csg so no exact vertex order) |
 | K6 | Pan, Pot (+Lid) meshes | todo | bounds exact |
-| K7 | KitchenSpace / KitchenIsland countertop slab + top cabinets | todo | |
+| K7 | KitchenSpace / KitchenIsland countertop slab + top cabinets | done 12/12 | shelves.rs assemble(): exact cabinets (frame params persist across instances of one factory object: cabdoor::kitchen_cabinet_gmesh_ex) + slab |
 | K8 | Oven gas variant (`use_gas=1`): exact boolean + bevel | todo | needs F2 |
 | K9 | Microwave: Mesh Boolean (FLOAT solver) mismatch | todo | needs F2 |
 | K10 | Aquarium contents (plants/corals) | todo | low priority |

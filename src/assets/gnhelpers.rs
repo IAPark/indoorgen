@@ -43,6 +43,22 @@ pub fn geo_radius(polylines: &[Vec<[f64; 3]>], radius: f64, resolution: i64, mer
 }
 
 pub fn geo_radius_ex(polylines: &[Vec<[f64; 3]>], radius: f64, resolution: i64, merge: f64, align_tilt: bool) -> Mesh {
+    let mut v = vec![];
+    let mut e = vec![];
+    for pl in polylines {
+        let base = v.len();
+        for (i, p) in pl.iter().enumerate() {
+            v.push(*p);
+            if i > 0 {
+                e.push([(base + i - 1) as u32, (base + i) as u32]);
+            }
+        }
+    }
+    geo_radius_graph(&v, &e, radius, resolution, merge, align_tilt)
+}
+
+/// geo_radius on an arbitrary wire mesh (vertices + edges, e.g. a branching skeleton)
+pub fn geo_radius_graph(verts: &[[f64; 3]], edges: &[[u32; 2]], radius: f64, resolution: i64, merge: f64, align_tilt: bool) -> Mesh {
     static TPL: OnceLock<J> = OnceLock::new();
     static TPL2: OnceLock<J> = OnceLock::new();
     let tpl = if align_tilt {
@@ -56,17 +72,8 @@ pub fn geo_radius_ex(polylines: &[Vec<[f64; 3]>], radius: f64, resolution: i64, 
     set_node(&mut j, "geo_radius", "Merge by Distance", &|n| set_input(n, "Distance", json!(merge)));
     let groups = gn::load::load_groups(j);
     let g = groups.map.get("geo_radius").unwrap();
-    let mut v = vec![];
-    let mut e = vec![];
-    for pl in polylines {
-        let base = v.len();
-        for (i, p) in pl.iter().enumerate() {
-            v.push(json!([p[0], p[1], p[2]]));
-            if i > 0 {
-                e.push(json!([base + i - 1, base + i]));
-            }
-        }
-    }
+    let v: Vec<J> = verts.iter().map(|p| json!([p[0], p[1], p[2]])).collect();
+    let e: Vec<J> = edges.iter().map(|x| json!([x[0], x[1]])).collect();
     let mesh = gn::load::mesh_from_json(&json!({"v": v, "e": e, "f": []}));
     let mut inputs: HashMap<String, gn::Value> = HashMap::default();
     let gi = g.inputs.iter().find(|i| i.ty == Ty::Geo).unwrap();
