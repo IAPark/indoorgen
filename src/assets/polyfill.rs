@@ -527,7 +527,7 @@ pub(crate) fn cross_tri_v3(v1: V3, v2: V3, v3: V3) -> V3 {
     [n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]]
 }
 
-fn is_quad_flip_v3(v1: V3, v2: V3, v3: V3, v4: V3) -> i32 {
+pub(crate) fn is_quad_flip_v3(v1: V3, v2: V3, v3: V3, v4: V3) -> i32 {
     let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let cross = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

@@ -63,6 +63,8 @@ pub struct BMFace {
     pub api: u8,
     pub idx: i32,
     pub alive: bool,
+    /// free user payload (copied by attribute copies, swapped by `face_swap_data`)
+    pub user: usize,
 }
 
 #[derive(Default)]
@@ -159,7 +161,7 @@ impl BMesh {
                 return f;
             }
         }
-        let f = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true };
+        let f = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true, user: 0 };
         self.totface += 1;
         let fid = match self.ffree.pop() {
             Some(i) => {
@@ -201,7 +203,7 @@ impl BMesh {
         let v2 = self.loops[l_v2].v;
         let e = self.edge_create(v1, v2, None, no_double);
         // bm_face_create__sfme
-        let nf = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true };
+        let nf = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true, user: 0 };
         self.totface += 1;
         let f2 = match self.ffree.pop() {
             Some(i) => {
@@ -311,7 +313,9 @@ impl BMesh {
 
     pub fn elem_attrs_copy_face(&mut self, src: usize, dst: usize) {
         let (flag, no, mat) = (self.faces[src].flag, self.faces[src].no, self.faces[src].mat_nr);
+        let user = self.faces[src].user;
         let d = &mut self.faces[dst];
+        d.user = user;
         d.flag = (d.flag & ELEM_SELECT) | (flag & !ELEM_SELECT);
         d.no = no;
         d.mat_nr = mat;
@@ -326,6 +330,21 @@ impl BMesh {
         let flag = self.edges[src].flag;
         let d = &mut self.edges[dst];
         d.flag = (d.flag & ELEM_SELECT) | (flag & !ELEM_SELECT);
+    }
+
+    /// bmesh_face_swap_data: swap the loop cycles / len / normal / flags of two faces (the element slots stay put)
+    pub fn face_swap_data(&mut self, a: usize, b: usize) {
+        for l in self.loops_of_face(a) {
+            self.loops[l].f = b;
+        }
+        for l in self.loops_of_face(b) {
+            self.loops[l].f = a;
+        }
+        let idx_a = self.faces[a].idx;
+        let idx_b = self.faces[b].idx;
+        self.faces.swap(a, b);
+        self.faces[a].idx = idx_a;
+        self.faces[b].idx = idx_b;
     }
 
     // ------------------------------------------------------------------ disk / radial cycles
