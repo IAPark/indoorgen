@@ -465,11 +465,8 @@ impl Factory for PlantContainer {
                 leaf_mat = Material::diffuse(&format!("cactus:{i}"), [0.1, 0.3, 0.12], 0.5);
             }
             Kind::Mushroom => {
-                let h = r.uniform(0.5, 0.9);
-                let cr = r.uniform(0.2, 0.4);
-                plant.append(&Mesh::frustum(0.0, 0.0, 0.0, h, 0.06, 0.04, 12));
-                plant.append(&Mesh::ellipsoid([0.0, 0.0, h], [cr, cr, cr * 0.6], 18, 8));
-                leaf_mat = Material::diffuse(&format!("mushroom:{i}"), [0.75, 0.55 + 0.2 * r.f64() as f32, 0.4], 0.6);
+                plant = super::mushroom::MushroomFactory::new(self.factory_seed).mesh(i);
+                leaf_mat = Material::diffuse(&format!("mushroom:{i}"), [0.5, 0.35, 0.25], 0.6);
             }
             Kind::Snake | Kind::Spider | Kind::Succulent => {
                 // exact node-graph ports (snakeplant.rs, spiderplant.rs, succulent.rs): the plant factory is built with the container's seed
