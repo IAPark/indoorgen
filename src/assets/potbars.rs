@@ -41,7 +41,14 @@ pub fn add_bars(pot: &Mesh, bar_radius: f64, bar_inner: f64, x_offset: f64, bar_
             *p = [(p[0] as f32 - loc32[0]) as f64, (p[1] as f32 - loc32[1]) as f64, (p[2] as f32 - loc32[2]) as f64];
         }
         dump(&format!("torus{}", side as i32), &torus);
-        let res = boolean(Op::Difference, &torus, &potl);
+        let res = if std::env::var("XBOOL").is_ok() {
+            use crate::exbool::exact_boolean::*;
+            let conv = |m: &Mesh| BoolInput { verts: m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), faces: m.faces.clone() };
+            let o = exact_boolean(&[conv(&torus), conv(&potl)], BoolOp::Difference, false, false);
+            Mesh { pos: o.verts.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(), faces: o.faces, uv: vec![] }
+        } else {
+            boolean(Op::Difference, &torus, &potl)
+        };
         dump(&format!("bool{}", side as i32), &res);
         let comps = components(&res);
         let mut best = (f64::NEG_INFINITY, usize::MAX);
