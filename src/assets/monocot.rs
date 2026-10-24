@@ -418,7 +418,7 @@ impl Growth {
         simple_deform(&mut m.v, Deform::Twist, a, 2);
         m.trace("SIMPLE_DEFORM");
         let a = r.uniform(0.0, self.bend_angle);
-        simple_deform(&mut m.v, Deform::Bend, a, 2);
+        simple_deform(&mut m.v, Deform::Bend, a, 0);
         m.trace("SIMPLE_DEFORM");
         let s = [r.uniform(0.8, 1.2) as f32, r.uniform(0.8, 1.2) as f32, self.z_scale as f32];
         let rz = r.uniform(0.0, PI * 2.0) as f32 as f64;

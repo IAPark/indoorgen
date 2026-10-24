@@ -259,6 +259,35 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
     if signed_area_xy(&m.v, &lp) < 0.0 {
         lp.reverse();
     }
+    // bmo_triangle_fill: the fill normal is that of the vertex with the largest edge-pair cross product (edge pair = its first two edges in
+    // mesh edge order, sign negated when the first leg is the longer one); the triangles wind counter-clockwise about it
+    let mut inc: Vec<Vec<u32>> = vec![vec![]; n];
+    for (ei, e) in m.e.iter().enumerate() {
+        inc[e[0] as usize].push(ei as u32);
+        inc[e[1] as usize].push(ei as u32);
+    }
+    let mut best: (f32, f32) = (-1.0, 1.0);
+    for v in 0..n {
+        if inc[v].len() != 2 {
+            continue;
+        }
+        let other = |ei: u32| {
+            let e = m.e[ei as usize];
+            if e[0] as usize == v { e[1] } else { e[0] }
+        };
+        let pv = m.v[v];
+        let (pa, pb) = (m.v[other(inc[v][0]) as usize], m.v[other(inc[v][1]) as usize]);
+        let da = [pv[0] - pa[0], pv[1] - pa[1], pv[2] - pa[2]];
+        let db = [pv[0] - pb[0], pv[1] - pb[1], pv[2] - pb[2]];
+        let cr = [da[1] * db[2] - da[2] * db[1], da[2] * db[0] - da[0] * db[2], da[0] * db[1] - da[1] * db[0]];
+        let value = cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2];
+        let (la, lb) = (da[0] * da[0] + da[1] * da[1] + da[2] * da[2], db[0] * db[0] + db[1] * db[1] + db[2] * db[2]);
+        let nz = if la > lb { -cr[2] } else { cr[2] };
+        if value > best.0 {
+            best = (value, nz);
+        }
+    }
+    let want_ccw = best.1 >= 0.0;
     // polyfill_calc(coords_sign = 1) expects the winding that axis_dominant_v3_to_m3_negate yields for a CCW face: clockwise in x/y
     let lpr: Vec<u32> = lp.iter().rev().copied().collect();
     let proj: Vec<[f32; 2]> = lpr.iter().map(|&i| [m.v[i as usize][0], m.v[i as usize][1]]).collect();
@@ -269,7 +298,7 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
         let (a, b, c) = (lp[t[0] as usize], lp[t[1] as usize], lp[t[2] as usize]);
         let (pa, pb, pc) = (m.v[a as usize], m.v[b as usize], m.v[c as usize]);
         let area = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0]);
-        if area < 0.0 {
+        if (area < 0.0) == want_ccw {
             o.f.push(vec![a, c, b]);
         } else {
             o.f.push(vec![a, b, c]);
