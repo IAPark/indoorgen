@@ -198,6 +198,8 @@ impl BedSpec {
 }
 
 // ------------------------------------------------------------------------------------------------ assembly
+use super::mattress::MattressSpec;
+use super::pillow::PillowSpec;
 use super::cloth::{simulate, Calib, ClothParams, Collider};
 use super::clothes::{Blanket, BlanketKind};
 use super::ctor_draws::{blanket_ctor, pillow_ctor, towel_material_draw};
@@ -520,110 +522,256 @@ impl Factory for Bed {
             return a;
         }
         // ---- outer stream continues after the frame (BedFactory.create_asset)
-        // mattress: MattressFactory(fseed) ctor (FixedSeed) then overrides
-        let mut mr = Rng::seeded(c.fseed);
-        let _w = mr.log_uniform(0.9, 2.0);
-        let _sz = mr.uniform(2.0, 2.4);
-        let mt = mr.uniform(0.2, 0.35);
-        let dot_d = mr.log_uniform(0.16, 0.2);
-        let _dot_s = mr.uniform(0.005, 0.02);
-        let _dot_h = mr.uniform(0.04, 0.08);
-        let _mtype = mr.choice_p(&[0.5, 0.5]);
-        let mat_cls = sample_call(&mut mr, FABRICS_W);
-        let coiled = r.choice_p(&[0.25, 0.75]) == 0;
-        let mw = c.width * r.uniform(0.88, 0.96);
-        let msz = c.size * r.uniform(0.88, 0.96);
-        let mat_m = m("mattress", mat_cls, 3, [0.92, 0.92, 0.9]);
-        let mut mattress = Mesh::cuboid([-mw / 2.0, -msz / 2.0, -mt / 2.0], [mw / 2.0, msz / 2.0, mt / 2.0]);
-        let _ = (coiled, dot_d);
+        // ---- mattress (MattressFactory: its own FixedSeed(fseed) ctor, type / width / size overridden from the bed stream)
+        let mut ms = MattressSpec::new(c.fseed);
+        ms.coiled = r.choice_p(&[0.25, 0.75]) == 0;
+        ms.width = c.width * r.uniform(0.88, 0.96);
+        ms.size = c.size * r.uniform(0.88, 0.96);
+        let mut mattress = ms.build(&mut inst_rng(c.fseed, inst));
         mattress.transform(&rot);
-        mattress.transform(&Mat4::translation([msz / 2.0, 0.0, mt / 2.0]));
+        mattress.transform(&Mat4::translation([c.size / 2.0, 0.0, ms.thickness / 2.0]));
+        let mat_m = m("mattress", ms.mat_cls, 3, [0.92, 0.92, 0.9]);
         let mb = mattress.bounds();
         a.parts.push(Part { mesh: mattress.clone(), mat: mat_m, col: Some((mb.0, mb.1)) });
-        let ztop = mt;
-        // sheet
-        let mut tops: Vec<Mesh> = vec![mattress.clone()];
-        if s.sheet_type != 3 {
-            let kind = [BlanketKind::Blanket, BlanketKind::Comforter, BlanketKind::BoxComforter][s.sheet_type];
-            let bc = blanket_ctor(&mut r, s.sheet_type == 2);
-            let (wm, sm) = if s.sheet_type == 0 { (r.uniform(1.4, 1.6), r.uniform(0.9, 1.1)) } else { (r.uniform(1.4, 1.8), r.uniform(0.9, 1.2)) };
-            let pressure = match s.sheet_type {
-                0 => 0.0,
-                1 => r.uniform(1.0, 1.5),
-                _ => r.log_uniform(8.0, 15.0),
-            };
-            let mut b = Blanket::from_unseeded(kind, &[mw * wm, msz * sm, bc[2], bc[3]]);
-            b.margin = bc[3];
-            let mut pre = b.create_asset();
-            if s.sheet_folded {
-                r.uniform(-std::f64::consts::PI / 6.0, std::f64::consts::PI / 6.0);
-                r.uniform(0.1, 0.3);
-            }
-            let off = r.uniform(0.0, 0.15);
-            pre.transform(&rot);
-            pre.transform(&Mat4::translation([b.size / 2.0 + off, 0.0, ztop]));
-            let mut p = ClothParams::default();
-            p.mass = 0.05;
-            p.tension = 2.0;
-            p.distance_min = 5e-3;
-            p.use_pressure = true;
-            p.pressure = pressure;
-            p.use_self_collision = s.sheet_folded;
-            let cm = Collider::new(&mattress.pos, &mattress.faces);
-            let cf = Collider::new(&frame_all.pos, &frame_all.faces);
-            let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &Calib::default());
-            let mut sheet = pre.clone();
-            sheet.pos = out;
-            let sheet = subsurf(&sheet, 2, false);
-            let sm_ = m("sheet", "fabric.FineKnitFabric", 4, [0.7, 0.7, 0.75]);
-            let sb = sheet.bounds();
-            tops.push(sheet.clone());
-            a.parts.push(Part { mesh: sheet, mat: sm_, col: Some((sb.0, sb.1)) });
+        let (mw, msz) = (ms.width, ms.size);
+        let cm = Collider::new(&mattress.pos, &mattress.faces);
+        let cf = Collider::new(&frame_all.pos, &frame_all.faces);
+        let fabric = m("sheet", "fabric.FineKnitFabric", 4, [0.7, 0.7, 0.75]);
+
+        // ---- sheet: "none" falls into python's `case _` = box comforter
+        let kind = [BlanketKind::Blanket, BlanketKind::Comforter, BlanketKind::BoxComforter, BlanketKind::BoxComforter][s.sheet_type];
+        let bc = blanket_ctor(&mut r, s.sheet_type >= 2);
+        let (wm, sm) = if s.sheet_type == 0 { (r.uniform(1.4, 1.6), r.uniform(0.9, 1.1)) } else { (r.uniform(1.4, 1.8), r.uniform(0.9, 1.2)) };
+        let pressure = match s.sheet_type {
+            0 => 0.0,
+            1 => r.uniform(1.0, 1.5),
+            _ => r.log_uniform(8.0, 15.0),
+        };
+        let mut b = Blanket::from_unseeded(kind, &[mw * wm, msz * sm, bc[2], bc[3]]);
+        b.margin = bc[3];
+        let mut pre = b.create_asset();
+        if s.sheet_folded {
+            let theta = r.uniform(-std::f64::consts::PI / 6.0, std::f64::consts::PI / 6.0);
+            let ym = b.size * (0.5 - r.uniform(0.1, 0.3));
+            pre = fold(&pre, theta, ym);
         }
-        let _ = (&mut r, FABRICS_W);
-        // pillows
+        let z_sheet = mattress.bounds().1[2];
+        let off = r.uniform(0.0, 0.15);
+        pre.transform(&rot);
+        pre.transform(&Mat4::translation([b.size / 2.0 + off, 0.0, z_sheet]));
+        let mut p = ClothParams::default();
+        p.mass = 0.05;
+        p.tension = 2.0;
+        p.distance_min = 5e-3;
+        p.use_pressure = true;
+        p.pressure = pressure;
+        p.use_self_collision = s.sheet_folded;
+        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &Calib::default());
+        let mut sheet = pre.clone();
+        sheet.pos = out;
+        let sheet = subsurf(&sheet, 2, false);
+        let sb = sheet.bounds();
+        a.parts.push(Part { mesh: sheet.clone(), mat: fabric.clone(), col: Some((sb.0, sb.1)) });
+
+        // ---- cover (always made: python never reads has_cover); 80 frames, no pressure
+        let cc = blanket_ctor(&mut r, false);
+        let cw = mw * r.uniform(1.6, 1.8);
+        let cs = msz * r.uniform(0.3, 0.4);
+        let cb = Blanket::from_unseeded(BlanketKind::Blanket, &[cw, cs, cc[2], 0.0]);
+        let mut cover = cb.create_asset();
+        let z_cover = sheet.bounds().1[2];
+        let off = r.uniform(0.0, 0.3);
+        cover.transform(&rot);
+        cover.transform(&Mat4::translation([c.size / 2.0 + off, 0.0, z_cover]));
+        let cs_ = Collider::new(&sheet.pos, &sheet.faces);
+        let mut p = ClothParams::default();
+        p.mass = 0.05;
+        p.tension = 2.0;
+        p.distance_min = 5e-3;
+        p.end_frame = 80;
+        let out = simulate(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
+        let mut cvm = cover.clone();
+        cvm.pos = out;
+        let cvm = subsurf(&cvm, 2, false);
+        let cbb = cvm.bounds();
+        a.parts.push(Part { mesh: cvm, mat: fabric.clone(), col: Some((cbb.0, cbb.1)) });
+
+        // ---- pillows
+        let bases = [&sheet, &mattress];
         let np = r.randint(2, 4) as usize;
         let pc = pillow_ctor(&mut r);
+        let pspec = PillowSpec::from_ctor(&pc);
+        let pillow = pspec.build(&mut inst_rng(c.fseed, inst));
         let pill_mat = m("pillow", "fabric.FineKnitFabric", 10, [0.9, 0.9, 0.92]);
-        let mut pts = vec![];
         let xs: Vec<f64> = (0..10).map(|_| r.uniform(0.1, 0.4) * c.size).collect();
         let ys: Vec<f64> = (0..10).map(|_| r.uniform(-0.3, 0.3) * c.width).collect();
-        for k in 0..10 {
-            pts.push([xs[k], ys[k]]);
-        }
-        let mut idx: Vec<usize> = (0..10).collect();
-        r.shuffle(&mut idx);
-        for &k in idx.iter().take(np) {
-            let z = tops.iter().filter_map(|t| face_top_z(t, pts[k][0], pts[k][1])).fold(f64::NEG_INFINITY, f64::max);
-            let z = if z.is_finite() { z } else { ztop };
-            let mut pm = quad_grid_pillow(pc[1], pc[2], pc[1] * 0.12, 12);
+        for loc in scatter(&bases, &xs, &ys, np, &mut r) {
+            let mut pm = pillow.clone();
             let rz = r.uniform(0.0, std::f64::consts::PI);
             let lowz = pm.bounds().0[2];
             pm.transform(&Mat4::rot_z(rz));
-            pm.transform(&Mat4::translation([pts[k][0], pts[k][1], z + 0.02 - lowz]));
+            pm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
             let b = pm.bounds();
             a.parts.push(Part { mesh: pm, mat: pill_mat.clone(), col: Some((b.0, b.1)) });
         }
-        // towel
-        let _n_towel = 1;
+        // ---- towel
         let mut ts = TowelSpec::from_stream(c.fseed, &mut r);
         let _ = towel_material_draw(&mut r);
         ts.mat_index = 0;
+        let tm0 = ts.build(inst);
         let txs: Vec<f64> = (0..10).map(|_| r.uniform(0.5, 0.8) * c.size).collect();
         let tys: Vec<f64> = (0..10).map(|_| r.uniform(-0.3, 0.3) * c.width).collect();
-        let mut idx: Vec<usize> = (0..10).collect();
-        r.shuffle(&mut idx);
-        let k = idx[0];
-        let z = tops.iter().filter_map(|t| face_top_z(t, txs[k], tys[k])).fold(f64::NEG_INFINITY, f64::max);
-        let z = if z.is_finite() { z } else { ztop };
-        let mut tm = ts.build(inst);
-        let rz = r.uniform(0.0, std::f64::consts::PI);
-        let lowz = tm.bounds().0[2];
-        tm.transform(&Mat4::rot_z(rz));
-        tm.transform(&Mat4::translation([txs[k], tys[k], z + 0.02 - lowz]));
-        let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
-        let b = tm.bounds();
-        a.parts.push(Part { mesh: tm, mat: tmat, col: Some((b.0, b.1)) });
+        for loc in scatter(&bases, &txs, &tys, 1, &mut r) {
+            let mut tm = tm0.clone();
+            let rz = r.uniform(0.0, std::f64::consts::PI);
+            let lowz = tm.bounds().0[2];
+            tm.transform(&Mat4::rot_z(rz));
+            tm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
+            let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
+            let b = tm.bounds();
+            a.parts.push(Part { mesh: tm, mat: tmat, col: Some((b.0, b.1)) });
+        }
         a
     }
+}
+
+/// BedFactory.scatter: drop points (x, y) at height 1 onto the highest surface of `bases`, trimesh remove_close culling to `n`, random order
+fn scatter(bases: &[&Mesh], xs: &[f64], ys: &[f64], n: usize, r: &mut Rng) -> Vec<V3> {
+    let mut pts: Vec<V3> = vec![];
+    for k in 0..xs.len() {
+        let z = bases.iter().filter_map(|t| face_top_z(t, xs[k], ys[k])).fold(f64::NEG_INFINITY, f64::max);
+        pts.push([xs[k], ys[k], if z.is_finite() { z } else { 0.0 }]);
+    }
+    decimate(&pts, n, r)
+}
+
+/// trimesh.points.remove_close: indices kept
+fn remove_close(pts: &[V3], radius: f64) -> Vec<usize> {
+    let n = pts.len();
+    let mut pairs = vec![];
+    for i in 0..n {
+        for j in i + 1..n {
+            let d: f64 = (0..3).map(|k| (pts[i][k] - pts[j][k]).powi(2)).sum();
+            if d <= radius * radius {
+                pairs.push((i, j));
+            }
+        }
+    }
+    let mut count = vec![0usize; n];
+    for &(i, j) in &pairs {
+        count[i] += 1;
+        count[j] += 1;
+    }
+    let mut removed = vec![false; n];
+    for &(i, j) in &pairs {
+        removed[if count[j] > count[i] { j } else { i }] = true;
+    }
+    (0..n).filter(|&i| !removed[i]).collect()
+}
+
+/// decorate.decimate(points, n)
+fn decimate(pts: &[V3], n: usize, r: &mut Rng) -> Vec<V3> {
+    let (mut dist, ratio) = (0.1f64, 1.2f64);
+    loop {
+        let culled = remove_close(pts, dist);
+        if culled.len() <= n || dist > 10.0 {
+            dist /= ratio;
+            break;
+        }
+        dist *= ratio;
+    }
+    let mut kept: Vec<V3> = remove_close(pts, dist).into_iter().map(|i| pts[i]).collect();
+    r.shuffle(&mut kept);
+    kept.truncate(n);
+    kept
+}
+
+/// BlanketFactory.fold: rotate by theta, shift by -y_margin, bisect at y = 0, mirror the y > 0 half down (y -> -y, z -> 0.05 - z), undo
+fn fold(m: &Mesh, theta: f64, ym: f64) -> Mesh {
+    let mut o = m.clone();
+    o.transform(&Mat4::rot_z(theta));
+    o.transform(&Mat4::translation([0.0, -ym, 0.0]));
+    let mut o = bisect_y(&o);
+    for p in o.pos.iter_mut() {
+        if p[1] > 0.0 {
+            p[1] = -p[1];
+            p[2] = 0.05 - p[2];
+        }
+    }
+    o.transform(&Mat4::translation([0.0, ym, 0.0]));
+    o.transform(&Mat4::rot_z(-theta));
+    o
+}
+
+/// bpy.ops.mesh.bisect(plane_co=0, plane_no=(0,1,0)): faces crossing y = 0 are split along the cut (no fill)
+fn bisect_y(m: &Mesh) -> Mesh {
+    let th = 1e-4;
+    let mut o = Mesh::new();
+    o.pos = m.pos.clone();
+    let side = |y: f64| if y > th { 1 } else if y < -th { -1 } else { 0 };
+    let mut cut: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
+    for f in &m.faces {
+        let n = f.len();
+        // ring with inserted cut vertices; side 0 on the plane for the cut points
+        let mut ring: Vec<(u32, i32)> = vec![];
+        for k in 0..n {
+            let (a, b) = (f[k], f[(k + 1) % n]);
+            let (sa, sb) = (side(m.pos[a as usize][1]), side(m.pos[b as usize][1]));
+            ring.push((a, sa));
+            if sa * sb < 0 {
+                let key = (a.min(b), a.max(b));
+                let id = *cut.entry(key).or_insert_with(|| {
+                    let (pa, pb) = (m.pos[a as usize], m.pos[b as usize]);
+                    let t = pa[1] / (pa[1] - pb[1]);
+                    o.pos.push([pa[0] + (pb[0] - pa[0]) * t, 0.0, pa[2] + (pb[2] - pa[2]) * t]);
+                    (o.pos.len() - 1) as u32
+                });
+                ring.push((id, 0));
+            }
+        }
+        let pos_n = ring.iter().filter(|r| r.1 > 0).count();
+        let neg_n = ring.iter().filter(|r| r.1 < 0).count();
+        let planar: Vec<usize> = (0..ring.len()).filter(|&i| ring[i].1 == 0).collect();
+        if pos_n > 0 && neg_n > 0 && planar.len() >= 2 {
+            // split between the first two on-plane ring entries that separate the sides
+            let (i, j) = (planar[0], *planar.last().unwrap());
+            let (i, j) = if planar.len() > 2 { find_split(&ring) .unwrap_or((i, j)) } else { (i, j) };
+            let l = ring.len();
+            let mut f1 = vec![];
+            let mut k = i;
+            loop {
+                f1.push(ring[k].0);
+                if k == j { break; }
+                k = (k + 1) % l;
+            }
+            let mut f2 = vec![];
+            let mut k = j;
+            loop {
+                f2.push(ring[k].0);
+                if k == i { break; }
+                k = (k + 1) % l;
+            }
+            o.faces.push(f1);
+            o.faces.push(f2);
+        } else {
+            o.faces.push(ring.iter().map(|r| r.0).collect());
+        }
+    }
+    o
+}
+
+fn find_split(ring: &[(u32, i32)]) -> Option<(usize, usize)> {
+    let l = ring.len();
+    let pl: Vec<usize> = (0..l).filter(|&i| ring[i].1 == 0).collect();
+    for a in 0..pl.len() {
+        for b in a + 1..pl.len() {
+            let (i, j) = (pl[a], pl[b]);
+            let between: Vec<i32> = (i + 1..j).map(|k| ring[k].1).filter(|&s| s != 0).collect();
+            let outside: Vec<i32> = (0..l).filter(|&k| k < i || k > j).map(|k| ring[k].1).filter(|&s| s != 0).collect();
+            if !between.is_empty() && !outside.is_empty() && between.iter().all(|&s| s == between[0]) && outside.iter().all(|&s| s == -between[0]) {
+                return Some((i, j));
+            }
+        }
+    }
+    None
 }

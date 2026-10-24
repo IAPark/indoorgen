@@ -63,7 +63,10 @@ impl MattressSpec {
             p.use_pressure = true;
             p.pressure = pressure;
             p.pin = m.pos.iter().map(|q| if q[2] < 0.1 - t / 2.0 { 1.0 } else { 0.0 }).collect();
-            let out = simulate(&m.pos, &m.faces, &p, &[], &Calib::default());
+            // pressure calibrated against the python mattress bake (seeds 4, 5): the generic scale over-inflates the sealed box
+            let mut cal = Calib::default();
+            cal.press_scale *= 0.2;
+            let out = simulate(&m.pos, &m.faces, &p, &[], &cal);
             let mut o = m;
             o.pos = out;
             o
