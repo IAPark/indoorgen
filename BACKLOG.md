@@ -48,7 +48,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | F4 | Unify `bridge_ex.rs` (SURFACE mode) into `bridge.rs` | todo | |
 | F5 | Remaining unit failures: AlignEulerToVector, SampleNearest ties, DistributePointsOnFaces sphere, VectorCurve | todo | |
 | P1 | Placement: Bathroom 0 diverges at stage 0 it 93: door vs bathtub MPR depth 0.567 vs python-fcl 0.482 for `collide(b,f)` (box-vs-box, support ties) | DONE| Cause: python-fcl (arm64) fuses a*b+c*d into FMAs in libccd (dot/cross/quat/pointTriDist); mpr.rs now emulates it (bit-exact depth/normal/pos vs fcl on the pair). Bathroom 0 identical through 730 iterations; added to selfcheck. |
-| P2 | Placement: DiningRoom 0 diverges at stage 2 it 15 (wall_decorations term) | todo | |
+| P2 | Placement: DiningRoom 0 diverges at stage 2 it 15 (wall_decorations term) | DONE| Same root cause as P1 (FMA in libccd); DiningRoom 0 identical through 770 iterations (add to selfcheck if wanted). |
 | P3 | Remove oracles: Rust room mesh in Blender face order, placeholder meshes, populated assets, ctor draws (CTOREMU) so lockstep holds with no python dumps | todo | biggest remaining exactness item |
 
 ## Evaluation (orchestrator)
