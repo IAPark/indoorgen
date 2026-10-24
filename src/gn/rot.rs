@@ -171,10 +171,11 @@ fn angle_signed_on_axis(v1: V3, v2: V3, axis: V3) -> f32 {
     let v2p = project_plane(v2, axis);
     let tproj = cross3(v1p, v2p);
     let a = angle_v3v3(v1p, v2p);
-    if dot3(tproj, axis) < 0.0 {
-        -a
-    } else {
+    // exactly antiparallel projections (zero cross product) give the negative angle in Blender
+    if dot3(tproj, axis) > 0.0 {
         a
+    } else {
+        -a
     }
 }
 

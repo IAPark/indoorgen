@@ -287,6 +287,101 @@ pub fn curve_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             }
             outs(node, vec![("Curve", rcgeo(o))])
         }
+        "GeometryNodeCurveSetHandles" => {
+            let g = ev.geo(ni, "Curve")?;
+            let ty: u8 = match node.ps("handle_type") {
+                "FREE" => 0,
+                "VECTOR" => 2,
+                "ALIGN" => 3,
+                _ => 1,
+            };
+            let (mut left, mut right) = (false, false);
+            if let Some(serde_json::Value::Array(a)) = node.pj("mode") {
+                for m in a {
+                    match m.as_str() {
+                        Some("LEFT") => left = true,
+                        Some("RIGHT") => right = true,
+                        _ => {}
+                    }
+                }
+            } else {
+                left = true;
+                right = true;
+            }
+            let mut o = (*g).clone();
+            if let Some(c) = o.curves.as_mut() {
+                let sel = selection(ev, ni, Comp::Curves(g.curves.as_ref().unwrap()), Dom::Point)?;
+                for i in 0..c.np() {
+                    if sel[i] {
+                        if left {
+                            c.htl[i] = ty;
+                        }
+                        if right {
+                            c.htr[i] = ty;
+                        }
+                    }
+                }
+                calculate_bezier_auto_handles(c);
+            }
+            outs(node, vec![("Curve", rcgeo(o))])
+        }
+        "GeometryNodeSetCurveHandlePositions" => {
+            let g = ev.geo(ni, "Curve")?;
+            let use_left = node.ps("mode") != "RIGHT";
+            let mut o = (*g).clone();
+            if let Some(c) = o.curves.as_mut() {
+                let comp = Comp::Curves(g.curves.as_ref().unwrap());
+                let sel = selection(ev, ni, comp, Dom::Point)?;
+                let pos = eval_on(&ev.field(ni, "Position")?, comp, Dom::Point);
+                let off = eval_on(&ev.field(ni, "Offset")?, comp, Dom::Point);
+                for i in 0..c.np() {
+                    if !sel[i] {
+                        continue;
+                    }
+                    let (mut t, mut t_other) = if use_left { (c.htl[i], c.htr[i]) } else { (c.htr[i], c.htl[i]) };
+                    // update_handle_types_for_movement
+                    match t {
+                        1 => {
+                            if t_other == 1 {
+                                t = 3;
+                                t_other = 3;
+                            } else {
+                                t = 0;
+                            }
+                        }
+                        2 => t = 0,
+                        3 => {
+                            if t_other != 3 {
+                                t = 0;
+                            }
+                        }
+                        _ => {}
+                    }
+                    if use_left {
+                        c.htl[i] = t;
+                        c.htr[i] = t_other;
+                    } else {
+                        c.htr[i] = t;
+                        c.htl[i] = t_other;
+                    }
+                    let newp = add3(pos[i].v(), off[i].v());
+                    let position = c.pos[i];
+                    if use_left {
+                        let (mut h, mut ho) = (c.hl[i], c.hr[i]);
+                        set_handle_position(position, t, t_other, newp, &mut h, &mut ho);
+                        c.hl[i] = h;
+                        c.hr[i] = ho;
+                    } else {
+                        let (mut h, mut ho) = (c.hr[i], c.hl[i]);
+                        set_handle_position(position, t, t_other, newp, &mut h, &mut ho);
+                        c.hr[i] = h;
+                        c.hl[i] = ho;
+                    }
+                }
+                calculate_bezier_auto_handles(c);
+            }
+            outs(node, vec![("Curve", rcgeo(o))])
+        }
         "GeometryNodeCurvePrimitiveBezierSegment" => {
             let res = ev.ci(ni, "Resolution")?.max(1);
             let (p0, mut h0, mut h1, p1) = (ev.cv(ni, "Start")?, ev.cv(ni, "Start Handle")?, ev.cv(ni, "End Handle")?, ev.cv(ni, "End")?);
@@ -613,11 +708,15 @@ pub fn curve_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let g = ev.geo(ni, "Curve")?;
             let rad = ev.field(ni, "Radius")?;
             let limit = ev.cb(ni, "Limit Radius")?;
-            let count = if ev.has_input(ni, "Count") { Some(ev.ci(ni, "Count")?.max(1) as usize) } else { None };
+            let count = if ev.has_input(ni, "Count") { Some(ev.field(ni, "Count")?) } else { None };
             let mut o = (*g).clone();
             if let Some(c) = &g.curves {
                 let rv = eval_on(&rad, Comp::Curves(c), Dom::Point);
-                o.curves = Some(fillet_curve(c, &rv, limit, count.unwrap_or(1), node.ps("mode") == "BEZIER"));
+                let cv = match &count {
+                    Some(f) => eval_on(f, Comp::Curves(c), Dom::Point),
+                    None => vec![Val::I(1); c.np()],
+                };
+                o.curves = Some(fillet_curve(c, &rv, &cv, limit, node.ps("mode") == "BEZIER"));
             }
             outs(node, vec![("Curve", rcgeo(o))])
         }
@@ -1062,102 +1161,215 @@ pub fn trim_curve(c: &Curves, sel: &[bool], start: &[Val], end: &[Val], by_len: 
     o
 }
 
-pub fn fillet_curve(c: &Curves, radius: &[Val], limit: bool, count: usize, bezier: bool) -> Curves {
-    let _ = bezier;
+/// angle_v3v3 (normalizes both inputs with normalize_v3, then angle_normalized_v3v3)
+fn angle_v3v3(a: V3, b: V3) -> f32 {
+    let (a, b) = (norm3_c(a), norm3_c(b));
+    let saasin = |x: f32| x.clamp(-1.0, 1.0).asin();
+    if dot3(a, b) >= 0.0 {
+        2.0 * saasin(len3(sub3(b, a)) / 2.0)
+    } else {
+        let bn = [-b[0], -b[1], -b[2]];
+        (std::f64::consts::PI as f32) - 2.0 * saasin(len3(sub3(bn, a)) / 2.0)
+    }
+}
+
+fn fillet_limit_radius(pp: V3, p: V3, pn: V3, ap: f32, a: f32, an: f32, rp: f32, r: f32, rn: f32) -> f32 {
+    let disp = r * (a / 2.0).tan();
+    let disp_p = rp * (ap / 2.0).tan();
+    let seg_p = len3(sub3(p, pp));
+    let tot_p = disp_p + disp;
+    let f_p = safe_div(seg_p, tot_p).clamp(0.0, 1.0);
+    let disp_n = rn * (an / 2.0).tan();
+    let seg_n = len3(sub3(p, pn));
+    let tot_n = disp_n + disp;
+    let f_n = safe_div(seg_n, tot_n).clamp(0.0, 1.0);
+    r * f_p.min(f_n)
+}
+
+/// vector handle: interpolate(p, other, 1/3)
+fn vector_handle(p: V3, other: V3) -> V3 {
+    let t = 1.0f32 / 3.0;
+    [p[0] * (1.0 - t) + other[0] * t, p[1] * (1.0 - t) + other[1] * t, p[2] * (1.0 - t) + other[2] * t]
+}
+
+/// Port of blender::geometry::fillet_curves (geometry/intern/fillet_curves.cc).  `counts` = per point Count field
+/// (ignored in Bezier mode, where it is 1).
+pub fn fillet_curve(c: &Curves, radius: &[Val], counts: &[Val], limit: bool, bezier: bool) -> Curves {
     let mut o = Curves::new();
     o.has_radius = c.has_radius;
+    let pi32 = std::f64::consts::PI as f32;
+    let _ = pi32;
+    let has_bezier = c.kind.iter().any(|k| *k == CKind::Bezier);
+    // destination point <- source point, for attribute gathering
+    let mut gather: Vec<usize> = vec![];
     for k in 0..c.nc() {
         let r = c.range(k);
         let n = r.len();
         let cyc = c.cyclic[k];
         let pos: Vec<V3> = c.pos[r.clone()].to_vec();
-        if n < 3 {
-            o.push_kind(c.kind[k], &pos, cyc);
+        if n == 0 {
+            o.push_kind(c.kind[k], &[], cyc);
             continue;
         }
-        let nseg = if cyc { n } else { n - 1 };
-        let dirs: Vec<V3> = (0..nseg).map(|i| norm3(sub3(pos[(i + 1) % n], pos[i]))).collect();
-        let seglen: Vec<f32> = (0..nseg).map(|i| len3(sub3(pos[(i + 1) % n], pos[i]))).collect();
-        let mut angle = vec![0.0f32; n];
-        let mut disp = vec![0.0f32; n];
-        let mut has = vec![false; n];
-        for i in 0..n {
-            if !cyc && (i == 0 || i == n - 1) {
-                continue;
-            }
-            let dp = dirs[(i + nseg - 1) % nseg];
-            let dn = dirs[i % nseg];
-            let a = angle_norm(dp.map(|x| -x), dn);
-            angle[i] = a;
-            let rad = radius[r.start + i].f();
-            if rad == 0.0 || a < 1e-4 || (std::f32::consts::PI - a) < 1e-4 {
-                continue;
-            }
-            has[i] = true;
-            // negative radii degenerate to `count + 1` copies of the vertex (measured against Blender)
-            disp[i] = if rad < 0.0 { 0.0 } else { rad / (a * 0.5).tan() };
+        let mut cnt: Vec<usize> = (0..n).map(|i| if bezier { 2 } else { (counts[r.start + i].i().max(0) + 1) as usize }).collect();
+        if !cyc {
+            cnt[0] = 1;
+            cnt[n - 1] = 1;
         }
-        if limit {
-            // each segment is shared by its two corner fillets
-            let orig = disp.clone();
+        for i in 0..n {
+            if radius[r.start + i].f() == 0.0 {
+                cnt[i] = 1;
+            }
+        }
+        // directions and angles
+        let mut dirs = vec![[0.0f32; 3]; n];
+        for i in 0..n.saturating_sub(1) {
+            dirs[i] = norm3(sub3(pos[i + 1], pos[i]));
+        }
+        dirs[n - 1] = norm3(sub3(pos[0], pos[n - 1]));
+        let neg = |v: V3| [-v[0], -v[1], -v[2]];
+        let mut angles = vec![0.0f32; n];
+        angles[0] = (std::f64::consts::PI - angle_v3v3(neg(dirs[n - 1]), dirs[0]) as f64) as f32;
+        for i in 1..n {
+            angles[i] = (std::f64::consts::PI - angle_v3v3(neg(dirs[i - 1]), dirs[i]) as f64) as f32;
+        }
+        let rin: Vec<f32> = (0..n).map(|i| radius[r.start + i].f()).collect();
+        let radii: Vec<f32> = if limit {
+            let mut rc = vec![0.0f32; n];
+            if cyc {
+                rc[0] = fillet_limit_radius(pos[n - 1], pos[0], pos[1 % n], angles[n - 1], angles[0], angles[1 % n], rin[n - 1], rin[0], rin[1 % n]);
+                for i in 1..n.saturating_sub(1) {
+                    rc[i] = fillet_limit_radius(pos[i - 1], pos[i], pos[i + 1], angles[i - 1], angles[i], angles[i + 1], rin[i - 1], rin[i], rin[i + 1]);
+                }
+                if n >= 2 {
+                    rc[n - 1] = fillet_limit_radius(pos[n - 2], pos[n - 1], pos[0], angles[n - 2], angles[n - 1], angles[0], rin[n - 2], rin[n - 1], rin[0]);
+                }
+            } else {
+                let last = n - 1;
+                rc[0] = 0.0;
+                for i in 1..last.max(1) {
+                    let (ip, in_) = (i - 1, i + 1);
+                    let rp = if ip == 0 { 0.0 } else { rin[ip] };
+                    let rn = if in_ == last { 0.0 } else { rin[in_] };
+                    rc[i] = fillet_limit_radius(pos[ip], pos[i], pos[in_], angles[ip], angles[i], angles[in_], rp, rin[i], rn);
+                }
+                rc[last] = 0.0;
+            }
+            rc
+        } else {
+            rin.clone()
+        };
+        // positions
+        let mut dst: Vec<V3> = vec![];
+        let mut arcs: Vec<std::ops::Range<usize>> = vec![];
+        for i in 0..n {
+            let start = dst.len();
+            if cnt[i] == 1 {
+                dst.push(pos[i]);
+                gather.push(r.start + i);
+                arcs.push(start..start + 1);
+                continue;
+            }
+            let ip = if i == 0 { n - 1 } else { i - 1 };
+            let angle = angles[i];
+            let rad = radii[i];
+            let displacement = rad * (angle / 2.0).tan();
+            let prev_dir = neg(dirs[ip]);
+            let next_dir = dirs[i];
+            let arc_start = add3(pos[i], mul3(prev_dir, displacement));
+            let arc_end = add3(pos[i], mul3(next_dir, displacement));
+            let nmid = cnt[i] - 2;
+            dst.push(arc_start);
+            if nmid > 0 {
+                let axis = neg(norm3(cross3(prev_dir, next_dir)));
+                let sum = add3(next_dir, prev_dir);
+                let center_direction = norm3(mul3(sum, 0.5));
+                let distance_to_center = (rad * rad + displacement * displacement).sqrt();
+                let center = add3(pos[i], mul3(center_direction, distance_to_center));
+                let segment_angle = angle / (nmid + 1) as f32;
+                for j in 0..nmid {
+                    let ang = segment_angle * (j + 1) as f32;
+                    let (si, co) = (ang.sin(), ang.cos());
+                    let ico = 1.0 - co;
+                    let nsi = [axis[0] * si, axis[1] * si, axis[2] * si];
+                    let n00 = (axis[0] * axis[0]) * ico;
+                    let n01 = (axis[0] * axis[1]) * ico;
+                    let n11 = (axis[1] * axis[1]) * ico;
+                    let n02 = (axis[0] * axis[2]) * ico;
+                    let n12 = (axis[1] * axis[2]) * ico;
+                    let n22 = (axis[2] * axis[2]) * ico;
+                    let m = [[n00 + co, n01 + nsi[2], n02 - nsi[1]], [n01 - nsi[2], n11 + co, n12 + nsi[0]], [n02 + nsi[1], n12 - nsi[0], n22 + co]];
+                    let v = sub3(arc_start, center);
+                    let rv = [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2], m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2], m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2]];
+                    dst.push(add3(rv, center));
+                }
+            }
+            dst.push(arc_end);
+            for _ in 0..cnt[i] {
+                gather.push(r.start + i);
+            }
+            arcs.push(start..dst.len());
+        }
+        let first_dst = o.pos.len();
+        o.push_kind(c.kind[k], &dst, cyc);
+        let kk = o.nc() - 1;
+        o.res[kk] = c.res[k];
+        // handles
+        if c.kind[k] == CKind::Bezier && has_bezier {
+            let nd = dst.len();
+            let last = nd - 1;
             for i in 0..n {
-                if !has[i] {
+                let arc = arcs[i].clone();
+                let rs = r.start + i;
+                if arc.len() == 1 {
+                    o.hl[first_dst + arc.start] = c.hl[rs];
+                    o.hr[first_dst + arc.start] = c.hr[rs];
+                    o.htl[first_dst + arc.start] = c.htl[rs];
+                    o.htr[first_dst + arc.start] = c.htr[rs];
                     continue;
                 }
-                let ip = (i + n - 1) % n;
-                let in_ = (i + 1) % n;
-                let lp = seglen[(i + nseg - 1) % nseg];
-                let ln = seglen[i % nseg];
-                let avail = |j: usize, l: f32| -> f32 {
-                    if has[j] && (cyc || (j != 0 && j != n - 1)) {
-                        let tot = orig[i] + orig[j];
-                        if tot > 0.0 {
-                            l * orig[i] / tot
-                        } else {
-                            l
-                        }
-                    } else {
-                        l
+                let (a, b) = (arc.start, arc.end - 1);
+                let prev = if a == 0 { last } else { a - 1 };
+                let next = if b == last { 0 } else { b + 1 };
+                if bezier {
+                    let ip = if i == 0 { n - 1 } else { i - 1 };
+                    let prev_dir = neg(dirs[ip]);
+                    let next_dir = dirs[i];
+                    o.hl[first_dst + a] = vector_handle(dst[a], dst[prev]);
+                    o.hr[first_dst + b] = vector_handle(dst[b], dst[next]);
+                    o.htl[first_dst + a] = 2;
+                    o.htr[first_dst + b] = 2;
+                    let handle_length = (4.0f32 / 3.0) * radii[i] * (angles[i] / 4.0).tan();
+                    o.hr[first_dst + a] = sub3(dst[a], mul3(prev_dir, handle_length));
+                    o.hl[first_dst + b] = sub3(dst[b], mul3(next_dir, handle_length));
+                    o.htr[first_dst + a] = 3;
+                    o.htl[first_dst + b] = 3;
+                } else {
+                    for j in arc.clone() {
+                        o.htl[first_dst + j] = 2;
+                        o.htr[first_dst + j] = 2;
                     }
-                };
-                let m = avail(ip, lp).min(avail(in_, ln));
-                disp[i] = orig[i].min(m);
+                    o.hl[first_dst + a] = vector_handle(dst[a], dst[prev]);
+                    o.hr[first_dst + b] = vector_handle(dst[b], dst[next]);
+                    for j in (a + 1)..b {
+                        o.hr[first_dst + j] = vector_handle(dst[j], dst[j - 1]);
+                        o.hl[first_dst + j] = vector_handle(dst[j], dst[j + 1]);
+                    }
+                }
             }
         }
-        let mut pts: Vec<V3> = vec![];
-        let mut src: Vec<usize> = vec![];
-        for i in 0..n {
-            if !has[i] {
-                pts.push(pos[i]);
-                src.push(i);
-                continue;
-            }
-            let dp = dirs[(i + nseg - 1) % nseg];
-            let dn = dirs[i % nseg];
-            let back = dp.map(|x| -x);
-            let d = disp[i];
-            let t0 = add3(pos[i], mul3(back, d));
-            let t1 = add3(pos[i], mul3(dn, d));
-            let a = angle[i];
-            let rr = d * (a * 0.5).tan();
-            let bis = norm3(add3(back, dn));
-            let cen = add3(pos[i], mul3(bis, rr / (a * 0.5).sin()));
-            let (v0, v1) = (sub3(t0, cen), sub3(t1, cen));
-            let axis = norm3(cross3(v0, v1));
-            let sweep = len3(cross3(v0, v1)).atan2(dot3(v0, v1));
-            let cnt = count + 1;
-            for j in 0..cnt {
-                let th = sweep * j as f32 / (cnt - 1).max(1) as f32;
-                let v = rotate_around(v0, axis, th);
-                pts.push(add3(cen, v));
-                src.push(i);
-            }
-        }
-        o.push_poly(&pts, cyc);
-        let base = o.pos.len() - pts.len();
-        for (j, &s) in src.iter().enumerate() {
-            o.radius[base + j] = c.radius[r.start + s];
-            o.tilt[base + j] = c.tilt[r.start + s];
+    }
+    // point attributes
+    for j in 0..gather.len() {
+        let s = gather[j];
+        o.radius[j] = c.radius[s];
+        o.tilt[j] = c.tilt[s];
+    }
+    for (name, a) in c.attrs.iter() {
+        if a.dom == Dom::Point {
+            o.attrs.insert(name.clone(), Attr { dom: Dom::Point, ty: a.ty, data: gather.iter().map(|&s| a.data[s].clone()).collect() });
+        } else {
+            o.attrs.insert(name.clone(), a.clone());
         }
     }
     o
