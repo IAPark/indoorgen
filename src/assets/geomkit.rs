@@ -281,3 +281,15 @@ pub fn solidify(m: &Mesh, t: f64) -> Mesh {
     }
     out
 }
+
+/// assets/utils/object.new_bbox: unit cube with float32 object scale / location, applied as x * s + l in float32 -> (lo, hi) with float32-exact values
+pub fn new_bbox_f32(x: f64, x_: f64, y: f64, y_: f64, z: f64, z_: f64) -> (V3, V3) {
+    let ax = |a: f64, b: f64| -> (f64, f64) {
+        let (l, s) = (((a + b) / 2.0) as f32, ((b - a) / 2.0) as f32);
+        (((-1.0f32) * s + l) as f64, (1.0f32 * s + l) as f64)
+    };
+    let (x0, x1) = ax(x, x_);
+    let (y0, y1) = ax(y, y_);
+    let (z0, z1) = ax(z, z_);
+    ([x0, y0, z0], [x1, y1, z1])
+}

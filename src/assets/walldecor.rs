@@ -99,7 +99,8 @@ impl Factory for WallArt {
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let mut a = Asset::default();
         let (w, h, t) = (self.width, self.height, self.thickness);
-        a.cuboid([-0.01, -w / 2.0 - t, -h / 2.0 - t], [0.15, w / 2.0 + t, h / 2.0 + t], &mat("ph", [0.5; 3], 0.5));
+        let (lo, hi) = super::geomkit::new_bbox_f32(-0.01, 0.15, -w / 2.0 - t, w / 2.0 + t, -h / 2.0 - t, h / 2.0 + t);
+        a.cuboid(lo, hi, &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
     fn asset(&self, _i: u64) -> Asset {
