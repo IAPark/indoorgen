@@ -37,6 +37,8 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     for f in os.listdir(outdir): os.remove(os.path.join(outdir, f))
     counter = [0]
+    rng_ = os.environ.get("PYTRACE_RANGE"); lo_, hi_ = (map(int, rng_.split("-")) if rng_ else (0, 10**9))
+    mod_ = os.environ.get("PYTRACE_MOD"); mm_, mr_ = (map(int, mod_.split(":")) if mod_ else (1, 0))
     import infinigen.core.util.blender as butil
     import infinigen.core.util.random as R
     R.weighted_sample = lambda *a, **k: _D
@@ -49,7 +51,8 @@ def main():
     def mm(obj, type, apply=True, **kw):
         i = counter[0]; counter[0] += 1
         tag = f"{i:03d}_{type}"
-        if apply and obj.type == "MESH":
+        dumpit = lo_ <= i <= hi_ and i % mm_ == mr_
+        if apply and obj.type == "MESH" and dumpit:
             dump_obj(f"{outdir}/{tag}_in.bin", obj)
             json.dump(dict(type=type, kwargs={k: jsonable(v) if k != "texture" else {a: getattr(v, a, None) for a in ["type","noise_scale","noise_basis","noise_depth","noise_type","turbulence","intensity","contrast","stucci_type","use_color_ramp","brightness"]} for k, v in kw.items() if k != "vertex_group"}, vg=kw.get("vertex_group")), open(f"{outdir}/{tag}.json", "w"))
             if kw.get("vertex_group"):
@@ -60,7 +63,7 @@ def main():
                         if g.group == vg.index: w[v.index] = g.weight
                 w.tofile(f"{outdir}/{tag}_vg.f32")
         r = orig_mod(obj, type, apply=apply, **kw)
-        if apply and obj.type == "MESH":
+        if apply and obj.type == "MESH" and dumpit:
             dump_obj(f"{outdir}/{tag}_out.bin", obj)
         return r
     butil.modify_mesh = mm
@@ -69,10 +72,11 @@ def main():
         i = counter[0]; counter[0] += 1
         tag = f"{i:03d}_geo_{getattr(fn, '__name__', 'fn')}"
         apply = kw.get("apply", True)
-        if apply and obj.type == "MESH":
+        dumpit = lo_ <= i <= hi_ and i % mm_ == mr_
+        if apply and obj.type == "MESH" and dumpit:
             dump_obj(f"{outdir}/{tag}_in.bin", obj)
         r = orig_geo(obj, fn, *args, **kw)
-        if apply and obj.type == "MESH":
+        if apply and obj.type == "MESH" and dumpit:
             dump_obj(f"{outdir}/{tag}_out.bin", obj)
         return r
     S.add_geomod = ag

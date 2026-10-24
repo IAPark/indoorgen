@@ -82,6 +82,8 @@ pub mod bevelgn;
 pub mod stagecmp;
 pub mod stagefile;
 pub mod dualcon;
+pub mod leafkit;
+pub mod monocot;
 pub mod bpymod;
 pub mod solidnm;
 pub mod bpyx;
@@ -265,6 +267,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if lamps::handles(c) => lamps::make(c, &mut rng, factory_seed),
         c if tables::handles(c) => tables::make(c, &mut rng),
         c if seating::handles(c) => seating::make(c, &mut rng, factory_seed),
+        c if monocot::handles(c) => monocot::make(c, &mut rng, factory_seed),
         c if plants::handles(c) => plants::make(c, &mut rng, factory_seed),
         _ => None,
     }
