@@ -212,7 +212,9 @@ fn newell(p: &[V3]) -> V3 {
 
 /// `corners`: the prism polygon in the xy plane (any orientation, convex)
 pub fn prism_difference(m: &Mesh, corners: &[V2]) -> Mesh {
-    let mut c = corners.to_vec();
+    // the pan mesh is mirror-symmetric about y = 0 and the cutter has corners on that plane: shift the prism by a hair (far below f32
+    // resolution of the output) so that no corner lies exactly on a mesh edge (Blender's own mesh carries +-1e-8 noise there)
+    let mut c: Vec<V2> = corners.iter().map(|p| [p[0], p[1] + 2.37e-9]).collect();
     let area: f64 = (0..c.len()).map(|i| cross2(c[i], c[(i + 1) % c.len()])).sum();
     if area < 0.0 {
         c.reverse();
