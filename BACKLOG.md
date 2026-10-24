@@ -42,7 +42,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 ## Framework / pipeline (worker: frame)
 | id | item | status | notes |
 |---|---|---|---|
-| F1 | Re-apply the framework agent's unmerged nodes_curves.rs changes (bezier handle nodes, FilletCurve fixes): `todo/framework_nodes_curves_unmerged.diff`; unit fails `curve2:SetHandle*`, `curve2:FilletCurve` | todo | master's nodes_curves.rs has storage's CDT FillCurve; keep it |
+| F1 | Re-apply the framework agent's unmerged nodes_curves.rs changes (bezier handle nodes, FilletCurve fixes): `todo/framework_nodes_curves_unmerged.diff`; unit fails `curve2:SetHandle*`, `curve2:FilletCurve` | DONE: unit 745 pass / 5 fail (was 724/26) | master's nodes_curves.rs has storage's CDT FillCurve; keep it |
 | F2 | Mesh Boolean exact (Blender EXACT and FLOAT solvers) without fragmentation (Spatula 36806 vs 2236 verts) | todo | blocks K8 K9 D7 |
 | F3 | ConvexHull exact (~1.6e-4 now) | todo | |
 | F4 | Unify `bridge_ex.rs` (SURFACE mode) into `bridge.rs` | todo | |
