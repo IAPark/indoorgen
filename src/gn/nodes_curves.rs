@@ -735,51 +735,60 @@ pub fn rotation_from_axes(normal: V3, tangent: V3) -> [f32; 4] {
 }
 
 pub fn mesh_to_curve(m: &Mesh, sel: &[bool]) -> Curves {
+    // geometry::mesh_to_curve_convert / edges_to_curve_point_indices: curves start at vertices that do not have exactly two neighbours and
+    // stop at the next such vertex; whatever is left over (all vertices of valence 2) forms cyclic curves
     let nv = m.nv();
-    let mut adj: Vec<Vec<usize>> = vec![vec![]; nv];
-    for (i, e) in m.edges.iter().enumerate() {
-        if sel[i] {
-            adj[e[0] as usize].push(i);
-            adj[e[1] as usize].push(i);
-        }
+    let edges: Vec<[u32; 2]> = m.edges.iter().enumerate().filter(|(i, _)| sel[*i]).map(|(_, e)| *e).collect();
+    let mut neighbors: Vec<Vec<usize>> = vec![vec![]; nv];
+    for e in &edges {
+        neighbors[e[0] as usize].push(e[1] as usize);
+        neighbors[e[1] as usize].push(e[0] as usize);
     }
-    let mut used = vec![false; m.ne()];
-    let mut c = Curves::new();
+    let mut unused: Vec<i64> = neighbors.iter().map(|n| n.len() as i64).collect();
     let mut chains: Vec<(Vec<u32>, bool)> = vec![];
-    let walk = |start: usize, used: &mut Vec<bool>| -> (Vec<u32>, bool) {
-        let mut chain = vec![start as u32];
-        let mut cur = start;
-        loop {
-            let next = adj[cur].iter().find(|&&e| !used[e]).copied();
-            match next {
-                None => return (chain, false),
-                Some(e) => {
-                    used[e] = true;
-                    let ed = m.edges[e];
-                    let nx = if ed[0] as usize == cur { ed[1] } else { ed[0] } as usize;
-                    if nx == start {
-                        return (chain, true);
-                    }
-                    chain.push(nx as u32);
-                    cur = nx;
+    for start in 0..nv {
+        if neighbors[start].len() == 2 || unused[start] == 0 {
+            continue;
+        }
+        for &nb in &neighbors[start].clone() {
+            let (mut cur, mut next) = (start, nb);
+            if unused[next] == 0 {
+                continue;
+            }
+            let mut chain = vec![start as u32];
+            loop {
+                let last = cur;
+                cur = next;
+                chain.push(cur as u32);
+                unused[cur] -= 1;
+                unused[last] -= 1;
+                if neighbors[cur].len() != 2 {
+                    break;
                 }
+                let (a, b) = (neighbors[cur][0], neighbors[cur][1]);
+                next = if last == a { b } else { a };
             }
-        }
-    };
-    for v in 0..nv {
-        if adj[v].len() == 1 && !used[adj[v][0]] {
-            chains.push(walk(v, &mut used));
-        } else if adj[v].len() > 2 {
-            while adj[v].iter().any(|&e| !used[e]) {
-                chains.push(walk(v, &mut used));
-            }
+            chains.push((chain, false));
         }
     }
-    for v in 0..nv {
-        if adj[v].iter().any(|&e| !used[e]) {
-            chains.push(walk(v, &mut used));
+    for start in 0..nv {
+        if unused[start] != 2 {
+            continue;
         }
+        let (mut cur, mut next) = (start, neighbors[start][0]);
+        let mut chain = vec![start as u32];
+        while next != start {
+            let last = cur;
+            cur = next;
+            chain.push(cur as u32);
+            unused[cur] -= 1;
+            unused[last] -= 1;
+            let (a, b) = (neighbors[cur][0], neighbors[cur][1]);
+            next = if last == a { b } else { a };
+        }
+        chains.push((chain, true));
     }
+    let mut c = Curves::new();
     let mut src = vec![];
     for (chain, cyc) in &chains {
         let pts: Vec<V3> = chain.iter().map(|&v| m.pos[v as usize]).collect();
