@@ -1,6 +1,6 @@
 //! Freestanding bathtub (bathroom/bathtub.py make_freestanding + SOLIDIFY + SUBSURF), geometric port used for the asset bounding box.
 //! Vertex/face ORDER is not Blender's (subsurf layout); positions are the limit surface of the same control cage.
-use super::subsurf::subsurf;
+use super::subsurf::subsurf_bl as subsurf;
 use crate::mesh::Mesh;
 use crate::dhash::HashMap;
 

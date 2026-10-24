@@ -511,6 +511,16 @@ pub fn triangulate_ngon(co: &[V3]) -> Vec<[u32; 3]> {
     tris
 }
 
+/// mesh_calc_tessellation_for_face (ngon branch): polyfill without beautify
+pub fn triangulate_ngon_plain(co: &[V3]) -> Vec<[u32; 3]> {
+    let n = poly_normal(co);
+    let r2 = [-n[0], -n[1], -n[2]];
+    let (r0, r1) = ortho_basis(r2);
+    let m = [[r0[0], r1[0], r2[0]], [r0[1], r1[1], r2[1]], [r0[2], r1[2], r2[2]]];
+    let proj: Vec<[f32; 2]> = co.iter().map(|c| [m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2], m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2]]).collect();
+    polyfill_calc(&proj)
+}
+
 fn cross_tri_v3(v1: V3, v2: V3, v3: V3) -> V3 {
     let n1 = [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]];
     let n2 = [v2[0] - v3[0], v2[1] - v3[1], v2[2] - v3[2]];

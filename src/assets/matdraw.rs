@@ -47,7 +47,15 @@ pub const FRONT_MAYBEGLASS: Table = &[
 pub const POTTING_SOIL: Table = &[("terrain.Mud", 1.0), ("terrain.Sand", 1.0), ("terrain.Soil", 3.0), ("terrain.Dirt", 6.0)];
 
 /// weighted_sample(table)() : class chosen + instantiated (constructor draws only)
+/// REFSTUB=1 (refcmp): python reference meshes were cached with `weighted_sample` stubbed, i.e. material choice and construction draw nothing
+pub fn ref_stub() -> bool {
+    std::env::var("REFSTUB").is_ok()
+}
+
 pub fn sample_init(r: &mut Rng, t: Table) -> &'static str {
+    if ref_stub() {
+        return t[0].0;
+    }
     let w: Vec<f64> = t.iter().map(|x| x.1).collect();
     let name = t[weighted_index(r, &w)].0;
     init(r, name);
@@ -56,6 +64,9 @@ pub fn sample_init(r: &mut Rng, t: Table) -> &'static str {
 
 /// weighted_sample(table)()() : class chosen, instantiated and called
 pub fn sample_call(r: &mut Rng, t: Table) -> &'static str {
+    if ref_stub() {
+        return t[0].0;
+    }
     let name = sample_init(r, t);
     call(r, name);
     name
