@@ -331,6 +331,16 @@ pub fn solid_room_exact(c: &RoomConstants, poly: &G, ext: &[P2]) -> Option<Vec<c
     use crate::furn::geom::{Tri, CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
     use super::pyroom::*;
     let rings = room_rings(c, poly)?;
+    // WELD(0.01) would merge vertices: not ported, fall back
+    let flat: Vec<P2> = rings.iter().flatten().copied().collect();
+    for i in 0..flat.len() {
+        for j in 0..i {
+            if (flat[i][0] - flat[j][0]).hypot(flat[i][1] - flat[j][1]) <= 0.0101 {
+                eprintln!("solid_room_exact: vertices closer than the weld threshold, using the approximate room");
+                return None;
+            }
+        }
+    }
     let out = std::panic::catch_unwind(|| make_room(&rings, c.wall_thickness, c.wall_height, ext)).ok()?;
     let p3 = |i: u32| -> V3 { let p = out.pos[i as usize]; [p[0] as f64, p[1] as f64, p[2] as f64] };
     Some(

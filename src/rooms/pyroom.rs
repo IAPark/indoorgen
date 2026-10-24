@@ -62,7 +62,10 @@ pub fn polygon2obj(rings: &[Vec<[f64; 2]>]) -> RawMesh {
     // point_normal_up(reversed=True): faces looking up are flipped (loop order reversed keeping the first vertex)
     for f in faces.iter_mut() {
         let (a, b, c) = (pos2[f[0] as usize], pos2[f[1] as usize], pos2[f[2] as usize]);
-        let nz = cross(sub(b, a), sub(c, a))[2];
+        let cr = cross(sub(a, b), sub(b, c));
+        // face_normal_calc: normal_tri = normalize(cross); a zero normal becomes (0, 0, 1)
+        let d = len_sq(cr);
+        let nz = if d > 1.0e-35f32 { cr[2] / d.sqrt() } else { 1.0 };
         if nz > 0.0 {
             let first = f[0];
             let mut rest: Vec<u32> = f[1..].to_vec();

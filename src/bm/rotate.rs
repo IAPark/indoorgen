@@ -4,6 +4,47 @@ use crate::assets::polyfill::bm_rotate_beauty_area;
 use crate::dhash::HashSet;
 
 impl BMesh {
+    /// bmesh_kernel_loop_reverse (private copy for the beautify code)
+    fn rot_loop_reverse(&mut self, f: usize) {
+        let l_first = self.faces[f].l_first;
+        let lp = self.loops[l_first].p;
+        let mut e_prev = self.loops[lp].e;
+        let mut l_prev_rn = self.loops[lp].rn;
+        let mut l_prev_rp = self.loops[lp].rp;
+        let mut is_prev_boundary = l_prev_rn == self.loops[l_prev_rn].rn;
+        let mut l_iter = l_first;
+        loop {
+            let e_iter = self.loops[l_iter].e;
+            let l_iter_rn = self.loops[l_iter].rn;
+            let l_iter_rp = self.loops[l_iter].rp;
+            let is_iter_boundary = l_iter_rn == self.loops[l_iter_rn].rn;
+            if is_prev_boundary {
+                self.loops[l_iter].rn = l_iter;
+                self.loops[l_iter].rp = l_iter;
+            } else {
+                self.loops[l_iter].rn = l_prev_rn;
+                self.loops[l_iter].rp = l_prev_rp;
+                self.loops[l_prev_rn].rp = l_iter;
+                self.loops[l_prev_rp].rn = l_iter;
+            }
+            if self.edges[e_iter].l == l_iter {
+                self.edges[e_iter].l = self.loops[l_iter].n;
+            }
+            self.loops[l_iter].e = e_prev;
+            let (n, p) = (self.loops[l_iter].n, self.loops[l_iter].p);
+            self.loops[l_iter].n = p;
+            self.loops[l_iter].p = n;
+            e_prev = e_iter;
+            l_prev_rn = l_iter_rn;
+            l_prev_rp = l_iter_rp;
+            is_prev_boundary = is_iter_boundary;
+            l_iter = self.loops[l_iter].p;
+            if l_iter == l_first {
+                break;
+            }
+        }
+    }
+
     /// BM_face_other_vert_loop
     pub fn face_other_vert_loop(&self, f: usize, v_prev: usize, v: usize) -> usize {
         let l = self.face_vert_share_loop(f, v);
@@ -39,6 +80,10 @@ impl BMesh {
 
     /// BM_faces_join_pair for two faces sharing exactly the edge `e` (do_del = true); returns the new face
     fn faces_join_pair_shared(&mut self, f_a: usize, f_b: usize, e: usize) -> usize {
+        let (la, lb) = (self.face_edge_share_loop(f_a, e), self.face_edge_share_loop(f_b, e));
+        if self.loops[la].v == self.loops[lb].v {
+            self.rot_loop_reverse(f_b);
+        }
         let mut chain: Vec<(usize, usize, usize)> = vec![]; // (from vert, to vert, edge)
         for &f in &[f_a, f_b] {
             for l in self.loops_of_face(f) {
@@ -88,13 +133,19 @@ impl BMesh {
         }
         let (f1, f2) = (self.loops[l1].f, self.loops[l2].f);
         let e_new = self.edge_create(v1, v2, Some(e), false);
-        let la = self.face_edge_share_loop(f1, e);
-        let lb = self.face_edge_share_loop(f2, e);
-        assert!(self.loops[la].v != self.loops[lb].v, "edge_rotate: non-contiguous winding not supported");
+        let is_flipped = {
+            let l = self.edges[e].l;
+            self.loops[l].v == self.loops[self.loops[l].rn].v
+        };
         let f = self.faces_join_pair_shared(f1, f2, e);
         let l1 = self.face_vert_share_loop(f, v1);
         let l2 = self.face_vert_share_loop(f, v2);
         self.face_split_ex(f, l1, l2, true);
+        if is_flipped {
+            if let Some((_fa, fb)) = self.edge_face_pair(e_new) {
+                { self.rot_loop_reverse(fb); let n = self.faces[fb].no; self.faces[fb].no = [-n[0], -n[1], -n[2]]; }
+            }
+        }
         e_new
     }
 }
