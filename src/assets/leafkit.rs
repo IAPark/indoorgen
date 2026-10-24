@@ -513,7 +513,24 @@ pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, 
             }
         }
     }
-    at.iter()
+    // per-triangle bounding boxes: a triangle whose box is farther than the best distance so far can neither win nor tie
+    let tri_box: Vec<(F3, F3)> = tris
+        .iter()
+        .map(|t| {
+            let ps = [src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]];
+            let mut a = ps[0];
+            let mut b = ps[0];
+            for p in &ps {
+                for k in 0..3 {
+                    a[k] = a[k].min(p[k]);
+                    b[k] = b[k].max(p[k]);
+                }
+            }
+            (a, b)
+        })
+        .collect();
+    use rayon::prelude::*;
+    at.par_iter()
         .map(|q| {
             let kq = key(*q);
             let mut best = (f32::MAX, usize::MAX, [0f32; 3]);
@@ -527,6 +544,17 @@ pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, 
                             }
                             if let Some(l) = grid.get(&[x, y, z]) {
                                 for &ti in l {
+                                    if best.1 != usize::MAX {
+                                        let (bl, bh) = &tri_box[ti as usize];
+                                        let mut lb = 0.0f32;
+                                        for k in 0..3 {
+                                            let d = (bl[k] - q[k]).max(q[k] - bh[k]).max(0.0);
+                                            lb += d * d;
+                                        }
+                                        if lb > best.0 * 1.001 + 1e-9 {
+                                            continue;
+                                        }
+                                    }
                                     let t = tris[ti as usize];
                                     let r = closest_on_tri_f32(*q, src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]);
                                     let d = sub3(r, *q);

@@ -422,11 +422,97 @@ pub struct RealAssets {
 
 impl Assets for RealAssets {
     fn placeholder(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
-        self.placeholder_raw(class, factory_seed, inst_seed, kind).map(round_geom_f32)
+        let t = thread_cpu();
+        let key = cache_key(class, factory_seed, inst_seed, &format!("{kind:?}"));
+        if !memo_off() {
+            if let Some(r) = memo_get(&PH_MEMO, &key) {
+                return r;
+            }
+        }
+        let r = self.placeholder_raw(class, factory_seed, inst_seed, kind).map(round_geom_f32);
+        memo_put(&PH_MEMO, key, &r);
+        if prof_on() {
+            prof_add(format!("placeholder {kind:?} {class}"), thread_cpu() - t);
+        }
+        r
     }
     fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
-        make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom())
+        let t = thread_cpu();
+        let key = cache_key(class, factory_seed, inst_seed, "solver");
+        if !memo_off() {
+            if let Some(r) = memo_get(&SOLVER_MEMO, &key) {
+                return r;
+            }
+        }
+        let r = make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom());
+        memo_put(&SOLVER_MEMO, key, &r);
+        if prof_on() {
+            prof_add(format!("solver_asset {class}"), thread_cpu() - t);
+        }
+        r
     }
+}
+
+/// GEN2PROF=1: accumulated wall time per (entry point, class); printed by `prof_report`
+static PROF: std::sync::Mutex<Vec<(String, f64, u32)>> = std::sync::Mutex::new(Vec::new());
+pub fn prof_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("GEN2PROF").is_some())
+}
+/// CPU seconds of the calling thread (immune to machine load; 0 off macOS/linux)
+pub fn thread_cpu() -> f64 {
+    #[repr(C)]
+    struct Ts {
+        s: i64,
+        n: i64,
+    }
+    extern "C" {
+        fn clock_gettime(id: i32, ts: *mut Ts) -> i32;
+    }
+    #[cfg(target_os = "macos")]
+    const ID: i32 = 16;
+    #[cfg(not(target_os = "macos"))]
+    const ID: i32 = 3;
+    let mut t = Ts { s: 0, n: 0 };
+    unsafe { clock_gettime(ID, &mut t) };
+    t.s as f64 + t.n as f64 * 1e-9
+}
+pub fn prof_add(label: String, secs: f64) {
+    let mut p = PROF.lock().unwrap();
+    if let Some(e) = p.iter_mut().find(|e| e.0 == label) {
+        e.1 += secs;
+        e.2 += 1;
+    } else {
+        p.push((label, secs, 1));
+    }
+}
+pub fn prof_report() {
+    let mut p = PROF.lock().unwrap().clone();
+    p.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    for (l, s, n) in p.iter().take(40) {
+        eprintln!("PROF {s:8.3}s {n:5}x  {l}");
+    }
+}
+
+// ---- memo caches: the solver, the final export and bbox placeholders build the same (class, fseed, inst) assets over and over.
+// Factories are pure functions of (class, factory seed, instance seed, unseeded ctor draws), so results are cached by exactly that key.
+type CacheKey = (String, u64, u64, String, Option<Vec<u64>>);
+fn cache_key(class: &str, fs: u64, inst: u64, what: &str) -> CacheKey {
+    (class.to_string(), fs, inst, what.to_string(), unseeded().map(|v| v.iter().map(|x| x.to_bits()).collect()))
+}
+type Memo<T> = std::sync::Mutex<Option<std::collections::HashMap<CacheKey, T>>>;
+fn memo_get<T: Clone>(m: &Memo<T>, k: &CacheKey) -> Option<T> {
+    m.lock().unwrap().as_ref().and_then(|h| h.get(k).cloned())
+}
+fn memo_put<T: Clone>(m: &Memo<T>, k: CacheKey, v: &T) {
+    m.lock().unwrap().get_or_insert_with(Default::default).insert(k, v.clone());
+}
+static PH_MEMO: Memo<Option<ObjGeom>> = std::sync::Mutex::new(None);
+static SOLVER_MEMO: Memo<Option<ObjGeom>> = std::sync::Mutex::new(None);
+static VISUAL_MEMO: Memo<Asset> = std::sync::Mutex::new(None);
+fn memo_off() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("NOMEMO").is_some())
 }
 
 impl RealAssets {
@@ -456,6 +542,21 @@ impl RealAssets {
     }
     /// final visual asset for a generated object (real port if available, otherwise a recipe in the sampled bbox)
     pub fn visual(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Asset {
+        let t = thread_cpu();
+        let key = cache_key(class, factory_seed, inst_seed, "visual");
+        if !memo_off() {
+            if let Some(r) = memo_get(&VISUAL_MEMO, &key) {
+                return r;
+            }
+        }
+        let r = self.visual_inner(class, factory_seed, inst_seed);
+        memo_put(&VISUAL_MEMO, key, &r);
+        if prof_on() {
+            prof_add(format!("visual {class}"), thread_cpu() - t);
+        }
+        r
+    }
+    fn visual_inner(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Asset {
         if let Some(f) = make_factory(class, factory_seed) {
             return scene_asset(&*f, inst_seed);
         }
