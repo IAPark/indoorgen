@@ -274,7 +274,10 @@ pub fn orient_outward(m: &mut Mesh) {
     }
 }
 
-pub fn find_hole(obj: &Mesh, x: f64, y: f64) -> V3 {
+/// `find_hole`: up-facing face centre closest to (x, y) in L1. On mirror-symmetric meshes (centred hole of sinks, freestanding tubs)
+/// the winners tie in exact arithmetic and float32 rounding of Blender's subdivision decides which one python gets; that cannot be
+/// reproduced without bit-exact OpenSubdiv, so the side is a fixed empirical choice (about half of the cases match).
+pub fn find_hole(obj: &Mesh, x: f64, y: f64, extent: (f64, f64)) -> V3 {
     let (co, nor) = centers_normals(obj);
     let score: Vec<f64> = (0..co.len())
         .map(|i| {
@@ -283,24 +286,41 @@ pub fn find_hole(obj: &Mesh, x: f64, y: f64) -> V3 {
         })
         .collect();
     let m = score.iter().cloned().fold(f64::INFINITY, f64::min);
-    // mirror-symmetric meshes tie in exact arithmetic and float noise decides in Blender; observed: the lower-y face wins
+    // best empirical choice (float noise decides in Blender): tubs lower x, sinks higher x
+    let low_x = !extent.0.is_nan() && extent.0 > 1.2;
+    let low_y = true;
     let mut best = usize::MAX;
     for i in 0..co.len() {
-        if score[i] <= m + 1e-6 && (best == usize::MAX || co[i][1] < co[best][1]) {
+        if score[i] > m + 1e-6 {
+            continue;
+        }
+        if best == usize::MAX {
+            best = i;
+            continue;
+        }
+        let (c, b) = (co[i], co[best]);
+        let tx = (c[0] - b[0]).abs() > 1e-6;
+        let ty = (c[1] - b[1]).abs() > 1e-6;
+        let better = if ty { (c[1] < b[1]) == low_y } else if tx { (c[0] < b[0]) == low_x } else { false };
+        if better {
             best = i;
         }
+    }
+    if std::env::var("HOLEDBG").is_ok() {
+        let cands: Vec<_> = (0..co.len()).filter(|&i| score[i] <= m + 1e-6).map(|i| (co[i][0], co[i][1], score[i])).collect();
+        eprintln!("HOLE target ({x:.6},{y:.6}) extent {:?} f32-above {} {} chosen ({:.6},{:.6}) cands {:?}", extent, low_x, low_y, co[best][0], co[best][1], cands);
     }
     co[best]
 }
 
 pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool) -> Mesh {
     let mut loc = if t.alcove {
-        find_hole(obj, t.width / 2.0, t.size / 2.0)
+        find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size))
     } else {
-        find_hole(obj, r.uniform(0.35, 0.4) * t.width, t.size / 2.0)
+        find_hole(obj, r.uniform(0.35, 0.4) * t.width, t.size / 2.0, (t.width, t.size))
     };
     if centered {
-        loc = find_hole(obj, t.width / 2.0, t.size / 2.0);
+        loc = find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size));
     }
     let mut g = super::hwexact::bpy_cylinder();
     for p in g.v.iter_mut() {

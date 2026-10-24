@@ -121,6 +121,9 @@ pub fn build(s: &Sink, r: &mut Rng) -> SinkBuilt {
     }
     stage(&mut stages, "prehole", "prehole", &obj);
     let hole = bathtub::add_hole(t, &obj, r, true);
+    if std::env::var("HOLEDBG").is_ok() {
+        eprintln!("BODYN {} subsurf-nv", obj.pos.len());
+    }
     let rot = |m: &Mesh| -> Mesh {
         let mut o = m.clone();
         for p in o.pos.iter_mut() {
