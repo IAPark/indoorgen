@@ -563,3 +563,44 @@ pub fn tri_nz(v: &[V3; 3]) -> bool {
     let b = [v[2][0] - v[0][0], v[2][1] - v[0][1]];
     a[0] * b[1] - a[1] * b[0] > 0.0
 }
+
+/// python placeholder boxes: exact vertex / triangle order of the reference meshes.
+/// variant 0: created placeholders (vertex i = 4x+2y+z), variant 1: bounding box of the asset (vertex i = x+2y+4z)
+pub fn cuboid_py(lo: V3, hi: V3, variant: u8, extra: u32) -> ObjGeom {
+    let vert = |i: usize| -> V3 {
+        let (x, y, z) = if variant == 0 { ((i >> 2) & 1, (i >> 1) & 1, i & 1) } else { (i & 1, (i >> 1) & 1, (i >> 2) & 1) };
+        [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }]
+    };
+    let (polys, names): ([[usize; 3]; 12], [&str; 12]) = if variant == 0 {
+        (
+            [[1, 2, 0], [3, 6, 2], [7, 4, 6], [5, 0, 4], [6, 0, 2], [3, 5, 7], [1, 3, 2], [3, 7, 6], [7, 5, 4], [5, 1, 0], [6, 4, 0], [3, 1, 5]],
+            ["back", "", "front", "", "bottom", "top", "back", "", "front", "", "bottom", "top"],
+        )
+    } else {
+        (
+            [[2, 1, 0], [1, 4, 0], [5, 6, 4], [6, 3, 2], [4, 2, 0], [3, 5, 1], [2, 3, 1], [1, 5, 4], [5, 7, 6], [6, 7, 3], [4, 6, 2], [3, 7, 5]],
+            ["bottom", "", "top", "", "back", "front", "bottom", "", "top", "", "back", "front"],
+        )
+    };
+    let tris: Vec<Tri> = polys
+        .iter()
+        .zip(names.iter())
+        .map(|(p, n)| Tri {
+            v: [vert(p[0]), vert(p[1]), vert(p[2])],
+            tags: extra
+                | match *n {
+                    "back" => BACK,
+                    "front" => FRONT,
+                    "bottom" => BOTTOM,
+                    "top" => TOP,
+                    _ => 0,
+                },
+        })
+        .collect();
+    let verts: Vec<V3> = (0..8).map(vert).collect();
+    ObjGeom::from_tris(
+        tris,
+        vec![(Proxy::Box { center: [(lo[0] + hi[0]) / 2., (lo[1] + hi[1]) / 2., (lo[2] + hi[2]) / 2.], half: [(hi[0] - lo[0]) / 2., (hi[1] - lo[1]) / 2., (hi[2] - lo[2]) / 2.] }, u32::MAX)],
+    )
+    .with_mesh_verts(verts)
+}

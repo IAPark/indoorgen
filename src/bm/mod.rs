@@ -2,6 +2,8 @@
 //! slot reuse (freed slots are reused LIFO, iteration is in slot order), as needed to reproduce Blender's bmesh operators exactly.
 pub mod bevel;
 pub mod query;
+pub mod rotate;
+pub mod scanfill;
 
 pub const NONE: usize = usize::MAX;
 pub type V3 = [f32; 3];
@@ -190,9 +192,13 @@ impl BMesh {
 
     /// BM_face_split (bmesh_kernel_split_face_make_edge): returns (new face, loop of the new face on the new edge)
     pub fn face_split(&mut self, f: usize, l_v1: usize, l_v2: usize) -> (usize, usize) {
+        self.face_split_ex(f, l_v1, l_v2, false)
+    }
+    /// BM_face_split with `no_double` (reuses an existing edge between the two verts)
+    pub fn face_split_ex(&mut self, f: usize, l_v1: usize, l_v2: usize, no_double: bool) -> (usize, usize) {
         let v1 = self.loops[l_v1].v;
         let v2 = self.loops[l_v2].v;
-        let e = self.edge_create(v1, v2, None, false);
+        let e = self.edge_create(v1, v2, None, no_double);
         // bm_face_create__sfme
         let nf = BMFace { len: 0, l_first: NONE, no: [0.0; 3], mat_nr: 0, flag: 0, api: 0, idx: -1, alive: true };
         self.totface += 1;
