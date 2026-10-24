@@ -1188,7 +1188,15 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                 let float = node.ps("solver") == "FLOAT" && std::env::var_os("GNBOOLEXACT").is_none();
                 let exact = node.ps("solver") != "FLOAT" || std::env::var_os("GNBOOLEXACT").is_some();
                 o.mesh = Some(if float && std::env::var_os("GNBOOLBSP").is_none() {
-                    super::fbool::mesh_boolean_float(op, &operands)
+                    // a degenerate input must never take the whole generator down: fall back to the BSP boolean
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::fbool::mesh_boolean_float(op, &operands))) {
+                        Ok(m) => m,
+                        Err(_) => {
+                            let owned: Vec<Option<Mesh>> = operands.iter().map(|(m, x)| if *x == ident { None } else { Some(super::fbool::transform_mesh(m, x)) }).collect();
+                            let refs: Vec<&Mesh> = operands.iter().zip(owned.iter()).map(|((m, _), ow)| ow.as_ref().unwrap_or(*m)).collect();
+                            super::csg::mesh_boolean(op, refs[0], &refs[1..])
+                        }
+                    }
                 } else {
                     // the other solvers take the transformed operands
                     let owned: Vec<Option<Mesh>> = operands.iter().map(|(m, x)| if *x == ident { None } else { Some(super::fbool::transform_mesh(m, x)) }).collect();

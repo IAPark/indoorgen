@@ -118,6 +118,11 @@ impl<V> GHash<V> {
     }
 }
 
+fn dbg_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("GNBOOL_DUMP").is_some())
+}
+
 // ------------------------------------------------------------------ math helpers
 fn fma_mode() -> u8 {
     static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
@@ -426,7 +431,7 @@ impl BMesh {
         let (side, ix) = intersect_line_tri(self.verts[e_v0].co, self.verts[e_v1].co, t_cos, t_nor, &s.eps);
         if side != IsectType::None {
             let iv = self.vert_create(ix, None);
-            if std::env::var_os("GNBOOL_DUMP").is_some() {
+            if dbg_on() {
                 eprintln!("NEWV {} side {:?} tri {} edge ({},{}) at {:?}", iv, side, t_index, e_v0, e_v1, ix);
             }
             let e = self.edge_exists(e_v0, e_v1);
@@ -862,7 +867,7 @@ pub fn mesh_intersect_boolean(bm: &mut BMesh, looptris: &[[usize; 3]], test_fn: 
         for (ia, ib) in overlap {
             let a = looptris[ia as usize];
             let b = looptris[ib as usize];
-            if std::env::var_os("GNBOOL_DUMP").is_some() {
+            if dbg_on() {
                 eprintln!("PAIR {} {}", ia, ib);
             }
             bm.isect_tri_tri(&mut s, &model, ia, ib, a, b, isect_tri_tri_no_shared);
@@ -922,7 +927,7 @@ pub fn mesh_intersect_boolean(bm: &mut BMesh, looptris: &[[usize; 3]], test_fn: 
         }
         let mut rf = vec![];
         bm.face_split_edgenet(f, &edge_arr, Some(&mut rf));
-        if std::env::var_os("GNBOOL_DUMP").is_some() {
+        if dbg_on() {
             eprintln!("net key {} f {} edges {} -> faces {:?}", f_index, f, edge_arr.len(), rf);
         }
     }
@@ -953,7 +958,7 @@ pub fn mesh_intersect_boolean(bm: &mut BMesh, looptris: &[[usize; 3]], test_fn: 
             BOOLEAN_UNION => ((hits & 1) == 1, false),
             _ => ((((hits & 1) == 1) as i32) == side, side == 0),
         };
-        if std::env::var_os("GNBOOL_DUMP").is_some() {
+        if dbg_on() {
             eprintln!("group start {} cnt {} f {} side {} co {:?} hits {} remove {} flip {}", fg0, cnt, f, side, co, hits, do_remove, do_flip);
         }
         if do_remove {

@@ -2,11 +2,12 @@
 //! intersect port in `crate::bm::isect` (`BM_mesh_intersect`).  Output vertex / face order follows Blender; face attributes are
 //! carried from the source faces, vertex attributes are dropped (like the EXACT wiring in csg.rs).
 use super::geom::*;
+use super::val::*;
 
 use crate::bm::edgenet::{axis_dominant_v3_to_m3, mul_v2_m3v3};
 use crate::bm::isect::{mesh_intersect_boolean, BOOLEAN_DIFFERENCE, BOOLEAN_ISECT, BOOLEAN_UNION};
 use crate::bm::query::normalize;
-use crate::bm::{BMesh, ELEM_DRAW, NONE};
+use crate::bm::{BMesh, ELEM_DRAW, ELEM_SMOOTH, NONE};
 use crate::exbool::polyfill::{polyfill_beautify, polyfill_calc, quad_rotate_calc};
 
 type V3 = [f32; 3];
@@ -57,6 +58,11 @@ pub fn transform_mesh(m: &Mesh, xf: &M4) -> Mesh {
     o
 }
 
+fn dbg_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("GNBOOL_DUMP").is_some())
+}
+
 /// BM_mesh_calc_tessellation_beauty (loops of every triangle, in pool order of faces)
 fn tessellation_beauty(bm: &BMesh) -> Vec<[usize; 3]> {
     let mut out = vec![];
@@ -72,7 +78,7 @@ fn tessellation_beauty(bm: &BMesh) -> Vec<[usize; 3]> {
                 let q = [mul_v2_m3v3(&m, co(l1)), mul_v2_m3v3(&m, co(l2)), mul_v2_m3v3(&m, co(l3)), mul_v2_m3v3(&m, co(l4))];
                 let cost = quad_rotate_calc(q[0], q[1], q[2], q[3], false).0;
                 let mut split_13 = cost < 0.0;
-                if std::env::var_os("GNBOOL_DUMP").is_some() {
+                if dbg_on() {
                     eprintln!("QUAD face slot {} cost {:e} split_13 {}", f, cost, split_13);
                 }
                 if let Ok(l) = std::env::var("GNBOOL_QUAD_FLIP") {
@@ -107,16 +113,28 @@ fn tessellation_beauty(bm: &BMesh) -> Vec<[usize; 3]> {
 fn bm_concat(m0: &Mesh, x0: &M4, m1: &Mesh, x1: &M4) -> (BMesh, Vec<[usize; 3]>) {
     let mut bm = BMesh::new();
     let mut fid = 0usize;
+    let mut vid = 0usize;
+    let mut eid = 0usize;
     let neg = [is_negative(x0), is_negative(x1)];
     let flip1 = neg[1] != neg[0];
     for (mi, m) in [m0, m1].iter().enumerate() {
         let vbase = bm.vert_ids().len();
         let ebase = bm.edge_ids().len();
         for p in &m.pos {
-            bm.vert_create(*p, None);
+            let v = bm.vert_create(*p, None);
+            vid += 1;
+            bm.verts[v].user = vid;
         }
-        for e in &m.edges {
-            bm.edge_create(vbase + e[0] as usize, vbase + e[1] as usize, None, false);
+        let sharp = m.attrs.get("sharp_edge");
+        for (ei, e) in m.edges.iter().enumerate() {
+            let be = bm.edge_create(vbase + e[0] as usize, vbase + e[1] as usize, None, false);
+            eid += 1;
+            bm.edges[be].user = eid;
+            // e->head.hflag = 0; SMOOTH unless sharp_edge
+            bm.edges[be].flag = 0;
+            if !sharp.map_or(false, |a| a.data[ei].b()) {
+                bm.edges[be].flag |= ELEM_SMOOTH;
+            }
         }
         let mat = m.attrs.get("material_index");
         for fi in 0..m.nf() {
@@ -167,23 +185,44 @@ fn operand_of(bm: &BMesh, f: usize) -> i32 {
     }
 }
 
-/// One BM_mesh_intersect pass over two meshes; returns the result mesh and, per output face, the (operand, face) source
-/// according to `src0` / `src1` (sources of the faces of m0 and m1).
-fn pass(m0: &Mesh, x0: &M4, src0: &[(u8, u32)], m1: &Mesh, x1: &M4, src1: &[(u8, u32)], mode: i32) -> (Mesh, Vec<(u8, u32)>) {
+/// sources of the faces / vertices of a mesh: (operand, element)
+#[derive(Clone, Default)]
+struct Src {
+    f: Vec<(u8, u32)>,
+    v: Vec<(u8, u32)>,
+    e: Vec<(u8, u32)>,
+}
+
+/// One BM_mesh_intersect pass over two meshes; returns the result mesh and the sources of its faces and vertices
+/// (vertices created by the intersection have operand `u8::MAX`).
+fn pass(m0: &Mesh, x0: &M4, s0: &Src, m1: &Mesh, x1: &M4, s1: &Src, mode: i32) -> (Mesh, Src) {
     let (mut bm, looptris) = bm_concat(m0, x0, m1, x1);
     mesh_intersect_boolean(&mut bm, &looptris, &|b: &BMesh, f: usize| operand_of(b, f), mode, 1e-6f32);
     let (pos, edges, faces) = bm.to_mesh();
-    if std::env::var_os("GNBOOL_DUMP").is_some() {
+    if dbg_on() {
         eprintln!("SLOTS {:?}", bm.face_ids());
     }
-    let mut srcs = vec![];
+    let mut src = Src::default();
     for f in bm.face_ids() {
         let u = bm.faces[f].user;
-        srcs.push(if u < src0.len() { src0[u] } else { src1[u - src0.len()] });
+        src.f.push(if u < s0.f.len() { s0.f[u] } else { s1.f[u - s0.f.len()] });
+    }
+    for v in bm.vert_ids() {
+        let u = bm.verts[v].user;
+        src.v.push(if u == 0 { (u8::MAX, 0) } else if u - 1 < s0.v.len() { s0.v[u - 1] } else { s1.v[u - 1 - s0.v.len()] });
+    }
+    for e in bm.edge_ids() {
+        let u = bm.edges[e].user;
+        src.e.push(if u == 0 { (u8::MAX, 0) } else if u - 1 < s0.e.len() { s0.e[u - 1] } else { s1.e[u - 1 - s0.e.len()] });
     }
     let _ = NONE;
-    let m = Mesh::from_faces(pos, &faces, &edges);
-    (m, srcs)
+    let mut m = Mesh::from_faces(pos, &faces, &edges);
+    // sharp_edge from the BM_ELEM_SMOOTH flag (written only when some edge is not smooth)
+    let sharp: Vec<bool> = bm.edge_ids().iter().map(|&e| bm.edges[e].flag & ELEM_SMOOTH == 0).collect();
+    if sharp.iter().any(|&x| x) {
+        m.attrs.insert("sharp_edge".into(), Attr { dom: Dom::Edge, ty: Ty::B, data: sharp.iter().map(|&b| Val::B(b)).collect() });
+    }
+    (m, src)
 }
 
 /// geometry::boolean::mesh_boolean_float: `operands[0]` is the first mesh (Mesh 1 for DIFFERENCE), each with its transform
@@ -194,19 +233,20 @@ pub fn mesh_boolean_float(op: &str, operands: &[(&Mesh, M4)]) -> Mesh {
         _ => BOOLEAN_DIFFERENCE,
     };
     let first = operands[0].0;
+    let t0 = std::time::Instant::now();
     if operands.len() == 1 {
         return first.clone();
     }
     let ident: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-    if std::env::var_os("GNBOOL_DUMP").is_some() {
+    if dbg_on() {
         for (i, (m, _)) in operands.iter().enumerate() {
             eprintln!("IN{} V {:?}", i, m.pos);
             eprintln!("IN{} F {:?}", i, (0..m.nf()).map(|f| m.face(f).to_vec()).collect::<Vec<_>>());
         }
     }
-    let src_of = |k: usize, m: &Mesh| -> Vec<(u8, u32)> { (0..m.nf()).map(|f| (k as u8, f as u32)).collect() };
+    let src_of = |k: usize, m: &Mesh| -> Src { Src { f: (0..m.nf()).map(|f| (k as u8, f as u32)).collect(), v: (0..m.nv()).map(|v| (k as u8, v as u32)).collect(), e: (0..m.ne()).map(|e| (k as u8, e as u32)).collect() } };
     let mut cur_mesh: Mesh = Mesh::new();
-    let mut cur_src: Vec<(u8, u32)> = vec![];
+    let mut cur_src: Src = Src::default();
     for i in 0..operands.len() - 1 {
         let (b, xb) = (operands[i + 1].0, &operands[i + 1].1);
         let sb = src_of(i + 1, b);
@@ -221,14 +261,24 @@ pub fn mesh_boolean_float(op: &str, operands: &[(&Mesh, M4)]) -> Mesh {
         cur_src = s;
     }
     let mut m = cur_mesh;
-    if std::env::var_os("GNBOOL_DUMP").is_some() {
+    if dbg_on() {
         eprintln!("RUST nv {} ne {} nf {}", m.nv(), m.ne(), m.nf());
         eprintln!("V {:?}", m.pos);
         eprintln!("F {:?}", (0..m.nf()).map(|f| m.face(f).to_vec()).collect::<Vec<_>>());
         eprintln!("E {:?}", m.edges);
     }
+    if std::env::var_os("GNBOOL_TIME").is_some() {
+        eprintln!("fbool: {} operands, {} faces in -> {} faces, {:.3}s", operands.len(), operands.iter().map(|x| x.0.nf()).sum::<usize>(), m.nf(), t0.elapsed().as_secs_f64());
+    }
     let others: Vec<&Mesh> = operands[1..].iter().map(|x| x.0).collect();
-    super::csg::propagate_face_attrs_pub(&mut m, first, &others, &cur_src);
+    super::csg::propagate_face_attrs_pub(&mut m, first, &others, &cur_src.f);
+    super::csg::propagate_point_attrs_pub(&mut m, first, &others, &cur_src.v);
+    super::csg::propagate_attrs_pub(&mut m, first, &others, &cur_src.e, Dom::Edge);
     m.mats = first.mats.clone();
+    if dbg_on() {
+        for (k, a) in m.attrs.iter() {
+            eprintln!("ATTR {} {:?} {:?}", k, a.dom, a.data.iter().map(|v| v.f()).collect::<Vec<_>>());
+        }
+    }
     m
 }

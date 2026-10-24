@@ -842,6 +842,11 @@ pub fn resolve_tjunctions(pos: &[V3], faces: Vec<Vec<u32>>, scale: f64) -> Vec<V
 
 /// face attributes of the result copied from the source faces (operand, face)
 fn propagate_face_attrs(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
+    propagate_attrs_dom(m, first, others, src, Dom::Face)
+}
+
+/// attributes of domain `want` of the result copied from the source elements (operand, element)
+fn propagate_attrs_dom(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)], want: Dom) {
     let metas: Vec<&Mesh> = std::iter::once(first).chain(others.iter().copied()).collect();
     let mut names: Vec<String> = vec![];
     for mm in &metas {
@@ -860,22 +865,34 @@ fn propagate_face_attrs(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8
                 dom = a.dom;
             }
         }
-        if dom != Dom::Face {
+        if dom != want {
             continue;
         }
         let data: Vec<Val> = src
             .iter()
-            .map(|&(id, f)| match metas[id as usize].attrs.get(&n) {
-                Some(a) => a.data[f as usize].clone(),
-                None => Val::zero(ty),
+            .map(|&(id, f)| {
+                if id == u8::MAX {
+                    return Val::zero(ty);
+                }
+                match metas[id as usize].attrs.get(&n) {
+                    Some(a) => a.data[f as usize].convert(ty),
+                    None => Val::zero(ty),
+                }
             })
             .collect();
-        m.attrs.insert(n, Attr { dom: Dom::Face, ty, data });
+        m.attrs.insert(n, Attr { dom: want, ty, data });
     }
 }
 
 pub fn propagate_face_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
     propagate_face_attrs(m, first, others, src)
+}
+pub fn propagate_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)], dom: Dom) {
+    propagate_attrs_dom(m, first, others, src, dom)
+}
+/// point attributes; sources with operand `u8::MAX` (new vertices) get the zero value
+pub fn propagate_point_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
+    propagate_attrs_dom(m, first, others, src, Dom::Point)
 }
 
 /// Blender's EXACT solver (exbool port: vertex, face and edge order identical to Blender 4.2)

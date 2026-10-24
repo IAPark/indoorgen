@@ -30,9 +30,13 @@ pub struct BMVert {
     pub api: u8,
     pub idx: i32,
     pub alive: bool,
+    /// free user payload (0 = none), copied from the example vertex by `vert_create`
+    pub user: usize,
 }
 #[derive(Clone, Default, Debug)]
 pub struct BMEdge {
+    /// free user payload (0 = none), copied from the example edge by `edge_create` / attribute copies
+    pub user: usize,
     pub v1: usize,
     pub v2: usize,
     /// disk links (next, prev) around v1 / v2
@@ -93,11 +97,12 @@ impl BMesh {
 
     // ------------------------------------------------------------------ create
     pub fn vert_create(&mut self, co: V3, example: Option<usize>) -> usize {
-        let mut v = BMVert { co, no: [0.0; 3], e: NONE, flag: 0, api: 0, idx: -1, alive: true };
+        let mut v = BMVert { co, no: [0.0; 3], e: NONE, flag: 0, api: 0, idx: -1, alive: true, user: 0 };
         if let Some(ex) = example {
             // BM_elem_attrs_copy: hflag (without select) and normal
             v.flag = self.verts[ex].flag & !ELEM_SELECT;
             v.no = self.verts[ex].no;
+            v.user = self.verts[ex].user;
         }
         self.totvert += 1;
         match self.vfree.pop() {
@@ -119,9 +124,10 @@ impl BMesh {
                 return e;
             }
         }
-        let mut e = BMEdge { v1, v2, d1: [NONE; 2], d2: [NONE; 2], l: NONE, flag: ELEM_SMOOTH | ELEM_DRAW, api: 0, idx: -1, alive: true };
+        let mut e = BMEdge { user: 0, v1, v2, d1: [NONE; 2], d2: [NONE; 2], l: NONE, flag: ELEM_SMOOTH | ELEM_DRAW, api: 0, idx: -1, alive: true };
         if let Some(ex) = example {
             e.flag = self.edges[ex].flag & !ELEM_SELECT;
+            e.user = self.edges[ex].user;
         }
         self.totedge += 1;
         let id = match self.efree.pop() {
@@ -331,9 +337,10 @@ impl BMesh {
         d.no = no;
     }
     pub fn elem_attrs_copy_edge(&mut self, src: usize, dst: usize) {
-        let flag = self.edges[src].flag;
+        let (flag, user) = (self.edges[src].flag, self.edges[src].user);
         let d = &mut self.edges[dst];
         d.flag = (d.flag & ELEM_SELECT) | (flag & !ELEM_SELECT);
+        d.user = user;
     }
 
     /// bmesh_face_swap_data: swap the loop cycles / len / normal / flags of two faces (the element slots stay put)

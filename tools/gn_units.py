@@ -1200,6 +1200,13 @@ def mesh2_cases():
         d2, sp2 = inst_cutters(b)
         return _boolean(b, "DIFFERENCE", base, [(d2, "Geometry"), sp2], "FLOAT")
     case("MeshBoolean.FLOAT.DIFFERENCE.instances", mk_inst)
+    def mk_pattr(b):
+        c = b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4)
+        st = b.store((c, "Mesh"), (b.index(), "Index"), "pi", "POINT", "INT")
+        st2 = b.store((st, "Geometry"), (b.index(), "Index"), "ei", "EDGE", "INT")
+        st3 = b.store((st2, "Geometry"), (b.index(), "Index"), "fi", "FACE", "INT")
+        return _boolean(b, "DIFFERENCE", st3, [b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.4, Depth=4.0)], "FLOAT")
+    case("MeshBoolean.FLOAT.DIFFERENCE.pattr", mk_pattr)
     case("MeshBoolean.FLOAT.DIFFERENCE.thin", lambda b: thin(b, solver="FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2), "FLOAT"))
     case("MeshBoolean.FLOAT.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
