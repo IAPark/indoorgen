@@ -117,19 +117,25 @@ fn centre(pos: &[V3], l: &[u32]) -> V3 {
 }
 
 fn newell(pos: &[V3], l: &[u32]) -> (V3, bool) {
+    // BM_edgeloop_calc_normal in float32 (the residual of a degenerate loop decides validity, as in Blender)
     let n = l.len();
-    let mut no = [0.0; 3];
+    let mut no = [0.0f32; 3];
     for k in 0..n {
-        let (p, q) = (pos[l[(k + n - 1) % n] as usize], pos[l[k] as usize]);
+        let (p, q) = (f3(pos[l[(k + n - 1) % n] as usize]), f3(pos[l[k] as usize]));
         no[0] += (p[1] - q[1]) * (p[2] + q[2]);
         no[1] += (p[2] - q[2]) * (p[0] + q[0]);
         no[2] += (p[0] - q[0]) * (p[1] + q[1]);
     }
-    let ln = len(no);
-    if ln < 1e-5 {
-        ([0.0, 0.0, 1.0], false)
+    let d = dot32(no, no);
+    if d > 1.0e-35f32 {
+        let ln = d.sqrt();
+        if ln < 1e-10 {
+            return ([0.0, 0.0, 1.0], false);
+        }
+        let inv = 1.0f32 / ln;
+        ([(no[0] * inv) as f64, (no[1] * inv) as f64, (no[2] * inv) as f64], true)
     } else {
-        (mul(no, 1.0 / ln), true)
+        ([0.0, 0.0, 1.0], false)
     }
 }
 
@@ -327,6 +333,30 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
             }
         }
     }
+    beautify_loop(pos, tris, side, None, false, None)
+}
+
+/// generic BM_mesh_beautify_fill on triangles (edge rotation until no improvement): `side` restricts rotations to edges whose new diagonal joins the
+/// two sides (VERT_RESTRICT_TAG, angle method as the bridge uses it); with `area` = Some(lock_degenerate) the AREA metric (bpy beautify_fill) is used.
+/// `edge_order`: candidate edge order (Blender's mesh edge list), default first use order of the triangle corners.
+pub fn beautify_loop(pos: &[V3], tris: Vec<[u32; 3]>, side: &HashMap<u32, u8>, edge_order: Option<&[[u32; 2]]>, area: bool, movable: Option<&[bool]>) -> Vec<[u32; 3]> {
+    let bl_order = area; // the bpy op path also reproduces Blender's face slot reuse
+    let lock = true;
+    let mut tris = tris;
+    let mut alive: Vec<bool> = vec![true; tris.len()];
+    let mut free: Vec<usize> = vec![];
+    let ord: Vec<i32> = std::env::var("BEAUTY_ORD").ok().map(|s| s.split(',').map(|x| x.parse().unwrap()).collect()).unwrap_or(vec![1, 1]);
+    let cost_of = |v1: u32, v2: u32, v3: u32, v4: u32| -> f32 {
+        if area {
+            if v1 == v3 {
+                return f32::MAX;
+            }
+            let p = |v: u32| f32v(pos[v as usize]);
+            super::polyfill::bm_rotate_beauty_area(p(v1), p(v2), p(v3), p(v4), lock)
+        } else {
+            rot_cost(pos, side, v1, v2, v3, v4)
+        }
+    };
     // edge map
     let mut edges: Vec<(u32, u32)> = vec![];
     let mut emap: HashMap<(u32, u32), Vec<usize>> = HashMap::default();
@@ -341,7 +371,14 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
         }
     }
     // candidate slots: edges with exactly two triangle faces
-    let mut slots: Vec<(u32, u32)> = edges.iter().cloned().filter(|k| emap[k].len() == 2).collect();
+    if let Some(eo) = edge_order {
+        let have: std::collections::HashSet<(u32, u32)> = edges.iter().cloned().collect();
+        let mut ord: Vec<(u32, u32)> = eo.iter().map(|e| ekey(e[0], e[1])).filter(|k| have.contains(k)).collect();
+        let seen: std::collections::HashSet<(u32, u32)> = ord.iter().cloned().collect();
+        ord.extend(edges.iter().cloned().filter(|k| !seen.contains(k)));
+        edges = ord;
+    }
+    let mut slots: Vec<(u32, u32)> = edges.iter().cloned().filter(|k| emap[k].len() == 2 && movable.map_or(true, |m| emap[k].iter().all(|&f| m[f]))).collect();
     let mut slot_of: HashMap<(u32, u32), usize> = slots.iter().cloned().enumerate().map(|(i, k)| (k, i)).collect();
     let mut states: Vec<Vec<([u32; 2], [u32; 2])>> = vec![vec![]; slots.len()];
     let quad_of = |tris: &Vec<[u32; 3]>, emap: &HashMap<(u32, u32), Vec<usize>>, key: (u32, u32)| -> Option<[u32; 4]> {
@@ -373,7 +410,7 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
     let mut heap = Heap::new();
     for (i, k) in slots.iter().enumerate() {
         if let Some(q) = quad_of(&tris, &emap, *k) {
-            let c = rot_cost(pos, side, q[0], q[1], q[2], q[3]);
+            let c = cost_of(q[0], q[1], q[2], q[3]);
             if c < 0.0 {
                 heap.insert(c, i);
             }
@@ -391,7 +428,36 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
             continue; // BM_EDGEROT_CHECK_EXISTS
         }
         // rotate
-        let fs = emap.remove(&key).unwrap();
+        let fs0 = emap.remove(&key).unwrap();
+        let mut fs = fs0.clone();
+        if bl_order {
+            // BM_edge_rotate = join the two triangles into a quad (new slot), kill them, split the quad (new slot from the free list)
+            let has_dir = |t: [u32; 3]| (0..3).any(|k| t[k] == key.0 && t[(k + 1) % 3] == key.1);
+            let (fa, fb) = if has_dir(tris[fs0[0]]) { (fs0[0], fs0[1]) } else { (fs0[1], fs0[0]) };
+            let qs = match free.pop() {
+                Some(x) => x,
+                None => {
+                    tris.push([0; 3]);
+                    alive.push(true);
+                    tris.len() - 1
+                }
+            };
+            alive[qs] = true;
+            let (k1, k2) = if ord[0] == 0 { (fa, fb) } else { (fb, fa) };
+            alive[fa] = false;
+            alive[fb] = false;
+            free.push(k1);
+            free.push(k2);
+            let ns = free.pop().unwrap();
+            alive[ns] = true;
+            fs = if ord[1] == 0 { vec![qs, ns] } else { vec![ns, qs] };
+            let _ = &fs0;
+            // outer edge face lists drop the old faces
+            for (a, b) in [(v1, v2), (v2, v3), (v3, v4), (v4, v1)] {
+                let l = emap.get_mut(&ekey(a, b)).unwrap();
+                l.retain(|f| *f != fa && *f != fb);
+            }
+        }
         tris[fs[0]] = [v1, v2, v3];
         tris[fs[1]] = [v1, v3, v4];
         // fix the four outer edges' face lists
@@ -422,13 +488,16 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
                     if states[s].contains(&alt) {
                         continue;
                     }
-                    let c = rot_cost(pos, side, q2[0], q2[1], q2[2], q2[3]);
+                    let c = cost_of(q2[0], q2[1], q2[2], q2[3]);
                     if c < 0.0 {
                         heap.insert(c, s);
                     }
                 }
             }
         }
+    }
+    if bl_order {
+        return tris.into_iter().zip(alive).filter(|x| x.1).map(|x| x.0).collect();
     }
     tris
 }
@@ -516,6 +585,39 @@ pub fn bridge_two_loops_surface(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: 
 
 /// `surface`: interpolation="SURFACE" instead of PATH
 pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>, surface: bool) -> (Vec<u32>, Vec<u32>) {
+    bridge_pair_opts(m, la, lb, cuts, shape, cache, if surface { Interp::Surface } else { Interp::Path }, 1.0, "SMOOTH")
+}
+
+thread_local! {
+    /// extra (vertex on loop a, vertex on loop b) rungs whose cut positions `bridge_pair_opts` should also produce
+    static EXTRA_RUNGS: std::cell::RefCell<Vec<(u32, u32)>> = std::cell::RefCell::new(vec![]);
+    /// cut vertex positions of the last `bridge_pair_opts` run, per cross edge (vertex on loop a, vertex on loop b), layers 1..cuts from a
+    static CUTPOS: std::cell::RefCell<HashMap<(u32, u32), Vec<V3>>> = std::cell::RefCell::new(HashMap::default());
+}
+
+/// `interpolation` of bridge_edge_loops
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Interp {
+    Linear,
+    Path,
+    Surface,
+}
+
+/// bmesh_subd_falloff_calc (profile_shape enum of bridge_edge_loops)
+pub fn subd_falloff(kind: &str, v: f64) -> f64 {
+    match kind {
+        "SPHERE" => (2.0 * v - v * v).max(0.0).sqrt(),
+        "ROOT" => v.max(0.0).sqrt(),
+        "SHARP" => v * v,
+        "LINEAR" => v,
+        "INVERSE_SQUARE" => v * (2.0 - v),
+        _ => 3.0 * v * v - 2.0 * v * v * v,
+    }
+}
+
+/// full bridge_edge_loops options: `smooth` = smoothness (bezier handle scale, Blender default 1.0), `profile_shape` = enum name
+pub fn bridge_pair_opts(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>, mode: Interp, smooth: f64, profile_shape: &str) -> (Vec<u32>, Vec<u32>) {
+    let surface = mode == Interp::Surface;
     let pos0 = m.pos.clone();
     let mut a = Lp { v: la, no: [0.0; 3] };
     let mut b = Lp { v: lb, no: [0.0; 3] };
@@ -661,7 +763,28 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
     let (mut nb, vb_ok) = newell(&pos0, &b.v);
     let el_d = sub(ca, cb);
     let nd = norm(el_d);
-    let _ = (va_ok, vb_ok, nd);
+    // BM_edgeloop_calc_normal_aligned when the plain normal is degenerate (e.g. open straight polylines)
+    let aligned = |l: &[u32]| -> V3 {
+        let n = l.len();
+        let mut no = [0.0; 3];
+        for k in 0..n {
+            let (p, q) = (pos0[l[(k + n - 1) % n] as usize], pos0[l[k] as usize]);
+            let dir = sub(q, p);
+            no = add(no, cross(dir, cross(nd, dir)));
+        }
+        let ln = len(no);
+        if ln < 1e-10 {
+            [0.0, 0.0, 1.0]
+        } else {
+            mul(no, 1.0 / ln)
+        }
+    };
+    if !va_ok {
+        na = aligned(&a.v);
+    }
+    if !vb_ok {
+        nb = aligned(&b.v);
+    }
     if dot(na, el_d) > 0.0 {
         na = mul(na, -1.0);
     }
@@ -686,7 +809,7 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
         } else {
             len(sub(cb, ca))
         };
-        (l * 0.5) * fac
+        (l * 0.5) * fac * smooth
     };
     let ha = add(ca, mul(na, hl));
     let hb = add(cb, mul(nb, hl));
@@ -744,7 +867,7 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
             if shape != 0.0 {
                 let mut fac = i as f64 / (resolu - 1) as f64;
                 fac = (1.0 - 2.0 * (0.5 - fac).abs()).abs();
-                fac = 3.0 * fac * fac - 2.0 * fac * fac * fac;
+                fac = subd_falloff(profile_shape, fac);
                 s += fac * shape;
             }
             s
@@ -765,6 +888,12 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
                 });
             }
         }
+    }
+    for (x, y) in EXTRA_RUNGS.with(|e| e.borrow().clone()) {
+        seen.entry((x, y)).or_insert_with(|| {
+            cross_edges.push((x, y));
+            cross_edges.len() - 1
+        });
     }
     // SURFACE: per-vertex surface tangent = normalized sum of the in-face perpendiculars of the rim edges (bm_vert_calc_surface_tangent)
     let mut tan: HashMap<u32, V3> = HashMap::default();
@@ -797,7 +926,7 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
         if surface {
             let (co_a, co_b) = (pos0[x as usize], pos0[y as usize]);
             let (no_a, no_b) = (tan[&x], tan[&y]);
-            let hl2 = handle_len3(co_a, no_a, co_b, no_b);
+            let hl2 = handle_len3(co_a, no_a, co_b, no_b) * smooth;
             let (h_a, h_b) = (add(co_a, mul(no_a, hl2)), add(co_b, mul(no_b, hl2)));
             let mut st = vec![[0.0; 3]; resolu];
             for k in 0..3 {
@@ -810,6 +939,21 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
                 let mut p = st[i];
                 if shape != 0.0 {
                     p = add(mul(cm[i], 1.0 - falloff[i]), mul(p, falloff[i]));
+                }
+                ids.push((base + newpos.len()) as u32);
+                newpos.push(p);
+            }
+            cut_id.insert((x, y), ids);
+            continue;
+        }
+        if mode == Interp::Linear {
+            for i in 1..resolu - 1 {
+                let t = i as f64 / (resolu - 1) as f64;
+                let (px, py) = (pos0[x as usize], pos0[y as usize]);
+                let mut p = add(mul(px, 1.0 - t), mul(py, t));
+                if shape != 0.0 {
+                    let lc = add(mul(ca, 1.0 - t), mul(cb, t));
+                    p = add(mul(lc, 1.0 - falloff[i]), mul(p, falloff[i]));
                 }
                 ids.push((base + newpos.len()) as u32);
                 newpos.push(p);
@@ -830,6 +974,13 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
         cut_id.insert((x, y), ids);
     }
     m.pos.extend(newpos);
+    CUTPOS.with(|c| {
+        let mut c = c.borrow_mut();
+        c.clear();
+        for (k, ids) in &cut_id {
+            c.insert(*k, ids.iter().map(|&i| m.pos[i as usize]).collect());
+        }
+    });
     // slice every bridge face into cuts+1 slabs measured from its rim edge
     for f in &faces {
         emit_slabs(m, f, &on_a, &cut_id, cuts);
@@ -908,4 +1059,89 @@ fn emit_slabs(m: &mut Mesh, f: &[u32], on_a: &HashMap<u32, ()>, cut_id: &HashMap
     } else {
         m.faces.push(f.to_vec());
     }
+}
+
+
+/// bridge_edge_loops with Blender's vertex and face ORDER: the topology comes from the BMesh port (`bm::bridge`: disk cycles, face slot
+/// reuse, edge split / face split order), the cut vertex positions from `bridge_pair_opts` run on a copy.
+/// `edge_order`: the Blender mesh's edge list (vertex pairs) if known, else first-use order of the face corners; edges between consecutive
+/// loop vertices are added when missing. Two loops only. Returns the new mesh (original vertices first, then cut vertices in Blender's order).
+pub fn bridge_bm(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode: Interp, smooth: f64, profile_shape: &str, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
+    use crate::bm::{bridge as bb, BMesh};
+    // BMesh input
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
+    let mut add_edge = |a: u32, b: u32, edges: &mut Vec<[u32; 2]>| -> u32 {
+        let k = (a.min(b), a.max(b));
+        *emap.entry(k).or_insert_with(|| {
+            edges.push(match edge_order.and_then(|eo| eo.iter().find(|e| (e[0].min(e[1]), e[0].max(e[1])) == k)) {
+                Some(e) => *e,
+                None => [k.0, k.1],
+            });
+            (edges.len() - 1) as u32
+        })
+    };
+    if let Some(eo) = edge_order {
+        for e in eo {
+            add_edge(e[0], e[1], &mut edges);
+        }
+    }
+    let mut ce: Vec<Vec<u32>> = vec![];
+    for f in &m.faces {
+        ce.push((0..f.len()).map(|c| add_edge(f[c], f[(c + 1) % f.len()], &mut edges)).collect());
+    }
+    let mut sel_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for l in [la, lb] {
+        // a loop is closed unless the mesh's edge list is known and lacks the closing edge
+        let closed = edge_order.map_or(true, |eo| eo.iter().any(|e| (e[0].min(e[1]), e[0].max(e[1])) == (l[0].min(l[l.len() - 1]), l[0].max(l[l.len() - 1]))));
+        let n = if closed { l.len() } else { l.len() - 1 };
+        for i in 0..n {
+            let id = add_edge(l[i], l[(i + 1) % l.len()], &mut edges);
+            sel_set.insert(id);
+        }
+    }
+    let mut bm = BMesh::from_mesh(&pos, &edges, &m.faces, &ce);
+    let eids = bm.edge_ids();
+    // BMesh edge slots == creation order == `edges` order
+    let sel = |e: usize| sel_set.contains(&(e as u32)) && eids.contains(&e);
+    let topo = bb::bridge_edge_loops(&mut bm, &sel, cuts)?;
+    let mode_s = match mode {
+        Interp::Linear => "LINEAR",
+        Interp::Path => "PATH",
+        Interp::Surface => "SURFACE",
+    };
+    if cuts > 0 && !bb::assign_ring_positions(&mut bm, &topo, cuts, mode_s, smooth as f32, shape as f32, profile_shape) {
+        // SURFACE: positions from the f64 implementation, asked for exactly the rungs of the BMesh topology
+        let (olda, _oldb) = if la.len() < lb.len() { (lb, la) } else { (la, lb) };
+        let on_a: std::collections::HashSet<u32> = olda.iter().copied().collect();
+        let norm = |p: u32, q: u32| if on_a.contains(&p) { (p, q) } else { (q, p) };
+        let extra: Vec<(u32, u32)> = topo.rings.iter().map(|r| norm(r[0] as u32, r[cuts + 1] as u32)).collect();
+        EXTRA_RUNGS.with(|e| *e.borrow_mut() = extra);
+        let mut mo = m.clone();
+        bridge_pair_opts(&mut mo, la.to_vec(), lb.to_vec(), cuts, shape, &mut None, mode, smooth, profile_shape);
+        EXTRA_RUNGS.with(|e| e.borrow_mut().clear());
+        let cutpos: HashMap<(u32, u32), Vec<V3>> = CUTPOS.with(|c| c.borrow().clone());
+        for ring in &topo.rings {
+            let (p, q) = norm(ring[0] as u32, ring[cuts + 1] as u32);
+            let flipped = p != ring[0] as u32;
+            let list = cutpos.get(&(p, q)).ok_or("bridge: no oracle positions for a rung")?;
+            for i in 1..=cuts {
+                let c = if flipped { list[cuts - i] } else { list[i - 1] };
+                bm.verts[ring[i]].co = [c[0] as f32, c[1] as f32, c[2] as f32];
+            }
+        }
+    }
+    let (p, _e, f) = bm.to_mesh();
+    let mut out = Mesh::new();
+    out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    out.faces = f;
+    Ok(out)
+}
+
+/// `bridge_two_loops` with Blender's vertex / face order (see `bridge_bm`): replaces `m` by the bridged mesh. Loops are closed vertex lists;
+/// edges of `m` are taken in first-use order of its faces (pass the real Blender edge list through `bridge_bm` when order matters).
+pub fn bridge_two_loops_bl(m: &mut Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64) -> Result<(), String> {
+    *m = bridge_bm(m, la, lb, cuts, shape, Interp::Path, 1.0, "SMOOTH", None)?;
+    Ok(())
 }
