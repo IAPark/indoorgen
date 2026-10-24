@@ -1,4 +1,3 @@
-pub mod dhash;
 pub mod pyhash;
 pub mod bl32;
 pub mod assets;

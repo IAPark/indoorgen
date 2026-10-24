@@ -3364,8 +3364,19 @@ impl<'a> Bp<'a> {
         for &v in &vids {
             if self.tag(v) {
                 let bv = self.bevel_vert_construct(v);
-                if bv != NONE {
+                if bv != NONE && !self.limit_offset {
                     self.build_boundary(bv, true);
+                }
+            }
+        }
+        if self.limit_offset {
+            self.bevel_limit_offset();
+            for &v in &vids {
+                if self.tag(v) {
+                    let bv = self.find_bevvert(v);
+                    if bv != NONE {
+                        self.build_boundary(bv, true);
+                    }
                 }
             }
         }
@@ -3405,13 +3416,153 @@ impl<'a> Bp<'a> {
     }
 }
 
+// ------------------------------------------------------------------ clamp overlap (bevel_limit_offset)
+impl<'a> Bp<'a> {
+    fn eh_vb_vc(&self, eb: usize) -> (usize, usize) {
+        let e = &self.bm.edges[self.ehs[eb].e];
+        if self.ehs[eb].is_rev {
+            (e.v2, e.v1)
+        } else {
+            (e.v1, e.v2)
+        }
+    }
+
+    fn geometry_collide_offset(&self, eb: usize) -> f32 {
+        let no_collide_offset = self.offset + 1e6f32;
+        let mut limit = no_collide_offset;
+        if self.offset == 0.0 {
+            return no_collide_offset;
+        }
+        let kb0 = self.ehs[eb].offset_l_spec;
+        let ea = self.ehs[eb].next;
+        let ka0 = self.ehs[ea].offset_r_spec;
+        let (vb, mut vc) = self.eh_vb_vc(eb);
+        let ea_e = &self.bm.edges[self.ehs[ea].e];
+        let va = if self.ehs[ea].is_rev { ea_e.v1 } else { ea_e.v2 };
+        let (ebother, bvc) = self.find_other_end_edge_half(eb);
+        let (ec, vd, mut kc);
+        if matches!(self.offset_type, OffsetType::Percent | OffsetType::Absolute) {
+            if self.ehs[ea].is_bev && ebother != NONE && self.ehs[self.ehs[ebother].prev].is_bev {
+                if self.offset_type == OffsetType::Percent {
+                    return 50.0;
+                }
+                let blen = self.bm.edge_calc_length(self.ehs[eb].e);
+                return if self.offset > blen / 2.0 { blen / 2.0 } else { blen };
+            }
+            return no_collide_offset;
+        }
+        if ebother != NONE {
+            ec = self.ehs[ebother].prev;
+            vc = self.bvs[bvc].v;
+            kc = self.ehs[ec].offset_l_spec;
+            let ece = &self.bm.edges[self.ehs[ec].e];
+            vd = if self.ehs[ec].is_rev { ece.v1 } else { ece.v2 };
+        } else {
+            kc = 0.0;
+            ec = NONE;
+            let fnext = self.ehs[eb].fnext;
+            if fnext == NONE {
+                return no_collide_offset;
+            }
+            let lb = self.bm.face_edge_share_loop(fnext, self.ehs[eb].e);
+            if lb == NONE {
+                return no_collide_offset;
+            }
+            let lbn = self.bm.loops[lb].n;
+            if self.bm.loops[lbn].v == vc {
+                vd = self.bm.loops[self.bm.loops[lbn].n].v;
+            } else if self.bm.loops[lb].v == vc {
+                vd = self.bm.loops[self.bm.loops[lb].p].v;
+            } else {
+                return no_collide_offset;
+            }
+        }
+        if self.ehs[ea].e == self.ehs[eb].e || (ec != NONE && self.ehs[ec].e == self.ehs[eb].e) {
+            return no_collide_offset;
+        }
+        let ka = ka0 / self.offset;
+        let kb = kb0 / self.offset;
+        kc /= self.offset;
+        let th1 = angle_v3v3v3(self.co(va), self.co(vb), self.co(vc));
+        let th2 = angle_v3v3v3(self.co(vb), self.co(vc), self.co(vd));
+        let sin1 = th1.sin();
+        let sin2 = th2.sin();
+        if (ka > 0.0) as i32 + (kb > 0.0) as i32 + (kc > 0.0) as i32 >= 2 {
+            let tan1 = th1.tan();
+            let tan2 = th2.tan();
+            let g = tan1 * tan2;
+            let h = sin1 * sin2;
+            let den = g * (ka * sin2 + kc * sin1) + kb * h * (tan1 + tan2);
+            if den != 0.0 {
+                let mut t = self.bm.edge_calc_length(self.ehs[eb].e);
+                t *= g * h / den;
+                if t >= 0.0 {
+                    limit = t;
+                }
+            }
+        }
+        if kb > 0.0 && ka == 0.0 {
+            let mut t = self.bm.edge_calc_length(self.ehs[ea].e);
+            t *= sin1 / kb;
+            if t >= 0.0 && t < limit {
+                limit = t;
+            }
+        }
+        if kb > 0.0 && kc == 0.0 {
+            let mut t = self.bm.edge_calc_length(self.ehs[ec].e);
+            t *= sin2 / kb;
+            if t >= 0.0 && t < limit {
+                limit = t;
+            }
+        }
+        limit
+    }
+
+    fn bevel_limit_offset(&mut self) {
+        let mut limited_offset = self.offset;
+        let vids = self.bm.vert_ids();
+        for &v in &vids {
+            if !self.tag(v) {
+                continue;
+            }
+            let bv = self.find_bevvert(v);
+            if bv == NONE {
+                continue;
+            }
+            for i in 0..self.bvs[bv].edgecount {
+                let c = self.geometry_collide_offset(self.bvs[bv].e0 + i);
+                if c < limited_offset {
+                    limited_offset = c;
+                }
+            }
+        }
+        if limited_offset < self.offset {
+            let f = limited_offset / self.offset;
+            for &v in &vids {
+                if !self.tag(v) {
+                    continue;
+                }
+                let bv = self.find_bevvert(v);
+                if bv == NONE {
+                    continue;
+                }
+                for i in 0..self.bvs[bv].edgecount {
+                    let e = self.bvs[bv].e0 + i;
+                    self.ehs[e].offset_l_spec *= f;
+                    self.ehs[e].offset_r_spec *= f;
+                    self.ehs[e].offset_l *= f;
+                    self.ehs[e].offset_r *= f;
+                }
+            }
+            self.offset = limited_offset;
+        }
+    }
+}
+
 /// Tag-based entry (BM_mesh_bevel). Callers set ELEM_TAG on verts/edges first.
 pub fn bm_mesh_bevel(bm: &mut BMesh, o: &BevelOpts) -> Result<(), String> {
     if o.offset <= 0.0 {
         return Ok(());
-    }
-    if o.limit_offset {
-        return Err("limit_offset not ported".into());
     }
     let mut pro_super_r = -(2.0f32).ln() / o.profile.sqrt().ln();
     if o.profile >= 0.950 {

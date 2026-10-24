@@ -14,46 +14,48 @@ fn ceramic(r: &mut Rng) -> Material {
 }
 
 pub struct Toilet {
-    size: f64,
-    width: f64,
-    height: f64,
-    size_mid: f64,
-    curve_scale: f64,
-    depth: f64,
-    tube_scale: f64,
-    thickness: f64,
-    extrude_height: f64,
-    stand_depth: f64,
-    stand_scale: f64,
-    bottom_offset: f64,
-    back_thickness: f64,
-    back_size: f64,
-    back_scale: f64,
-    seat_size: f64,
-    tank_width: f64,
-    tank_height: f64,
-    tank_size: f64,
-    tank_cap_height: f64,
-    tank_cap_extrude: f64,
-    cover_rotation: f64,
-    handle: bool,
-    hw_radius: f64,
-    hw_length: f64,
-    hw_side: bool,
-    seed: u64,
+    pub size: f64,
+    pub width: f64,
+    pub height: f64,
+    pub size_mid: f64,
+    pub curve_scale: f64,
+    pub depth: f64,
+    pub tube_scale: f64,
+    pub thickness: f64,
+    pub extrude_height: f64,
+    pub stand_depth: f64,
+    pub stand_scale: f64,
+    pub bottom_offset: f64,
+    pub back_thickness: f64,
+    pub back_size: f64,
+    pub back_scale: f64,
+    pub seat_size: f64,
+    pub tank_width: f64,
+    pub tank_height: f64,
+    pub tank_size: f64,
+    pub tank_cap_height: f64,
+    pub tank_cap_extrude: f64,
+    pub cover_rotation: f64,
+    pub handle: bool,
+    pub hw_radius: f64,
+    pub hw_length: f64,
+    pub hw_side: bool,
+    pub seed: u64,
+    pub curve_scales: [f64; 4],
+    pub seat_thickness: f64,
+    pub has_seat_cut: bool,
+    pub hw_cap: f64,
 }
 
 impl Toilet {
-    fn new(rng: &mut Rng) -> Toilet {
+    pub fn new(rng: &mut Rng) -> Toilet {
         let mut r = rng.clone();
         let size = r.uniform(0.4, 0.5);
         let width = size * r.uniform(0.7, 0.8);
         let height = size * r.uniform(0.8, 0.9);
         let size_mid = r.uniform(0.6, 0.65);
-        let curve_scale = r.log_uniform(0.8, 1.2);
-        for _ in 0..3 {
-            r.f64(); // log_uniform(size=4)
-        }
+        let curve_scales = [r.log_uniform(0.8, 1.2), r.log_uniform(0.8, 1.2), r.log_uniform(0.8, 1.2), r.log_uniform(0.8, 1.2)];
+        let curve_scale = curve_scales[0];
         let depth = size * r.uniform(0.5, 0.6);
         let tube_scale = r.uniform(0.25, 0.3);
         let thickness = r.uniform(0.05, 0.06);
@@ -64,9 +66,9 @@ impl Toilet {
         let back_thickness = thickness * r.uniform(0.0, 0.8);
         let back_size = size * r.uniform(0.55, 0.65);
         let back_scale = r.uniform(0.8, 1.0);
-        let _seat_thickness = r.uniform(0.1, 0.3) * thickness;
+        let seat_thickness = r.uniform(0.1, 0.3) * thickness;
         let seat_size = thickness * r.uniform(1.2, 1.6);
-        let _has_seat_cut = r.f64() < 0.1;
+        let has_seat_cut = r.f64() < 0.1;
         let tank_width = width * r.uniform(1.0, 1.2);
         let tank_height = height * r.uniform(0.6, 1.0);
         let tank_size = back_size - seat_size - r.uniform(0.02, 0.03);
@@ -74,13 +76,13 @@ impl Toilet {
         let tank_cap_extrude = if r.f64() < 0.5 { 0.0 } else { r.uniform(0.005, 0.01) };
         let cover_rotation = -r.uniform(0.0, std::f64::consts::FRAC_PI_2);
         let handle = r.choice_idx(2) == 1;
-        let _hc = r.uniform(0.01, 0.015);
+        let hw_cap = r.uniform(0.01, 0.015);
         let hw_radius = r.uniform(0.015, 0.02);
         let hw_length = r.uniform(0.04, 0.05);
         let hw_side = r.f64() < 0.5;
-        Toilet { size, width, height, size_mid, curve_scale, depth, tube_scale, thickness, extrude_height, stand_depth, stand_scale, bottom_offset, back_thickness, back_size, back_scale, seat_size, tank_width, tank_height, tank_size, tank_cap_height, tank_cap_extrude, cover_rotation, handle, hw_radius, hw_length, hw_side, seed: r.randint(0, 1_000_000) as u64 }
+        Toilet { size, width, height, size_mid, curve_scale, depth, tube_scale, thickness, extrude_height, stand_depth, stand_scale, bottom_offset, back_thickness, back_size, back_scale, seat_size, tank_width, tank_height, tank_size, tank_cap_height, tank_cap_extrude, cover_rotation, handle, hw_radius, hw_length, hw_side, seed: r.randint(0, 1_000_000) as u64, curve_scales, seat_thickness, has_seat_cut, hw_cap }
     }
-    fn mid_offset(&self) -> f64 {
+    pub fn mid_offset(&self) -> f64 {
         (1.0 - self.size_mid) * self.size
     }
     /// closed outline (x, y) of the bowl rim: two quarter-ellipse arcs mirrored in x
