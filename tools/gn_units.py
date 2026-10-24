@@ -1203,10 +1203,29 @@ def mesh2_cases():
     def mk_pattr(b):
         c = b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4)
         st = b.store((c, "Mesh"), (b.index(), "Index"), "pi", "POINT", "INT")
-        st2 = b.store((st, "Geometry"), (b.index(), "Index"), "ei", "EDGE", "INT")
-        st3 = b.store((st2, "Geometry"), (b.index(), "Index"), "fi", "FACE", "INT")
+        # (an edge attribute would be compared by index, but Blender's edge order depends on heap addresses)
+        st3 = b.store((st, "Geometry"), (b.index(), "Index"), "fi", "FACE", "INT")
         return _boolean(b, "DIFFERENCE", st3, [b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.4, Depth=4.0)], "FLOAT")
     case("MeshBoolean.FLOAT.DIFFERENCE.pattr", mk_pattr)
+    def usph(b, seg=24, rings=12, r=1.0, t=(0, 0, 0)):
+        sp = b.n("GeometryNodeMeshUVSphere", Segments=seg, Rings=rings, Radius=r)
+        return b.n("GeometryNodeTransform", Geometry=(sp, "Mesh"), Translation=t)
+    for op in ("UNION", "INTERSECT", "DIFFERENCE"):
+        case(f"MeshBoolean.FLOATX.{op}.spheres", lambda b, op=op: _boolean(b, op, usph(b), [usph(b, 20, 10, 0.8, (0.7, 0.2, 0.1))], "FLOAT"))
+        case(f"MeshBoolean.FLOATX.{op}.sphcyl", lambda b, op=op: _boolean(b, op, usph(b, 32, 16), [b.n("GeometryNodeMeshCylinder", Vertices=24, Radius=0.35, Depth=3.0)], "FLOAT"))
+        case(f"MeshBoolean.FLOATX.{op}.gridcyl", lambda b, op=op: _boolean(b, op, b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=6, Vertices__Y=6, Vertices__Z=6), [cube_at(b, (0.8, 0.8, 3.0), (0.25, 0.1, 0.0)), b.n("GeometryNodeMeshCylinder", Vertices=16, Radius=0.3, Depth=3.0)], "FLOAT"))
+    case("MeshBoolean.FLOATX.DIFFERENCE.cone", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCone", Vertices=12, Radius__Top=0.1, Radius__Bottom=0.8, Depth=3.0)], "FLOAT"))
+    case("MeshBoolean.FLOATX.DIFFERENCE.cyls", lambda b: _boolean(b, "DIFFERENCE", b.n("GeometryNodeMeshCylinder", Vertices=32, Radius=1.0, Depth=1.0), [b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.3, Depth=3.0), cube_at(b, (0.3, 3.0, 0.3), (0.5, 0, 0.1))], "FLOAT"))
+    def cube_uv(b, size, res):
+        c = b.n("GeometryNodeMeshCube", Size=size, Vertices__X=res, Vertices__Y=res, Vertices__Z=res)
+        return b.store((c, "Mesh"), (c, "UV Map"), "uv_map", "CORNER", "FLOAT_VECTOR")
+    def mk_uv(b):
+        a = cube_uv(b, (2, 2, 2), 4)
+        a = b.store((a, "Geometry"), (b.index(), "Index"), "ci", "CORNER", "INT")
+        cyl = b.n("GeometryNodeMeshCylinder", Vertices=8, Radius=0.4, Depth=4.0)
+        return _boolean(b, "DIFFERENCE", a, [cyl], "FLOAT")
+    case("MeshBoolean.FLOAT.DIFFERENCE.cornerattr", mk_uv)
+    case("MeshBoolean.FLOAT.DIFFERENCE.cornerattr2", lambda b: _boolean(b, "DIFFERENCE", cube_uv(b, (2, 2, 2), 3), [cube_uv(b, (0.8, 0.8, 3.0), 2)], "FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.thin", lambda b: thin(b, solver="FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2), "FLOAT"))
     case("MeshBoolean.FLOAT.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))

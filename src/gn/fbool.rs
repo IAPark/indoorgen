@@ -7,6 +7,7 @@ use super::val::*;
 use crate::bm::edgenet::{axis_dominant_v3_to_m3, mul_v2_m3v3};
 use crate::bm::isect::{mesh_intersect_boolean, BOOLEAN_DIFFERENCE, BOOLEAN_ISECT, BOOLEAN_UNION};
 use crate::bm::query::normalize;
+use crate::bm::cdata::{LKind, LoopData};
 use crate::bm::{BMesh, ELEM_DRAW, ELEM_SMOOTH, NONE};
 use crate::exbool::polyfill::{polyfill_beautify, polyfill_calc, quad_rotate_calc};
 
@@ -63,6 +64,38 @@ fn dbg_on() -> bool {
     *ON.get_or_init(|| std::env::var_os("GNBOOL_DUMP").is_some())
 }
 
+fn lkind(t: Ty) -> LKind {
+    match t {
+        Ty::F => LKind::Float,
+        Ty::I => LKind::Int,
+        Ty::B => LKind::Bool,
+        Ty::V => LKind::Vec3,
+        _ => LKind::Color,
+    }
+}
+fn r_start(m: &Mesh, f: usize) -> usize {
+    m.foff[f] as usize
+}
+fn push_val(out: &mut Vec<f64>, v: &Val) {
+    match v {
+        Val::F(x) => out.push(*x as f64),
+        Val::I(x) => out.push(*x as f64),
+        Val::B(x) => out.push(if *x { 1.0 } else { 0.0 }),
+        Val::V(x) => out.extend(x.iter().map(|c| *c as f64)),
+        Val::C(x) => out.extend(x.iter().map(|c| *c as f64)),
+        _ => out.push(0.0),
+    }
+}
+fn val_from(ty: Ty, d: &[f64]) -> Val {
+    match ty {
+        Ty::F => Val::F(d[0] as f32),
+        Ty::I => Val::I(d[0] as i32),
+        Ty::B => Val::B(d[0] != 0.0),
+        Ty::V => Val::V([d[0] as f32, d[1] as f32, d[2] as f32]),
+        _ => Val::C([d[0] as f32, d[1] as f32, d[2] as f32, d[3] as f32]),
+    }
+}
+
 /// BM_mesh_calc_tessellation_beauty (loops of every triangle, in pool order of faces)
 fn tessellation_beauty(bm: &BMesh) -> Vec<[usize; 3]> {
     let mut out = vec![];
@@ -112,6 +145,23 @@ fn tessellation_beauty(bm: &BMesh) -> Vec<[usize; 3]> {
 /// mesh_bm_concat for two meshes (identity transforms): operand 0 faces are tagged (BM_FACE_TAG), `user` = local face id
 fn bm_concat(m0: &Mesh, x0: &M4, m1: &Mesh, x1: &M4) -> (BMesh, Vec<[usize; 3]>) {
     let mut bm = BMesh::new();
+    // corner (loop) layers: union of both operands, in order of first appearance
+    let mut layers: Vec<(String, Ty)> = vec![];
+    for m in [m0, m1] {
+        for (name, a) in m.attrs.iter() {
+            if a.dom != Dom::Corner || !matches!(a.ty, Ty::F | Ty::I | Ty::B | Ty::V | Ty::C) {
+                continue;
+            }
+            match layers.iter_mut().find(|l| &l.0 == name) {
+                Some(l) => l.1 = a.ty,
+                None => layers.push((name.clone(), a.ty)),
+            }
+        }
+    }
+    if !layers.is_empty() {
+        let kinds: Vec<LKind> = layers.iter().map(|l| lkind(l.1)).collect();
+        bm.ld = LoopData::new(&kinds);
+    }
     let mut fid = 0usize;
     let mut vid = 0usize;
     let mut eid = 0usize;
@@ -152,6 +202,19 @@ fn bm_concat(m0: &Mesh, x0: &M4, m1: &Mesh, x1: &M4) -> (BMesh, Vec<[usize; 3]>)
             }
             if mi == 0 {
                 bm.faces[f].flag |= ELEM_DRAW;
+            }
+            if !layers.is_empty() {
+                let ls = bm.loops_of_face(f);
+                for (k, &l) in ls.iter().enumerate() {
+                    let mut vals: Vec<f64> = vec![];
+                    for (name, ty) in &layers {
+                        match m.attrs.get(name).filter(|a| a.dom == Dom::Corner) {
+                            Some(a) => push_val(&mut vals, &a.data[r_start(m, fi) + k].convert(*ty)),
+                            None => push_val(&mut vals, &Val::zero(*ty)),
+                        }
+                    }
+                    bm.ld.set_block(l, &vals);
+                }
             }
             if mi == 1 && flip1 {
                 bm.face_normal_flip(f);
@@ -217,6 +280,34 @@ fn pass(m0: &Mesh, x0: &M4, s0: &Src, m1: &Mesh, x1: &M4, s1: &Src, mode: i32) -
     }
     let _ = NONE;
     let mut m = Mesh::from_faces(pos, &faces, &edges);
+    // corner layers back to attributes (same layer order as in bm_concat)
+    if !bm.ld.is_empty() {
+        let mut names: Vec<(String, Ty)> = vec![];
+        for mm in [m0, m1] {
+            for (name, a) in mm.attrs.iter() {
+                if a.dom != Dom::Corner || !matches!(a.ty, Ty::F | Ty::I | Ty::B | Ty::V | Ty::C) {
+                    continue;
+                }
+                match names.iter_mut().find(|l| &l.0 == name) {
+                    Some(l) => l.1 = a.ty,
+                    None => names.push((name.clone(), a.ty)),
+                }
+            }
+        }
+        let mut cols: Vec<Vec<Val>> = names.iter().map(|_| vec![]).collect();
+        for f in bm.face_ids() {
+            for l in bm.loops_of_face(f) {
+                let blk = bm.ld.block(l);
+                for (i, (_, ty)) in names.iter().enumerate() {
+                    let (_, off) = bm.ld.layers[i];
+                    cols[i].push(val_from(*ty, &blk[off..]));
+                }
+            }
+        }
+        for ((name, ty), data) in names.into_iter().zip(cols) {
+            m.attrs.insert(name, Attr { dom: Dom::Corner, ty, data });
+        }
+    }
     // sharp_edge from the BM_ELEM_SMOOTH flag (written only when some edge is not smooth)
     let sharp: Vec<bool> = bm.edge_ids().iter().map(|&e| bm.edges[e].flag & ELEM_SMOOTH == 0).collect();
     if sharp.iter().any(|&x| x) {

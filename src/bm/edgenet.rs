@@ -162,6 +162,107 @@ fn isect_ray_seg_v2(ray_origin: [f32; 2], ray_direction: [f32; 2], v0: [f32; 2],
     None
 }
 
+fn closest_to_line_segment_v2(p: [f32; 2], l1: [f32; 2], l2: [f32; 2]) -> [f32; 2] {
+    // closest_to_line_v2
+    let u = sub_v2(l2, l1);
+    let h = sub_v2(p, l1);
+    let denom = dot_v2(u, u);
+    let (lambda, cp) = if denom == 0.0 {
+        (0.0f32, l1)
+    } else {
+        let lambda = dot_v2(u, h) / denom;
+        (lambda, [l1[0] + u[0] * lambda, l1[1] + u[1] * lambda])
+    };
+    if lambda <= 0.0 {
+        l1
+    } else if lambda >= 1.0 {
+        l2
+    } else {
+        cp
+    }
+}
+
+fn mean_value_half_tan_v2_db(d_curr: &([f64; 2], f64), d_next: &([f64; 2], f64)) -> f64 {
+    let area = d_curr.0[0] * d_next.0[1] - d_curr.0[1] * d_next.0[0];
+    if area != 0.0 {
+        let dot = d_curr.0[0] * d_next.0[0] + d_curr.0[1] * d_next.0[1];
+        let len = d_curr.1 * d_next.1;
+        let result = (len - dot) / area;
+        if result.is_finite() {
+            return result;
+        }
+    }
+    0.0
+}
+
+/// interp_weights_poly_v2 (mean value coordinates, double precision internals)
+pub fn interp_weights_poly_v2(v: &[[f32; 2]], co: [f32; 2]) -> Vec<f32> {
+    let n = v.len();
+    let mut w = vec![0.0f32; n];
+    let mut max_value = 0.0f32;
+    for p in v {
+        max_value = max_value.max((p[0] - co[0]).abs());
+        max_value = max_value.max((p[1] - co[1]).abs());
+    }
+    let eps = 16.0 * f32::EPSILON * max_value;
+    let eps_sq = eps * eps;
+    let dir = |a: [f32; 2], b: [f32; 2]| -> ([f64; 2], f64) {
+        let d = [a[0] as f64 - b[0] as f64, a[1] as f64 - b[1] as f64];
+        (d, (d[0] * d[0] + d[1] * d[1]).sqrt())
+    };
+    let mut totweight = 0.0f32;
+    let mut ix_flag = 0u8;
+    let mut i_curr = n - 1;
+    let mut i_next = 0usize;
+    let mut v_curr = v[i_curr];
+    let mut v_next = v[i_next];
+    let mut d_curr = dir(v[n - 2], co);
+    let mut d_next = dir(v_curr, co);
+    let mut ht_prev = mean_value_half_tan_v2_db(&d_curr, &d_next);
+    while i_next < n {
+        if d_next.1 < eps as f64 {
+            ix_flag = 1;
+            break;
+        }
+        let cl = closest_to_line_segment_v2(co, v_curr, v_next);
+        let dd = sub_v2(cl, co);
+        if dd[0] * dd[0] + dd[1] * dd[1] < eps_sq {
+            ix_flag = 2;
+            break;
+        }
+        d_curr = d_next;
+        d_next = dir(v_next, co);
+        let ht = mean_value_half_tan_v2_db(&d_curr, &d_next);
+        w[i_curr] = if d_curr.1 == 0.0 { 0.0 } else { ((ht_prev + ht) / d_curr.1) as f32 };
+        totweight += w[i_curr];
+        i_curr = i_next;
+        i_next += 1;
+        v_curr = v_next;
+        if i_next < n {
+            v_next = v[i_next];
+        }
+        ht_prev = ht;
+    }
+    if ix_flag != 0 {
+        for x in w.iter_mut() {
+            *x = 0.0;
+        }
+        if ix_flag & 1 != 0 {
+            w[i_curr] = 1.0;
+        } else {
+            let mut fac = line_point_factor_v2(co, v_curr, v_next);
+            fac = fac.clamp(0.0, 1.0);
+            w[i_curr] = 1.0 - fac;
+            w[i_next] = fac;
+        }
+    } else if totweight != 0.0 {
+        for x in w.iter_mut() {
+            *x /= totweight;
+        }
+    }
+    w
+}
+
 impl BMesh {
     fn edge_flagged_radial_count(&self, e: usize) -> usize {
         let first = self.edges[e].l;
@@ -451,6 +552,50 @@ impl BMesh {
                         if self.verts[lv].api & VERT_IN_QUEUE == 0 && self.edgenet_find_loop_pair_exists(lv) {
                             vert_queue.push(lv);
                             self.verts[lv].api |= VERT_IN_QUEUE;
+                        }
+                    }
+                }
+            }
+        }
+        // loop custom data of the new faces (only when some layer interpolates)
+        if self.ld.has_math() {
+            let axis_mat = fnm;
+            let mut blocks: Vec<usize> = vec![];
+            let mut cos_2d: Vec<[f32; 2]> = vec![];
+            let first = self.faces[f].l_first;
+            let mut l_iter = first;
+            loop {
+                let lv = self.loops[l_iter].v;
+                for l_other in self.loops_of_vert(lv) {
+                    let fo = self.loops[l_other].f;
+                    if fo != f && self.faces[fo].api & FACE_NET != 0 {
+                        self.ld.copy(l_iter, l_other);
+                    }
+                }
+                self.verts[lv].api |= VERT_VISIT;
+                cos_2d.push(mul_v2_m3v3(&axis_mat, self.verts[lv].co));
+                blocks.push(l_iter);
+                l_iter = self.loops[l_iter].n;
+                if l_iter == first {
+                    break;
+                }
+            }
+            for &e in edge_net {
+                for v in [self.edges[e].v1, self.edges[e].v2] {
+                    if self.verts[v].api & VERT_VISIT == 0 {
+                        self.verts[v].api |= VERT_VISIT;
+                        let mut l_first_net = NONE;
+                        for l_it in self.loops_of_vert(v) {
+                            if self.faces[self.loops[l_it].f].api & FACE_NET != 0 {
+                                if l_first_net == NONE {
+                                    let co = mul_v2_m3v3(&axis_mat, self.verts[v].co);
+                                    let w = interp_weights_poly_v2(&cos_2d, co);
+                                    self.ld.interp(&blocks, &w, l_it);
+                                    l_first_net = l_it;
+                                } else {
+                                    self.ld.copy(l_first_net, l_it);
+                                }
+                            }
                         }
                     }
                 }

@@ -2,6 +2,7 @@
 //! slot reuse (freed slots are reused LIFO, iteration is in slot order), as needed to reproduce Blender's bmesh operators exactly.
 pub mod bevel;
 pub mod bvh;
+pub mod cdata;
 pub mod edgenet;
 pub mod isect;
 pub mod kern;
@@ -88,6 +89,8 @@ pub struct BMesh {
     pub totvert: usize,
     pub totedge: usize,
     pub totface: usize,
+    /// loop (corner) custom data (empty unless a tool sets layers)
+    pub ld: cdata::LoopData,
 }
 
 impl BMesh {
@@ -147,7 +150,7 @@ impl BMesh {
 
     fn loop_create(&mut self, v: usize, e: usize, f: usize) -> usize {
         let l = BMLoop { v, e, f, rn: NONE, rp: NONE, n: NONE, p: NONE, flag: 0, idx: -1, alive: true };
-        match self.lfree.pop() {
+        let i = match self.lfree.pop() {
             Some(i) => {
                 self.loops[i] = l;
                 i
@@ -156,7 +159,9 @@ impl BMesh {
                 self.loops.push(l);
                 self.loops.len() - 1
             }
-        }
+        };
+        self.ld.reset(i);
+        i
     }
 
     /// BM_face_create (edges given)

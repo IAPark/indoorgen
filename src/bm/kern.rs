@@ -96,6 +96,7 @@ impl BMesh {
                 self.loops[l].rp = NONE;
 
                 let l_new = self.loop_create(NONE, NONE, f);
+                self.ld.copy(l, l_new);
                 // l_new->prev = l; l_new->next = l->next; ...
                 self.loops[l_new].p = l;
                 let ln = self.loops[l].n;
@@ -136,7 +137,41 @@ impl BMesh {
         self.verts[v_new].co = query::madd(vco, d, fac);
         self.edges[e_new].flag = self.edges[e].flag;
         self.elem_attrs_copy_edge(e, e_new);
+        // BM_data_interp_face_vert_edge(bm, v_other, v, v_new, e, fac)
+        if !self.ld.is_empty() {
+            self.data_interp_face_vert_edge(v_other, v_new, e, fac);
+        }
         (v_new, e_new)
+    }
+
+    /// BM_data_interp_face_vert_edge (loop data only)
+    pub fn data_interp_face_vert_edge(&mut self, v_src_1: usize, v: usize, e: usize, fac: f32) {
+        let first = self.edges[e].l;
+        if first == NONE {
+            return;
+        }
+        let w = [fac, 1.0 - fac];
+        let (mut l_v1, mut l_v, mut l_v2) = (NONE, NONE, NONE);
+        let mut l_iter = first;
+        loop {
+            if self.loops[l_iter].v == v_src_1 {
+                l_v1 = l_iter;
+                l_v = self.loops[l_v1].n;
+                l_v2 = self.loops[l_v].n;
+            } else if self.loops[l_iter].v == v {
+                l_v1 = self.loops[l_iter].n;
+                l_v = l_iter;
+                l_v2 = self.loops[l_iter].p;
+            }
+            if l_v1 == NONE || l_v2 == NONE {
+                return;
+            }
+            self.ld.interp(&[l_v1, l_v2], &w, l_v);
+            l_iter = self.loops[l_iter].rn;
+            if l_iter == first {
+                break;
+            }
+        }
     }
 
     // ------------------------------------------------------------------ splice
@@ -281,6 +316,22 @@ impl BMesh {
 
     /// BM_vert_collapse_edge(bm, e_kill, v_kill, do_del=true, kill_degenerate=false, kill_duplicate=false)
     pub fn vert_collapse_edge(&mut self, e_kill: usize, v_kill: usize) -> usize {
+        // BM_vert_collapse_faces: the loop at v_kill takes the data of the loop at the other vertex (weights {0, 1})
+        if !self.ld.is_empty() && self.edges[e_kill].l != NONE {
+            let tv = self.edge_other_vert(e_kill, v_kill);
+            let first = self.edges[e_kill].l;
+            let mut l_iter = first;
+            loop {
+                let nx = self.loops[l_iter].n;
+                if self.loops[l_iter].v == tv && self.loops[nx].v == v_kill {
+                    self.ld.interp(&[nx, l_iter], &[0.0, 1.0], nx);
+                }
+                l_iter = self.loops[l_iter].rn;
+                if l_iter == first {
+                    break;
+                }
+            }
+        }
         self.join_edge_kill_vert(e_kill, v_kill, true)
     }
 
