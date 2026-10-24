@@ -235,6 +235,7 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             ctx.assets.placeholder(class, fac_seed, inst_seed, kind)?
         }
     };
+    if std::env::var_os("PHDBG").is_some() { eprintln!("PHDBG {class} {fac_seed} {inst_seed} lo {:?} hi {:?}", geom.lo, geom.hi); }
     Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed }))
 }
 

@@ -33,7 +33,7 @@ fn poly_normal(co: &[V3]) -> V3 {
     normalize_v3(n)
 }
 
-fn ortho_basis(n: V3) -> (V3, V3) {
+pub(crate) fn ortho_basis(n: V3) -> (V3, V3) {
     let eps = f32::EPSILON;
     let f = n[0] * n[0] + n[1] * n[1];
     if f > eps {
@@ -521,13 +521,13 @@ pub fn triangulate_ngon_plain(co: &[V3]) -> Vec<[u32; 3]> {
     polyfill_calc(&proj)
 }
 
-fn cross_tri_v3(v1: V3, v2: V3, v3: V3) -> V3 {
+pub(crate) fn cross_tri_v3(v1: V3, v2: V3, v3: V3) -> V3 {
     let n1 = [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]];
     let n2 = [v2[0] - v3[0], v2[1] - v3[1], v2[2] - v3[2]];
     [n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]]
 }
 
-fn is_quad_flip_v3(v1: V3, v2: V3, v3: V3, v4: V3) -> i32 {
+pub(crate) fn is_quad_flip_v3(v1: V3, v2: V3, v3: V3, v4: V3) -> i32 {
     let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let cross = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -586,4 +586,27 @@ pub fn quad_split_24_beauty(co: [V3; 4]) -> bool {
     }
     let (cost, _) = quad_rotate_calc(v1p, v2p, v3p, v4p, false);
     cost > 0.0
+}
+
+/// bm_edge_calc_rotate_beauty__area (BMesh beautify cost of rotating the edge between triangles (v2,v3,v4) / (v2,v4,v1))
+pub(crate) fn bm_rotate_beauty_area(v1: V3, v2: V3, v3: V3, v4: V3, lock_degenerate: bool) -> f32 {
+    let no_a = cross_tri_v3(v2, v3, v4);
+    let no_b = cross_tri_v3(v2, v4, v1);
+    let mut no = [no_a[0] + no_b[0], no_a[1] + no_b[1], no_a[2] + no_b[2]];
+    let d = no[0] * no[0] + no[1] * no[1] + no[2] * no[2];
+    let no_scale = if d > 1.0e-35f32 { d.sqrt() } else { 0.0 };
+    if no_scale == 0.0 {
+        return f32::MAX;
+    }
+    let f = 1.0f32 / no_scale;
+    no = [no[0] * f, no[1] * f, no[2] * f];
+    let (r0, r1) = ortho_basis(no);
+    let m = [[r0[0], r1[0], no[0]], [r0[1], r1[1], no[1]], [r0[2], r1[2], no[2]]];
+    let proj = |c: V3| [m[0][0] * c[0] + m[1][0] * c[1] + m[2][0] * c[2], m[0][1] * c[0] + m[1][1] * c[1] + m[2][1] * c[2]];
+    let (v1p, v2p, v3p, v4p) = (proj(v1), proj(v2), proj(v3), proj(v4));
+    let eps = 1e-5f32;
+    if signum_i_ex(cross_tri_v2(v2p, v3p, v4p) / no_scale, eps) + signum_i_ex(cross_tri_v2(v2p, v4p, v1p) / no_scale, eps) == 0 {
+        return f32::MAX;
+    }
+    quad_rotate_calc(v1p, v2p, v3p, v4p, lock_degenerate).0
 }

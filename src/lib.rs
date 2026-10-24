@@ -25,3 +25,5 @@ pub fn int_hash(parts: &[&str]) -> u64 {
 }
 pub mod gn;
 pub mod bm;
+
+pub mod exbool;

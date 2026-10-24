@@ -3,6 +3,7 @@ pub mod attr;
 pub mod cdt;
 pub mod bullet_hull;
 pub mod csg;
+pub mod fbool;
 pub mod dual;
 pub mod curveops;
 pub mod eval;

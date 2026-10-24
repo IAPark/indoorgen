@@ -14,6 +14,11 @@ anyhow = "1"
 md5 = "0.8.1"
 earcutr = "0.5.0"
 parry3d-f64 = "0.18"
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"
+robust = "1.2"
 
 [profile.release]
 opt-level = 3
