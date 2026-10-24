@@ -48,6 +48,16 @@ fn main() {
                 if ar < 0.0 { neg += 1; }
                 tot += ar as f64 / 2.0;
             }
+            if let Ok(vs) = std::env::var("FILLV") {
+                let vi: u32 = vs.parse().unwrap();
+                for t in &f.f {
+                    if t.contains(&vi) {
+                        let (a, b, c) = (f.v[t[0] as usize], f.v[t[1] as usize], f.v[t[2] as usize]);
+                        let ar = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                        println!("tri {:?} area2 {:e}", t, ar);
+                    }
+                }
+            }
             println!("fill: {} tris, neg {}, area {} ; python area:", f.f.len(), neg, tot);
             let s = infinigen::assets::leafkit::solidify(&f, 0.1);
             let zs: std::collections::BTreeSet<i64> = s.v.iter().map(|p| (p[2] * 1000.0).round() as i64).collect();

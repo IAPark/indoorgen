@@ -309,14 +309,23 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
         let (pa, pb) = (m.v[other(inc[v][0]) as usize], m.v[other(inc[v][1]) as usize]);
         let da = [pv[0] - pa[0], pv[1] - pa[1], pv[2] - pa[2]];
         let db = [pv[0] - pb[0], pv[1] - pb[1], pv[2] - pb[2]];
-        let cr = [da[1] * db[2] - da[2] * db[1], da[2] * db[0] - da[0] * db[2], da[0] * db[1] - da[1] * db[0]];
-        let value = cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2];
-        let (la, lb) = (da[0] * da[0] + da[1] * da[1] + da[2] * da[2], db[0] * db[0] + db[1] * db[1] + db[2] * db[2]);
+        // arm64 clang contracts a*b - c*d into fma(a, b, -(c*d)); the mirrored vertex of a symmetric leaf then rounds differently, which decides the sort
+        let fm = |a: f32, b: f32, c: f32, d: f32| a.mul_add(b, -(c * d));
+        let cr = [fm(da[1], db[2], da[2], db[1]), fm(da[2], db[0], da[0], db[2]), fm(da[0], db[1], da[1], db[0])];
+        let value = cr[2].mul_add(cr[2], cr[1].mul_add(cr[1], cr[0] * cr[0]));
+        let sq = |d: [f32; 3]| d[2].mul_add(d[2], d[1].mul_add(d[1], d[0] * d[0]));
+        let (la, lb) = (sq(da), sq(db));
         let nz = if la > lb { -cr[2] } else { cr[2] };
         nors.push((value, nz));
     }
+    let pre = nors.clone();
     bsd_qsort(&mut nors, &|a: &(f32, f32), b: &(f32, f32)| if a.0 < b.0 { 1 } else if a.0 > b.0 { -1 } else { 0 });
     let best = nors[0];
+    if std::env::var("LEAFDBG").is_ok() {
+        let mx = pre.iter().map(|x| x.0).fold(-1.0f32, f32::max);
+        let ties: Vec<(usize, f32)> = pre.iter().enumerate().filter(|(_, x)| x.0 == mx).map(|(i, x)| (i, x.1)).collect();
+        eprintln!("fill normal: max {mx} ties {:?} chosen nz {}", ties, best.1);
+    }
     let want_ccw = best.1 >= 0.0;
     // polyfill_calc(coords_sign = 1) expects the winding that axis_dominant_v3_to_m3_negate yields for a CCW face: clockwise in x/y
     let lpr: Vec<u32> = lp.iter().rev().copied().collect();
@@ -349,8 +358,44 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
 /// SOLIDIFY modifier (simple mode, offset -1, rim on): originals stay, the copy moves by -thickness along the vertex normal
 pub fn solidify(m: &LMesh, thickness: f32) -> LMesh {
     let n = m.v.len();
-    let mesh = crate::mesh::Mesh { pos: m.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(), faces: m.f.clone(), uv: vec![] };
-    let nrm = super::legtex::vert_normals(&mesh);
+    // zero-area triangles (collinear outline vertices) would contribute the (0,0,1) fallback normal: drop them for the normal calculation only
+    let nondeg: Vec<Vec<u32>> = m
+        .f
+        .iter()
+        .filter(|fc| {
+            if fc.len() != 3 {
+                return true;
+            }
+            let (a, b, c) = (m.v[fc[0] as usize], m.v[fc[1] as usize], m.v[fc[2] as usize]);
+            let cr = [(b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]), (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]), (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])];
+            cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2] > 0.0
+        })
+        .cloned()
+        .collect();
+    let mesh = crate::mesh::Mesh { pos: m.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(), faces: nondeg, uv: vec![] };
+    let mut nrm = super::legtex::vert_normals(&mesh);
+    // planar xy fill: sliver triangles make the angle-weighted normal sign noisy; Blender's triangulation has none, so use the fill orientation
+    if m.v.iter().all(|p| p[2] == m.v[0][2]) && !m.f.is_empty() {
+        let mut area = 0.0f64;
+        for fc in &m.f {
+            for k in 1..fc.len() - 1 {
+                let (a, b, c) = (m.v[fc[0] as usize], m.v[fc[k] as usize], m.v[fc[k + 1] as usize]);
+                area += ((b[0] - a[0]) as f64) * ((c[1] - a[1]) as f64) - ((b[1] - a[1]) as f64) * ((c[0] - a[0]) as f64);
+            }
+        }
+        let sg = if area >= 0.0 { 1.0f32 } else { -1.0 };
+        let mut used = vec![false; n];
+        for fc in &m.f {
+            for &i in fc {
+                used[i as usize] = true;
+            }
+        }
+        for i in 0..n {
+            if used[i] {
+                nrm[i] = [0.0, 0.0, sg];
+            }
+        }
+    }
     let ofs_orig = -(((-(-1.0f32) + 1.0) * 0.5) * thickness);
     let ofs_new = thickness + ofs_orig;
     let mut o = LMesh::default();
@@ -577,7 +622,7 @@ pub fn bsd_qsort<T: Copy>(a: &mut [T], cmp: &dyn Fn(&T, &T) -> i32) {
         pb += 1;
         pc -= 1;
     }
-    if !swap_cnt {
+    if !swap_cnt && std::env::var("QSORT_NOINS").is_err() {
         insertion(a);
         return;
     }
