@@ -3,6 +3,7 @@
 pub mod bevel;
 pub mod bvh;
 pub mod cdata;
+pub mod hull;
 pub mod edgenet;
 pub mod isect;
 pub mod kern;

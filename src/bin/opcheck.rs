@@ -374,9 +374,20 @@ fn r_displace(c: &Case, p: &Value) -> Res {
     Ok(m)
 }
 
-fn r_convex_hull(c: &Case, _p: &Value) -> Res {
-    let pts: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    Ok(from_gn(&infinigen::gn::nodes_mesh::hull_mesh(&pts)))
+fn r_convex_hull(c: &Case, p: &Value) -> Res {
+    use infinigen::bm::*;
+    let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+    let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
+    let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
+    let mut hp = infinigen::bm::hull::HullParams::default();
+    hp.use_existing_faces = pb(p, "use_existing_faces", true);
+    hp.delete_unused = pb(p, "delete_unused", true);
+    hp.make_holes = pb(p, "make_holes", false);
+    hp.join_triangles = pb(p, "join_triangles", true);
+    if !infinigen::bm::hull::convex_hull(&mut bm, &hp) {
+        return Err("convex_hull: cancelled".into());
+    }
+    Ok(bm_out(&bm))
 }
 
 fn r_remesh(c: &Case, p: &Value) -> Res {
@@ -406,7 +417,7 @@ const OPS: &[(&str, &str, fn(&Case, &Value) -> Res)] = &[
     ("triangulate_op", "exact", r_triangulate_op),
     ("remove_doubles", "exact", r_remove_doubles),
     ("displace", "exact", r_displace),
-    ("convex_hull", "surface", r_convex_hull),
+    ("convex_hull", "exact", r_convex_hull),
     ("remesh", "surface", r_remesh),
 ];
 
