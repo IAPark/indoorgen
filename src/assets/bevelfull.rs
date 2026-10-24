@@ -2036,51 +2036,88 @@ impl<'a> Bevel<'a> {
 }
 
 // ------------------------------------------------------------------------------------------ offset adjustment
-fn solve_lsq(a: &Vec<Vec<f64>>, b: &Vec<f64>, np: usize) -> Vec<f64> {
-    // normal equations with Gaussian elimination (np is small)
-    let nrows = a.len();
-    let mut m = vec![vec![0.0; np + 1]; np];
-    for i in 0..np {
-        for j in 0..np {
-            let mut s = 0.0;
-            for r in 0..nrows {
-                s += a[r][i] * a[r][j];
-            }
-            m[i][j] = s;
-        }
-        let mut s = 0.0;
-        for r in 0..nrows {
-            s += a[r][i] * b[r];
-        }
-        m[i][np] = s;
-    }
-    for i in 0..np {
-        let mut p = i;
-        for r in i + 1..np {
-            if m[r][i].abs() > m[p][i].abs() {
-                p = r;
+fn solve_lsq(a: &Vec<Vec<(usize, f64)>>, b: &Vec<f64>, np: usize) -> Vec<f64> {
+    // least squares min |A x - b| for the (sparse, <= 3 entries per row) chain matrix.
+    if np <= 48 {
+        // dense normal equations with Gaussian elimination
+        let mut m = vec![vec![0.0; np + 1]; np];
+        for (r, row) in a.iter().enumerate() {
+            for &(i, vi) in row {
+                for &(j, vj) in row {
+                    m[i][j] += vi * vj;
+                }
+                m[i][np] += vi * b[r];
             }
         }
-        m.swap(i, p);
-        let d = m[i][i];
-        if d.abs() < 1e-18 {
-            continue;
-        }
-        for c in i..=np {
-            m[i][c] /= d;
-        }
-        for r in 0..np {
-            if r != i {
-                let f = m[r][i];
-                if f != 0.0 {
-                    for c in i..=np {
-                        m[r][c] -= f * m[i][c];
+        for i in 0..np {
+            let mut p = i;
+            for r in i + 1..np {
+                if m[r][i].abs() > m[p][i].abs() {
+                    p = r;
+                }
+            }
+            m.swap(i, p);
+            let d = m[i][i];
+            if d.abs() < 1e-18 {
+                continue;
+            }
+            for c in i..=np {
+                m[i][c] /= d;
+            }
+            for r in 0..np {
+                if r != i {
+                    let f = m[r][i];
+                    if f != 0.0 {
+                        for c in i..=np {
+                            m[r][c] -= f * m[i][c];
+                        }
                     }
                 }
             }
         }
+        return (0..np).map(|i| m[i][np]).collect();
     }
-    (0..np).map(|i| m[i][np]).collect()
+    // CGNR on the sparse matrix
+    let atv = |v: &[f64]| -> Vec<f64> {
+        let mut o = vec![0.0; np];
+        for (r, row) in a.iter().enumerate() {
+            for &(c, x) in row {
+                o[c] += x * v[r];
+            }
+        }
+        o
+    };
+    let av = |x: &[f64]| -> Vec<f64> { a.iter().map(|row| row.iter().map(|&(c, v)| v * x[c]).sum()).collect() };
+    let mut x = vec![0.0; np];
+    let mut r = atv(b);
+    let mut p = r.clone();
+    let mut rs: f64 = r.iter().map(|v| v * v).sum();
+    let rs0 = rs.max(1e-300);
+    for _ in 0..20 * np.max(100) {
+        if rs < 1e-30 * rs0 {
+            break;
+        }
+        let q = av(&p);
+        let qq: f64 = q.iter().map(|v| v * v).sum();
+        if qq < 1e-300 {
+            break;
+        }
+        let alpha = rs / qq;
+        for i in 0..np {
+            x[i] += alpha * p[i];
+        }
+        let aq = atv(&q);
+        for i in 0..np {
+            r[i] -= alpha * aq[i];
+        }
+        let rs2: f64 = r.iter().map(|v| v * v).sum();
+        let beta = rs2 / rs;
+        for i in 0..np {
+            p[i] = r[i] + beta * p[i];
+        }
+        rs = rs2;
+    }
+    x
 }
 
 impl<'a> Bevel<'a> {
@@ -2097,30 +2134,37 @@ impl<'a> Bevel<'a> {
         }
         let np = chain.len();
         let nrows = if iscycle { 3 * np } else { 3 * np - 3 };
-        let mut a = vec![vec![0.0; np]; nrows];
+        let mut a: Vec<Vec<(usize, f64)>> = vec![vec![]; nrows];
         let mut b = vec![0.0; nrows];
         let weight = 0.2;
+        let add = |a: &mut Vec<Vec<(usize, f64)>>, r: usize, c: usize, v: f64| {
+            if let Some(e) = a[r].iter_mut().find(|e| e.0 == c) {
+                e.1 += v;
+            } else {
+                a[r].push((c, v));
+            }
+        };
         for (i, &(bi, vi)) in chain.iter().enumerate() {
             let bnd = &self.bvs[bi].vm.bounds[vi];
             if iscycle || i < np - 1 {
                 let eright = bnd.efirst.unwrap();
                 let nxt = bnd.adjchain.unwrap();
                 let enextleft = self.bvs[nxt.0].vm.bounds[nxt.1].elast.unwrap();
-                a[i][i] += 1.0;
+                add(&mut a, i, i, 1.0);
                 if iscycle {
-                    a[if i > 0 { i - 1 } else { np - 1 }][i] += -bnd.sinratio;
+                    add(&mut a, if i > 0 { i - 1 } else { np - 1 }, i, -bnd.sinratio);
                 } else if i > 0 {
-                    a[i - 1][i] += -bnd.sinratio;
+                    add(&mut a, i - 1, i, -bnd.sinratio);
                 }
                 let row = if iscycle { np + 2 * i } else { np - 1 + 2 * i };
-                a[row][i] += weight;
+                add(&mut a, row, i, weight);
                 b[row] += weight * self.bvs[bi].edges[eright].offset_r;
                 let row = row + 1;
                 let col = if i == np - 1 { 0 } else { i + 1 };
-                a[row][col] += weight * self.bvs[nxt.0].vm.bounds[nxt.1].sinratio;
+                add(&mut a, row, col, weight * self.bvs[nxt.0].vm.bounds[nxt.1].sinratio);
                 b[row] += weight * self.bvs[nxt.0].edges[enextleft].offset_l;
             } else {
-                a[i - 1][i] += -1.0;
+                add(&mut a, i - 1, i, -1.0);
             }
         }
         let sol = solve_lsq(&a, &b, np);
