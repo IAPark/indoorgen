@@ -52,6 +52,7 @@ pub mod hwexact;
 pub mod bathfree;
 pub mod pangeom;
 pub mod prismcut;
+pub mod potbars;
 pub mod ksink;
 pub mod books;
 pub mod textdraw;
