@@ -816,3 +816,43 @@ pub fn polygon_angles(r: &mut Rng, n: usize, min_angle: f64, max_angle: f64) -> 
     a.sort_by(|x, y| x.partial_cmp(y).unwrap());
     a
 }
+
+/// kinds that have an exact port so far
+pub fn supported(fs: u64) -> bool {
+    matches!(kind_for_seed(fs), Kind::Agave | Kind::Maize | Kind::Grasses | Kind::Tussock | Kind::Banana | Kind::Taro)
+}
+
+/// PlantContainerFactory.create_asset: origin2lowest(plant, approximate=True), then scale = min([side, side, top] / max|bound_box|), location z = dirt_z.
+/// Returns the final vertex positions (float32 math as the object transform apply on join) and the scale.
+pub fn fit_in_container(m: &LMesh, side: f64, top: f64, dirt_z: f64) -> (Vec<F3>, f32) {
+    let n = m.v.len();
+    let zs: Vec<f32> = m.v.iter().map(|p| p[2]).collect();
+    let order = np_argsort_f32(&zs);
+    let k = n / 10;
+    let mut mean = [0f64; 3];
+    for &i in &order[..k] {
+        for c in 0..3 {
+            mean[c] += m.v[i][c] as f64;
+        }
+    }
+    for c in 0..3 {
+        mean[c] /= k.max(1) as f64;
+    }
+    let zmin = m.v[order[0]][2];
+    let loc = [(-mean[0]) as f32, (-mean[1]) as f32, -zmin];
+    let mut v: Vec<F3> = m.v.iter().map(|p| [p[0] + loc[0], p[1] + loc[1], p[2] + loc[2]]).collect();
+    let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    for p in &v {
+        for c in 0..3 {
+            lo[c] = lo[c].min(p[c]);
+            hi[c] = hi[c].max(p[c]);
+        }
+    }
+    let mx = |c: usize| (lo[c].abs()).max(hi[c].abs()) as f64;
+    let scale = (side / mx(0)).min(side / mx(1)).min(top / mx(2)) as f32;
+    let lz = dirt_z as f32;
+    for p in v.iter_mut() {
+        *p = [p[0] * scale, p[1] * scale, p[2] * scale + lz];
+    }
+    (v, scale)
+}

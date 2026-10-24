@@ -53,6 +53,20 @@ fn main() {
         }
         return;
     }
+    if a[1] == "container" {
+        let fs: u64 = a[2].parse().unwrap();
+        let inst: u64 = a[3].parse().unwrap();
+        let f = infinigen::assets::make_factory("LargePlantContainerFactory", fs).unwrap();
+        let asset = f.asset(inst);
+        let d = &a[4];
+        for (k, pi) in [(0usize, 0usize), (2, 1), (1, 2)] {
+            if let Some(p) = asset.parts.get(pi) {
+                let v: Vec<[f32; 3]> = p.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+                write(&format!("{d}/90{k}_part_out.bin"), &v, &p.mesh.faces, &[]);
+            }
+        }
+        return;
+    }
     if a[1] == "leaf" {
         let xs: Vec<f64> = a[2].split(',').map(|x| x.parse().unwrap()).collect();
         let ys: Vec<f64> = a[3].split(',').map(|x| x.parse().unwrap()).collect();
