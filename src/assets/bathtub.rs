@@ -14,7 +14,7 @@ pub struct Built {
     pub stages: Vec<(String, String, Mesh)>,
 }
 
-fn stage(st: &mut Vec<(String, String, Mesh)>, name: &str, key: &str, m: &Mesh) {
+pub fn stage(st: &mut Vec<(String, String, Mesh)>, name: &str, key: &str, m: &Mesh) {
     st.push((name.to_string(), key.to_string(), m.clone()));
 }
 

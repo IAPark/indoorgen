@@ -316,24 +316,26 @@ impl Factory for Bathtub {
 }
 
 pub struct Sink {
-    width: f64,
-    size: f64,
-    depth: f64,
-    alcove: bool,
-    has_extrude: bool,
-    has_stand: bool,
-    alcove_levels: usize,
-    thickness: f64,
-    size_extrude: f64,
-    tap_offset: f64,
-    stand_radius: f64,
-    stand_bottom: f64,
-    stand_height: f64,
-    stand_circular: bool,
-    disp_x: f64,
-    disp_y: f64,
-    tap_h: f64,
-    seed: u64,
+    pub width: f64,
+    pub size: f64,
+    pub depth: f64,
+    pub alcove: bool,
+    pub has_extrude: bool,
+    pub has_stand: bool,
+    pub alcove_levels: usize,
+    pub thickness: f64,
+    pub size_extrude: f64,
+    pub tap_offset: f64,
+    pub stand_radius: f64,
+    pub stand_bottom: f64,
+    pub stand_height: f64,
+    pub stand_circular: bool,
+    pub disp_x: f64,
+    pub disp_y: f64,
+    pub tap_h: f64,
+    pub seed: u64,
+    pub tub: Bathtub,
+    pub fseed: u64,
 }
 
 impl Sink {
@@ -376,7 +378,8 @@ impl Sink {
             has_extrude = true;
             has_stand = true;
         }
-        Sink { width, size, depth, alcove, has_extrude, has_stand, alcove_levels, thickness, size_extrude, tap_offset, stand_radius, stand_bottom, stand_height, stand_circular, disp_x: tub.disp_x[0], disp_y: tub.disp_y, tap_h: r.uniform(0.5, 1.0), seed: r.randint(0, 1_000_000) as u64 }
+        let tub2 = Bathtub { width, size, depth, alcove, thickness, alcove_levels, disp_x: [tub.disp_x[0], tub.disp_x[0]], has_curve: tub.has_curve, has_legs: tub.has_legs, disp_y: tub.disp_y, leg_height: tub.leg_height, leg_radius: tub.leg_radius, hole_radius: tub.hole_radius, seed: tub.seed, taper: tub.taper, fseed: 0, leg_side: tub.leg_side, leg_y_scale: tub.leg_y_scale, leg_sub: tub.leg_sub, stretch: tub.stretch, beveler_amount: tub.beveler_amount };
+        Sink { width, size, depth, alcove, has_extrude, has_stand, alcove_levels, thickness, size_extrude, tap_offset, stand_radius, stand_bottom, stand_height, stand_circular, disp_x: tub.disp_x[0], disp_y: tub.disp_y, tap_h: r.uniform(0.5, 1.0), seed: r.randint(0, 1_000_000) as u64, tub: tub2, fseed: 0 }
     }
 }
 
@@ -386,126 +389,17 @@ impl Factory for Sink {
         a.cuboid([-(self.size_extrude + 1.0) * self.size, 0.0, if self.has_stand { -self.stand_height } else { 0.0 }], [0.0, self.width, self.depth], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
-    fn asset(&self, _i: u64) -> Asset {
-        use super::geomkit::{chaikin, limb};
+    fn asset(&self, i: u64) -> Asset {
         let ceramic = spec_material("sink_ceramic", serde_json::json!({"cls": "ceramic.Ceramic", "kwargs": {}, "seed": self.seed}), [0.92, 0.92, 0.92]);
         let metal = spec_material("sink_metal", serde_json::json!({"cls": "metal.MetalBasic", "kwargs": {}, "seed": self.seed + 1}), [0.7, 0.7, 0.72]);
-        let (w, s, d, t) = (self.width, self.size, self.depth, self.thickness);
-        let (dx, dy) = (self.disp_x.min(w * 0.2), self.disp_y.min(s * 0.2));
-        let contour = |ins: f64, i: f64| -> Vec<[f64; 2]> { vec![[ins + dx * i, ins + dy * i], [w - ins - dx * i, ins + dy * i], [w - ins - dx * i, s - ins - dy * i], [ins + dx * i, s - ins - dy * i]] };
-        let smooth = if self.alcove_levels == 0 { 0 } else { self.alcove_levels + 1 };
+        let mut r = inst_rng(self.fseed, i);
+        let b = super::bathsink::build(self, &mut r);
         let mut a = Asset::default();
-        let mut m = Mesh::new();
-        let c = [w / 2.0, s / 2.0];
-        if self.alcove {
-            // drop-in: slab-walled box with the basin cut in
-            // drop-in: solid slab whose basin is the (subsurf-shrunk, rounded) cutter
-            let outer = contour(0.0, 0.0);
-            let (cx, cy) = (c[0], c[1]);
-            let (hx, hy) = (w / 2.0, s / 2.0);
-            let n = 28;
-            let ell = |sc: f64| -> Vec<[f64; 2]> {
-                (0..n).map(|i| {
-                    let a = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
-                    let (co, si) = (a.cos(), a.sin());
-                    let e = 0.25; // superellipse exponent: boxy when smoothing is light
-                    let kx = co.abs().powf(2.0 / (2.0 + 2.0 * e)).copysign(co);
-                    let ky = si.abs().powf(2.0 / (2.0 + 2.0 * e)).copysign(si);
-                    [cx + hx * 0.78 * sc * kx, cy + hy * 0.78 * sc * ky]
-                }).collect()
-            };
-            let rect_out: Vec<[f64; 2]> = ell(1.0).iter().map(|p| {
-                let (ex, ey) = (p[0] - cx, p[1] - cy);
-                let k = (hx / ex.abs().max(1e-9)).min(hy / ey.abs().max(1e-9));
-                [cx + ex * k, cy + ey * k]
-            }).collect();
-            let _ = outer;
-            let (ro_t, ro_b) = (ring3(&rect_out, d), ring3(&rect_out, 0.0));
-            loft(&[ro_t.clone(), ro_b.clone()], &mut m, true);
-            cap_fan(&ro_b, false, &mut m);
-            loft(&[ro_t, ring3(&ell(1.0), d)], &mut m, true);
-            let k = 8;
-            let rings: Vec<Vec<V3>> = (0..=k).map(|q| {
-                let u = q as f64 / k as f64;
-                let sc = (1.0 - (1.0 - u).powi(2)).max(0.0).sqrt() * 0.9 + 0.1 * u;
-                ell(sc).iter().map(|p| [p[0], p[1], t + (d - t) * u]).collect()
-            }).collect();
-            loft(&rings, &mut m, false);
-            cap_fan(&rings[0], true, &mut m);
-        } else {
-            let rim = chaikin(&contour(0.0, 0.0), smooth.max(2).min(3));
-            let n = 10;
-            let ring_at = |u: f64, off: f64| -> Vec<V3> {
-                let sc = 0.28 + 0.72 * (1.0 - (1.0 - u).powi(2)).max(0.0).sqrt();
-                rim.iter().map(|p| {
-                    let (ex, ey) = (p[0] - c[0], p[1] - c[1]);
-                    let l = (ex * ex + ey * ey).sqrt().max(1e-9);
-                    [c[0] + ex * sc + ex / l * off, c[1] + ey * sc + ey / l * off, d * u]
-                }).collect()
-            };
-            let inner: Vec<Vec<V3>> = (0..=n).map(|q| ring_at(q as f64 / n as f64, -t)).collect();
-            let outer: Vec<Vec<V3>> = (0..=n).map(|q| ring_at(q as f64 / n as f64, 0.0)).collect();
-            loft(&outer, &mut m, false);
-            loft(&inner, &mut m, true);
-            loft(&[inner[n].clone(), outer[n].clone()], &mut m, true);
-            cap_fan(&outer[0], false, &mut m);
-            cap_fan(&inner[0], true, &mut m);
+        a.mesh(b.body, &ceramic, None);
+        a.mesh(b.hole, &metal, None);
+        if let Some(t) = b.tap {
+            a.mesh(t, &metal, None);
         }
-        let b = m.bounds();
-        a.mesh(m, &ceramic, Some(b));
-        if self.has_extrude {
-            let deck = Mesh::cuboid([0.0, s, d - 0.025], [w, s * (1.0 + self.size_extrude), d]);
-            let db = deck.bounds();
-            a.mesh(deck, &ceramic, Some(db));
-        }
-        if self.has_stand {
-            let h = self.stand_height;
-            let (r0, r1) = (self.stand_radius, self.stand_bottom);
-            let stand = if self.stand_circular {
-                Mesh::frustum(c[0], c[1], -h, 0.0, r1, r0, 16)
-            } else {
-                let mut q = Mesh::new();
-                let top = [[c[0] - r0, c[1] - r0], [c[0] + r0, c[1] - r0], [c[0] + r0, c[1] + r0], [c[0] - r0, c[1] + r0]];
-                let bot = [[c[0] - r1, c[1] - r1], [c[0] + r1, c[1] - r1], [c[0] + r1, c[1] + r1], [c[0] - r1, c[1] + r1]];
-                loft(&[ring3(&top, 0.0), ring3(&bot, -h)], &mut q, false);
-                cap_fan(&ring3(&bot, -h), false, &mut q);
-                q
-            };
-            let sb = stand.bounds();
-            a.mesh(stand, &ceramic, Some(sb));
-        }
-        let hole = Mesh::cylinder(c[0], c[1], t, t + 0.006, 0.018, 14);
-        let hb = hole.bounds();
-        a.mesh(hole, &metal, Some(hb));
-        if self.has_extrude {
-            // gooseneck tap on the deck
-            let (tx, ty) = (w / 2.0, s * (1.0 + self.size_extrude * 0.45));
-            let hh = 0.16 * self.tap_h + 0.08;
-            let base = Mesh::cylinder(tx, ty, d, d + 0.02, 0.025, 16);
-            let bb = base.bounds();
-            a.mesh(base, &metal, Some(bb));
-            let pts: Vec<V3> = (0..=10)
-                .map(|k| {
-                    let u = k as f64 / 10.0;
-                    let ang = std::f64::consts::PI * 0.5 * u;
-                    [tx, ty - (1.0 - ang.cos()) * 0.0 - 0.1 * (1.0 - ang.cos()) * (u), d + 0.02 + hh * (ang.sin()) ]
-                })
-                .collect();
-            for k in 0..pts.len() - 1 {
-                let l = limb(pts[k], pts[k + 1], 0.011, 0.011, true);
-                let lb = l.bounds();
-                a.mesh(l, &metal, Some(lb));
-            }
-            let top = pts[pts.len() - 1];
-            let spout = limb(top, [top[0], top[1] - 0.12, top[2] - 0.03], 0.011, 0.009, true);
-            let sb = spout.bounds();
-            a.mesh(spout, &metal, Some(sb));
-            let lever = limb([tx, ty, d + 0.04], [tx + 0.06, ty + 0.02, d + 0.05], 0.007, 0.007, true);
-            let lb = lever.bounds();
-            a.mesh(lever, &metal, Some(lb));
-        }
-        // python: x = -y, y = x after the +90 degree rotation about z
-        a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
         a
     }
 }
@@ -639,8 +533,13 @@ pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
             b.fseed = fseed;
             Box::new(b)
         }
-        "BathroomSinkFactory" => Box::new(Sink::new(rng, false)),
-        "StandingSinkFactory" => Box::new(Sink::new(rng, true)),
+        "BathroomSinkFactory" | "StandingSinkFactory" => {
+            let mut k = Sink::new(rng, c == "StandingSinkFactory");
+            k.fseed = fseed;
+            k.tub.fseed = fseed;
+            k.tub.alcove = k.alcove;
+            Box::new(k)
+        }
         "HardwareFactory" => {
             let mut h = Hardware::new(rng);
             h.fseed = fseed;
