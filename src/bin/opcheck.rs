@@ -7,7 +7,8 @@
 //! Without --blender only the Rust result is produced (written to --out). Reports vertex/face counts, exact-order max error, face-list
 //! identity (exact and up to cyclic rotation), nearest-neighbour vertex-set match both ways, symmetric surface distance (sampled),
 //! and the FIRST differing vertex / face with its neighbourhood (indices + coords) so the bug can be located.
-//! Level reached: `exact` (same order, faces) > `surface` (same surface, any order) > `none`.
+//! Level reached: `exact` (same vertex order, same faces in the same order) > `verts` (same vertex order, same face set, face order
+//! differs) > `surface` (same surface, any order) > `none`.  Params may carry "_tol" and "_require" (harness meta, not sent to Blender).
 //! Exit code: 0 = required level reached (default requirement = the table's level for the op, see OPS), 1 = mismatch, 2 = op/params
 //! not supported by the Rust port or a Rust error.  The last stdout line is machine readable:
 //!   RESULT <op> <case-name> level=<exact|surface|none> required=<..> status=<OK|MISMATCH|UNSUPPORTED> ...
@@ -169,6 +170,9 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
         mat_nr: -1,
     };
     if ps(p, "affect", "EDGES") == "VERTICES" {
+        return Err("bevel: affect=VERTICES (vertex-only bevel) not ported: bm_mesh_bevel has no vertex_only mode".into());
+    }
+    if false {
         for v in bm.vert_ids() {
             bm.verts[v].flag &= !ELEM_TAG;
         }
@@ -425,11 +429,27 @@ fn nn_dists(a: &[[f64; 3]], b: &[[f64; 3]]) -> Vec<(f64, usize)> {
     a.iter().map(|p| b.iter().enumerate().map(|(j, q)| (dist(*p, *q), j)).fold((f64::MAX, 0), |m, x| if x.0 < m.0 { x } else { m })).collect()
 }
 
+/// triangles covering the surface: tris as is; quads with BOTH diagonals (non-planar quads / different split = same surface);
+/// n-gons ear-clipped (concave faces from booleans)
 fn tris_of(m: &Mesh) -> Vec<[[f64; 3]; 3]> {
     let mut t = vec![];
     for f in &m.faces {
-        for k in 1..f.len().saturating_sub(1) {
-            t.push([m.pos[f[0] as usize], m.pos[f[k] as usize], m.pos[f[k + 1] as usize]]);
+        let p = |i: usize| m.pos[f[i] as usize];
+        match f.len() {
+            0..=2 => {}
+            3 => t.push([p(0), p(1), p(2)]),
+            4 => {
+                t.push([p(0), p(1), p(2)]);
+                t.push([p(0), p(2), p(3)]);
+                t.push([p(1), p(2), p(3)]);
+                t.push([p(1), p(3), p(0)]);
+            }
+            _ => {
+                let co: Vec<[f32; 3]> = f.iter().map(|&i| [m.pos[i as usize][0] as f32, m.pos[i as usize][1] as f32, m.pos[i as usize][2] as f32]).collect();
+                for tr in infinigen::assets::polyfill::triangulate_ngon_plain(&co) {
+                    t.push([p(tr[0] as usize), p(tr[1] as usize), p(tr[2] as usize)]);
+                }
+            }
         }
     }
     t
@@ -626,14 +646,15 @@ fn compare(rs: &Mesh, bl: &Mesh, tol: f64) -> Cmp {
         }
     }
     let exact = same_nv && same_nf && order_err <= tol && faces_cyc;
+    let verts_exact = same_nv && same_nf && order_err <= tol && faces_set;
     let surface = surf_ok && nn_ok;
-    let _ = faces_set;
-    Cmp { level: if exact { "exact" } else if surface { "surface" } else { "none" } }
+    Cmp { level: if exact { "exact" } else if verts_exact { "verts" } else if surface { "surface" } else { "none" } }
 }
 
 fn rank(l: &str) -> i32 {
     match l {
-        "exact" => 2,
+        "exact" => 3,
+        "verts" => 2,
         "surface" => 1,
         _ => 0,
     }
@@ -661,7 +682,12 @@ fn main() {
         j[&k] = params[&k].clone();
         params.as_object_mut().unwrap().remove(&k);
     }
-    let tol: f64 = arg("--tol").map_or(1e-5, |s| s.parse().unwrap());
+    // harness meta keys inside params: "_tol" (comparison tolerance), "_require" (level floor for this case); ignored by Blender
+    let meta_tol = params.get("_tol").and_then(|x| x.as_f64());
+    let meta_req = params.get("_require").and_then(|x| x.as_str()).map(|s| s.to_string());
+    params.as_object_mut().unwrap().remove("_tol");
+    params.as_object_mut().unwrap().remove("_require");
+    let tol: f64 = arg("--tol").map(|s| s.parse().unwrap()).or(meta_tol).unwrap_or(1e-5);
     let name = j.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()).unwrap_or_else(|| std::path::Path::new(&inp).file_stem().unwrap().to_string_lossy().to_string());
     let (_, req_default, f) = match OPS.iter().find(|o| o.0 == op) {
         Some(o) => *o,
@@ -670,12 +696,20 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let required = arg("--require").unwrap_or(req_default.to_string());
+    let required = arg("--require").or(meta_req).unwrap_or(req_default.to_string());
     let round32 = true;
     let mesh = mesh_of(&j["verts"], &j["polys"], round32);
     j["verts"] = json!(mesh.pos);
     let blender_json: Option<Value> = arg("--blender").map(|bp| serde_json::from_str(&std::fs::read_to_string(&bp).unwrap()).unwrap());
     let edges = blender_json.as_ref().and_then(|b| b.get("in_edges")).map(|e| e.as_array().unwrap().iter().map(|x| [x[0].as_u64().unwrap() as u32, x[1].as_u64().unwrap() as u32]).collect());
+    // parameters Blender actually used (python fills its defaults, e.g. the DISPLACE texture) are the base, explicit params override
+    if let Some(bpm) = blender_json.as_ref().and_then(|b| b.get("params")).and_then(|x| x.as_object()) {
+        for (k, v) in bpm {
+            if params.get(k).is_none() && !k.starts_with("sel_") {
+                params[k] = v.clone();
+            }
+        }
+    }
     let c = Case { j, mesh, edges };
     let t0 = std::time::Instant::now();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&c, &params)));

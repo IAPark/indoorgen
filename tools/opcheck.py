@@ -291,6 +291,8 @@ def run(op, case, params):
     del CALLS[:]
     c = dict(case)
     p = dict(c.get("params", {})); p.update(params)
+    for k in [k for k in p if k.startswith("_")]:   # harness meta (read by the rust side only)
+        p.pop(k)
     for k in [k for k in p if k.startswith("sel_") or k in ("loops", "other")]:   # selections may be given in --params too
         c[k] = p.pop(k)
     bpy, ob, used = OPS[op](c, p)
