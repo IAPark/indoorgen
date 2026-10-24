@@ -14,7 +14,7 @@ fn main() {
         let f = infinigen::assets::monocot::MonocotFactory::new(fs);
         let m = f.mesh(inst);
         println!("monocot {fs}: {} verts {} faces in {:.1}s", m.v.len(), m.f.len(), t0.elapsed().as_secs_f64());
-        if let Ok(d) = std::env::var("MONOTRACE") {
+        if let Ok(d) = std::env::var("MONOTRACE").or(std::env::var("MONOFINAL")) {
             write(&format!("{d}/999_final_out.bin"), &m.v, &m.f, &m.e);
         }
         return;

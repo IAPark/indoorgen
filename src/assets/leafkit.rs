@@ -238,18 +238,33 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
         adj[e[0] as usize].push(e[1]);
         adj[e[1] as usize].push(e[0]);
     }
-    let start = (0..n).find(|&i| !adj[i].is_empty()).unwrap_or(0) as u32;
+    // prune dangling wire chains (welded curve stems): the fill covers the 2-core loop only
+    let mut deg: Vec<usize> = adj.iter().map(|a| a.len()).collect();
+    let mut removed = vec![false; n];
+    let mut stack: Vec<usize> = (0..n).filter(|&i| deg[i] == 1).collect();
+    while let Some(v) = stack.pop() {
+        if removed[v] {
+            continue;
+        }
+        removed[v] = true;
+        for &u in &adj[v] {
+            let u = u as usize;
+            if !removed[u] {
+                deg[u] -= 1;
+                if deg[u] == 1 {
+                    stack.push(u);
+                }
+            }
+        }
+    }
+    let start = (0..n).find(|&i| !removed[i] && !adj[i].is_empty()).unwrap_or(0) as u32;
     let mut lp = vec![start];
     let mut prev = u32::MAX;
     let mut cur = start;
     loop {
-        let nxt = adj[cur as usize].iter().copied().find(|&x| x != prev && x != cur);
+        let nxt = adj[cur as usize].iter().copied().find(|&x| x != prev && x != cur && !removed[x as usize]);
         let Some(nx) = nxt else { break };
-        if nx == start {
-            break;
-        }
-        // do not walk back into a visited vertex (degenerate outlines)
-        if lp.contains(&nx) {
+        if nx == start || lp.contains(&nx) {
             break;
         }
         lp.push(nx);
@@ -266,9 +281,24 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
         inc[e[0] as usize].push(ei as u32);
         inc[e[1] as usize].push(ei as u32);
     }
-    let mut best: (f32, f32) = (-1.0, 1.0);
-    for v in 0..n {
+    // scanfill vertex order = first appearance in the edge list; qsort (BSD / macOS) over (value, normal.z), descending by value
+    let mut order: Vec<u32> = vec![];
+    {
+        let mut seen = vec![false; n];
+        for e in &m.e {
+            for &v in e {
+                if !seen[v as usize] {
+                    seen[v as usize] = true;
+                    order.push(v);
+                }
+            }
+        }
+    }
+    let mut nors: Vec<(f32, f32)> = vec![];
+    for &vv in &order {
+        let v = vv as usize;
         if inc[v].len() != 2 {
+            nors.push((-1.0, 0.0));
             continue;
         }
         let other = |ei: u32| {
@@ -283,10 +313,10 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
         let value = cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2];
         let (la, lb) = (da[0] * da[0] + da[1] * da[1] + da[2] * da[2], db[0] * db[0] + db[1] * db[1] + db[2] * db[2]);
         let nz = if la > lb { -cr[2] } else { cr[2] };
-        if value > best.0 {
-            best = (value, nz);
-        }
+        nors.push((value, nz));
     }
+    bsd_qsort(&mut nors, &|a: &(f32, f32), b: &(f32, f32)| if a.0 < b.0 { 1 } else if a.0 > b.0 { -1 } else { 0 });
+    let best = nors[0];
     let want_ccw = best.1 >= 0.0;
     // polyfill_calc(coords_sign = 1) expects the winding that axis_dominant_v3_to_m3_negate yields for a CCW face: clockwise in x/y
     let lpr: Vec<u32> = lp.iter().rev().copied().collect();
@@ -303,6 +333,14 @@ pub fn fill_outline(m: &LMesh) -> LMesh {
         } else {
             o.f.push(vec![a, b, c]);
         }
+    }
+    if std::env::var("LEAFDBG").is_ok() {
+        let pa = signed_area_xy(&m.v, &lp).abs();
+        let ta: f32 = o.f.iter().map(|t| {
+            let (a, b, c) = (o.v[t[0] as usize], o.v[t[1] as usize], o.v[t[2] as usize]);
+            ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
+        }).sum();
+        eprintln!("fill_outline: loop {} of {} verts, polygon area {pa} tri area {ta}", lp.len(), n);
     }
     o.ensure_face_edges();
     o
@@ -458,4 +496,110 @@ pub fn leaf(x: &[f64], y: &[f64], face_size: Option<f64>) -> LMesh {
         o.trace("WELD");
     }
     o.largest_component()
+}
+
+/// Apple / FreeBSD libc qsort (Bentley-McIlroy 3-way partition, insertion sort for n < 7 or when a pass swapped nothing), needed for tie behaviour
+pub fn bsd_qsort<T: Copy>(a: &mut [T], cmp: &dyn Fn(&T, &T) -> i32) {
+    let n = a.len();
+    if n < 2 {
+        return;
+    }
+    let med3 = |a: &[T], x: usize, y: usize, z: usize| -> usize {
+        if cmp(&a[x], &a[y]) < 0 {
+            if cmp(&a[y], &a[z]) < 0 { y } else if cmp(&a[x], &a[z]) < 0 { z } else { x }
+        } else if cmp(&a[y], &a[z]) > 0 {
+            y
+        } else if cmp(&a[x], &a[z]) < 0 {
+            x
+        } else {
+            z
+        }
+    };
+    let insertion = |a: &mut [T]| {
+        for pm in 1..a.len() {
+            let mut pl = pm;
+            while pl > 0 && cmp(&a[pl - 1], &a[pl]) > 0 {
+                a.swap(pl, pl - 1);
+                pl -= 1;
+            }
+        }
+    };
+    if n < 7 {
+        insertion(a);
+        return;
+    }
+    let mut pm = n / 2;
+    if n > 7 {
+        let mut pl = 0;
+        let mut pn = n - 1;
+        if n > 40 {
+            let d = n / 8;
+            pl = med3(a, pl, pl + d, pl + 2 * d);
+            pm = med3(a, pm - d, pm, pm + d);
+            pn = med3(a, pn - 2 * d, pn - d, pn);
+        }
+        pm = med3(a, pl, pm, pn);
+    }
+    a.swap(0, pm);
+    let (mut pa, mut pb) = (1usize, 1usize);
+    let (mut pc, mut pd) = (n - 1, n - 1);
+    let mut swap_cnt = false;
+    loop {
+        while pb <= pc {
+            let r = cmp(&a[pb], &a[0]);
+            if r > 0 {
+                break;
+            }
+            if r == 0 {
+                swap_cnt = true;
+                a.swap(pa, pb);
+                pa += 1;
+            }
+            pb += 1;
+        }
+        while pb <= pc {
+            let r = cmp(&a[pc], &a[0]);
+            if r < 0 {
+                break;
+            }
+            if r == 0 {
+                swap_cnt = true;
+                a.swap(pc, pd);
+                pd -= 1;
+            }
+            pc -= 1;
+        }
+        if pb > pc {
+            break;
+        }
+        a.swap(pb, pc);
+        swap_cnt = true;
+        pb += 1;
+        pc -= 1;
+    }
+    if !swap_cnt {
+        insertion(a);
+        return;
+    }
+    let pn = n;
+    let vecswap = |a: &mut [T], mut i: usize, mut j: usize, cnt: usize| {
+        for _ in 0..cnt {
+            a.swap(i, j);
+            i += 1;
+            j += 1;
+        }
+    };
+    let d1 = pa.min(pb - pa);
+    vecswap(a, 0, pb - d1, d1);
+    let d1b = (pd - pc).min(pn - pd - 1);
+    vecswap(a, pb, pn - d1b, d1b);
+    let d1 = pb - pa;
+    let d2 = pd - pc;
+    if d1 > 1 {
+        bsd_qsort(&mut a[..d1], cmp);
+    }
+    if d2 > 1 {
+        let s = pn - d2;
+        bsd_qsort(&mut a[s..], cmp);
+    }
 }

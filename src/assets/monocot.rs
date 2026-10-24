@@ -28,7 +28,7 @@ pub enum Kind {
 
 impl Kind {
     pub fn is_grass(self) -> bool {
-        matches!(self, Kind::Tussock | Kind::Grasses | Kind::Maize | Kind::Wheat)
+        matches!(self, Kind::Grasses | Kind::Maize | Kind::Wheat)
     }
 }
 
@@ -64,6 +64,16 @@ fn log_uniform(r: &mut Rng, lo: f64, hi: f64) -> f64 {
 }
 
 impl Growth {
+    fn grasses_block(&mut self, r: &mut Rng) {
+        self.stem_offset = r.uniform(1.5, 2.0);
+        self.angle = r.uniform(PI / 6.0, PI / 3.0);
+        self.z_drag = r.uniform(0.0, 0.2);
+        self.min_y = r.uniform(PI * 0.35, PI * 0.45);
+        self.max_y = r.uniform(PI * 0.45, PI * 0.5);
+        self.count = log_uniform(r, 16.0, 64.0) as i64;
+        self.scale_curve = vec![(0.0, 1.0), (1.0, 0.2)];
+        self.bend_angle = PI / 2.0;
+    }
     /// MonocotGrowthFactory.__init__ (draws, incl. the colour / shader draws of the material) then the subclass block (each restarts at the factory seed)
     pub fn new(kind: Kind, fs: u64) -> Growth {
         let mut r = Rng::seeded(fs);
@@ -102,9 +112,6 @@ impl Growth {
         }
         if use_distance {
             r.uniform(1.8, 3.5);
-        } else {
-            // build_color_ramp(nw.musgrave(10)): node construction draws a seed? (checked per kind with rnglog)
-            r.randint(0, 100000);
         }
         let mut g = Growth {
             kind,
@@ -142,6 +149,33 @@ impl Growth {
                 g.scale_curve = vec![(0.0, r.uniform(0.8, 1.0)), (0.5, 1.0), (1.0, r.uniform(0.6, 1.0))];
                 g.bud_angle = r.uniform(PI / 8.0, PI / 4.0);
                 g.cut_prob = if r.uniform(0.0, 1.0) < 0.5 { 0.0 } else { r.uniform(0.2, 0.4) };
+            }
+            Kind::Tussock => {
+                g.stem_offset = r.uniform(0.0, 0.2);
+                g.angle = r.uniform(PI / 20.0, PI / 18.0);
+                g.z_drag = r.uniform(0.1, 0.2);
+                g.min_y = r.uniform(PI * 0.2, PI * 0.25);
+                g.max_y = PI / 2.0;
+                g.count = log_uniform(&mut r, 512.0, 1024.0) as i64;
+                g.scale_curve = vec![(0.0, r.uniform(0.6, 1.0)), (1.0, r.uniform(0.6, 1.0))];
+            }
+            Kind::Grasses | Kind::Maize | Kind::Wheat => {
+                g.grasses_block(&mut r);
+                match kind {
+                    Kind::Maize => {
+                        let mut r = Rng::seeded(fs);
+                        g.stem_offset = r.uniform(2.0, 2.5);
+                        g.scale_curve = vec![(0.0, 1.0), (1.0, 0.6)];
+                        g.leaf_range = (0.1, 0.7);
+                    }
+                    Kind::Wheat => {
+                        let mut r = Rng::seeded(fs);
+                        g.scale_curve = vec![(0.0, 1.0), (1.0, 0.6)];
+                        g.leaf_range = (0.1, 0.7);
+                        let _ = &mut r;
+                    }
+                    _ => {}
+                }
             }
             _ => unimplemented!("monocot kind {:?}", kind),
         }
@@ -255,7 +289,32 @@ impl Growth {
                 decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
                 obj
             }
-            _ => unimplemented!(),
+            Kind::Tussock => {
+                let x = [0.0, r.uniform(0.3, 0.7), 1.0];
+                let y = [0.0, 0.01, 0.0];
+                let mut obj = leaf(&x, &y, Some(face_size));
+                decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
+                obj
+            }
+            Kind::Grasses | Kind::Maize => {
+                let (x1, x2) = (r.uniform(0.1, 0.2), r.uniform(0.5, 0.7));
+                let x = [0.0, x1, x2, 1.0];
+                let (lo, hi) = if self.kind == Kind::Maize { (0.03, 0.06) } else { (0.02, 0.03) };
+                let (y1, y2) = (r.uniform(lo, hi), r.uniform(lo, hi));
+                let y = [0.0, y1, y2, 0.0];
+                let mut obj = leaf(&x, &y, Some(face_size));
+                if self.kind == Kind::Grasses && r.uniform(0.0, 1.0) < 0.4 {
+                    let x_cut = r.uniform(0.5, 1.0);
+                    let ang = r.uniform(-PI / 3.0, PI / 3.0);
+                    let (ca, sa) = (ang.cos() as f32, ang.sin() as f32);
+                    let xc = x_cut as f32;
+                    let del: Vec<bool> = obj.v.iter().map(|p| (p[0] - xc) * ca + p[1] * sa > 0.0).collect();
+                    obj = obj.delete_verts(&del);
+                }
+                decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
+                obj
+            }
+            _ => unimplemented!("leaf of {:?}", self.kind),
         }
     }
 
@@ -440,7 +499,36 @@ impl Growth {
     /// MonocotGrowthFactory.create_asset for the non-grass kinds (the instance RNG `r` is already seeded)
     pub fn create_asset(&self, r: &mut Rng, face_size: f64) -> LMesh {
         let mut m = self.create_raw(r, face_size);
+        if self.kind == Kind::Maize {
+            let husk = self.build_husk(r);
+            m = LMesh::join(&[&m, &husk]);
+        }
         self.decorate_monocot(&mut m, r);
+        m
+    }
+
+    fn build_husk(&self, r: &mut Rng) -> LMesh {
+        let x = [0.0, r.uniform(0.04, 0.05), r.uniform(0.03, 0.03), 0.0];
+        let z = [0.0, 0.01, r.uniform(0.24, 0.3), r.uniform(0.35, 0.4)];
+        let anchors: Vec<[f64; 3]> = (0..4).map(|i| [x[i], 0.0, z[i]]).collect();
+        let bm = bezier_mesh(&anchors, &[]);
+        bm.trace("WELD");
+        bm.trace("WELD");
+        let sp = super::blops::spin_anchors(&anchors, &[]);
+        let mut m = LMesh { v: sp.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), f: sp.faces.clone(), e: vec![] };
+        m.ensure_face_edges();
+        let tex = stucci(0.01);
+        displace(&mut m.v, &m.f, &tex, 0.02, 0.5, DispDir::Normal, None);
+        m.trace("DISPLACE");
+        let rx = r.uniform(0.0, PI * 0.2) as f32 as f64;
+        let (c, s) = (rx.cos() as f32, rx.sin() as f32);
+        let lz = (self.stem_offset - 0.02) as f32;
+        for p in m.v.iter_mut() {
+            let (x, y, z) = (p[0], p[1], p[2]);
+            p[0] = x * 1.0 + y * 0.0 + z * 0.0 + 0.0;
+            p[1] = x * 0.0 + y * c + z * -s + 0.0;
+            p[2] = x * 0.0 + y * s + z * c + lz;
+        }
         m
     }
 }
@@ -477,7 +565,23 @@ impl MonocotFactory {
     pub fn mesh(&self, inst: u64) -> LMesh {
         let mut r = inst_rng(self.fs, inst);
         if self.g.kind.is_grass() {
-            unimplemented!("grass cluster");
+            let n = r.randint(1, 6) as usize;
+            let angles = polygon_angles(&mut r, n, PI / 4.0, PI * 2.0);
+            let radius: Vec<f64> = (0..n).map(|_| r.uniform(0.08, 0.16)).collect();
+            let mut parts: Vec<LMesh> = vec![];
+            // join_objects keeps the first object as the active one: every other part is placed relative to it
+            let loc = |j: usize| ((radius[j] * angles[j].cos()) as f32, (radius[j] * angles[j].sin()) as f32);
+            for j in 0..n {
+                let mut m = self.g.create_asset(&mut r, FACE_SIZE);
+                let (lx, ly) = if j == 0 { (0.0, 0.0) } else { (loc(j).0 - loc(0).0, loc(j).1 - loc(0).1) };
+                for p in m.v.iter_mut() {
+                    p[0] += lx;
+                    p[1] += ly;
+                }
+                parts.push(m);
+            }
+            let refs: Vec<&LMesh> = parts.iter().collect();
+            return LMesh::join(&refs);
         }
         self.g.create_asset(&mut r, FACE_SIZE)
     }
@@ -496,4 +600,23 @@ impl Factory for MonocotFactory {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(MonocotFactory::new(fs)))
+}
+
+/// assets/utils/mesh.polygon_angles
+pub fn polygon_angles(r: &mut Rng, n: usize, min_angle: f64, max_angle: f64) -> Vec<f64> {
+    for _ in 0..100 {
+        let mut a: Vec<f64> = (0..n).map(|_| r.uniform(0.0, 2.0 * PI)).collect();
+        a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        let ok = (0..n).all(|i| {
+            let d = (a[i] - a[(i + n - 1) % n]).rem_euclid(2.0 * PI);
+            d >= min_angle && d <= max_angle
+        });
+        if ok {
+            return a;
+        }
+    }
+    let off = r.uniform(0.0, 2.0 * PI);
+    let mut a: Vec<f64> = (0..n).map(|i| (i as f64 * (2.0 * PI / n as f64) + off).rem_euclid(2.0 * PI)).collect();
+    a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    a
 }
