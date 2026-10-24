@@ -23,7 +23,6 @@ pub mod snakeplant;
 pub mod spiderplant;
 pub mod chopsticks;
 pub mod bridge;
-pub mod bridge_ex;
 pub mod jar;
 pub mod lid;
 pub mod cup;

@@ -2,7 +2,7 @@
 //! bridge / solidify stages). Stage dumps: ~/work/agents/storage/toistages.py, compared by src/bin/toicmp.rs.
 use super::bathroom::Toilet;
 use super::blops::align_bezier_points;
-use super::bridge_ex::bridge_two_loops_ex;
+use super::bridge::bridge_two_loops_surface;
 use crate::mesh::Mesh;
 use crate::rng::Rng;
 
@@ -59,7 +59,7 @@ pub fn tube_bridge(t: &Toilet, r: &mut Rng) -> Stages {
     let shape = r.uniform(0.1, 0.2);
     let la: Vec<u32> = ring.order.clone();
     let lb: Vec<u32> = ring.order.iter().map(|&i| i + n).collect();
-    bridge_two_loops_ex(&mut m, la, lb, 64, shape, true);
+    bridge_two_loops_surface(&mut m, la, lb, 64, shape);
     Stages { upper, lower, bottom, bridged: m }
 }
 
