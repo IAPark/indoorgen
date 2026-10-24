@@ -45,7 +45,16 @@ def main():
     specs += [x for x in a if ":" in x and not x.startswith("--")]
     import bpy
     import infinigen.core.util.random as R
-    R.weighted_sample = lambda *a, **k: _D
+    _orig_ws = R.weighted_sample
+    def _ws(*a, **k):
+        # consume the same random draws as the real weighted_sample (the constructor stream continues after it), return a stub class
+        if os.environ.get("REFCACHE_STUB") != "1":
+            try:
+                _orig_ws(*a, **k)
+            except Exception:
+                pass
+        return _D
+    R.weighted_sample = _ws
     import infinigen.core.surface as S
     S.assign_material = lambda *a, **k: None
     for spec in specs:

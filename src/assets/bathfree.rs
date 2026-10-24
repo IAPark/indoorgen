@@ -31,7 +31,7 @@ fn contour(p: &BowlParams, t: f64, i: f64) -> Vec<[f64; 2]> {
 }
 
 /// bpy cylinder (n verts) topology, vertex 2i = bottom, 2i+1 = top
-fn cylinder_topology(n: usize) -> Vec<Vec<u32>> {
+pub fn cylinder_topology(n: usize) -> Vec<Vec<u32>> {
     let mut f = vec![];
     for i in 0..n {
         let a = (2 * i) as u32;

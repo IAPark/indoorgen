@@ -309,7 +309,134 @@ pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool) -> Mesh {
     from_g(&super::hwexact::apply_obj(&g, [t.hole_radius, t.hole_radius, 0.005], [0.0; 3], loc, true))
 }
 
+/// make_base minus make_cutter (BOOLEAN DIFFERENCE, EXACT) constructed directly: the box with the part of the cutter below the box top
+/// as cavity, the top face split into two polygons by two chords at the x = width side (what the exact boolean's dissolve leaves)
+pub fn alcove_body(t: &Bathtub, stages: &mut Vec<(String, String, Mesh)>) -> Mesh {
+    let d = t.depth;
+    let (lower, upper) = if t.has_curve { (t.contour(t.thickness, 1.0), t.contour(t.thickness, -1.0)) } else { (t.contour(t.thickness, 0.0), t.contour(t.thickness, 0.0)) };
+    let n = lower.len();
+    let mut cage = Mesh::new();
+    for k in 0..n {
+        let (a, b) = (lower[n - 1 - k], upper[n - 1 - k]);
+        cage.pos.push([a[0], a[1], t.thickness]);
+        cage.pos.push([b[0], b[1], d * 2.0 - t.thickness]);
+    }
+    cage.faces = bathfree::cylinder_topology(n);
+    let cage = super::subsurf::subsurf_bl(&cage, t.alcove_levels, true);
+    let cutter = super::subsurf::subsurf_bl(&cage, 5 - t.alcove_levels, false);
+    // cavity = cutter faces below the box top, normals into the cavity
+    let tol = 1e-6;
+    let keep: Vec<bool> = cutter.faces.iter().map(|f| f.iter().all(|&v| cutter.pos[v as usize][2] <= d + tol)).collect();
+    assert!(cutter.faces.iter().enumerate().all(|(i, f)| keep[i] || f.iter().all(|&v| cutter.pos[v as usize][2] >= d - tol)), "cutter faces crossing the box top plane are not supported");
+    let mut cav = separate_faces(&cutter, &keep);
+    for p in cav.pos.iter_mut() {
+        if (p[2] - d).abs() < tol {
+            p[2] = d;
+        }
+    }
+    let ctr = [t.width / 2.0, t.size / 2.0, d / 2.0];
+    let mut s = 0.0;
+    for f in &cav.faces {
+        let nn = super::bpyops::face_normal(&cav, f);
+        let c = f.iter().fold([0.0; 3], |a, &v| [a[0] + cav.pos[v as usize][0], a[1] + cav.pos[v as usize][1], a[2] + cav.pos[v as usize][2]]);
+        let c = [c[0] / f.len() as f64 - ctr[0], c[1] / f.len() as f64 - ctr[1], c[2] / f.len() as f64 - ctr[2]];
+        s += nn[0] * c[0] + nn[1] * c[1] + nn[2] * c[2];
+    }
+    if s > 0.0 {
+        for f in cav.faces.iter_mut() {
+            f.reverse();
+        }
+    }
+    let loops = boundary_loops(&cav);
+    assert_eq!(loops.len(), 1, "alcove rim loops");
+    let mut rim = loops[0].clone();
+    let area: f64 = (0..rim.len()).map(|i| {
+        let (a, b) = (cav.pos[rim[i] as usize], cav.pos[rim[(i + 1) % rim.len()] as usize]);
+        a[0] * b[1] - b[0] * a[1]
+    }).sum();
+    if area < 0.0 {
+        rim.reverse();
+    }
+    // box
+    let (w, sz) = (t.width, t.size);
+    let base = cav.pos.len() as u32;
+    let mut m = cav.clone();
+    let corners = [[0.0, 0.0], [w, 0.0], [w, sz], [0.0, sz]];
+    for z in [0.0, d] {
+        for c in corners {
+            m.pos.push([c[0], c[1], z]);
+        }
+    }
+    let bot = |i: usize| base + i as u32;
+    let top = |i: usize| base + 4 + i as u32;
+    for i in 0..4 {
+        let j = (i + 1) % 4;
+        m.faces.push(vec![bot(i), bot(j), top(j), top(i)]);
+    }
+    m.faces.push(vec![bot(0), bot(3), bot(2), bot(1)]);
+    // chords from the two x = width corners to the nearest rim vertices
+    let nearest = |c: [f64; 2]| -> usize {
+        let mut b = (f64::INFINITY, 0);
+        for (k, &v) in rim.iter().enumerate() {
+            let p = m.pos[v as usize];
+            let dd = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2);
+            if dd < b.0 {
+                b = (dd, k);
+            }
+        }
+        b.1
+    };
+    let (ia, ib) = (nearest(corners[1]), nearest(corners[2]));
+    let nr = rim.len();
+    // polygon A: O1, O2, b, (rim CW from b to a), a ; polygon B: O2, O3, O0, O1, a, (rim CW from a to b), b
+    let mut pa = vec![top(1), top(2)];
+    let mut k = ib;
+    loop {
+        pa.push(rim[k]);
+        if k == ia {
+            break;
+        }
+        k = (k + nr - 1) % nr;
+    }
+    let mut pb = vec![top(2), top(3), top(0), top(1)];
+    let mut k = ia;
+    loop {
+        pb.push(rim[k]);
+        if k == ib {
+            break;
+        }
+        k = (k + nr - 1) % nr;
+    }
+    m.faces.push(pa);
+    m.faces.push(pb);
+    stage(stages, "prehole", "prehole", &m);
+    m
+}
+
+pub fn build_alcove(t: &Bathtub, r: &mut Rng) -> Built {
+    let mut stages = vec![];
+    let obj = alcove_body(t, &mut stages);
+    let hole = add_hole(t, &obj, r, false);
+    stage(&mut stages, "hole", "hole", &hole);
+    let rot = |m: &Mesh| -> Mesh {
+        let mut o = m.clone();
+        for p in o.pos.iter_mut() {
+            *p = [-p[1], p[0], p[2]];
+        }
+        o
+    };
+    let amt = t.beveler_amount * 5.0;
+    let sharp = (70.0f32).to_radians();
+    let body = super::bevmod::bevel_sharp_op(&rot(&obj), sharp, amt, 5, true).expect("bevel");
+    let hole_b = super::bevmod::bevel_sharp_op(&rot(&hole), sharp, amt, 5, true).expect("bevel hole");
+    stage(&mut stages, "final", "final", &join(&[&body, &hole_b]));
+    Built { body, hole: hole_b, extra: vec![], stages }
+}
+
 pub fn build(t: &Bathtub, r: &mut Rng) -> Built {
+    if t.alcove {
+        return build_alcove(t, r);
+    }
     let mut stages = vec![];
     let p = bowl_params(t);
     let bowl = bathfree::make_bowl(&p);

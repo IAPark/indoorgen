@@ -50,6 +50,14 @@ fn trimesh(m: &M) -> Option<TriMesh> {
     let pts: Vec<na::Point3<f64>> = m.v.iter().map(|p| na::Point3::new(p[0], p[1], p[2])).collect();
     let mut idx = vec![];
     for f in &m.f {
+        if f.len() > 4 {
+            // concave n-gons: ear clipping (a fan would cover area outside the polygon)
+            let co: Vec<[f32; 3]> = f.iter().map(|&i| { let p = m.v[i as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] }).collect();
+            for t in infinigen::assets::polyfill::triangulate_ngon(&co) {
+                idx.push([f[t[0] as usize], f[t[1] as usize], f[t[2] as usize]]);
+            }
+            continue;
+        }
         for k in 1..f.len().saturating_sub(1) {
             idx.push([f[0], f[k], f[k + 1]]);
         }
@@ -169,6 +177,10 @@ fn main() {
             let off = rs.v.len() as u32;
             rs.v.extend(p.mesh.pos.iter().cloned());
             rs.f.extend(p.mesh.faces.iter().map(|fc| fc.iter().map(|x| x + off).collect::<Vec<u32>>()));
+        }
+        if let Ok(d) = std::env::var("DUMPRS") {
+            std::fs::write(format!("{d}/{cls}_{s}_{i}_rs.json"), serde_json::json!({"v": rs.v, "p": rs.f}).to_string()).unwrap();
+            std::fs::write(format!("{d}/{cls}_{s}_{i}_py.json"), serde_json::json!({"v": py.v, "p": py.f}).to_string()).unwrap();
         }
         if h["too_big"].as_bool().unwrap_or(false) {
             println!("{cls} {s}_{i}: reference too big to cache (nv {}); rust nv {}", h["nv"], rs.v.len());

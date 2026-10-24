@@ -198,6 +198,7 @@ pub struct Bathtub {
     pub leg_sub: i64,
     pub alcove_levels: usize,
     pub stretch: f64,
+    pub beveler_amount: f64,
 }
 
 impl Bathtub {
@@ -224,10 +225,16 @@ impl Bathtub {
             alcove_levels = r.randint(1, 3) as usize;
         }
         let hole_radius = r.uniform(0.015, 0.02);
-        Bathtub { width, size, depth, alcove, has_curve, has_legs, thickness, disp_x, disp_y, leg_height, leg_radius, hole_radius, seed: r.randint(0, 1_000_000) as u64, taper, fseed: 0, leg_side, leg_y_scale, leg_sub, alcove_levels, stretch }
+        let mut rb = r.clone();
+        let kskip: usize = std::env::var("BEVK").ok().and_then(|s| s.parse().ok()).unwrap_or(5);
+        for _ in 0..kskip {
+            rb.f64();
+        }
+        let beveler_amount = rb.uniform(0.001, 0.006);
+        Bathtub { width, size, depth, alcove, has_curve, has_legs, thickness, disp_x, disp_y, leg_height, leg_radius, hole_radius, seed: r.randint(0, 1_000_000) as u64, taper, fseed: 0, leg_side, leg_y_scale, leg_sub, alcove_levels, stretch, beveler_amount }
     }
     /// make_box_contour(t, i)
-    fn contour(&self, t: f64, i: f64) -> Vec<[f64; 2]> {
+    pub fn contour(&self, t: f64, i: f64) -> Vec<[f64; 2]> {
         let (w, s) = (self.width, self.size);
         vec![
             [t + self.disp_x[0] * i, t + self.disp_y * i],
@@ -301,7 +308,9 @@ impl Factory for Bathtub {
         let mut a = Asset::default();
         a.mesh(b.body, &ceramic, None);
         a.mesh(b.hole, &metal, None);
-        a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
+        if !self.alcove {
+            a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
+        }
         a
     }
 }
