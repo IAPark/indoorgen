@@ -117,19 +117,25 @@ fn centre(pos: &[V3], l: &[u32]) -> V3 {
 }
 
 fn newell(pos: &[V3], l: &[u32]) -> (V3, bool) {
+    // BM_edgeloop_calc_normal in float32 (the residual of a degenerate loop decides validity, as in Blender)
     let n = l.len();
-    let mut no = [0.0; 3];
+    let mut no = [0.0f32; 3];
     for k in 0..n {
-        let (p, q) = (pos[l[(k + n - 1) % n] as usize], pos[l[k] as usize]);
+        let (p, q) = (f3(pos[l[(k + n - 1) % n] as usize]), f3(pos[l[k] as usize]));
         no[0] += (p[1] - q[1]) * (p[2] + q[2]);
         no[1] += (p[2] - q[2]) * (p[0] + q[0]);
         no[2] += (p[0] - q[0]) * (p[1] + q[1]);
     }
-    let ln = len(no);
-    if ln < 1e-5 {
-        ([0.0, 0.0, 1.0], false)
+    let d = dot32(no, no);
+    if d > 1.0e-35f32 {
+        let ln = d.sqrt();
+        if ln < 1e-10 {
+            return ([0.0, 0.0, 1.0], false);
+        }
+        let inv = 1.0f32 / ln;
+        ([(no[0] * inv) as f64, (no[1] * inv) as f64, (no[2] * inv) as f64], true)
     } else {
-        (mul(no, 1.0 / ln), true)
+        ([0.0, 0.0, 1.0], false)
     }
 }
 
@@ -582,6 +588,13 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
     bridge_pair_opts(m, la, lb, cuts, shape, cache, if surface { Interp::Surface } else { Interp::Path }, 1.0, "SMOOTH")
 }
 
+thread_local! {
+    /// extra (vertex on loop a, vertex on loop b) rungs whose cut positions `bridge_pair_opts` should also produce
+    static EXTRA_RUNGS: std::cell::RefCell<Vec<(u32, u32)>> = std::cell::RefCell::new(vec![]);
+    /// cut vertex positions of the last `bridge_pair_opts` run, per cross edge (vertex on loop a, vertex on loop b), layers 1..cuts from a
+    static CUTPOS: std::cell::RefCell<HashMap<(u32, u32), Vec<V3>>> = std::cell::RefCell::new(HashMap::default());
+}
+
 /// `interpolation` of bridge_edge_loops
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Interp {
@@ -750,7 +763,28 @@ pub fn bridge_pair_opts(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, s
     let (mut nb, vb_ok) = newell(&pos0, &b.v);
     let el_d = sub(ca, cb);
     let nd = norm(el_d);
-    let _ = (va_ok, vb_ok, nd);
+    // BM_edgeloop_calc_normal_aligned when the plain normal is degenerate (e.g. open straight polylines)
+    let aligned = |l: &[u32]| -> V3 {
+        let n = l.len();
+        let mut no = [0.0; 3];
+        for k in 0..n {
+            let (p, q) = (pos0[l[(k + n - 1) % n] as usize], pos0[l[k] as usize]);
+            let dir = sub(q, p);
+            no = add(no, cross(dir, cross(nd, dir)));
+        }
+        let ln = len(no);
+        if ln < 1e-10 {
+            [0.0, 0.0, 1.0]
+        } else {
+            mul(no, 1.0 / ln)
+        }
+    };
+    if !va_ok {
+        na = aligned(&a.v);
+    }
+    if !vb_ok {
+        nb = aligned(&b.v);
+    }
     if dot(na, el_d) > 0.0 {
         na = mul(na, -1.0);
     }
@@ -855,6 +889,12 @@ pub fn bridge_pair_opts(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, s
             }
         }
     }
+    for (x, y) in EXTRA_RUNGS.with(|e| e.borrow().clone()) {
+        seen.entry((x, y)).or_insert_with(|| {
+            cross_edges.push((x, y));
+            cross_edges.len() - 1
+        });
+    }
     // SURFACE: per-vertex surface tangent = normalized sum of the in-face perpendiculars of the rim edges (bm_vert_calc_surface_tangent)
     let mut tan: HashMap<u32, V3> = HashMap::default();
     if surface {
@@ -934,6 +974,13 @@ pub fn bridge_pair_opts(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, s
         cut_id.insert((x, y), ids);
     }
     m.pos.extend(newpos);
+    CUTPOS.with(|c| {
+        let mut c = c.borrow_mut();
+        c.clear();
+        for (k, ids) in &cut_id {
+            c.insert(*k, ids.iter().map(|&i| m.pos[i as usize]).collect());
+        }
+    });
     // slice every bridge face into cuts+1 slabs measured from its rim edge
     for f in &faces {
         emit_slabs(m, f, &on_a, &cut_id, cuts);
@@ -1012,4 +1059,75 @@ fn emit_slabs(m: &mut Mesh, f: &[u32], on_a: &HashMap<u32, ()>, cut_id: &HashMap
     } else {
         m.faces.push(f.to_vec());
     }
+}
+
+
+/// bridge_edge_loops with Blender's vertex and face ORDER: the topology comes from the BMesh port (`bm::bridge`: disk cycles, face slot
+/// reuse, edge split / face split order), the cut vertex positions from `bridge_pair_opts` run on a copy.
+/// `edge_order`: the Blender mesh's edge list (vertex pairs) if known, else first-use order of the face corners; edges between consecutive
+/// loop vertices are added when missing. Two loops only. Returns the new mesh (original vertices first, then cut vertices in Blender's order).
+pub fn bridge_bm(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode: Interp, smooth: f64, profile_shape: &str, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
+    use crate::bm::{bridge as bb, BMesh};
+    // BMesh input
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
+    let mut add_edge = |a: u32, b: u32, edges: &mut Vec<[u32; 2]>| -> u32 {
+        let k = (a.min(b), a.max(b));
+        *emap.entry(k).or_insert_with(|| {
+            edges.push(match edge_order.and_then(|eo| eo.iter().find(|e| (e[0].min(e[1]), e[0].max(e[1])) == k)) {
+                Some(e) => *e,
+                None => [k.0, k.1],
+            });
+            (edges.len() - 1) as u32
+        })
+    };
+    if let Some(eo) = edge_order {
+        for e in eo {
+            add_edge(e[0], e[1], &mut edges);
+        }
+    }
+    let mut ce: Vec<Vec<u32>> = vec![];
+    for f in &m.faces {
+        ce.push((0..f.len()).map(|c| add_edge(f[c], f[(c + 1) % f.len()], &mut edges)).collect());
+    }
+    let mut sel_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for l in [la, lb] {
+        // a loop is closed unless the mesh's edge list is known and lacks the closing edge
+        let closed = edge_order.map_or(true, |eo| eo.iter().any(|e| (e[0].min(e[1]), e[0].max(e[1])) == (l[0].min(l[l.len() - 1]), l[0].max(l[l.len() - 1]))));
+        let n = if closed { l.len() } else { l.len() - 1 };
+        for i in 0..n {
+            let id = add_edge(l[i], l[(i + 1) % l.len()], &mut edges);
+            sel_set.insert(id);
+        }
+    }
+    let mut bm = BMesh::from_mesh(&pos, &edges, &m.faces, &ce);
+    let eids = bm.edge_ids();
+    // BMesh edge slots == creation order == `edges` order
+    let sel = |e: usize| sel_set.contains(&(e as u32)) && eids.contains(&e);
+    let topo = bb::bridge_edge_loops(&mut bm, &sel, cuts)?;
+    // positions oracle (the older f64 implementation), asked for exactly the rungs of the BMesh topology
+    let (olda, _oldb) = if la.len() < lb.len() { (lb, la) } else { (la, lb) };
+    let on_a: std::collections::HashSet<u32> = olda.iter().copied().collect();
+    let norm = |p: u32, q: u32| if on_a.contains(&p) { (p, q) } else { (q, p) };
+    let extra: Vec<(u32, u32)> = topo.rings.iter().map(|r| norm(r[0] as u32, r[cuts + 1] as u32)).collect();
+    EXTRA_RUNGS.with(|e| *e.borrow_mut() = extra);
+    let mut mo = m.clone();
+    bridge_pair_opts(&mut mo, la.to_vec(), lb.to_vec(), cuts, shape, &mut None, mode, smooth, profile_shape);
+    EXTRA_RUNGS.with(|e| e.borrow_mut().clear());
+    let cutpos: HashMap<(u32, u32), Vec<V3>> = CUTPOS.with(|c| c.borrow().clone());
+    for ring in &topo.rings {
+        let (p, q) = norm(ring[0] as u32, ring[cuts + 1] as u32);
+        let flipped = p != ring[0] as u32;
+        let (list, rev) = if let Some(l) = cutpos.get(&(p, q)) { (l, flipped) } else if let Some(l) = cutpos.get(&(q, p)) { (l, !flipped) } else { return Err("bridge: no oracle positions for a rung".into()) };
+        for i in 1..=cuts {
+            let c = if rev { list[cuts - i] } else { list[i - 1] };
+            bm.verts[ring[i]].co = [c[0] as f32, c[1] as f32, c[2] as f32];
+        }
+    }
+    let (p, _e, f) = bm.to_mesh();
+    let mut out = Mesh::new();
+    out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    out.faces = f;
+    Ok(out)
 }

@@ -233,7 +233,6 @@ fn r_bridge(c: &Case, p: &Value) -> Res {
     if l.len() != 2 {
         return Err("bridge: exactly two loops supported".into());
     }
-    let mut m = c.mesh.clone();
     let cuts = pi(p, "number_cuts", 0) as usize;
     let shape = pf(p, "profile_shape_factor", 0.0);
     let mode = match ps(p, "interpolation", "PATH") {
@@ -241,8 +240,7 @@ fn r_bridge(c: &Case, p: &Value) -> Res {
         "SURFACE" => infinigen::assets::bridge::Interp::Surface,
         _ => infinigen::assets::bridge::Interp::Path,
     };
-    infinigen::assets::bridge::bridge_pair_opts(&mut m, l[0].clone(), l[1].clone(), cuts, shape, &mut None, mode, pf(p, "smoothness", 1.0), ps(p, "profile_shape", "SMOOTH"));
-    Ok(m)
+    infinigen::assets::bridge::bridge_bm(&c.mesh, &l[0], &l[1], cuts, shape, mode, pf(p, "smoothness", 1.0), ps(p, "profile_shape", "SMOOTH"), c.edges.as_deref())
 }
 
 fn r_fill_grid(c: &Case, p: &Value) -> Res {

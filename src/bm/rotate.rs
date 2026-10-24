@@ -215,6 +215,33 @@ impl Heap {
 
 type RotState = ([i32; 2], [i32; 2]);
 
+thread_local! {
+    static ROT_MODE: std::cell::Cell<(bool, bool)> = std::cell::Cell::new((false, false));
+}
+
+/// bm_edge_calc_rotate_beauty__angle
+fn rotate_beauty_angle(v1: V3, v2: V3, v3: V3, v4: V3) -> f32 {
+    use super::query::*;
+    let nt = |a: V3, b: V3, c: V3| -> Option<V3> {
+        let n = normalize_len(cross(sub(a, b), sub(b, c)));
+        if n.1 == 0.0 {
+            None
+        } else {
+            Some(n.0)
+        }
+    };
+    let (a, b) = match (nt(v2, v3, v4), nt(v2, v4, v1)) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return f32::MAX,
+    };
+    let angle_24 = angle_normalized_v3v3(a, b);
+    let (c, d) = match (nt(v1, v2, v3), nt(v1, v3, v4)) {
+        (Some(c), Some(d)) => (c, d),
+        _ => return f32::MAX,
+    };
+    angle_normalized_v3v3(c, d) - angle_24
+}
+
 impl BMesh {
     fn erot_state_ex(&self, e: usize) -> ([i32; 2], [i32; 2]) {
         let l = self.edges[e].l;
@@ -232,14 +259,21 @@ impl BMesh {
         (v, f)
     }
     fn calc_rotate_beauty(&self, e: usize) -> f32 {
+        let (angle, restrict) = ROT_MODE.with(|m| m.get());
         let l = self.edges[e].l;
         let lr = self.loops[l].rn;
         let v1 = self.loops[self.loops[l].p].v;
         let v2 = self.loops[l].v;
         let v3 = self.loops[self.loops[lr].p].v;
         let v4 = self.loops[self.loops[l].n].v;
+        if restrict && (self.verts[v1].flag & ELEM_TAG != 0) == (self.verts[v3].flag & ELEM_TAG != 0) {
+            return f32::MAX;
+        }
         if v1 == v3 {
             return f32::MAX;
+        }
+        if angle {
+            return rotate_beauty_angle(self.verts[v1].co, self.verts[v2].co, self.verts[v3].co, self.verts[v4].co);
         }
         bm_rotate_beauty_area(self.verts[v1].co, self.verts[v2].co, self.verts[v3].co, self.verts[v4].co, true)
     }
@@ -247,6 +281,18 @@ impl BMesh {
     /// `beautify_fill` on the given candidate edges (only manifold, rotatable ones are used); returns nothing, the mesh is
     /// modified in place.  Vertex `idx` fields must hold the vertex indices.
     pub fn beautify_fill(&mut self, cand: &[usize]) {
+        self.beautify_fill_ex(cand, false, false)
+    }
+
+    /// `angle`: method ANGLE instead of AREA; `restrict`: VERT_RESTRICT_TAG (only rotate edges whose new diagonal joins an ELEM_TAG vertex
+    /// with an untagged one, as bridge_edge_loops does)
+    pub fn beautify_fill_ex(&mut self, cand: &[usize], angle: bool, restrict: bool) {
+        let prev = ROT_MODE.with(|m| m.replace((angle, restrict)));
+        self.beautify_fill_inner(cand);
+        ROT_MODE.with(|m| m.set(prev));
+    }
+
+    fn beautify_fill_inner(&mut self, cand: &[usize]) {
         let mut edge_array: Vec<usize> = cand.iter().copied().filter(|&e| self.edge_rotate_check(e)).collect();
         let n = edge_array.len();
         let mut states: Vec<Option<HashSet<RotState>>> = (0..n).map(|_| None).collect();
