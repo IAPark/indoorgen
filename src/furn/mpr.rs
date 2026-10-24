@@ -23,11 +23,14 @@ fn eq(a: f64, b: f64) -> bool {
 fn vec_eq(a: V3, b: V3) -> bool {
     eq(a[0], b[0]) && eq(a[1], b[1]) && eq(a[2], b[2])
 }
+// The reference python-fcl is an arm64 build: clang contracts `a*b + c*d (+ e*f)` into fused multiply-adds
+// (-ffp-contract=on).  libccd's vector helpers are reproduced with the same fusion.
 fn dot(a: V3, b: V3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0]))
 }
 fn cross(a: V3, b: V3) -> V3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    let f = |p: f64, q: f64, r: f64, s: f64| p.mul_add(q, -(r * s));
+    [f(a[1], b[2], a[2], b[1]), f(a[2], b[0], a[0], b[2]), f(a[0], b[1], a[1], b[0])]
 }
 fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -86,7 +89,7 @@ fn eigen_quat(m: &[[f64; 3]; 3]) -> [f64; 4] {
 }
 
 fn quat_invert(q: [f64; 4]) -> [f64; 4] {
-    let l2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    let l2 = q[3].mul_add(q[3], q[2].mul_add(q[2], q[1].mul_add(q[1], q[0] * q[0])));
     let inv = 1.0 / l2;
     [-q[0] * inv, -q[1] * inv, -q[2] * inv, q[3] * inv]
 }
@@ -95,12 +98,13 @@ fn quat_invert(q: [f64; 4]) -> [f64; 4] {
 fn quat_rot(v: V3, q: [f64; 4]) -> V3 {
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let (vx, vy, vz) = (v[0], v[1], v[2]);
-    let c1x = y * vz - z * vy + w * vx;
-    let c1y = z * vx - x * vz + w * vy;
-    let c1z = x * vy - y * vx + w * vz;
-    let c2x = y * c1z - z * c1y;
-    let c2y = z * c1x - x * c1z;
-    let c2z = x * c1y - y * c1x;
+    let f = |p: f64, q: f64, r: f64, s: f64| p.mul_add(q, -(r * s));
+    let c1x = w.mul_add(vx, f(y, vz, z, vy));
+    let c1y = w.mul_add(vy, f(z, vx, x, vz));
+    let c1z = w.mul_add(vz, f(x, vy, y, vx));
+    let c2x = f(y, c1z, z, c1y);
+    let c2y = f(z, c1x, x, c1z);
+    let c2z = f(x, c1y, y, c1x);
     [vx + 2.0 * c2x, vy + 2.0 * c2y, vz + 2.0 * c2z]
 }
 
@@ -215,14 +219,14 @@ fn point_tri_dist2(p: V3, x0: V3, b: V3, c: V3) -> (f64, V3) {
     let pp = dot(a, d1);
     let q = dot(a, d2);
     let r = dot(d1, d2);
-    let d = w * v - r * r;
+    let d = w.mul_add(v, -(r * r));
     let (s, t);
     if is_zero(d) {
         s = -1.0;
         t = -1.0;
     } else {
-        s = (q * r - w * pp) / d;
-        t = (-s * r - q) / w;
+        s = q.mul_add(r, -(w * pp)) / d;
+        t = (-s).mul_add(r, -q) / w;
     }
     if (is_zero(s) || s > 0.0) && (eq(s, 1.0) || s < 1.0) && (is_zero(t) || t > 0.0) && (eq(t, 1.0) || t < 1.0) && (eq(t + s, 1.0) || t + s < 1.0) {
         let wit = add(add(x0, scale(d1, s)), scale(d2, t));

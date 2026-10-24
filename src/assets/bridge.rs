@@ -484,8 +484,38 @@ fn add_face_edges(ecount: &mut EdgeMap, f: &[u32]) {
     }
 }
 
+/// bezier_handle_calc_length_v3 (bmo_subdivide_edgering.cc)
+fn handle_len3(ca: V3, na: V3, cb: V3, nb: V3) -> f64 {
+    let d = dot(na, nb);
+    let mut fac = 1.333333f64;
+    if d < 0.0 {
+        let t = 1.0 + d;
+        fac = fac * t + 0.75 * (1.0 - t);
+    }
+    let cr = cross(na, nb);
+    let l = if dot(cr, cr) > f32::EPSILON as f64 {
+        let q = add(cr, ca);
+        let u = sub(q, ca);
+        let t = dot(sub(cb, ca), u) / dot(u, u);
+        len(sub(cb, add(ca, mul(u, t))))
+    } else {
+        len(sub(cb, ca))
+    };
+    (l * 0.5) * fac
+}
+
 /// same, returning the two loop lists after the flips / rotation (what a following pair of a multi-loop bridge sees)
 pub fn bridge_pair(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>) -> (Vec<u32>, Vec<u32>) {
+    bridge_pair_ex(m, la, lb, cuts, shape, cache, false)
+}
+
+/// two-loop bridge with interpolation="SURFACE" (strand handles along the surface tangents of the bridge faces)
+pub fn bridge_two_loops_surface(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64) {
+    bridge_pair_ex(m, la, lb, cuts, shape, &mut None, true);
+}
+
+/// `surface`: interpolation="SURFACE" instead of PATH
+pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>, surface: bool) -> (Vec<u32>, Vec<u32>) {
     let pos0 = m.pos.clone();
     let mut a = Lp { v: la, no: [0.0; 3] };
     let mut b = Lp { v: lb, no: [0.0; 3] };
@@ -731,11 +761,57 @@ pub fn bridge_pair(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape:
             }
         }
     }
+    // SURFACE: per-vertex surface tangent = normalized sum of the in-face perpendiculars of the rim edges (bm_vert_calc_surface_tangent)
+    let mut tan: HashMap<u32, V3> = HashMap::default();
+    if surface {
+        let on_b: HashMap<u32, ()> = b.v.iter().map(|&v| (v, ())).collect();
+        for f in &faces {
+            let n = f.len();
+            let p: Vec<V3> = f.iter().map(|&v| pos0[v as usize]).collect();
+            let no = if n == 3 { norm(cross(sub(p[1], p[0]), sub(p[2], p[0]))) } else { norm(cross(sub(p[2], p[0]), sub(p[3], p[1]))) };
+            for k in 0..n {
+                let (u, w) = (f[k], f[(k + 1) % n]);
+                if (on_a.contains_key(&u) && on_a.contains_key(&w)) || (on_b.contains_key(&u) && on_b.contains_key(&w)) {
+                    let t = norm(cross(sub(pos0[u as usize], pos0[w as usize]), no));
+                    for q in [u, w] {
+                        let e = tan.entry(q).or_insert([0.0; 3]);
+                        *e = add(*e, t);
+                    }
+                }
+            }
+        }
+        for t in tan.values_mut() {
+            *t = norm(*t);
+        }
+    }
     let base = m.pos.len();
     let mut cut_id: HashMap<(u32, u32), Vec<u32>> = HashMap::default();
     let mut newpos: Vec<V3> = vec![];
     for &(x, y) in &cross_edges {
         let mut ids = vec![];
+        if surface {
+            let (co_a, co_b) = (pos0[x as usize], pos0[y as usize]);
+            let (no_a, no_b) = (tan[&x], tan[&y]);
+            let hl2 = handle_len3(co_a, no_a, co_b, no_b);
+            let (h_a, h_b) = (add(co_a, mul(no_a, hl2)), add(co_b, mul(no_b, hl2)));
+            let mut st = vec![[0.0; 3]; resolu];
+            for k in 0..3 {
+                let c = forward_diff([co_a[k], h_a[k], h_b[k], co_b[k]], resolu - 1);
+                for i in 0..resolu {
+                    st[i][k] = c[i];
+                }
+            }
+            for i in 1..resolu - 1 {
+                let mut p = st[i];
+                if shape != 0.0 {
+                    p = add(mul(cm[i], 1.0 - falloff[i]), mul(p, falloff[i]));
+                }
+                ids.push((base + newpos.len()) as u32);
+                newpos.push(p);
+            }
+            cut_id.insert((x, y), ids);
+            continue;
+        }
         for i in 1..resolu - 1 {
             // transform_point_by_tri: similarity from the start / end frames to frame i
             let pa = add(cm[i], mul(cum(i, sub(pos0[x as usize], ca)), falloff[i] / falloff[0]));

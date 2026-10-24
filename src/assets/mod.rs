@@ -23,7 +23,6 @@ pub mod snakeplant;
 pub mod spiderplant;
 pub mod chopsticks;
 pub mod bridge;
-pub mod bridge_ex;
 pub mod jar;
 pub mod lid;
 pub mod cup;
@@ -73,6 +72,8 @@ pub mod bpyops;
 pub mod gnhelpers;
 pub mod chair;
 pub mod bed;
+pub mod mattress;
+pub mod pillow;
 pub mod coil;
 pub mod towel;
 pub mod doorhandles;
@@ -80,6 +81,9 @@ pub mod gnasset;
 pub mod gnports;
 pub mod bevelgn;
 pub mod stagecmp;
+pub mod stagefile;
+pub mod dualcon;
+pub mod bpymod;
 pub mod solidnm;
 pub mod bpyx;
 pub mod bevmod;
@@ -244,6 +248,9 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if decor::handles(c) => decor::make(c, &mut rng, factory_seed),
         c if sofa::handles(c) => sofa::make(c, &mut rng),
         c if officechair::handles(c) => officechair::make(c, &mut rng, factory_seed),
+        "MattressFactory" => mattress::make(factory_seed),
+        "PillowFactory" => pillow::make(factory_seed),
+        "BedFrameFactory" => bed::make_frame(factory_seed),
         "BedFactory" if unseeded().is_some() && bed::make(factory_seed).is_some() => bed::make(factory_seed),
         c if chair::handles(c) => chair::make(c, &mut rng, factory_seed),
         c if towel::handles(c) && unseeded().is_some() => towel::make(c, &mut rng, factory_seed),
@@ -287,6 +294,53 @@ pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
     f.asset(inst).bbox_geom()
 }
 
+
+/// The asset scenes should use: the exact (python-matching) geometry when the class has one behind `Factory::exact`,
+/// with each exact face given the material of the nearest part of the approximate `asset()` (which carries the
+/// material choices); otherwise `asset()` itself.
+pub fn scene_asset(f: &dyn Factory, inst: u64) -> Asset {
+    let approx = f.asset(inst);
+    let Some(e) = f.exact(inst) else { return approx };
+    if approx.parts.is_empty() || e.polys.is_empty() {
+        return approx;
+    }
+    let boxes: Vec<(V3, V3)> = approx.parts.iter().map(|p| p.mesh.bounds()).collect();
+    let dist = |c: V3, b: &(V3, V3)| -> f64 {
+        let mut d = 0.0;
+        for k in 0..3 {
+            let x = (b.0[k] - c[k]).max(0.0).max(c[k] - b.1[k]);
+            d += x * x;
+        }
+        d
+    };
+    let mut meshes: Vec<Mesh> = approx.parts.iter().map(|_| Mesh::new()).collect();
+    let mut maps: Vec<crate::dhash::HashMap<u32, u32>> = approx.parts.iter().map(|_| crate::dhash::HashMap::default()).collect();
+    for poly in &e.polys {
+        let n = poly.len() as f64;
+        let mut c = [0.0; 3];
+        for &i in poly {
+            for k in 0..3 {
+                c[k] += e.verts[i as usize][k] / n;
+            }
+        }
+        let best = (0..boxes.len()).min_by(|&a, &b| dist(c, &boxes[a]).partial_cmp(&dist(c, &boxes[b])).unwrap()).unwrap();
+        let m = &mut meshes[best];
+        let map = &mut maps[best];
+        let face: Vec<u32> = poly.iter().map(|&i| *map.entry(i).or_insert_with(|| {
+            m.pos.push(e.verts[i as usize]);
+            (m.pos.len() - 1) as u32
+        })).collect();
+        m.faces.push(face);
+    }
+    let mut out = Asset { parts: vec![], supports: approx.supports.clone() };
+    for (k, m) in meshes.into_iter().enumerate() {
+        if !m.faces.is_empty() {
+            out.parts.push(Part { mesh: m, mat: approx.parts[k].mat.clone(), col: approx.parts[k].col });
+        }
+    }
+    out
+}
+
 pub fn inst_rng(factory_seed: u64, inst_seed: u64) -> Rng {
     Rng::seeded(int_hash(&[&factory_seed.to_string(), &inst_seed.to_string()]))
 }
@@ -326,7 +380,7 @@ impl Assets for RealAssets {
         self.fallback.placeholder(class, factory_seed, inst_seed, kind)
     }
     fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
-        make_factory(class, factory_seed).map(|f| f.asset(inst_seed).solver_geom())
+        make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom())
     }
 }
 
@@ -334,7 +388,7 @@ impl RealAssets {
     /// final visual asset for a generated object (real port if available, otherwise a recipe in the sampled bbox)
     pub fn visual(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Asset {
         if let Some(f) = make_factory(class, factory_seed) {
-            return f.asset(inst_seed);
+            return scene_asset(&*f, inst_seed);
         }
         let (lo, hi) = match self.fallback.sample(class, factory_seed, inst_seed).and_then(|s| s.asset.or(s.ph)) {
             Some(b) => b,

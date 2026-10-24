@@ -67,13 +67,30 @@ pub fn merge_by_distance(m: &GMesh, dist: f32) -> GMesh {
     let range_sq = dist * dist;
     let mut dup = vec![OOC; n];
     let mut found = 0;
+    // uniform grid (cell = dist) so the neighbour query does not scan every vertex; the result of one iteration does not depend on the visiting order of j
+    let cell = if dist > 0.0 { dist as f64 } else { 1e-9 };
+    let key = |p: [f32; 3]| [(p[0] as f64 / cell).floor() as i64, (p[1] as f64 / cell).floor() as i64, (p[2] as f64 / cell).floor() as i64];
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    for j in 0..n {
+        grid.entry(key(m.v[j])).or_default().push(j as u32);
+    }
     for i in 0..n {
         if dup[i] == OOC || dup[i] == i as i32 {
             let fp = found;
-            for j in 0..n {
-                if j != i && dup[j] == OOC && len_sq(m.v[j], m.v[i]) <= range_sq {
-                    dup[j] = i as i32;
-                    found += 1;
+            let k = key(m.v[i]);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(l) = grid.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) {
+                            for &j in l {
+                                let j = j as usize;
+                                if j != i && dup[j] == OOC && len_sq(m.v[j], m.v[i]) <= range_sq {
+                                    dup[j] = i as i32;
+                                    found += 1;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if found != fp {

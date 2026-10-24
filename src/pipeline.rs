@@ -123,6 +123,21 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
                 geom.tris = tris;
             }
         }
+        if std::env::var("ROOMSTAT").is_ok() {
+            let stat = |tris: &[crate::furn::geom::Tri]| {
+                let mut a = [0.0f64; 6];
+                let mut n = [0usize; 6];
+                for t in tris {
+                    let ar = crate::furn::geom::tri_area(&t.v);
+                    for (k, bit) in [crate::furn::geom::INTERIOR, crate::furn::geom::VISIBLE, crate::furn::geom::SUPPORT, crate::furn::geom::CEILING, crate::furn::geom::WALL].iter().enumerate() {
+                        if t.tags & bit != 0 { a[k] += ar; n[k] += 1; }
+                    }
+                    a[5] += ar; n[5] += 1;
+                }
+                format!("int {:.2}/{} vis {:.2}/{} sup {:.2}/{} ceil {:.2}/{} wall {:.2}/{} all {:.2}/{}", a[0], n[0], a[1], n[1], a[2], n[2], a[3], n[3], a[4], n[4], a[5], n[5])
+            };
+            eprintln!("ROOMSTAT {} {}", sh.name, stat(&geom.tris));
+        }
         let rt = room_type(&sh.name);
         let tags = TagSet::from([Tag::sem("Room"), Tag::obj(&sh.name), sem_room_tag(rt)]);
         let mut o = ObjState::new(Arc::new(geom), Pose::identity(), tags);
