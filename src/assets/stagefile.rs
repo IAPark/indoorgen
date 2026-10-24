@@ -2,6 +2,7 @@
 pub struct Stage {
     pub v: Vec<[f32; 3]>,
     pub f: Vec<Vec<u32>>,
+    pub e: Vec<[u32; 2]>,
 }
 
 pub fn read(path: &str) -> Option<Stage> {
@@ -28,7 +29,15 @@ pub fn read(path: &str) -> Option<Stage> {
         f.push((0..s).map(|k| u32at(o + 4 * k)).collect());
         o += 4 * s;
     }
-    Some(Stage { v, f })
+    let mut e = vec![];
+    if b.len() >= o + 8 && &b[o..o + 4] == b"EDG1" {
+        let ne = u32at(o + 4) as usize;
+        o += 8;
+        for i in 0..ne {
+            e.push([u32at(o + 8 * i), u32at(o + 8 * i + 4)]);
+        }
+    }
+    Some(Stage { v, f, e })
 }
 
 pub fn read_f32(path: &str) -> Option<Vec<f32>> {

@@ -20,6 +20,8 @@ def dump_obj(path, ob, evaluated=False, extra=None):
     with open(path, "wb") as fh:
         fh.write(b"RCv1"); fh.write(struct.pack("<I", len(hb))); fh.write(hb)
         fh.write(co.tobytes()); fh.write(ls.astype("<u4").tobytes()); fh.write(lv.astype("<u4").tobytes())
+        ed = np.empty(len(m.edges) * 2, dtype=np.uint32); m.edges.foreach_get("vertices", ed)
+        fh.write(b"EDG1"); fh.write(struct.pack("<I", len(m.edges))); fh.write(ed.astype("<u4").tobytes())
     if evaluated: e.to_mesh_clear()
 
 class _D:

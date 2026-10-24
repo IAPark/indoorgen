@@ -82,6 +82,7 @@ pub mod bevelgn;
 pub mod stagecmp;
 pub mod stagefile;
 pub mod dualcon;
+pub mod bpymod;
 pub mod solidnm;
 pub mod bpyx;
 pub mod bevmod;
