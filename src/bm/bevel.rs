@@ -207,6 +207,8 @@ pub struct Bp<'a> {
     pub loop_slide: bool,
     pub limit_offset: bool,
     pub offset_adjust: bool,
+    /// bevel affect = VERTICES (bmo_bevel with vertices selected; verts tagged, edges not)
+    pub vertex_only: bool,
     pub mat_nr: i32,
     pub pro_spacing: ProfileSpacing,
     pub ehs: Vec<EdgeHalf>,
@@ -1007,6 +1009,15 @@ impl<'a> Bp<'a> {
             pro.plane_no = [0.0; 3];
             pro.proj_dir = [0.0; 3];
             do_linear_interp = false;
+        } else if self.vertex_only {
+            pro.start = start;
+            pro.middle = self.co(self.bvs[bv].v);
+            pro.end = end;
+            pro.super_r = self.pro_super_r;
+            pro.plane_co = [0.0; 3];
+            pro.plane_no = [0.0; 3];
+            pro.proj_dir = [0.0; 3];
+            do_linear_interp = false;
         }
         if do_linear_interp {
             pro.super_r = PRO_LINE_R;
@@ -1310,8 +1321,47 @@ impl<'a> Bp<'a> {
         }
     }
 
+    /// build_boundary_vertex_only
+    fn build_boundary_vertex_only(&mut self, bv: usize, construct: bool) {
+        let vm = self.bvs[bv].vmesh;
+        let bvv = self.bvs[bv].v;
+        let efirst = self.bvs[bv].e0;
+        let mut e = efirst;
+        loop {
+            let co = self.slide_dist(e, bvv, self.ehs[e].offset_l);
+            if construct {
+                let v = self.add_new_bound_vert(vm, co);
+                self.bounds[v].efirst = e;
+                self.bounds[v].elast = e;
+                self.ehs[e].leftv = v;
+                self.ehs[e].rightv = v;
+            } else {
+                let lv = self.ehs[e].leftv;
+                self.adjust_bound_vert(lv, co);
+            }
+            e = self.ehs[e].next;
+            if e == efirst {
+                break;
+            }
+        }
+        if construct {
+            // set_bound_vert_seams only matters for mark_seam / mark_sharp (not ported)
+            if self.vms[vm].count == 2 {
+                self.vms[vm].mesh_kind = MeshKind::None;
+            } else if self.seg == 1 {
+                self.vms[vm].mesh_kind = MeshKind::Poly;
+            } else {
+                self.vms[vm].mesh_kind = MeshKind::Adj;
+            }
+        }
+    }
+
     fn build_boundary(&mut self, bv: usize, construct: bool) {
         if self.bvs[bv].edgecount <= 1 {
+            return;
+        }
+        if self.vertex_only {
+            self.build_boundary_vertex_only(bv, construct);
             return;
         }
         let vm = self.bvs[bv].vmesh;
@@ -2048,6 +2098,9 @@ impl<'a> Bp<'a> {
     }
 
     fn tri_corner_test(&self, bv: usize) -> i32 {
+        if self.vertex_only {
+            return -1;
+        }
         let mut in_plane_e = 0;
         let vm = self.bvs[bv].vmesh;
         if self.vms[vm].count != 3 {
@@ -2498,6 +2551,44 @@ impl<'a> Bp<'a> {
         }
     }
 
+    /// vertex bevel with only two boundary verts: a curved edge between them when seg > 1 (or the plain edge if the vertex had no faces)
+    fn bevel_vert_two_edges(&mut self, bv: usize) {
+        let vm = self.bvs[bv].vmesh;
+        let bvv = self.bvs[bv].v;
+        let (v1, v2) = (self.mv(vm, 0, 0, 0).v, self.mv(vm, 1, 0, 0).v);
+        let ns = self.vms[vm].seg;
+        if ns > 1 {
+            let bndv = self.vms[vm].boundstart;
+            let mut pro = self.bounds[bndv].profile.clone();
+            pro.super_r = self.pro_super_r;
+            pro.start = self.co(v1);
+            pro.end = self.co(v2);
+            pro.middle = self.co(bvv);
+            pro.plane_co = [0.0; 3];
+            pro.plane_no = [0.0; 3];
+            pro.proj_dir = [0.0; 3];
+            for k in 1..ns {
+                let co = self.get_profile_point(&pro, k, ns);
+                self.set_mv_co(vm, 0, 0, k, co);
+                self.create_mesh_bmvert(vm, 0, 0, k, bvv);
+            }
+            let c2 = self.co(v2);
+            self.set_mv_co(vm, 0, 0, ns, c2);
+            for k in 1..ns {
+                self.copy_mesh_vert(vm, 1, 0, ns - k, 0, 0, k);
+            }
+            self.bounds[bndv].profile = pro;
+        }
+        if !self.bm.vert_face_check(bvv) {
+            let e_eg = self.ehs[self.bvs[bv].e0].e;
+            for k in 0..ns {
+                let a = self.mv(vm, 0, 0, k).v;
+                let b = self.mv(vm, 0, 0, k + 1).v;
+                self.bm.edge_create(a, b, Some(e_eg), true);
+            }
+        }
+    }
+
     fn build_vmesh(&mut self, bv: usize) -> Result<(), String> {
         let vm = self.bvs[bv].vmesh;
         let n = self.vms[vm].count;
@@ -2586,8 +2677,8 @@ impl<'a> Bp<'a> {
         }
         match self.vms[vm].mesh_kind {
             MeshKind::None => {
-                if n == 2 {
-                    // vertex-only bevel case (not supported)
+                if n == 2 && self.vertex_only {
+                    self.bevel_vert_two_edges(bv);
                 }
             }
             MeshKind::Poly => {
@@ -2778,7 +2869,7 @@ impl<'a> Bp<'a> {
         for &bme in &edges {
             let face_count = self.bm.edge_face_count(bme);
             self.edge_tag_disable(bme);
-            if self.bm.edges[bme].flag & ELEM_TAG != 0 {
+            if self.bm.edges[bme].flag & ELEM_TAG != 0 && !self.vertex_only {
                 nsel += 1;
                 if first_bme == NONE {
                     first_bme = bme;
@@ -2787,18 +2878,20 @@ impl<'a> Bp<'a> {
             if face_count == 1 {
                 first_bme = bme;
             }
-            if face_count > 0 {
+            if face_count > 0 || self.vertex_only {
                 tot_edges += 1;
             }
             if self.bm.edge_is_wire(bme) {
                 tot_wire += 1;
-                self.edge_tag_enable(bme);
+                if !self.vertex_only {
+                    self.edge_tag_enable(bme);
+                }
             }
         }
         if first_bme == NONE {
             first_bme = self.bm.verts[v].e;
         }
-        if nsel == 0 {
+        if (nsel == 0 && !self.vertex_only) || (tot_edges < 2 && self.vertex_only) {
             self.bm.verts[v].flag &= !ELEM_TAG;
             return NONE;
         }
@@ -2814,7 +2907,7 @@ impl<'a> Bp<'a> {
         self.find_bevel_edge_order(bv, first_bme);
         for i in 0..tot_edges {
             let bme = self.ehs[e0 + i].e;
-            if self.bm.edges[bme].flag & ELEM_TAG != 0 {
+            if self.bm.edges[bme].flag & ELEM_TAG != 0 && !self.vertex_only {
                 self.ehs[e0 + i].is_bev = true;
                 self.ehs[e0 + i].seg = self.seg;
             } else {
@@ -2856,6 +2949,16 @@ impl<'a> Bp<'a> {
                 }
             }
         }
+        let mut vert_axis = [0.0f32; 3];
+        let bv_offset = self.offset;
+        if self.vertex_only && matches!(self.offset_type, OffsetType::Width | OffsetType::Depth) {
+            for i in 0..tot_edges {
+                let bme = self.ehs[e0 + i].e;
+                let v2 = self.bm.edge_other_vert(bme, v);
+                let edge_dir = normalize(sub(self.co(v), self.co(v2)));
+                vert_axis = add(vert_axis, edge_dir);
+            }
+        }
         for i in 0..tot_edges {
             let e = e0 + i;
             self.ehs[e].next = e0 + (i + 1) % tot_edges;
@@ -2883,6 +2986,26 @@ impl<'a> Bp<'a> {
                 if !matches!(self.offset_type, OffsetType::Percent | OffsetType::Absolute) {
                     self.ehs[e].offset_r_spec = self.ehs[e].offset_l_spec;
                 }
+            } else if self.vertex_only {
+                let bme = self.ehs[e].e;
+                match self.offset_type {
+                    OffsetType::Offset => self.ehs[e].offset_l_spec = bv_offset,
+                    OffsetType::Width => {
+                        let v2 = self.bm.edge_other_vert(bme, v);
+                        let edge_dir = sub(self.co(v), self.co(v2));
+                        let z = (2.0 * angle_v3v3(vert_axis, edge_dir).sin()).abs();
+                        self.ehs[e].offset_l_spec = if z < BEVEL_EPSILON { 0.01 * self.offset } else { self.offset / z };
+                    }
+                    OffsetType::Depth => {
+                        let v2 = self.bm.edge_other_vert(bme, v);
+                        let edge_dir = sub(self.co(v), self.co(v2));
+                        let z = angle_v3v3(vert_axis, edge_dir).cos().abs();
+                        self.ehs[e].offset_l_spec = if z < BEVEL_EPSILON { 0.01 * self.offset } else { self.offset / z };
+                    }
+                    OffsetType::Percent => self.ehs[e].offset_l_spec = self.bm.edge_calc_length(bme) * bv_offset / 100.0,
+                    OffsetType::Absolute => self.ehs[e].offset_l_spec = bv_offset,
+                }
+                self.ehs[e].offset_r_spec = self.ehs[e].offset_l_spec;
             } else {
                 self.ehs[e].offset_l_spec = 0.0;
                 self.ehs[e].offset_r_spec = 0.0;
@@ -3393,7 +3516,7 @@ impl<'a> Bp<'a> {
             }
         }
         for e in self.bm.edge_ids() {
-            if self.bm.edges[e].flag & ELEM_TAG != 0 {
+            if self.bm.edges[e].flag & ELEM_TAG != 0 && !self.vertex_only {
                 self.bevel_build_edge_polygons(e);
             }
         }
@@ -3425,6 +3548,22 @@ impl<'a> Bp<'a> {
         } else {
             (e.v1, e.v2)
         }
+    }
+
+    fn vertex_collide_offset(&self, ea: usize) -> f32 {
+        let no_collide_offset = self.offset + 1e6f32;
+        if self.offset == 0.0 {
+            return no_collide_offset;
+        }
+        let ka = self.ehs[ea].offset_l_spec / self.offset;
+        let (eb, _) = self.find_other_end_edge_half(ea);
+        let kb = if eb != NONE { self.ehs[eb].offset_l_spec / self.offset } else { 0.0 };
+        let kab = ka + kb;
+        let la = self.bm.edge_calc_length(self.ehs[ea].e);
+        if kab <= 0.0 {
+            return no_collide_offset;
+        }
+        la / kab
     }
 
     fn geometry_collide_offset(&self, eb: usize) -> f32 {
@@ -3533,7 +3672,7 @@ impl<'a> Bp<'a> {
                 continue;
             }
             for i in 0..self.bvs[bv].edgecount {
-                let c = self.geometry_collide_offset(self.bvs[bv].e0 + i);
+                let c = if self.vertex_only { self.vertex_collide_offset(self.bvs[bv].e0 + i) } else { self.geometry_collide_offset(self.bvs[bv].e0 + i) };
                 if std::env::var("BEVDBG").is_ok() && c < self.offset {
                     eprintln!("collide v{} i{} c={:e} co={:?}", v, i, c, self.bm.verts[v].co);
                 }
@@ -3567,6 +3706,11 @@ impl<'a> Bp<'a> {
 
 /// Tag-based entry (BM_mesh_bevel). Callers set ELEM_TAG on verts/edges first.
 pub fn bm_mesh_bevel(bm: &mut BMesh, o: &BevelOpts) -> Result<(), String> {
+    bm_mesh_bevel_ex(bm, o, false)
+}
+
+/// `vertex_only`: affect = VERTICES (callers tag the vertices to bevel, no edges)
+pub fn bm_mesh_bevel_ex(bm: &mut BMesh, o: &BevelOpts, vertex_only: bool) -> Result<(), String> {
     if o.offset <= 0.0 {
         return Ok(());
     }
@@ -3589,7 +3733,8 @@ pub fn bm_mesh_bevel(bm: &mut BMesh, o: &BevelOpts) -> Result<(), String> {
         pro_super_r,
         loop_slide: o.loop_slide,
         limit_offset: o.limit_offset,
-        offset_adjust: !matches!(o.offset_type, OffsetType::Percent | OffsetType::Absolute),
+        offset_adjust: !vertex_only && !matches!(o.offset_type, OffsetType::Percent | OffsetType::Absolute),
+        vertex_only,
         mat_nr: o.mat_nr,
         pro_spacing: ProfileSpacing::default(),
         ehs: vec![],

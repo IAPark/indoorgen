@@ -6,6 +6,21 @@ use crate::subdiv::{catmull_clark, QMesh};
 use crate::dhash::HashMap;
 
 pub fn subsurf(m: &Mesh, levels: usize, simple: bool) -> Mesh {
+    subsurf_bs(m, levels, simple, false)
+}
+
+/// `preserve_corners`: SUBSURF boundary_smooth PRESERVE_CORNERS (valence-2 boundary vertices stay fixed); false = 'ALL' (the modifier default:
+/// corners are treated like creased boundary vertices and move)
+pub fn subsurf_bs(m: &Mesh, levels: usize, simple: bool, preserve_corners: bool) -> Mesh {
+    let prev = crate::subdiv::set_corner_fixed(preserve_corners);
+    let prev2 = CORNER_FIXED_NOW.with(|c| c.replace(preserve_corners));
+    let r = subsurf_inner(m, levels, simple);
+    CORNER_FIXED_NOW.with(|c| c.set(prev2));
+    crate::subdiv::set_corner_fixed(prev);
+    r
+}
+
+fn subsurf_inner(m: &Mesh, levels: usize, simple: bool) -> Mesh {
     if levels == 0 {
         return m.clone();
     }
@@ -14,8 +29,43 @@ pub fn subsurf(m: &Mesh, levels: usize, simple: bool) -> Mesh {
     }
     let q = QMesh { pos: m.pos.clone(), faces: m.faces.clone() };
     let r = catmull_clark(&q, levels, None);
-    let pos = limit_positions(&r);
+    let mut pos = limit_positions(&r);
+    {
+    let fixed = CORNER_FIXED_NOW.with(|c| c.get());
+        // boundary_smooth ALL: OpenSubdiv's limit position of a valence-2 boundary corner (single face corner) is p + k((a-p)+(b-p)) with
+        // k = 21/128 (a, b = its two original neighbours), not the crease limit 1/6 (measured against Blender 4.2, independent of level)
+        let mut ecount: HashMap<(u32, u32), Vec<u32>> = HashMap::default();
+        for f in &m.faces {
+            for c in 0..f.len() {
+                let (a, b) = (f[c], f[(c + 1) % f.len()]);
+                ecount.entry((a.min(b), a.max(b))).or_default().push(f[(c + 2) % f.len()]);
+            }
+        }
+        let mut nb: Vec<Vec<u32>> = vec![vec![]; m.pos.len()];
+        for (&(a, b), fs) in &ecount {
+            if fs.len() == 1 {
+                nb[a as usize].push(b);
+                nb[b as usize].push(a);
+            }
+        }
+        let mut deg = vec![0usize; m.pos.len()];
+        for &(a, b) in ecount.keys() {
+            deg[a as usize] += 1;
+            deg[b as usize] += 1;
+        }
+        for v in 0..m.pos.len() {
+            if deg[v] == 2 && nb[v].len() == 2 {
+                let (p, a, b) = (m.pos[v], m.pos[nb[v][0] as usize], m.pos[nb[v][1] as usize]);
+                let k = 21.0 / 128.0;
+                pos[v] = if fixed { p } else { [0, 1, 2].map(|i| p[i] + k * ((a[i] - p[i]) + (b[i] - p[i]))) };
+            }
+        }
+    }
     Mesh { pos, faces: r.faces, uv: vec![] }
+}
+
+thread_local! {
+    static CORNER_FIXED_NOW: std::cell::Cell<bool> = std::cell::Cell::new(true);
 }
 
 fn limit_positions(m: &QMesh) -> Vec<[f64; 3]> {
