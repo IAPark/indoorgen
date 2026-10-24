@@ -545,7 +545,7 @@ impl Factory for Bed {
         if let Some((mut pre, pressure, pin)) = mjob {
             pre.transform(&rot);
             pre.transform(&Mat4::translation([c.size / 2.0, 0.0, ms.thickness / 2.0]));
-            a.cloth.push(ClothJob { target: mattress_idx, pre, collide: vec![], kwargs: json!({"gravity": 0, "use_pressure": true, "uniform_pressure_force": pressure, "vertex_group_mass": "pin"}), end_frame: 50, subsurf: 0, pin, z_from: None });
+            a.cloth.push(ClothJob { target: mattress_idx, pre, collide: vec![], kwargs: json!({"gravity": 0, "use_pressure": true, "uniform_pressure_force": pressure, "vertex_group_mass": "pin"}), end_frame: 50, subsurf: 0, pin, z_from: None, build: None });
         }
         let mat_m = m("mattress", ms.mat_cls, 3, [0.92, 0.92, 0.9]);
         let mb = mattress.bounds();
@@ -567,9 +567,11 @@ impl Factory for Bed {
         let mut b = Blanket::from_unseeded(kind, &[mw * wm, msz * sm, bc[2], bc[3]]);
         b.margin = bc[3];
         let mut pre = b.create_asset();
+        let mut fold_p = serde_json::Value::Null;
         if s.sheet_folded {
             let theta = r.uniform(-std::f64::consts::PI / 6.0, std::f64::consts::PI / 6.0);
             let ym = b.size * (0.5 - r.uniform(0.1, 0.3));
+            fold_p = json!({"theta": theta, "y_margin": ym});
             pre = fold(&pre, theta, ym);
         }
         let z_sheet = mattress.bounds().1[2];
@@ -591,9 +593,10 @@ impl Factory for Bed {
         let sheet = subsurf(&sheet, 2, false);
         let sb = sheet.bounds();
         let sheet_idx = a.parts.len();
+        let btype = ["blanket", "comforter", "box", "box"][s.sheet_type];
         let mut collide = vec![mattress_idx];
         collide.extend(frame_idx.iter().cloned());
-        a.cloth.push(ClothJob { target: sheet_idx, pre: pre.clone(), collide, kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005, "use_pressure": true, "uniform_pressure_force": pressure, "use_self_collision": s.sheet_folded}), end_frame: 50, subsurf: 2, pin: vec![], z_from: Some((mattress_idx, z_sheet)) });
+        a.cloth.push(ClothJob { target: sheet_idx, pre: pre.clone(), collide, kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005, "use_pressure": true, "uniform_pressure_force": pressure, "use_self_collision": s.sheet_folded}), end_frame: 50, subsurf: 2, pin: vec![], z_from: Some((mattress_idx, z_sheet)), build: Some(json!({"type": btype, "width": b.width, "size": b.size, "thickness": b.thickness, "margin": b.margin, "fold": fold_p, "x": b.size / 2.0 + off})) });
         a.parts.push(Part { mesh: sheet.clone(), mat: fabric.clone(), col: Some((sb.0, sb.1)) });
 
         // ---- cover (always made: python never reads has_cover); 80 frames, no pressure
@@ -617,7 +620,7 @@ impl Factory for Bed {
         cvm.pos = out;
         let cvm = subsurf(&cvm, 2, false);
         let cbb = cvm.bounds();
-        a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)) });
+        a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)), build: Some(json!({"type": "blanket", "width": cb.width, "size": cb.size, "thickness": cb.thickness, "margin": 0.0, "fold": null, "x": c.size / 2.0 + off})) });
         a.parts.push(Part { mesh: cvm, mat: fabric.clone(), col: Some((cbb.0, cbb.1)) });
 
         // ---- pillows

@@ -118,6 +118,8 @@ pub struct ClothJob {
     pub pin: Vec<u32>,
     /// pre mesh was placed at z = top of `.0` (max z) : `.1` is the value Rust used; Blender shifts by (new top - used)
     pub z_from: Option<(usize, f64)>,
+    /// build the pre mesh in Blender with python's own factory code instead of importing `pre` (exact edge/loop order => reproducible sims)
+    pub build: Option<serde_json::Value>,
 }
 
 /// object resting on cloth/bed surfaces: Blender re-drops it by the change of the supporting surface height at (x, y)
@@ -152,7 +154,7 @@ impl Asset {
             out.push(json!({
                 "kind": "cloth", "target": nm(j.target), "verts": verts, "faces": pre.faces,
                 "collide": j.collide.iter().map(|&i| nm(i)).collect::<Vec<_>>(), "kwargs": j.kwargs, "end_frame": j.end_frame,
-                "subsurf": j.subsurf, "pin": j.pin,
+                "subsurf": j.subsurf, "pin": j.pin, "build": j.build, "pose": m.0,
                 "z_from": j.z_from.map(|(p, z)| json!({"part": nm(p), "z_used": z + zt})),
             }));
         }

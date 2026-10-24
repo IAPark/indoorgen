@@ -40,17 +40,64 @@ def _drop(bases_mesh, x, y):
     return best
 
 
+def _build_blanket(b, z, pose=None):
+    """python's own Blanket / Comforter / BoxComforter create_asset (+ fold) with explicit parameters, placed like BedFactory.make_sheet"""
+    import math
+    from infinigen.assets.objects.clothes import blanket as BL
+    from infinigen.core import surface as S
+    from infinigen.core.util import blender as butil
+    from infinigen.assets.utils.decorate import read_co, write_co
+    S.assign_material = lambda *a, **k: None
+    BL.surface.assign_material = lambda *a, **k: None
+    cls = {"blanket": BL.BlanketFactory, "comforter": BL.ComforterFactory, "box": BL.BoxComforterFactory}[b["type"]]
+    f = cls.__new__(cls)
+    f.width, f.size, f.thickness = b["width"], b["size"], b["thickness"]
+    if b["type"] == "box":
+        f.margin = b["margin"]
+    f.surface = None
+    obj = f.create_asset()
+    if b.get("fold"):
+        theta, ym = b["fold"]["theta"], b["fold"]["y_margin"]
+        # BlanketFactory.fold with the drawn values
+        import bpy as _b
+        obj.rotation_euler[-1] = theta
+        obj.location[1] -= ym
+        butil.apply_transform(obj, True)
+        with butil.ViewportMode(obj, "EDIT"):
+            _b.ops.mesh.select_all(action="SELECT")
+            _b.ops.mesh.bisect(plane_co=(0, 0, 0), plane_no=(0, 1, 0))
+        x, y, zz = read_co(obj).T
+        write_co(obj, np.stack([x, np.where(y > 0, -y, y), np.where(y > 0, 0.05 - zz, zz)], -1))
+        obj.location[1] += ym
+        butil.apply_transform(obj, True)
+        obj.rotation_euler[-1] = -theta
+        butil.apply_transform(obj)
+    obj.location = b["x"], 0, z - (pose[2][3] if pose else 0.0)
+    obj.rotation_euler[-1] = math.pi / 2
+    butil.apply_transform(obj, True)
+    if pose:
+        import mathutils
+        obj.matrix_world = mathutils.Matrix([list(r) for r in pose])
+        butil.apply_transform(obj, True)
+    return obj
+
+
 def run_jobs(jobs, world_mesh, set_mesh, verbose=True):
     from infinigen.assets.scatters.clothes import cloth_sim
     from infinigen.assets.utils.decorate import subsurf
     from infinigen.core.util import blender as butil
     for j in jobs:
         if j["kind"] == "cloth":
-            verts = np.array(j["verts"], dtype=float).reshape(-1, 3)
-            if j.get("z_from"):
+            if j.get("build"):
                 pv, _ = world_mesh(j["z_from"]["part"])
-                verts[:, 2] += pv[:, 2].max() - j["z_from"]["z_used"]
-            obj = _make("sim", verts, j["faces"])
+                obj = _build_blanket(j["build"], float(pv[:, 2].max()), j.get("pose"))
+                verts = np.array([tuple(v.co) for v in obj.data.vertices])
+            else:
+                verts = np.array(j["verts"], dtype=float).reshape(-1, 3)
+                if j.get("z_from"):
+                    pv, _ = world_mesh(j["z_from"]["part"])
+                    verts[:, 2] += pv[:, 2].max() - j["z_from"]["z_used"]
+                obj = _make("sim", verts, j["faces"])
             if j.get("pin"):
                 vg = obj.vertex_groups.new(name="pin")
                 vg.add([int(i) for i in j["pin"]], 1, "REPLACE")

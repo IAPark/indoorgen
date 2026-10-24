@@ -86,7 +86,9 @@ fn main() {
                 scene.lights.push(infinigen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() });
             }
         }
+        infinigen::assets::set_unseeded(gen.unseeded.clone());
         let asset = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+        infinigen::assets::set_unseeded(None);
         let _ = obj;
         let pose_m = Mat4([
             [o.pose.r[0][0], o.pose.r[0][1], o.pose.r[0][2], o.pose.t[0]],

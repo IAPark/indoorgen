@@ -35,7 +35,7 @@ fn main() {
             tags.insert(if neg { tag.negated() } else { tag });
         }
         let mut os = ObjState::new(Arc::new(geom), pose, tags);
-        os.generator = Some(GenRef { class: gen.to_string(), factory_seed: 0, inst_seed: 0 });
+        os.generator = Some(GenRef { class: gen.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None });
         for r in o["relations"].as_array().unwrap() {
             let kind = r["rel"].as_str().unwrap();
             let gk = match kind { "StableAgainst" => GeoKind::StableAgainst, "CoPlanar" => GeoKind::CoPlanar, "SupportedBy" => GeoKind::SupportedBy, "Touching" => GeoKind::Touching, _ => continue };

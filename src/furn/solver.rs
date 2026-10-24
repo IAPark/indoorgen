@@ -206,7 +206,8 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
                 // real draws: the gaussian cache state matters
                 unseeded_init_draws(class, rng);
             } else {
-                crate::assets::set_unseeded(None);
+                // BedFactory: the sheet / fold / cover choices are needed by the final asset (same words as skipped below)
+                crate::assets::set_unseeded(if class == "BedFactory" { crate::assets::ctor_draws::ctor_draws(class, &mut rng.clone()) } else { None });
                 for _ in 0..k {
                     rng.next_u32();
                 }
@@ -235,7 +236,7 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             ctx.assets.placeholder(class, fac_seed, inst_seed, kind)?
         }
     };
-    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed }))
+    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::assets::unseeded() } else { None } }))
 }
 
 pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng) -> bool {
