@@ -305,6 +305,12 @@ fn ceil_cuts(size: f64, dist: f64) -> usize {
 
 fn divide(m: &Mesh, dist: f64, r: &mut Rng) -> Mesh {
     let (lo, hi) = m.bounds();
+    divide_dims(m, [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]], dist, r)
+}
+
+/// divide with explicit `obj.dimensions` (python reads stale bounds of the joined legs, before clamp / wrap)
+fn divide_dims(m: &Mesh, dims: [f64; 3], dist: f64, r: &mut Rng) -> Mesh {
+    let (lo, hi) = ([0.0; 3], dims);
     let mut out = m.clone();
     for i in 0..3 {
         let d = if i != 2 { dist } else { dist * r.uniform(0.5, 1.0) };
@@ -345,17 +351,22 @@ impl BedSpec {
             y0 -= d;
             y1 += d;
         }
+        let ldims = {
+            let pts: Vec<V3> = legs.iter().flatten().cloned().collect();
+            let ext = |k: usize| pts.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max) - pts.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min);
+            [ext(0), ext(1), ext(2)]
+        };
         let m = box_walls([x0, y0, -c.leg_height * zf], [x1, y1, 0.0]);
         if std::env::var("BEDDBG").is_ok() {
             eprintln!("leg decor box {:?} {:?} (leg_height {} zf {}) walls verts {}", [x0, y0, -c.leg_height * zf], [x1, y1, 0.0], c.leg_height, zf, m.pos.len());
         }
         match self.leg_decor {
             0 => {
-                let g = divide(&m, self.dot_distance, r);
+                let g = divide_dims(&m, ldims, self.dot_distance, r);
                 coil(&g, self, r)
             }
             1 => {
-                let g = divide(&m, self.panel_distance, r);
+                let g = divide_dims(&m, ldims, self.panel_distance, r);
                 let sel = vec![true; g.faces.len()];
                 pad_bevel(&inset_individual(&g, &sel, self.panel_margin, self.panel_margin))
             }

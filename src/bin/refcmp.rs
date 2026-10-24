@@ -118,6 +118,7 @@ fn main() {
         eprintln!("usage: refcmp CLASS [SEEDS] [--inst I] [--dir DIR] [--tol-mean X] [--tol-max X] [--quiet]");
         std::process::exit(2);
     }
+    std::env::set_var("REFSTUB", "1");
     let opt = |k: &str| a.iter().position(|x| x == k).map(|i| a[i + 1].clone());
     let cls = &a[1];
     let dir = opt("--dir").unwrap_or_else(|| format!("{}/work/refcache", std::env::var("HOME").unwrap()));

@@ -361,6 +361,9 @@ fn pick_and_generate(rng: &mut Rng, mats: &[(Mat, f64)]) {
 
 /// returns the index (in `mats`) of the sampled material
 fn pick_and_generate_idx(rng: &mut Rng, mats: &[(Mat, f64)]) -> usize {
+    if super::matdraw::ref_stub() {
+        return 0;
+    }
     let w: Vec<f64> = mats.iter().map(|m| m.1).collect();
     let mi = wsample(rng, &w);
     let m = mats[mi].0;
