@@ -247,6 +247,30 @@ fn csg_intersect(a: Vec<Poly>, b: Vec<Poly>, eps: f64) -> Vec<Poly> {
     na.all_polygons()
 }
 
+/// split `p` into the cells of the BSP tree (no classification)
+fn split_cells(node: &Node, p: Poly, out: &mut Vec<Poly>, eps: f64) {
+    let Some(pl) = node.plane else {
+        out.push(p);
+        return;
+    };
+    let (mut cf, mut cb, mut fr, mut bk) = (vec![], vec![], vec![], vec![]);
+    split_polygon(&pl, &p, &mut cf, &mut cb, &mut fr, &mut bk, eps);
+    fr.extend(cf);
+    fr.extend(cb);
+    for f in fr {
+        match &node.front {
+            Some(n) => split_cells(n, f, out, eps),
+            None => out.push(f),
+        }
+    }
+    for b in bk {
+        match &node.back {
+            Some(n) => split_cells(n, b, out, eps),
+            None => out.push(b),
+        }
+    }
+}
+
 fn bbox(p: &Poly) -> ([f64; 3], [f64; 3]) {
     let mut lo = [f64::MAX; 3];
     let mut hi = [f64::MIN; 3];
@@ -290,7 +314,6 @@ fn flipped(ps: &[Poly]) -> Vec<Poly> {
 fn classify(a: &[Poly], b: &[Poly], eps: f64) -> (Vec<Poly>, Vec<Poly>) {
     let bb: Vec<([f64; 3], [f64; 3])> = b.iter().map(bbox).collect();
     let tree = Node::new(b.to_vec(), eps);
-    let inv = Node::new(flipped(b), eps);
     let (mut out, mut inn) = (vec![], vec![]);
     for p in a {
         let (lo, hi) = bbox(p);
@@ -312,9 +335,61 @@ fn classify(a: &[Poly], b: &[Poly], eps: f64) -> (Vec<Poly>, Vec<Poly>) {
                 inn.push(p.clone());
             }
         } else {
-            out.extend(tree.clip_polygons(vec![p.clone()], eps));
-            inn.extend(inv.clip_polygons(vec![p.clone()], eps));
+            // split p by the planes of the other solid's triangles that really cross it, then classify the cells
+            let side = |pl: &Plane, q: &Poly| -> (bool, bool) {
+                let (mut pos_, mut neg) = (false, false);
+                for v in &q.v {
+                    let d = dot(pl.n, *v) - pl.w;
+                    if d > eps {
+                        pos_ = true;
+                    } else if d < -eps {
+                        neg = true;
+                    }
+                }
+                (pos_, neg)
+            };
+            let mut cand: Vec<Poly> = vec![];
+            for (bi, (l, h)) in bb.iter().enumerate() {
+                if !(0..3).all(|k| lo[k] <= h[k] + eps * 10.0 && hi[k] >= l[k] - eps * 10.0) {
+                    continue;
+                }
+                let q = &b[bi];
+                let (sp, sn) = side(&p.plane, q);
+                if !(sp && sn) {
+                    continue;
+                }
+                let (tp, tn) = side(&q.plane, p);
+                if !(tp && tn) {
+                    continue;
+                }
+                cand.push(q.clone());
+            }
+            let mut frags = vec![];
+            if cand.is_empty() {
+                frags.push(p.clone());
+            } else {
+                let local = Node::new(cand, eps);
+                split_cells(&local, p.clone(), &mut frags, eps);
+            }
+            for f in frags {
+                let n = f.v.len() as f64;
+                let mut c = [0.0; 3];
+                for v in &f.v {
+                    for k in 0..3 {
+                        c[k] += v[k] / n;
+                    }
+                }
+                if point_outside(&tree, c, eps) {
+                    out.push(f);
+                } else {
+                    inn.push(f);
+                }
+            }
         }
+    }
+    if std::env::var("GNDUMP").is_ok() {
+        let t = a.iter().filter(|p| { let (lo, hi) = bbox(p); bb.iter().any(|(l, h)| (0..3).all(|k| lo[k] <= h[k] + eps * 10.0 && hi[k] >= l[k] - eps * 10.0)) }).count();
+        eprintln!("classify: {} polys, {} touching -> out {} in {}", a.len(), t, out.len(), inn.len());
     }
     (out, inn)
 }
@@ -394,9 +469,11 @@ pub fn mesh_boolean(op: &str, first: &Mesh, others: &[&Mesh]) -> Mesh {
         }
     }
     // weld vertices and triangulate (fan) the convex fragments
-    let q = 1.0 / (1e-7 * scale.max(1e-3));
-    let mut map: HashMap<[i64; 3], u32> = HashMap::default();
+    let tolw = 2e-7 * scale.max(1e-3);
+    let q = 1.0 / tolw;
+    let mut map: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
     let mut pos: Vec<V3> = vec![];
+    let mut posd: Vec<[f64; 3]> = vec![];
     let mut faces: Vec<Vec<u32>> = vec![];
     let mut src: Vec<(u8, u32)> = vec![];
     for p in &result {
@@ -404,11 +481,26 @@ pub fn mesh_boolean(op: &str, first: &Mesh, others: &[&Mesh]) -> Mesh {
             .v
             .iter()
             .map(|v| {
-                let key = [(v[0] * q).round() as i64, (v[1] * q).round() as i64, (v[2] * q).round() as i64];
-                *map.entry(key).or_insert_with(|| {
-                    pos.push([v[0] as f32, v[1] as f32, v[2] as f32]);
-                    pos.len() as u32 - 1
-                })
+                let c = [(v[0] * q).floor() as i64, (v[1] * q).floor() as i64, (v[2] * q).floor() as i64];
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            if let Some(list) = map.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) {
+                                for &id in list {
+                                    let w = posd[id as usize];
+                                    if (w[0] - v[0]).abs() <= tolw && (w[1] - v[1]).abs() <= tolw && (w[2] - v[2]).abs() <= tolw {
+                                        return id;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                pos.push([v[0] as f32, v[1] as f32, v[2] as f32]);
+                posd.push(*v);
+                let id = pos.len() as u32 - 1;
+                map.entry(c).or_default().push(id);
+                id
             })
             .collect();
         let mut ids = ids;
@@ -423,6 +515,15 @@ pub fn mesh_boolean(op: &str, first: &Mesh, others: &[&Mesh]) -> Mesh {
             }
         }
     }
+    if std::env::var("GNDUMP").is_ok() {
+        eprintln!("csg {}: A {} verts {} faces, others {:?}, result tris {} verts {}", op, first.nv(), first.nf(), others.iter().map(|o| (o.nv(), o.nf())).collect::<Vec<_>>(), faces.len(), pos.len());
+    }
+    let faces = if std::env::var("GNNOMERGE").is_ok() { faces } else { resolve_tjunctions(&pos, faces, scale) };
+    let (faces, src) = if std::env::var("GNNOMERGE").is_ok() { (faces, src) } else { merge_coplanar(&pos, faces, src) };
+    if std::env::var("GNDUMP").is_ok() {
+        eprintln!("  merged faces {}", faces.len());
+    }
+    let (pos, faces) = compact(pos, faces);
     let mut m = Mesh::from_faces(pos, &faces, &[]);
     // face attribute propagation from the source faces
     let metas: Vec<&Mesh> = std::iter::once(first).chain(others.iter().copied()).collect();
@@ -457,4 +558,314 @@ pub fn mesh_boolean(op: &str, first: &Mesh, others: &[&Mesh]) -> Mesh {
     }
     m.mats = first.mats.clone();
     m
+}
+
+fn compact(pos: Vec<V3>, faces: Vec<Vec<u32>>) -> (Vec<V3>, Vec<Vec<u32>>) {
+    let mut map = vec![u32::MAX; pos.len()];
+    let mut np = vec![];
+    for f in &faces {
+        for &v in f {
+            if map[v as usize] == u32::MAX {
+                map[v as usize] = 0;
+            }
+        }
+    }
+    for (i, p) in pos.iter().enumerate() {
+        if map[i] != u32::MAX {
+            map[i] = np.len() as u32;
+            np.push(*p);
+        }
+    }
+    (np, faces.into_iter().map(|f| f.into_iter().map(|v| map[v as usize]).collect()).collect())
+}
+
+/// Merge edge-adjacent coplanar triangles with the same source face into polygons; vertices that are collinear in every
+/// polygon they belong to are dropped (removes the T-junction vertices the BSP leaves behind). Regions with holes stay triangles.
+pub fn merge_coplanar(pos: &[V3], tris: Vec<Vec<u32>>, src: Vec<(u8, u32)>) -> (Vec<Vec<u32>>, Vec<(u8, u32)>) {
+    let n = tris.len();
+    let p64 = |i: u32| {
+        let q = pos[i as usize];
+        [q[0] as f64, q[1] as f64, q[2] as f64]
+    };
+    let normals: Vec<P3> = tris
+        .iter()
+        .map(|t| {
+            let c = cross(sub(p64(t[1]), p64(t[0])), sub(p64(t[2]), p64(t[0])));
+            let l = dot(c, c).sqrt();
+            if l > 0.0 { [c[0] / l, c[1] / l, c[2] / l] } else { c }
+        })
+        .collect();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut Vec<usize>, x: usize) -> usize {
+        let mut r = x;
+        while p[r] != r {
+            r = p[r];
+        }
+        let mut c = x;
+        while p[c] != r {
+            let nx = p[c];
+            p[c] = r;
+            c = nx;
+        }
+        r
+    }
+    let mut emap: HashMap<(u32, u32), usize> = HashMap::default();
+    for (i, t) in tris.iter().enumerate() {
+        for k in 0..3 {
+            emap.insert((t[k], t[(k + 1) % 3]), i);
+        }
+    }
+    for (i, t) in tris.iter().enumerate() {
+        for k in 0..3 {
+            if let Some(&j) = emap.get(&(t[(k + 1) % 3], t[k])) {
+                if src[i] == src[j] {
+                    let d = sub(normals[i], normals[j]);
+                    if dot(d, d).sqrt() < 1e-5 {
+                        let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+                        parent[a] = b;
+                    }
+                }
+            }
+        }
+    }
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::default();
+    let mut order = vec![];
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_insert_with(|| {
+            order.push(r);
+            vec![]
+        }).push(i);
+    }
+    let mut needed = vec![false; pos.len()];
+    // (loop, src) for merged groups; triangles for the rest
+    let mut loops: Vec<(Vec<u32>, (u8, u32))> = vec![];
+    let mut keep_tris: Vec<usize> = vec![];
+    let mut tri_out: Vec<([u32; 3], (u8, u32))> = vec![];
+    for r in &order {
+        let g = &groups[r];
+        if g.len() == 1 {
+            keep_tris.push(g[0]);
+            for &v in &tris[g[0]] {
+                needed[v as usize] = true;
+            }
+            continue;
+        }
+        let mut set: HashMap<(u32, u32), ()> = HashMap::default();
+        for &i in g {
+            for k in 0..3 {
+                set.insert((tris[i][k], tris[i][(k + 1) % 3]), ());
+            }
+        }
+        let mut next: HashMap<u32, Vec<u32>> = HashMap::default();
+        for &(a, b) in set.keys() {
+            if !set.contains_key(&(b, a)) {
+                next.entry(a).or_default().push(b);
+            }
+        }
+        // boundary loops
+        let simple = next.values().all(|v| v.len() == 1);
+        let mut gl: Vec<Vec<u32>> = vec![];
+        if simple {
+            let mut seen: HashMap<u32, ()> = HashMap::default();
+            let mut starts: Vec<u32> = next.keys().copied().collect();
+            starts.sort();
+            for st in starts {
+                if seen.contains_key(&st) {
+                    continue;
+                }
+                let mut lp = vec![st];
+                seen.insert(st, ());
+                let mut cur = next[&st][0];
+                let mut guard = 0;
+                while cur != st && guard < 100000 {
+                    lp.push(cur);
+                    seen.insert(cur, ());
+                    cur = match next.get(&cur) {
+                        Some(v) => v[0],
+                        None => break,
+                    };
+                    guard += 1;
+                }
+                if cur != st {
+                    gl.clear();
+                    break;
+                }
+                gl.push(lp);
+            }
+        }
+        let keep_group = |keep_tris: &mut Vec<usize>, needed: &mut Vec<bool>| {
+            for &i in g {
+                keep_tris.push(i);
+                for &v in &tris[i] {
+                    needed[v as usize] = true;
+                }
+            }
+        };
+        if gl.is_empty() || gl.iter().any(|l| l.len() < 3) {
+            keep_group(&mut keep_tris, &mut needed);
+            continue;
+        }
+        // drop collinear vertices (they stay only if some polygon needs them)
+        let mut gn = normals[g[0]];
+        let _ = &mut gn;
+        for lp in &gl {
+            let m = lp.len();
+            for k in 0..m {
+                let (a, b, c) = (p64(lp[(k + m - 1) % m]), p64(lp[k]), p64(lp[(k + 1) % m]));
+                let (u, v) = (sub(b, a), sub(c, b));
+                let cr = cross(u, v);
+                if dot(cr, cr).sqrt() > 1e-5 * dot(u, u).sqrt() * dot(v, v).sqrt() {
+                    needed[lp[k] as usize] = true;
+                }
+            }
+        }
+        let signed_area = |lp: &Vec<u32>| -> f64 {
+            let mut nn = [0.0f64; 3];
+            for k in 0..lp.len() {
+                let (a, b) = (p64(lp[k]), p64(lp[(k + 1) % lp.len()]));
+                let c = cross(a, b);
+                for q in 0..3 {
+                    nn[q] += c[q];
+                }
+            }
+            dot(nn, gn) * 0.5
+        };
+        let outers: Vec<usize> = (0..gl.len()).filter(|&k| signed_area(&gl[k]) > 0.0).collect();
+        if gl.len() == 1 {
+            loops.push((gl[0].clone(), src[g[0]]));
+        } else if outers.len() == 1 {
+            // one outer loop with holes: earcut in the plane
+            let o = outers[0];
+            let ax = (0..3).max_by(|&a, &b| gn[a].abs().partial_cmp(&gn[b].abs()).unwrap()).unwrap();
+            let (u, w) = ((ax + 1) % 3, (ax + 2) % 3);
+            let mut ids: Vec<u32> = vec![];
+            let mut data: Vec<f64> = vec![];
+            let mut holes: Vec<usize> = vec![];
+            let order_loops: Vec<usize> = std::iter::once(o).chain((0..gl.len()).filter(|&k| k != o)).collect();
+            for (n_, &k) in order_loops.iter().enumerate() {
+                if n_ > 0 {
+                    holes.push(ids.len());
+                }
+                let lp: Vec<u32> = gl[k].iter().copied().filter(|&v| needed[v as usize]).collect();
+                // earcut expects the outer ring CCW in its (u, w) frame; flip the frame sign if the normal axis is negative
+                let flip = gn[ax] < 0.0;
+                for &v in &lp {
+                    let q = p64(v);
+                    data.push(q[u]);
+                    data.push(if flip { -q[w] } else { q[w] });
+                    ids.push(v);
+                }
+            }
+            let tri = earcutr::earcut(&data, &holes, 2).unwrap_or_default();
+            if tri.is_empty() {
+                keep_group(&mut keep_tris, &mut needed);
+                continue;
+            }
+            let _ = ();
+            for t in tri.chunks(3) {
+                tri_out.push(([ids[t[0]], ids[t[1]], ids[t[2]]], src[g[0]]));
+            }
+        } else {
+            keep_group(&mut keep_tris, &mut needed);
+            continue;
+        }
+    }
+    let mut faces = vec![];
+    let mut osrc = vec![];
+    for (lp, s) in loops {
+        let f: Vec<u32> = lp.into_iter().filter(|&v| needed[v as usize]).collect();
+        if f.len() >= 3 {
+            faces.push(f);
+            osrc.push(s);
+        }
+    }
+    for (t, sr) in tri_out {
+        faces.push(t.to_vec());
+        osrc.push(sr);
+    }
+    for i in keep_tris {
+        faces.push(tris[i].clone());
+        osrc.push(src[i]);
+    }
+    (faces, osrc)
+}
+
+
+/// insert into every face edge the vertices lying on it (so adjacent fragments share identical edges)
+pub fn resolve_tjunctions(pos: &[V3], faces: Vec<Vec<u32>>, scale: f64) -> Vec<Vec<u32>> {
+    if pos.is_empty() {
+        return faces;
+    }
+    let mut lo = [f64::MAX; 3];
+    let mut hi = [f64::MIN; 3];
+    for p in pos {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k] as f64);
+            hi[k] = hi[k].max(p[k] as f64);
+        }
+    }
+    let ext = (0..3).map(|k| hi[k] - lo[k]).fold(1e-9, f64::max);
+    let cell = (ext / ((pos.len() as f64).cbrt() * 1.5 + 1.0)).max(1e-9);
+    let key = |p: [f64; 3]| [((p[0] - lo[0]) / cell).floor() as i64, ((p[1] - lo[1]) / cell).floor() as i64, ((p[2] - lo[2]) / cell).floor() as i64];
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    for (i, p) in pos.iter().enumerate() {
+        grid.entry(key([p[0] as f64, p[1] as f64, p[2] as f64])).or_default().push(i as u32);
+    }
+    let tol = 1e-6 * scale.max(1e-6);
+    let mut out = Vec::with_capacity(faces.len());
+    for f in faces {
+        let n = f.len();
+        let mut nf: Vec<u32> = vec![];
+        for k in 0..n {
+            let (a, b) = (f[k], f[(k + 1) % n]);
+            nf.push(a);
+            let (pa, pb) = ([pos[a as usize][0] as f64, pos[a as usize][1] as f64, pos[a as usize][2] as f64], [pos[b as usize][0] as f64, pos[b as usize][1] as f64, pos[b as usize][2] as f64]);
+            let (ka, kb) = (key(pa), key(pb));
+            let (mut cl, mut ch) = ([0i64; 3], [0i64; 3]);
+            for q in 0..3 {
+                cl[q] = ka[q].min(kb[q]) - 0;
+                ch[q] = ka[q].max(kb[q]) + 0;
+            }
+            let ncells = (0..3).map(|q| (ch[q] - cl[q] + 1) as i64).product::<i64>();
+            if ncells > 4000 {
+                continue;
+            }
+            let d = sub(pb, pa);
+            let l2 = dot(d, d);
+            if l2 < 1e-30 {
+                continue;
+            }
+            let mut found: Vec<(f64, u32)> = vec![];
+            for x in cl[0] - 1..=ch[0] + 1 {
+                for y in cl[1] - 1..=ch[1] + 1 {
+                    for z in cl[2] - 1..=ch[2] + 1 {
+                        if let Some(vs) = grid.get(&[x, y, z]) {
+                            for &v in vs {
+                                if v == a || v == b {
+                                    continue;
+                                }
+                                let pv = [pos[v as usize][0] as f64, pos[v as usize][1] as f64, pos[v as usize][2] as f64];
+                                let t = dot(sub(pv, pa), d) / l2;
+                                if t <= 1e-9 || t >= 1.0 - 1e-9 {
+                                    continue;
+                                }
+                                let proj = [pa[0] + d[0] * t, pa[1] + d[1] * t, pa[2] + d[2] * t];
+                                let e = sub(pv, proj);
+                                if dot(e, e).sqrt() <= tol {
+                                    found.push((t, v));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            found.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+            for (_, v) in found {
+                nf.push(v);
+            }
+        }
+        out.push(nf);
+    }
+    out
 }

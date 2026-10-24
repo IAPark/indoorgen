@@ -251,6 +251,10 @@ fn probes(v: &[[f64; 3]], f: &[Vec<u32>]) -> Vec<[f64; 3]> {
 /// symmetric max nearest-surface distance of vertex + polygon-edge probes (None if too large to evaluate)
 fn surface_distance(va: &[[f64; 3]], fa: &[Vec<u32>], vb: &[[f64; 3]], fb: &[Vec<u32>]) -> Option<f64> {
     let (ta, tb) = (tri_list(va, fa), tri_list(vb, fb));
+    if std::env::var("GNDUMP").is_ok() {
+        let area = |t: &Vec<[[f64; 3]; 3]>| -> f64 { t.iter().map(|x| { let u = sub(x[1], x[0]); let v = sub(x[2], x[0]); let c = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]; dot(c, c).sqrt() * 0.5 }).sum() };
+        eprintln!("  area blender {:.6} rust {:.6}", area(&ta), area(&tb));
+    }
     if ta.is_empty() || tb.is_empty() || ta.len().max(tb.len()) > 250_000 {
         return None;
     }
@@ -258,6 +262,12 @@ fn surface_distance(va: &[[f64; 3]], fa: &[Vec<u32>], vb: &[[f64; 3]], fb: &[Vec
     for (pv, pf, t) in [(va, fa, &tb), (vb, fb, &ta)] {
         for p in probes(pv, pf) {
             let d = t.iter().map(|tr| pt_tri(p, tr)).fold(f64::MAX, f64::min);
+            if d > 1e-4 && std::env::var("GNDUMP").is_ok() {
+                eprintln!("  bad probe {:?} d={:.2e} {}", p.map(|x| (x * 1e5).round() / 1e5), d, if std::ptr::eq(t, &tb) { "A" } else { "B" });
+            }
+            if d > mx && std::env::var("GNDUMP").is_ok() {
+                eprintln!("  worst probe {:?} d={:.3e} ({})", p, d, if std::ptr::eq(t, &tb) { "from A" } else { "from B" });
+            }
             mx = mx.max(d);
         }
     }
@@ -332,6 +342,13 @@ fn main() {
                 objects.map.insert(k.clone(), infinigen::gn::eval::Object { geo, matrix: m });
             }
         }
+        if let Some(cs) = c["collections"].as_object() {
+            for (k, o) in cs {
+                let names = |j: &J| -> Vec<String> { j.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default() };
+                let off = o["offset"].as_array().map(|a| [a[0].as_f64().unwrap_or(0.0) as f32, a[1].as_f64().unwrap_or(0.0) as f32, a[2].as_f64().unwrap_or(0.0) as f32]).unwrap_or([0.0; 3]);
+                objects.collections.insert(k.clone(), infinigen::gn::eval::Collection { objects: names(&o["objects"]), children: names(&o["children"]), offset: off });
+            }
+        }
         if let Some(fa) = c.get("factory").and_then(|f| f.as_array()) {
             // compare the Rust Factory (parameter sampler + template) against Blender's final mesh
             let (class, fseed, inst) = (fa[0].as_str().unwrap_or(""), fa[1].as_u64().unwrap_or(0), fa[2].as_u64().unwrap_or(0));
@@ -347,7 +364,12 @@ fn main() {
                 continue;
             };
             let m = Mesh::from_faces(ex.verts.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &ex.polys, &[]);
-            let rep = compare(exp, &m, tol, verbose);
+            if std::env::var("GNPROF").is_ok() {
+            for (k, t, n) in infinigen::gn::eval::prof_report().iter().take(8) {
+                eprintln!("  prof {:32} {:8.1} ms  x{}", k, t * 1000.0, n);
+            }
+        }
+        let rep = compare(exp, &m, tol, verbose);
             let mut rep = rep;
             if !rep.ok && m.nf() > 0 && !rep.msg.starts_with("attr") {
                 let ev: Vec<[f64; 3]> = exp["v"].as_array().map(|a| a.iter().map(|p| [p[0].as_f64().unwrap(), p[1].as_f64().unwrap(), p[2].as_f64().unwrap()]).collect()).unwrap_or_default();
@@ -415,6 +437,11 @@ fn main() {
             continue;
         }
         let got = mesh.unwrap_or_else(Mesh::new);
+        if std::env::var("GNPROF").is_ok() {
+            for (k, t, n) in infinigen::gn::eval::prof_report().iter().take(10) {
+                eprintln!("  prof {:32} {:8.1} ms  x{}", k, t * 1000.0, n);
+            }
+        }
         let rep = compare(exp, &got, tol, verbose);
         if !rep.ok && got.nf() > 0 && !rep.msg.starts_with("attr") {
             let ev: Vec<[f64; 3]> = exp["v"].as_array().map(|a| a.iter().map(|p| [p[0].as_f64().unwrap(), p[1].as_f64().unwrap(), p[2].as_f64().unwrap()]).collect()).unwrap_or_default();

@@ -112,7 +112,7 @@ def export_node(n):
     if n.bl_idname == "ShaderNodeVectorCurve":
         m = n.mapping
         p["curves3"] = {"pts": [[[pt.location[0], pt.location[1], pt.handle_type] for pt in c.points] for c in m.curves[:3]],
-                        "clip": [m.use_clip, m.clip_min_x, m.clip_min_y, m.clip_max_x, m.clip_max_y]}
+                        "ext": m.extend, "clip": [m.use_clip, m.clip_min_x, m.clip_min_y, m.clip_max_x, m.clip_max_y]}
     if n.bl_idname == "ShaderNodeValToRGB":
         r = n.color_ramp
         p["ramp"] = {"interp": r.interpolation, "mode": r.color_mode, "hue": r.hue_interpolation,
@@ -170,15 +170,48 @@ def export_group(ng, out):
                       "ts": l.to_socket.identifier, "sort": l.multi_input_sort_id})
     for n in ng.nodes:
         for sk in n.inputs:
-            v = getattr(sk, "default_value", None) if sk.type == "OBJECT" else None
+            v = getattr(sk, "default_value", None) if sk.type in ("OBJECT", "COLLECTION") else None
             if isinstance(v, bpy.types.Object) and v.name not in out["objects"]:
                 out["objects"][v.name] = {"mesh": export_mesh(v.data) if v.type == "MESH" else None,
                                           "matrix": [x for r in v.matrix_world for x in r]}
+            elif isinstance(v, bpy.types.Collection):
+                export_collection(v, out)
     items = [i for i in ng.interface.items_tree if i.item_type == "SOCKET"]
     out["groups"][ng.name] = {
         "inputs": [export_iface(i) for i in items if i.in_out == "INPUT"],
         "outputs": [export_iface(i) for i in items if i.in_out == "OUTPUT"],
         "nodes": nodes, "links": links}
+
+
+def export_object_entry(v, out):
+    """scene object -> out["objects"] (raw mesh data, world matrix)"""
+    if v.name not in out["objects"]:
+        out["objects"][v.name] = {"mesh": export_mesh(v.data) if v.type == "MESH" else None,
+                                  "matrix": [x for r in v.matrix_world for x in r]}
+
+
+def export_collection(c, out):
+    """collection -> out["collections"] (+ its objects, evaluated meshes), recursively"""
+    cols = out.setdefault("collections", {})
+    if c.name in cols:
+        return
+    cols[c.name] = {"objects": [o.name for o in c.objects], "children": [ch.name for ch in c.children],
+                    "offset": [x for x in c.instance_offset]}
+    for o in c.objects:
+        if o.name not in out["objects"]:
+            m = None
+            if o.type == "MESH":
+                dg = bpy.context.evaluated_depsgraph_get()
+                ev = o.evaluated_get(dg)
+                me = ev.to_mesh()
+                m = export_mesh(me)
+                ev.to_mesh_clear()
+            mw = o.matrix_world
+            if o.name not in bpy.context.scene.objects:
+                mw = o.matrix_basis  # not in the scene: matrix_world was never evaluated
+            out["objects"][o.name] = {"mesh": m, "matrix": [x for r in mw for x in r]}
+    for ch in c.children:
+        export_collection(ch, out)
 
 
 def export_mesh(me):
@@ -234,6 +267,8 @@ def mod_inputs(mod, out):
                                           "matrix": [x for r in v.matrix_world for x in r]}
                 v = {"object": v.name}
             elif isinstance(v, bpy.types.ID):
+                if isinstance(v, bpy.types.Collection):
+                    export_collection(v, out)
                 v = {"id": v.name}
             elif hasattr(v, "to_list"):
                 v = v.to_list()

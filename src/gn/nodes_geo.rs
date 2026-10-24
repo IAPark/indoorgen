@@ -142,7 +142,10 @@ pub fn geo_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         "GeometryNodeMeshCube" => {
             let size = ev.cv(ni, "Size")?;
             let n = [ev.ci(ni, "Vertices X")?, ev.ci(ni, "Vertices Y")?, ev.ci(ni, "Vertices Z")?];
-            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(mesh_cube(size, n))))])
+            let mut m = mesh_cube(size, n);
+            let un = anon_name("cube_uv");
+            m.attrs.insert(un.clone(), Attr { dom: Dom::Corner, ty: Ty::V, data: cube_uv(n).iter().map(|u| Val::V([u[0], u[1], 0.0])).collect() });
+            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m))), ("UV Map", fld(Rc::new(FNode::Named(un, Ty::V))))])
         }
         "GeometryNodeMeshCylinder" | "GeometryNodeMeshCone" => {
             let fill = match node.ps("fill_type") {
@@ -161,12 +164,27 @@ pub fn geo_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let n = ev.ci(ni, "Vertices")?.max(3) as usize;
             let ss = ev.ci(ni, "Side Segments")?.max(1) as usize;
             let fs = if ev.has_input(ni, "Fill Segments") { ev.ci(ni, "Fill Segments")?.max(1) as usize } else { 1 };
-            let m = mesh_cone(n, rt, rb, depth, ss, fs, fill, !cyl);
-            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m)))])
+            let co = mesh_cone(n, rt, rb, depth, ss, fs, fill, !cyl);
+            let mut m = co.mesh;
+            let (tn, bn, sn, un) = (anon_name("cone_top"), anon_name("cone_bottom"), anon_name("cone_side"), anon_name("cone_uv"));
+            let put = |m: &mut Mesh, name: &str, dom: Dom, v: &Vec<bool>| {
+                m.attrs.insert(name.to_string(), Attr { dom, ty: Ty::B, data: v.iter().map(|b| Val::B(*b)).collect() });
+            };
+            put(&mut m, &tn, co.top.0, &co.top.1);
+            put(&mut m, &bn, co.bottom.0, &co.bottom.1);
+            if !co.side.is_empty() {
+                put(&mut m, &sn, Dom::Face, &co.side);
+            }
+            if !co.uv.is_empty() {
+                m.attrs.insert(un.clone(), Attr { dom: Dom::Corner, ty: Ty::V, data: co.uv.iter().map(|u| Val::V([u[0], u[1], 0.0])).collect() });
+            }
+            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m))), ("Top", fld(Rc::new(FNode::Named(tn, Ty::B)))), ("Bottom", fld(Rc::new(FNode::Named(bn, Ty::B)))), ("Side", fld(Rc::new(FNode::Named(sn, Ty::B)))), ("UV Map", fld(Rc::new(FNode::Named(un, Ty::V))))])
         }
         "GeometryNodeMeshUVSphere" => {
-            let m = mesh_uv_sphere(ev.ci(ni, "Segments")?.max(3) as usize, ev.ci(ni, "Rings")?.max(2) as usize, ev.cf(ni, "Radius")?);
-            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m)))])
+            let (mut m, uv) = mesh_uv_sphere_uv(ev.ci(ni, "Segments")?.max(3) as usize, ev.ci(ni, "Rings")?.max(2) as usize, ev.cf(ni, "Radius")?);
+            let un = anon_name("sphere_uv");
+            m.attrs.insert(un.clone(), Attr { dom: Dom::Corner, ty: Ty::V, data: uv.iter().map(|u| Val::V([u[0], u[1], 0.0])).collect() });
+            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m))), ("UV Map", fld(Rc::new(FNode::Named(un, Ty::V))))])
         }
         "GeometryNodeMeshLine" => {
             let start = ev.cv(ni, "Start Location")?;
@@ -186,8 +204,13 @@ pub fn geo_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(mesh_line(count.max(0) as usize, start, delta))))])
         }
         "GeometryNodeMeshGrid" => {
-            let m = mesh_grid(ev.cf(ni, "Size X")?, ev.cf(ni, "Size Y")?, ev.ci(ni, "Vertices X")?.max(1) as usize, ev.ci(ni, "Vertices Y")?.max(1) as usize);
-            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m)))])
+            let (sx, sy) = (ev.cf(ni, "Size X")?, ev.cf(ni, "Size Y")?);
+            let mut m = mesh_grid(sx, sy, ev.ci(ni, "Vertices X")?.max(1) as usize, ev.ci(ni, "Vertices Y")?.max(1) as usize);
+            let un = anon_name("grid_uv");
+            if m.nf() > 0 {
+                m.attrs.insert(un.clone(), Attr { dom: Dom::Corner, ty: Ty::V, data: grid_uv(&m, sx, sy).iter().map(|u| Val::V([u[0], u[1], 0.0])).collect() });
+            }
+            outs(node, vec![("Mesh", rcgeo(Geometry::from_mesh(m))), ("UV Map", fld(Rc::new(FNode::Named(un, Ty::V))))])
         }
         "GeometryNodeMeshCircle" => {
             let fill = match node.ps("fill_type") {
@@ -344,7 +367,11 @@ pub fn geo_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let c = ev.geo(ni, "Curve")?;
             let prof = ev.geo(ni, "Profile Curve")?;
             let caps = ev.cb(ni, "Fill Caps")?;
+            if std::env::var("GNDUMP").is_ok() {
+                eprintln!("CurveToMesh {}: main curves {:?} pts {:?}, profile curves {:?} pts {:?}, has mesh {}", node.name, c.curves.as_ref().map(|x| x.nc()), c.curves.as_ref().map(|x| x.np()), prof.curves.as_ref().map(|x| x.nc()), prof.curves.as_ref().map(|x| x.np()), c.mesh.is_some());
+            }
             let mut o = Geometry::default();
+            o.inst = c.inst.clone();
             if let Some(cv) = &c.curves {
                 o.mesh = Some(curve_to_mesh(cv, prof.curves.as_ref(), caps));
             }
@@ -384,6 +411,7 @@ fn set_position_geo(g: &mut Geometry, sel: &Field, pos: &Field, off: &Field) {
                 c.hr[i] = add3(c.hr[i], d);
             }
         }
+        super::curveops::calculate_bezier_auto_handles(c);
     }
     if let Some(pt) = g.points.as_ref() {
         let comp = Comp::Points(pt);
@@ -484,30 +512,49 @@ pub fn curve_to_mesh(c: &Curves, prof: Option<&Curves>, caps: bool) -> Mesh {
                     m.pos.push(v);
                 }
             }
-            let nseg = if c.cyclic[k] { n } else { n.saturating_sub(1) };
+            let nseg = if n <= 2 { n.saturating_sub(1) } else if c.cyclic[k] { n } else { n - 1 };
             let pseg = if *pcyc { pn } else { pn.saturating_sub(1) };
             let mut faces: Vec<Vec<u32>> = vec![];
-            let ebase = m.edges.len();
-            // Blender edge order: all edges along the main curve first, then the profile rings
-            for i in 0..nseg {
-                let (r0, r1) = (base + (i * pn) as u32, base + (((i + 1) % n) * pn) as u32);
-                for j in 0..pn as u32 {
-                    m.edges.push([r0 + j, r1 + j]);
+            let mut fedges: Vec<Vec<u32>> = vec![];
+            let main_start = m.edges.len();
+            if pn == 1 {
+                // profile with a single point: wire along the curve
+                for i in 0..n.saturating_sub(1) {
+                    m.edges.push([base + i as u32, base + i as u32 + 1]);
+                }
+                if c.cyclic[k] && nseg > 2 {
+                    m.edges.push([base + n as u32 - 1, base]);
+                }
+                continue;
+            }
+            // Blender edge order: edges along the curve for each profile vertex, then the profile rings
+            for ip in 0..pn {
+                for ir in 0..nseg {
+                    let nx = if ir == n - 1 { 0 } else { ir + 1 };
+                    m.edges.push([base + (pn * ir + ip) as u32, base + (pn * nx + ip) as u32]);
                 }
             }
             let ring_edges_start = m.edges.len();
-            for i in 0..n {
-                let r0 = base + (i * pn) as u32;
-                for j in 0..pseg {
-                    m.edges.push([r0 + j as u32, r0 + ((j + 1) % pn) as u32]);
+            for ir in 0..n {
+                for ip in 0..pseg {
+                    let nx = if ip == pn - 1 { 0 } else { ip + 1 };
+                    m.edges.push([base + (pn * ir + ip) as u32, base + (pn * ir + nx) as u32]);
                 }
             }
-            let _ = ebase;
-            for i in 0..nseg {
-                let (r0, r1) = (base + (i * pn) as u32, base + (((i + 1) % n) * pn) as u32);
-                for j in 0..pseg {
-                    let j1 = ((j + 1) % pn) as u32;
-                    faces.push(vec![r0 + j as u32, r0 + j1, r1 + j1, r1 + j as u32]);
+            for ir in 0..nseg {
+                let nx = if ir == n - 1 { 0 } else { ir + 1 };
+                let (r0, r1) = (base + (ir * pn) as u32, base + (nx * pn) as u32);
+                for ip in 0..pseg {
+                    let j1 = if ip == pn - 1 { 0 } else { ip + 1 };
+                    faces.push(vec![r0 + ip as u32, r0 + j1 as u32, r1 + j1 as u32, r1 + ip as u32]);
+                    let ring_e = ring_edges_start + pseg * ir;
+                    let next_ring_e = ring_edges_start + pseg * nx;
+                    fedges.push(vec![
+                        (ring_e + ip) as u32,
+                        (main_start + nseg * j1 + ir) as u32,
+                        (next_ring_e + ip) as u32,
+                        (main_start + nseg * ip + ir) as u32,
+                    ]);
                 }
             }
             let nside = faces.len();
@@ -515,7 +562,9 @@ pub fn curve_to_mesh(c: &Curves, prof: Option<&Curves>, caps: bool) -> Mesh {
                 let last = base + ((n - 1) * pn) as u32;
                 faces.push((0..pn as u32).rev().map(|j| base + j).collect());
                 faces.push((0..pn as u32).map(|j| last + j).collect());
-                // cap boundary edges and cap faces are sharp
+                let last_ring_e = ring_edges_start + pseg * (n - 1);
+                fedges.push((0..pseg).map(|i| (ring_edges_start + if i == pseg - 1 { pseg - 1 } else { pseg - i - 2 }) as u32).collect());
+                fedges.push((0..pseg).map(|i| (last_ring_e + i) as u32).collect());
                 for i in [0usize, n - 1] {
                     for j in 0..pseg {
                         cap_edges.push(ring_edges_start + i * pseg + j);
@@ -523,6 +572,9 @@ pub fn curve_to_mesh(c: &Curves, prof: Option<&Curves>, caps: bool) -> Mesh {
                 }
                 cap_faces.push(m.nf() + nside);
                 cap_faces.push(m.nf() + nside + 1);
+            }
+            for fe in &fedges {
+                m.ce.extend_from_slice(fe);
             }
             for f in &faces {
                 m.cv.extend_from_slice(f);
@@ -537,7 +589,6 @@ pub fn curve_to_mesh(c: &Curves, prof: Option<&Curves>, caps: bool) -> Mesh {
             a.data.resize(nvv, z);
         }
     }
-    m.rebuild_corner_edges();
     if !cap_faces.is_empty() {
         let mut se = vec![Val::B(false); m.ne()];
         for &e in &cap_edges {

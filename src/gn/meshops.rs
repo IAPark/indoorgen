@@ -355,8 +355,14 @@ pub fn realize_instances(g: &Geometry, depth: i32) -> Geometry {
         let mut ctx_attrs_names: Vec<String> = vec![];
         for (k, x) in inst.xf.iter().enumerate() {
             let Some(r) = inst.refs.get(inst.idx[k] as usize) else { continue };
-            let sub = if depth != 0 && r.inst.is_some() { realize_instances(r, depth - 1) } else { (**r).clone() };
-            let mut t = transform_geometry(&sub, x, None);
+            let owned;
+            let sub: &Geometry = if depth != 0 && r.inst.is_some() {
+                owned = realize_instances(r, depth - 1);
+                &owned
+            } else {
+                &**r
+            };
+            let mut t = transform_geometry(sub, x, None);
             // propagate instance attributes to point/face/... domains of realized geometry
             for (name, a) in inst.attrs.iter() {
                 if !ctx_attrs_names.contains(name) {

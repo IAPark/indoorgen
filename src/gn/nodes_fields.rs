@@ -664,29 +664,113 @@ pub fn field_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         }
         "ShaderNodeTexVoronoi" => {
             use super::noise::*;
-            if node.ps("voronoi_dimensions") != "3D" {
-                return Err("Voronoi: only 3D implemented".into());
-            }
-            let feature = node.ps("feature").to_string();
-            let metric = node.ps("distance").to_string();
+            let dim: usize = match node.ps("voronoi_dimensions") {
+                "1D" => 1,
+                "2D" => 2,
+                "4D" => 4,
+                _ => 3,
+            };
+            let feature: u8 = match node.ps("feature") {
+                "F2" => 1,
+                "SMOOTH_F1" => 2,
+                "DISTANCE_TO_EDGE" => 3,
+                "N_SPHERE_RADIUS" => 4,
+                _ => 0,
+            };
+            let metric: u8 = match node.ps("distance") {
+                "MANHATTAN" => 1,
+                "CHEBYCHEV" => 2,
+                "MINKOWSKI" => 3,
+                _ => 0,
+            };
+            let normalize = node.pb("normalize");
             let get = |id: &str, d: Val| -> Res<Field> { if ev.has_input(ni, id) { ev.field(ni, id) } else { Ok(konst(d)) } };
-            let args = vec![get("Vector", Val::V([0.0; 3]))?, get("Scale", Val::F(5.0))?, get("Smoothness", Val::F(1.0))?, get("Exponent", Val::F(0.5))?, get("Randomness", Val::F(1.0))?];
+            let args = vec![
+                get("Vector", Val::V([0.0; 3]))?,
+                get("W", Val::F(0.0))?,
+                get("Scale", Val::F(5.0))?,
+                get("Detail", Val::F(0.0))?,
+                get("Roughness", Val::F(0.5))?,
+                get("Lacunarity", Val::F(2.0))?,
+                get("Smoothness", Val::F(1.0))?,
+                get("Exponent", Val::F(0.5))?,
+                get("Randomness", Val::F(1.0))?,
+            ];
             let k = kern(move |a, n| {
-                let mut o = vec![vec![], vec![], vec![], vec![]];
+                let mut o = vec![vec![], vec![], vec![], vec![], vec![]];
                 for i in 0..n {
                     let v = at(a[0], i).v();
-                    let sc = at(a[1], i).f();
-                    let prm = VoronoiParams { feature: feature.clone(), metric: metric.clone(), randomness: at(a[4], i).f().clamp(0.0, 1.0), smoothness: (at(a[2], i).f() / 2.0).clamp(0.0, 0.5), exponent: at(a[3], i).f() };
-                    let (d, c, p, r) = voronoi3([v[0] * sc, v[1] * sc, v[2] * sc], &prm);
-                    o[0].push(Val::F(d));
-                    o[1].push(Val::C([c[0], c[1], c[2], 1.0]));
-                    o[2].push(Val::V([p[0] / sc, p[1] / sc, p[2] / sc]));
-                    o[3].push(Val::F(r));
+                    let w = at(a[1], i).f();
+                    let scale = at(a[2], i).f();
+                    let randomness = at(a[8], i).f().clamp(0.0, 1.0);
+                    let mut prm = VorP {
+                        feature,
+                        metric,
+                        dim,
+                        scale,
+                        detail: at(a[3], i).f(),
+                        roughness: at(a[4], i).f(),
+                        lacunarity: at(a[5], i).f(),
+                        smoothness: if feature == 2 { (at(a[6], i).f() / 2.0).clamp(0.0, 0.5) } else { 0.0 },
+                        exponent: if metric == 3 && dim != 1 { at(a[7], i).f() } else { 0.0 },
+                        randomness,
+                        normalize,
+                        max_distance: 0.0,
+                    };
+                    let m = 0.5 + 0.5 * randomness;
+                    let coord_raw = match dim {
+                        1 => [w, 0.0, 0.0, 0.0],
+                        2 => [v[0], v[1], 0.0, 0.0],
+                        3 => [v[0], v[1], v[2], 0.0],
+                        _ => [v[0], v[1], v[2], w],
+                    };
+                    let mut coord = [0.0f32; 4];
+                    for q in 0..dim {
+                        coord[q] = coord_raw[q] * scale;
+                    }
+                    match feature {
+                        3 => {
+                            prm.max_distance = 0.5 + 0.5 * randomness;
+                            o[0].push(Val::F(vor_fractal_dist_to_edge(&prm, coord)));
+                            o[1].push(Val::C([0.0, 0.0, 0.0, 1.0]));
+                            o[2].push(Val::V([0.0; 3]));
+                            o[3].push(Val::F(0.0));
+                            o[4].push(Val::F(0.0));
+                        }
+                        4 => {
+                            o[0].push(Val::F(0.0));
+                            o[1].push(Val::C([0.0, 0.0, 0.0, 1.0]));
+                            o[2].push(Val::V([0.0; 3]));
+                            o[3].push(Val::F(0.0));
+                            o[4].push(Val::F(vor_n_sphere(&prm, coord)));
+                        }
+                        _ => {
+                            let md = if dim == 1 {
+                                m
+                            } else {
+                                let mut z = [0.0f32; 4];
+                                let mut mm = [0.0f32; 4];
+                                for q in 0..dim {
+                                    mm[q] = m;
+                                }
+                                let _ = &mut z;
+                                let dd = vdist_pub(dim, z, mm, &prm);
+                                dd
+                            };
+                            prm.max_distance = md * if feature == 1 { 2.0 } else { 1.0 };
+                            let r = vor_fractal(&prm, coord, true);
+                            o[0].push(Val::F(r.distance));
+                            o[1].push(Val::C([r.color[0], r.color[1], r.color[2], 1.0]));
+                            o[2].push(Val::V(if dim == 1 { [0.0; 3] } else { [r.position[0], r.position[1], r.position[2]] }));
+                            o[3].push(Val::F(r.position[3]));
+                            o[4].push(Val::F(0.0));
+                        }
+                    }
                 }
                 o
             });
-            let r = mf(k, args, 4);
-            outs(node, vec![("Distance", fld(r[0].clone())), ("Color", fld(r[1].clone())), ("Position", fld(r[2].clone())), ("Radius", fld(r[3].clone()))])
+            let r = mf(k, args, 5);
+            outs(node, vec![("Distance", fld(r[0].clone())), ("Color", fld(r[1].clone())), ("Position", fld(r[2].clone())), ("W", fld(r[3].clone())), ("Radius", fld(r[4].clone()))])
         }
         "ShaderNodeTexWhiteNoise" => {
             use super::noise::*;

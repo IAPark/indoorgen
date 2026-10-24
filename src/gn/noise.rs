@@ -522,3 +522,435 @@ pub fn voronoi3(coord: [f32; 3], p: &VoronoiParams) -> (f32, [f32; 3], [f32; 3],
         }
     }
 }
+
+// ------------------------------------------------------------------ Voronoi (1D-4D, fractal), port of blenlib/intern/noise.cc
+pub struct VorP {
+    pub feature: u8, // 0 F1, 1 F2, 2 SMOOTH_F1, 3 DISTANCE_TO_EDGE, 4 N_SPHERE_RADIUS
+    pub metric: u8,  // 0 euclidean, 1 manhattan, 2 chebychev, 3 minkowski
+    pub dim: usize,
+    pub scale: f32,
+    pub detail: f32,
+    pub roughness: f32,
+    pub lacunarity: f32,
+    pub smoothness: f32,
+    pub exponent: f32,
+    pub randomness: f32,
+    pub normalize: bool,
+    pub max_distance: f32,
+}
+
+type V4 = [f32; 4];
+#[derive(Clone, Copy, Default)]
+pub struct VorOut {
+    pub distance: f32,
+    pub color: [f32; 3],
+    pub position: V4,
+}
+
+fn vhash_point(d: usize, k: V4) -> V4 {
+    match d {
+        1 => [hf1(k[0]), 0.0, 0.0, 0.0],
+        2 => [hf2(k[0], k[1]), hf3(k[0], k[1], 1.0), 0.0, 0.0],
+        3 => {
+            let h = hash_f3_to_f3([k[0], k[1], k[2]]);
+            [h[0], h[1], h[2], 0.0]
+        }
+        _ => [hf4(k[0], k[1], k[2], k[3]), hf4(k[3], k[0], k[1], k[2]), hf4(k[2], k[3], k[0], k[1]), hf4(k[1], k[2], k[3], k[0])],
+    }
+}
+fn vhash_color(d: usize, k: V4) -> [f32; 3] {
+    match d {
+        1 => [hf1(k[0]), hf2(k[0], 1.0), hf2(k[0], 2.0)],
+        2 => [hf2(k[0], k[1]), hf3(k[0], k[1], 1.0), hf3(k[0], k[1], 2.0)],
+        3 => hash_f3_to_f3([k[0], k[1], k[2]]),
+        _ => [hf4(k[0], k[1], k[2], k[3]), hf4(k[2], k[0], k[3], k[1]), hf4(k[3], k[2], k[1], k[0])],
+    }
+}
+pub fn vdist_pub(d: usize, a: V4, b: V4, p: &VorP) -> f32 {
+    vdist_nd(d, a, b, p)
+}
+fn vdist_nd(d: usize, a: V4, b: V4, p: &VorP) -> f32 {
+    if d == 1 {
+        return (b[0] - a[0]).abs();
+    }
+    let df: Vec<f32> = (0..d).map(|i| (a[i] - b[i]).abs()).collect();
+    match p.metric {
+        1 => {
+            let mut s = df[0];
+            for x in &df[1..] {
+                s += *x;
+            }
+            s
+        }
+        2 => {
+            let mut m = df[d - 1];
+            for i in (0..d - 1).rev() {
+                m = df[i].max(m);
+            }
+            m
+        }
+        3 => {
+            let mut s = df[0].powf(p.exponent);
+            for x in &df[1..] {
+                s += x.powf(p.exponent);
+            }
+            s.powf(1.0 / p.exponent)
+        }
+        _ => {
+            let mut s = 0.0f32;
+            for i in 0..d {
+                let t = a[i] - b[i];
+                s += t * t;
+            }
+            s.sqrt()
+        }
+    }
+}
+fn euclid(d: usize, a: V4, b: V4) -> f32 {
+    let mut s = 0.0f32;
+    for i in 0..d {
+        let t = a[i] - b[i];
+        s += t * t;
+    }
+    s.sqrt()
+}
+fn vfloor(d: usize, c: V4) -> V4 {
+    let mut o = [0.0; 4];
+    for i in 0..d {
+        o[i] = c[i].floor();
+    }
+    o
+}
+fn vsub(d: usize, a: V4, b: V4) -> V4 {
+    let mut o = [0.0; 4];
+    for i in 0..d {
+        o[i] = a[i] - b[i];
+    }
+    o
+}
+fn vadd(d: usize, a: V4, b: V4) -> V4 {
+    let mut o = [0.0; 4];
+    for i in 0..d {
+        o[i] = a[i] + b[i];
+    }
+    o
+}
+/// offsets of the scan window in Blender's loop order (first axis fastest)
+fn window(d: usize, lo: i32, hi: i32) -> Vec<V4> {
+    let n = (hi - lo + 1) as usize;
+    let total = n.pow(d as u32);
+    (0..total)
+        .map(|mut idx| {
+            let mut o = [0.0f32; 4];
+            for a in 0..d {
+                o[a] = (lo + (idx % n) as i32) as f32;
+                idx /= n;
+            }
+            o
+        })
+        .collect()
+}
+fn point_at(d: usize, cell: V4, off: V4, rnd: f32) -> V4 {
+    let h = vhash_point(d, vadd(d, cell, off));
+    let mut o = [0.0; 4];
+    for i in 0..d {
+        o[i] = off[i] + h[i] * rnd;
+    }
+    o
+}
+fn vpos_out(d: usize, c: V4) -> V4 {
+    // voronoi_position: 1D puts the coordinate into w, others keep their components
+    if d == 1 {
+        [0.0, 0.0, 0.0, c[0]]
+    } else {
+        let mut o = [0.0; 4];
+        for i in 0..d {
+            o[i] = c[i];
+        }
+        o
+    }
+}
+fn smooth01(x: f32) -> f32 {
+    if x >= 1.0 {
+        1.0
+    } else if x <= 0.0 {
+        0.0
+    } else {
+        x * x * (3.0 - 2.0 * x)
+    }
+}
+
+fn vor_f1(p: &VorP, coord: V4) -> VorOut {
+    let d = p.dim;
+    let cell = vfloor(d, coord);
+    let local = vsub(d, coord, cell);
+    let mut md = f32::MAX;
+    let mut toff = [0.0; 4];
+    let mut tpos = [0.0; 4];
+    for off in window(d, -1, 1) {
+        let pp = point_at(d, cell, off, p.randomness);
+        let dd = vdist_nd(d, pp, local, p);
+        if dd < md {
+            toff = off;
+            md = dd;
+            tpos = pp;
+        }
+    }
+    VorOut { distance: md, color: vhash_color(d, vadd(d, cell, toff)), position: vpos_out(d, vadd(d, tpos, cell)) }
+}
+fn vor_f2(p: &VorP, coord: V4) -> VorOut {
+    let d = p.dim;
+    let cell = vfloor(d, coord);
+    let local = vsub(d, coord, cell);
+    let (mut d1, mut d2) = (f32::MAX, f32::MAX);
+    let (mut o1, mut o2) = ([0.0; 4], [0.0; 4]);
+    let (mut p1, mut p2) = ([0.0; 4], [0.0; 4]);
+    for off in window(d, -1, 1) {
+        let pp = point_at(d, cell, off, p.randomness);
+        let dd = vdist_nd(d, pp, local, p);
+        if dd < d1 {
+            d2 = d1;
+            d1 = dd;
+            o2 = o1;
+            o1 = off;
+            p2 = p1;
+            p1 = pp;
+        } else if dd < d2 {
+            d2 = dd;
+            o2 = off;
+            p2 = pp;
+        }
+    }
+    let _ = (o1, p1);
+    VorOut { distance: d2, color: vhash_color(d, vadd(d, cell, o2)), position: vpos_out(d, vadd(d, p2, cell)) }
+}
+fn vor_smooth_f1(p: &VorP, coord: V4, calc_color: bool) -> VorOut {
+    let d = p.dim;
+    let cell = vfloor(d, coord);
+    let local = vsub(d, coord, cell);
+    let mut sd = 0.0f32;
+    let mut sc = [0.0f32; 3];
+    let mut sp = [0.0f32; 4];
+    let mut h = -1.0f32;
+    for off in window(d, -2, 2) {
+        let pp = point_at(d, cell, off, p.randomness);
+        let dd = vdist_nd(d, pp, local, p);
+        h = if h == -1.0 { 1.0 } else { smooth01(0.5 + 0.5 * (sd - dd) / p.smoothness) };
+        let mut corr = p.smoothness * h * (1.0 - h);
+        sd = ((1.0 - h) * sd + h * dd) - corr;
+        corr /= 1.0 + 3.0 * p.smoothness;
+        if calc_color {
+            let cc = vhash_color(d, vadd(d, cell, off));
+            for q in 0..3 {
+                sc[q] = ((1.0 - h) * sc[q] + h * cc[q]) - corr;
+            }
+        }
+        for q in 0..d {
+            sp[q] = ((1.0 - h) * sp[q] + h * pp[q]) - corr;
+        }
+    }
+    VorOut { distance: sd, color: sc, position: vpos_out(d, vadd(d, cell, sp)) }
+}
+fn vor_dist_to_edge(p: &VorP, coord: V4) -> f32 {
+    let d = p.dim;
+    let cell = vfloor(d, coord);
+    let local = vsub(d, coord, cell);
+    if d == 1 {
+        let mid = hf1(cell[0]) * p.randomness;
+        let left = -1.0 + hf1(cell[0] - 1.0) * p.randomness;
+        let right = 1.0 + hf1(cell[0] + 1.0) * p.randomness;
+        let dl = ((mid + left) / 2.0 - local[0]).abs();
+        let dr = ((mid + right) / 2.0 - local[0]).abs();
+        return dl.min(dr);
+    }
+    let dot = |a: V4, b: V4| {
+        let mut s = a[0] * b[0];
+        for i in 1..d {
+            s += a[i] * b[i];
+        }
+        s
+    };
+    let mut closest = [0.0; 4];
+    let mut md = f32::MAX;
+    let offs = window(d, -1, 1);
+    for off in &offs {
+        let pp = point_at(d, cell, *off, p.randomness);
+        let v = vsub(d, pp, local);
+        let dd = dot(v, v);
+        if dd < md {
+            md = dd;
+            closest = v;
+        }
+    }
+    md = f32::MAX;
+    for off in &offs {
+        let pp = point_at(d, cell, *off, p.randomness);
+        let v = vsub(d, pp, local);
+        let perp = vsub(d, v, closest);
+        if dot(perp, perp) > 0.0001 {
+            let len = dot(perp, perp).sqrt();
+            let mut nrm = [0.0; 4];
+            for i in 0..d {
+                nrm[i] = perp[i] / len;
+            }
+            let mut mid = [0.0; 4];
+            for i in 0..d {
+                mid[i] = (closest[i] + v[i]) / 2.0;
+            }
+            md = md.min(dot(mid, nrm));
+        }
+    }
+    md
+}
+pub fn vor_n_sphere(p: &VorP, coord: V4) -> f32 {
+    let d = p.dim;
+    let cell = vfloor(d, coord);
+    let local = vsub(d, coord, cell);
+    let offs = window(d, -1, 1);
+    let mut closest = [0.0; 4];
+    let mut closest_off = [0.0; 4];
+    let mut md = f32::MAX;
+    for off in &offs {
+        let pp = point_at(d, cell, *off, p.randomness);
+        let dd = if d == 1 { (pp[0] - local[0]).abs() } else { euclid(d, pp, local) };
+        if dd < md {
+            md = dd;
+            closest = pp;
+            closest_off = *off;
+        }
+    }
+    md = f32::MAX;
+    let mut cc = [0.0; 4];
+    for off in &offs {
+        if (0..d).all(|i| off[i] == 0.0) {
+            continue;
+        }
+        let o2 = vadd(d, *off, closest_off);
+        let pp = point_at(d, cell, o2, p.randomness);
+        let dd = if d == 1 { (closest[0] - pp[0]).abs() } else { euclid(d, closest, pp) };
+        if dd < md {
+            md = dd;
+            cc = pp;
+        }
+    }
+    if d == 1 {
+        (cc[0] - closest[0]).abs() / 2.0
+    } else {
+        euclid(d, cc, closest) / 2.0
+    }
+}
+
+/// fractal_voronoi_x_fx (F1/F2/Smooth F1)
+pub fn vor_fractal(p: &VorP, coord: V4, calc_color: bool) -> VorOut {
+    let d = p.dim;
+    let mut amplitude = 1.0f32;
+    let mut max_amp = 0.0f32;
+    let mut scale = 1.0f32;
+    let mut out = VorOut::default();
+    let zero_input = p.detail == 0.0 || p.roughness == 0.0;
+    let sc = |c: V4, s: f32| -> V4 {
+        let mut o = [0.0; 4];
+        for i in 0..d {
+            o[i] = c[i] * s;
+        }
+        o
+    };
+    let n = p.detail.ceil() as i32;
+    for i in 0..=n {
+        let cs = sc(coord, scale);
+        let oct = if p.feature == 1 {
+            vor_f2(p, cs)
+        } else if p.feature == 2 && p.smoothness != 0.0 {
+            vor_smooth_f1(p, cs, calc_color)
+        } else {
+            vor_f1(p, cs)
+        };
+        // position components beyond `dim` are zero except 1D w, which lives in component 3
+        let comps: [usize; 4] = if d == 1 { [3, 3, 3, 3] } else { [0, 1, 2, 3] };
+        let ncomp = if d == 1 { 1 } else { d };
+        if zero_input {
+            max_amp = 1.0;
+            out = oct;
+            break;
+        }
+        if (i as f32) <= p.detail {
+            max_amp += amplitude;
+            out.distance += oct.distance * amplitude;
+            for q in 0..3 {
+                out.color[q] += oct.color[q] * amplitude;
+            }
+            for q in 0..ncomp {
+                let c = comps[q];
+                out.position[c] = mixf(out.position[c], oct.position[c] / scale, amplitude);
+            }
+            scale *= p.lacunarity;
+            amplitude *= p.roughness;
+        } else {
+            let rem = p.detail - p.detail.floor();
+            if rem != 0.0 {
+                max_amp = mixf(max_amp, max_amp + amplitude, rem);
+                out.distance = mixf(out.distance, out.distance + oct.distance * amplitude, rem);
+                for q in 0..3 {
+                    out.color[q] = mixf(out.color[q], out.color[q] + oct.color[q] * amplitude, rem);
+                }
+                for q in 0..ncomp {
+                    let c = comps[q];
+                    out.position[c] = mixf(out.position[c], mixf(out.position[c], oct.position[c] / scale, amplitude), rem);
+                }
+            }
+        }
+    }
+    if p.normalize {
+        out.distance /= max_amp * p.max_distance;
+        for q in 0..3 {
+            out.color[q] /= max_amp;
+        }
+    }
+    if p.scale != 0.0 {
+        for q in 0..4 {
+            out.position[q] /= p.scale;
+        }
+    } else {
+        out.position = [0.0; 4];
+    }
+    out
+}
+
+pub fn vor_fractal_dist_to_edge(p: &VorP, coord: V4) -> f32 {
+    let d = p.dim;
+    let mut amplitude = 1.0f32;
+    let mut max_amp = p.max_distance;
+    let mut scale = 1.0f32;
+    let mut distance = 8.0f32;
+    let zero_input = p.detail == 0.0 || p.roughness == 0.0;
+    let n = p.detail.ceil() as i32;
+    for i in 0..=n {
+        let mut cs = [0.0; 4];
+        for q in 0..d {
+            cs[q] = coord[q] * scale;
+        }
+        let od = vor_dist_to_edge(p, cs);
+        if zero_input {
+            distance = od;
+            break;
+        }
+        if (i as f32) <= p.detail {
+            max_amp = mixf(max_amp, p.max_distance / scale, amplitude);
+            distance = mixf(distance, distance.min(od / scale), amplitude);
+            scale *= p.lacunarity;
+            amplitude *= p.roughness;
+        } else {
+            let rem = p.detail - p.detail.floor();
+            if rem != 0.0 {
+                let la = mixf(max_amp, p.max_distance / scale, amplitude);
+                max_amp = mixf(max_amp, la, rem);
+                let ld = mixf(distance, distance.min(od / scale), amplitude);
+                distance = mixf(distance, distance.min(ld), rem);
+            }
+        }
+    }
+    if p.normalize {
+        distance /= max_amp;
+    }
+    distance
+}

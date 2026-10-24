@@ -13,129 +13,420 @@ pub fn mesh_cube(size: V3, n: [i32; 3]) -> Mesh {
     m
 }
 
-/// Cylinder (cone=false: centred, z in +-depth/2) or cone (cone=true: z in [0, depth] like Blender 4.2).
-/// fill: 0 none, 1 ngon, 2 triangle fan. Layout verified against Blender: [top centre][top fill rings inner->outer]
-/// [side rings][bottom fill rings outer->inner][bottom centre].
-pub fn mesh_cone(n: usize, rtop: f32, rbot: f32, depth: f32, side_segs: usize, fill_segs: usize, fill: u8, cone: bool) -> Mesh {
-    let n = n.max(3);
-    let rings = side_segs.max(1);
-    let fsegs = fill_segs.max(1);
-    let top_point = rtop == 0.0;
-    let bot_point = rbot == 0.0;
-    let top_center = top_point || fill == 2;
-    let bot_center = bot_point || fill == 2;
-    let ad = (2.0f64 * (std::f64::consts::PI / n as f64)) as f32;
-    let (ztop, zbot) = if cone { (depth, 0.0) } else { (depth * 0.5, -depth * 0.5) };
-    let mut circ: Vec<[f32; 2]> = Vec::with_capacity(n);
-    let mut ang = 0.0f32;
-    for _ in 0..n {
-        circ.push([ang.cos(), ang.sin()]);
-        ang += ad;
-    }
-    let nn = n as u32;
-    let mut pos: Vec<V3> = vec![];
-    let mut push_ring = |pos: &mut Vec<V3>, rad: f32, z: f32| -> u32 {
-        let s = pos.len() as u32;
-        for c in &circ {
-            pos.push([c[0] * rad, c[1] * rad, z]);
+/// outputs of the Cylinder / Cone nodes
+pub struct ConeOut {
+    pub mesh: Mesh,
+    /// selection fields: (domain, values)
+    pub top: (Dom, Vec<bool>),
+    pub bottom: (Dom, Vec<bool>),
+    pub side: Vec<bool>,
+    /// UV map (corner domain)
+    pub uv: Vec<[f32; 2]>,
+}
+
+/// Exact port of geometry::create_cylinder_or_cone_mesh (mesh_primitive_cylinder_cone.cc).
+/// fill: 0 none, 1 ngon, 2 triangle fan.  For cones the node translates the mesh by depth/2 in z.
+pub fn mesh_cone(n: usize, rtop: f32, rbot: f32, depth: f32, side_segs: usize, fill_segs: usize, fill: u8, cone: bool) -> ConeOut {
+    let cs = n.max(3);
+    let ss = side_segs.max(1);
+    let fsg = fill_segs.max(1);
+    let fill_segments = if fill == 0 { 1 } else { fsg };
+    let radius_top = rtop;
+    let radius_bottom = rbot;
+    let height = 0.5f32 * depth;
+    let top_is_point = radius_top == 0.0;
+    let bottom_is_point = radius_bottom == 0.0;
+    let top_has_center = top_is_point || fill == 2;
+    let bottom_has_center = bottom_is_point || fill == 2;
+    // totals
+    let quad_rings = if top_is_point && bottom_is_point {
+        0
+    } else {
+        let mut q = 0;
+        if !top_is_point {
+            q += fill_segments - 1;
         }
-        s
+        q += if !top_is_point && !bottom_is_point { ss } else { ss - 1 };
+        if !bottom_is_point {
+            q += fill_segments - 1;
+        }
+        q
     };
-    if top_center {
-        pos.push([0.0, 0.0, ztop]);
-    }
-    let apex_top = 0u32;
-    // top fill rings (inner -> outer), only when a cap exists
-    let mut top_fill: Vec<u32> = vec![];
-    if !top_point && fill != 0 {
-        for k in 1..fsegs {
-            top_fill.push(push_ring(&mut pos, rtop * k as f32 / fsegs as f32, ztop));
+    let edge_rings = if top_is_point && bottom_is_point {
+        0
+    } else {
+        let mut e = 0;
+        if !top_is_point {
+            e += fill_segments;
         }
-    }
-    let mut ring_start: Vec<Option<u32>> = vec![];
-    for r in 0..=rings {
-        let is_pt = (r == 0 && top_point) || (r == rings && bot_point);
-        if is_pt {
-            ring_start.push(None);
-            continue;
+        e += ss - 1;
+        if !bottom_is_point {
+            e += fill_segments;
         }
-        let (rad, z) = if r == 0 {
-            (rtop, ztop)
-        } else if r == rings {
-            (rbot, zbot)
+        e
+    };
+    let tot_verts = if top_is_point && bottom_is_point {
+        ss + 1
+    } else {
+        let mut v = 0;
+        if top_has_center {
+            v += 1;
+        }
+        if !top_is_point {
+            v += cs * fill_segments;
+        }
+        v += cs * (ss - 1);
+        if !bottom_is_point {
+            v += cs * fill_segments;
+        }
+        if bottom_has_center {
+            v += 1;
+        }
+        v
+    };
+    let tot_edges = if top_is_point && bottom_is_point {
+        ss
+    } else {
+        let mut e = 0;
+        if top_has_center {
+            e += cs;
+        }
+        e += cs * (quad_rings * 2 + 1);
+        if bottom_has_center {
+            e += cs;
+        }
+        e
+    };
+    let first_vert = 0usize;
+    let first_ring_verts_start = if top_has_center { 1 } else { first_vert };
+    let last_vert = tot_verts - 1;
+    let last_ring_verts_start = last_vert.wrapping_sub(cs);
+    let first_ring_edges_start = if top_has_center { cs } else { 0 };
+    let last_ring_edges_start = first_ring_edges_start + quad_rings * cs * 2;
+    let last_fan_edges_start = tot_edges.wrapping_sub(cs);
+    let last_edge = tot_edges.wrapping_sub(1);
+    let top_faces_len = if !top_is_point {
+        (fill_segments - 1) * cs + if top_has_center { cs } else { 0 } + if fill == 1 { 1 } else { 0 }
+    } else {
+        0
+    };
+    let side_faces_start = top_faces_len;
+    let side_faces_len = if top_is_point && bottom_is_point { 0 } else { ss * cs };
+    let bottom_faces_len = if !bottom_is_point {
+        (fill_segments - 1) * cs + if bottom_has_center { cs } else { 0 } + if fill == 1 { 1 } else { 0 }
+    } else {
+        0
+    };
+    let bottom_faces_start = side_faces_start + side_faces_len;
+    let tot_faces = top_faces_len + side_faces_len + bottom_faces_len;
+
+    let empty_sel = |len: usize| vec![false; len];
+    // point / vertex special cases
+    if top_is_point && bottom_is_point {
+        let mut m = Mesh::new();
+        if height == 0.0 {
+            m.pos.push([0.0, 0.0, 0.0]);
         } else {
-            let t = r as f32 / rings as f32;
-            (rtop * (1.0 - t) + rbot * t, ztop - depth * t)
-        };
-        ring_start.push(Some(push_ring(&mut pos, rad, z)));
-    }
-    let mut bot_fill: Vec<u32> = vec![];
-    if !bot_point && fill != 0 {
-        for k in (1..fsegs).rev() {
-            bot_fill.push(push_ring(&mut pos, rbot * k as f32 / fsegs as f32, zbot));
-        }
-    }
-    let apex_bot = pos.len() as u32;
-    if bot_center {
-        pos.push([0.0, 0.0, zbot]);
-    }
-    let mut faces: Vec<Vec<u32>> = vec![];
-    // top cap
-    if !top_point {
-        let outer = ring_start[0].unwrap();
-        let inner = top_fill.first().copied().unwrap_or(outer);
-        if fill == 2 {
-            for i in 0..nn {
-                faces.push(vec![inner + i, inner + (i + 1) % nn, apex_top]);
+            let z_delta = -2.0f32 * height / ss as f32;
+            for i in 0..tot_verts {
+                m.pos.push([0.0 + 0.0 * i as f32, 0.0 + 0.0 * i as f32, height + z_delta * i as f32]);
             }
-        } else if fill == 1 {
-            faces.push((0..nn).map(|i| inner + i).collect());
-        }
-        // fill rings inner -> outer
-        let mut chain = top_fill.clone();
-        chain.push(outer);
-        for w in chain.windows(2) {
-            for i in 0..nn {
-                let j = (i + 1) % nn;
-                faces.push(vec![w[0] + i, w[1] + i, w[1] + j, w[0] + j]);
+            for i in 0..tot_edges {
+                m.edges.push([i as u32, i as u32 + 1]);
             }
         }
+        if cone {
+            for p in m.pos.iter_mut() {
+                p[2] += depth * 0.5;
+            }
+        }
+        let nv = m.pos.len();
+        return ConeOut { mesh: m, top: (Dom::Point, { let mut v = empty_sel(nv); if nv > 0 { v[0] = true; } v }), bottom: (Dom::Point, { let mut v = empty_sel(nv); if nv > 0 { v[nv - 1] = true; } v }), side: vec![], uv: vec![] };
     }
-    // sides
-    for r in 0..rings {
-        for i in 0..nn {
-            let j = (i + 1) % nn;
-            match (ring_start[r], ring_start[r + 1]) {
-                (Some(a), Some(b)) => faces.push(vec![a + i, b + i, b + j, a + j]),
-                (None, Some(b)) => faces.push(vec![b + i, b + j, apex_top]),
-                (Some(a), None) => faces.push(vec![a + i, apex_bot, a + j]),
-                _ => {}
+    // vertices
+    let mut circle = vec![[0.0f32; 2]; cs];
+    let angle_delta = (2.0f64 * (std::f64::consts::PI / cs as f64)) as f32;
+    let mut angle = 0.0f32;
+    for c in circle.iter_mut() {
+        *c = [angle.cos(), angle.sin()];
+        angle += angle_delta;
+    }
+    let mut pos: Vec<V3> = Vec::with_capacity(tot_verts);
+    if top_has_center {
+        pos.push([0.0, 0.0, height]);
+    }
+    if !top_is_point {
+        let delta = radius_top / fill_segments as f32;
+        for i in 0..fill_segments {
+            let r = delta * (i + 1) as f32;
+            for j in 0..cs {
+                pos.push([circle[j][0] * r, circle[j][1] * r, height]);
             }
         }
     }
-    // bottom cap
-    if !bot_point {
-        let outer = ring_start[rings].unwrap();
-        let mut chain = vec![outer];
-        chain.extend(bot_fill.iter().copied());
-        for w in chain.windows(2) {
-            for i in 0..nn {
-                let j = (i + 1) % nn;
-                faces.push(vec![w[0] + i, w[1] + i, w[1] + j, w[0] + j]);
-            }
-        }
-        let inner = *chain.last().unwrap();
-        if fill == 2 {
-            for i in 0..nn {
-                faces.push(vec![inner + i, apex_bot, inner + (i + 1) % nn]);
-            }
-        } else if fill == 1 {
-            faces.push((0..nn).rev().map(|i| inner + i).collect());
+    let side_radius_delta = (radius_bottom - radius_top) / ss as f32;
+    let height_delta = 2.0f32 * height / ss as f32;
+    for i in 0..ss - 1 {
+        let ring_radius = radius_top + (side_radius_delta * (i + 1) as f32);
+        let ring_height = height - (height_delta * (i + 1) as f32);
+        for j in 0..cs {
+            pos.push([circle[j][0] * ring_radius, circle[j][1] * ring_radius, ring_height]);
         }
     }
-    let mut m = Mesh::from_faces(pos, &faces, &[]);
+    if !bottom_is_point {
+        let delta = radius_bottom / fill_segments as f32;
+        for i in 0..fill_segments {
+            let r = radius_bottom - (i as f32 * delta);
+            for j in 0..cs {
+                pos.push([circle[j][0] * r, circle[j][1] * r, -height]);
+            }
+        }
+    }
+    if bottom_has_center {
+        pos.push([0.0, 0.0, -height]);
+    }
+    // edges
+    let mut edges: Vec<[u32; 2]> = Vec::with_capacity(tot_edges);
+    if top_has_center {
+        for i in 0..cs {
+            edges.push([first_vert as u32, (first_ring_verts_start + i) as u32]);
+        }
+    }
+    for i in 0..edge_rings {
+        let this_ring = first_ring_verts_start + i * cs;
+        let next_ring = this_ring + cs;
+        for j in 0..cs {
+            edges.push([(this_ring + j) as u32, (this_ring + (j + 1) % cs) as u32]);
+        }
+        if i == edge_rings - 1 {
+            break;
+        }
+        for j in 0..cs {
+            edges.push([(this_ring + j) as u32, (next_ring + j) as u32]);
+        }
+    }
+    if bottom_has_center {
+        for i in 0..cs {
+            edges.push([(last_ring_verts_start + i) as u32, last_vert as u32]);
+        }
+    }
+    // faces
+    let mut face_sizes: Vec<usize> = vec![0; tot_faces];
+    let mut cv: Vec<u32> = vec![];
+    let mut ce: Vec<u32> = vec![];
+    let tot_corners = {
+        let mut c = 0;
+        if top_has_center {
+            c += cs * 3;
+        } else if !top_is_point && fill == 1 {
+            c += cs;
+        }
+        c += quad_rings * (cs * 4);
+        if bottom_has_center {
+            c += cs * 3;
+        } else if !bottom_is_point && fill == 1 {
+            c += cs;
+        }
+        c
+    };
+    cv.resize(tot_corners, 0);
+    ce.resize(tot_corners, 0);
+    let mut rings_face_start = 0;
+    let mut rings_loop_start = 0;
+    if top_has_center {
+        rings_face_start = cs;
+        rings_loop_start = cs * 3;
+        for f in 0..cs {
+            face_sizes[f] = 3;
+        }
+        for i in 0..cs {
+            let l = i * 3;
+            cv[l] = (first_ring_verts_start + i) as u32;
+            ce[l] = (first_ring_edges_start + i) as u32;
+            cv[l + 1] = (first_ring_verts_start + (i + 1) % cs) as u32;
+            ce[l + 1] = ((i + 1) % cs) as u32;
+            cv[l + 2] = 0;
+            ce[l + 2] = i as u32;
+        }
+    } else if fill == 1 {
+        rings_face_start = 1;
+        rings_loop_start = cs;
+        face_sizes[0] = cs;
+        for i in 0..cs {
+            cv[i] = i as u32;
+            ce[i] = i as u32;
+        }
+    }
+    let ring_faces_num = quad_rings * cs;
+    for f in 0..ring_faces_num {
+        face_sizes[rings_face_start + f] = 4;
+    }
+    for i in 0..quad_rings {
+        let this_ring_loop_start = rings_loop_start + i * cs * 4;
+        let this_ring_vert_start = first_ring_verts_start + i * cs;
+        let next_ring_vert_start = this_ring_vert_start + cs;
+        let this_ring_edges_start = first_ring_edges_start + i * 2 * cs;
+        let next_ring_edges_start = this_ring_edges_start + 2 * cs;
+        let ring_connections_start = this_ring_edges_start + cs;
+        for j in 0..cs {
+            let l = this_ring_loop_start + j * 4;
+            cv[l] = (this_ring_vert_start + j) as u32;
+            ce[l] = (ring_connections_start + j) as u32;
+            cv[l + 1] = (next_ring_vert_start + j) as u32;
+            ce[l + 1] = (next_ring_edges_start + j) as u32;
+            cv[l + 2] = (next_ring_vert_start + (j + 1) % cs) as u32;
+            ce[l + 2] = (ring_connections_start + (j + 1) % cs) as u32;
+            cv[l + 3] = (this_ring_vert_start + (j + 1) % cs) as u32;
+            ce[l + 3] = (this_ring_edges_start + j) as u32;
+        }
+    }
+    let bottom_face_start = rings_face_start + ring_faces_num;
+    let bottom_loop_start = rings_loop_start + ring_faces_num * 4;
+    if bottom_has_center {
+        for f in 0..cs {
+            face_sizes[bottom_face_start + f] = 3;
+        }
+        for i in 0..cs {
+            let l = bottom_loop_start + i * 3;
+            cv[l] = (last_ring_verts_start + i) as u32;
+            ce[l] = (last_fan_edges_start + i) as u32;
+            cv[l + 1] = last_vert as u32;
+            ce[l + 1] = (last_fan_edges_start + (i + 1) % cs) as u32;
+            cv[l + 2] = (last_ring_verts_start + (i + 1) % cs) as u32;
+            ce[l + 2] = (last_ring_edges_start + i) as u32;
+        }
+    } else if fill == 1 {
+        face_sizes[bottom_face_start] = cs;
+        for i in 0..cs {
+            cv[bottom_loop_start + i] = (last_vert - i) as u32;
+            ce[bottom_loop_start + i] = (last_edge - ((i + 1) % cs)) as u32;
+        }
+    }
+    let mut m = Mesh::new();
+    m.pos = pos;
+    m.edges = edges;
+    m.foff = vec![0];
+    let mut acc = 0u32;
+    for s in &face_sizes {
+        acc += *s as u32;
+        m.foff.push(acc);
+    }
+    m.cv = cv;
+    m.ce = ce;
+    // selections
+    let top_face = !top_is_point && fill != 0;
+    let mut top = vec![false; if top_face { tot_faces } else { tot_verts }];
+    if top_is_point {
+        top[first_vert] = true;
+    } else {
+        let len = if top_face { top_faces_len } else { cs };
+        for v in top.iter_mut().take(len) {
+            *v = true;
+        }
+    }
+    let bottom_face = !bottom_is_point && fill != 0;
+    let mut bottom = vec![false; if bottom_face { tot_faces } else { tot_verts }];
+    if bottom_is_point {
+        bottom[last_vert] = true;
+    } else if bottom_face {
+        for f in 0..bottom_faces_len {
+            bottom[bottom_faces_start + f] = true;
+        }
+    } else {
+        for v in 0..cs {
+            bottom[last_ring_verts_start + 1 + v] = true;
+        }
+    }
+    let mut side = vec![false; tot_faces];
+    for f in 0..side_faces_len {
+        side[side_faces_start + f] = true;
+    }
+    // UV map
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(tot_corners);
+    {
+        let mut circ = vec![[0.0f32; 2]; cs];
+        let mut ang = 0.0f32;
+        let ad = (2.0f64 * std::f64::consts::PI / cs as f64) as f32;
+        for c in circ.iter_mut() {
+            *c = [ang.cos() * 0.225, ang.sin() * 0.225];
+            ang += ad;
+        }
+        let sc = |f: f32, c: [f32; 2], o: [f32; 2]| [f * c[0] + o[0], f * c[1] + o[1]];
+        if top_is_point || fill != 0 {
+            let center_left = [0.25f32, 0.25f32];
+            let radius_factor_delta = 1.0f32 / if top_is_point { ss as f32 } else { fill_segments as f32 };
+            let left_count = if top_is_point { ss } else { fill_segments };
+            if top_has_center {
+                for i in 0..cs {
+                    uvs.push(sc(radius_factor_delta, circ[i], center_left));
+                    uvs.push(sc(radius_factor_delta, circ[(i + 1) % cs], center_left));
+                    uvs.push(center_left);
+                }
+            } else if !top_is_point && fill == 1 {
+                for i in 0..cs {
+                    uvs.push(sc(radius_factor_delta, circ[i], center_left));
+                }
+            }
+            for i in 1..left_count {
+                let inner = i as f32 * radius_factor_delta;
+                let outer = (i + 1) as f32 * radius_factor_delta;
+                for j in 0..cs {
+                    uvs.push(sc(inner, circ[j], center_left));
+                    uvs.push(sc(outer, circ[j], center_left));
+                    uvs.push(sc(outer, circ[(j + 1) % cs], center_left));
+                    uvs.push(sc(inner, circ[(j + 1) % cs], center_left));
+                }
+            }
+        }
+        if !top_is_point && !bottom_is_point {
+            let bottom_v = if fill == 0 { 0.0f32 } else { 0.5f32 };
+            let x_delta = 1.0f32 / cs as f32;
+            let y_delta = (1.0f32 - bottom_v) / ss as f32;
+            for i in 0..ss {
+                for j in 0..cs {
+                    uvs.push([j as f32 * x_delta, i as f32 * y_delta + bottom_v]);
+                    uvs.push([j as f32 * x_delta, (i + 1) as f32 * y_delta + bottom_v]);
+                    uvs.push([(j + 1) as f32 * x_delta, (i + 1) as f32 * y_delta + bottom_v]);
+                    uvs.push([(j + 1) as f32 * x_delta, i as f32 * y_delta + bottom_v]);
+                }
+            }
+        }
+        if bottom_is_point || fill != 0 {
+            let center_right = [0.75f32, 0.25f32];
+            let radius_factor_delta = 1.0f32 / if bottom_is_point { ss as f32 } else { fill_segments as f32 };
+            let right_count = if bottom_is_point { ss } else { fill_segments };
+            for i in 0..right_count - 1 {
+                let outer = 1.0f32 - i as f32 * radius_factor_delta;
+                let inner = 1.0f32 - (i + 1) as f32 * radius_factor_delta;
+                for j in 0..cs {
+                    uvs.push(sc(outer, circ[j], center_right));
+                    uvs.push(sc(inner, circ[j], center_right));
+                    uvs.push(sc(inner, circ[(j + 1) % cs], center_right));
+                    uvs.push(sc(outer, circ[(j + 1) % cs], center_right));
+                }
+            }
+            if bottom_has_center {
+                for i in 0..cs {
+                    uvs.push(sc(radius_factor_delta, circ[i], center_right));
+                    uvs.push(center_right);
+                    uvs.push(sc(radius_factor_delta, circ[(i + 1) % cs], center_right));
+                }
+            } else if !bottom_is_point && fill == 1 {
+                for i in 0..cs {
+                    uvs.push(sc(radius_factor_delta, circ[cs - 1 - i], center_right));
+                }
+            }
+        }
+    }
+    if cone {
+        for p in m.pos.iter_mut() {
+            p[2] += depth * 0.5;
+        }
+    }
     set_sharp_all(&mut m);
-    m
+    let tdom = if top_face { Dom::Face } else { Dom::Point };
+    let bdom = if bottom_face { Dom::Face } else { Dom::Point };
+    ConeOut { mesh: m, top: (tdom, top), bottom: (bdom, bottom), side, uv: uvs }
 }
 
 /// all faces flat shaded (sharp_face = true), as the 4.2 primitives do
@@ -146,45 +437,143 @@ pub fn set_sharp_all(m: &mut Mesh) {
 }
 
 pub fn mesh_uv_sphere(segs: usize, rings: usize, radius: f32) -> Mesh {
-    let segs = segs.max(3);
+    mesh_uv_sphere_uv(segs, rings, radius).0
+}
+
+/// exact port of create_uv_sphere_mesh; also returns the UV map (corner domain)
+pub fn mesh_uv_sphere_uv(segs: usize, rings: usize, radius: f32) -> (Mesh, Vec<[f32; 2]>) {
+    let segments = segs.max(3);
     let rings = rings.max(2);
+    let delta_theta = (std::f64::consts::PI / rings as f64) as f32;
+    let delta_phi = ((2.0f32 as f64 * std::f64::consts::PI) / segments as f64) as f32;
+    let mut cosines = vec![0.0f32; segments + 1];
+    let mut sines = vec![0.0f32; segments + 1];
+    for sg in 1..=segments {
+        let phi = sg as f32 * delta_phi;
+        cosines[sg] = phi.cos();
+        sines[sg] = phi.sin();
+    }
     let mut pos: Vec<V3> = vec![[0.0, 0.0, radius]];
-    let delta_theta = (std::f64::consts::PI * 2.0 / segs as f64) as f32;
-    let delta_phi = (std::f64::consts::PI / rings as f64) as f32;
-    let _ = delta_theta;
-    for r in 1..rings {
-        let phi = delta_phi * r as f32;
-        let z = phi.cos() * radius;
-        let rr = phi.sin() * radius;
-        for s in 0..segs {
-            let theta = delta_theta * (s + 1) as f32;
-            pos.push([theta.cos() * rr, theta.sin() * rr, z]);
+    for ring in 1..rings {
+        let theta = ring as f32 * delta_theta;
+        let sin_theta = theta.sin();
+        let z = theta.cos();
+        for sg in 1..=segments {
+            let x = sin_theta * cosines[sg];
+            let y = sin_theta * sines[sg];
+            pos.push([x * radius, y * radius, z * radius]);
         }
     }
     pos.push([0.0, 0.0, -radius]);
-    let nv = pos.len() as u32;
-    let sg = segs as u32;
-    let mut faces: Vec<Vec<u32>> = vec![];
-    // top fan
-    for s in 0..sg {
-        faces.push(vec![0, 1 + s, 1 + (s + 1) % sg]);
+    let nv = pos.len();
+    let mut m = Mesh::new();
+    // edges
+    for sg in 0..segments {
+        m.edges.push([0, (1 + sg) as u32]);
     }
-    for r in 0..(rings as u32 - 2) {
-        let a = 1 + r * sg;
-        let b = a + sg;
-        for s in 0..sg {
-            let sn = (s + 1) % sg;
-            faces.push(vec![a + s, b + s, b + sn, a + sn]);
+    let mut ring_start = 1usize;
+    for ring in 0..rings - 1 {
+        let next = ring_start + segments;
+        for sg in 0..segments {
+            m.edges.push([(ring_start + sg) as u32, (ring_start + (sg + 1) % segments) as u32]);
+        }
+        if ring + 2 < rings {
+            for sg in 0..segments {
+                m.edges.push([(ring_start + sg) as u32, (next + sg) as u32]);
+            }
+        }
+        ring_start += segments;
+    }
+    let last = nv - 1;
+    let last_ring = last - segments;
+    for sg in 0..segments {
+        m.edges.push([last as u32, (last_ring + sg) as u32]);
+    }
+    // faces
+    m.foff = vec![0];
+    let mut acc = 0u32;
+    let mut push_face = |m: &mut Mesh, n: u32| {
+        acc += n;
+        m.foff.push(acc);
+    };
+    for _ in 0..segments {
+        push_face(&mut m, 3);
+    }
+    for _ in 0..segments * (rings - 2) {
+        push_face(&mut m, 4);
+    }
+    for _ in 0..segments {
+        push_face(&mut m, 3);
+    }
+    let nxt = |s: usize| if s == segments - 1 { 0 } else { s + 1 };
+    for sg in 0..segments {
+        let sn = nxt(sg);
+        m.cv.extend([0u32, (1 + sg) as u32, (1 + sn) as u32]);
+        m.ce.extend([sg as u32, (segments + sg) as u32, sn as u32]);
+    }
+    let (rings_vert_start, rings_edge_start) = (1usize, segments);
+    for ring in 1..=rings - 2 {
+        let rvs = rings_vert_start + (ring - 1) * segments;
+        let res = rings_edge_start + (ring - 1) * segments * 2;
+        let nvs = rvs + segments;
+        let nes = res + segments * 2;
+        let rves = res + segments;
+        for sg in 0..segments {
+            let sn = nxt(sg);
+            m.cv.extend([(rvs + sg) as u32, (nvs + sg) as u32, (nvs + sn) as u32, (rvs + sn) as u32]);
+            m.ce.extend([(rves + sg) as u32, (nes + sg) as u32, (rves + sn) as u32, (res + sg) as u32]);
         }
     }
-    let last = 1 + (rings as u32 - 2) * sg;
-    for s in 0..sg {
-        faces.push(vec![nv - 1, last + (s + 1) % sg, last + s]);
+    let last_edge_ring_start = segments * (rings - 2) * 2 + segments;
+    let bottom_fan = last_edge_ring_start + segments;
+    for sg in 0..segments {
+        let sn = nxt(sg);
+        m.cv.extend([last as u32, (last_ring + sn) as u32, (last_ring + sg) as u32]);
+        m.ce.extend([(bottom_fan + sn) as u32, (last_edge_ring_start + sg) as u32, (bottom_fan + sg) as u32]);
     }
-    let mut m = Mesh::from_faces(pos, &faces, &[]);
+    // UVs
+    let rf = rings as f32;
+    let sf = segments as f32;
+    let dy = 1.0f32 / rf;
+    let si = 1.0f32 / sf;
+    let mut uv: Vec<[f32; 2]> = vec![];
+    for i in 0..segments {
+        let sgf = i as f32;
+        uv.push([(sgf + 0.5) * si, 0.0]);
+        uv.push([sgf * si, dy]);
+        uv.push([(sgf + 1.0) * si, dy]);
+    }
+    for ir in 1..=rings - 2 {
+        let ring = ir as f32;
+        for i in 0..segments {
+            let sgf = i as f32;
+            uv.push([sgf * si, ring / rf]);
+            uv.push([sgf * si, (ring + 1.0) / rf]);
+            uv.push([(sgf + 1.0) * si, (ring + 1.0) / rf]);
+            uv.push([(sgf + 1.0) * si, ring / rf]);
+        }
+    }
+    for i in 0..segments {
+        let sgf = i as f32;
+        uv.push([(sgf + 0.5) * si, 1.0]);
+        uv.push([(sgf + 1.0) * si, 1.0 - dy]);
+        uv.push([sgf * si, 1.0 - dy]);
+    }
+    m.pos = pos;
     set_sharp_all(&mut m);
-    m.vnor = Some(m.pos.iter().map(|p| super::math::norm3_c(*p)).collect());
-    m
+    // vertex normals: unit directions (x, y, z) before the radius multiplication
+    let mut vn: Vec<V3> = vec![[0.0, 0.0, 1.0]];
+    for ring in 1..rings {
+        let theta = ring as f32 * delta_theta;
+        let sin_theta = theta.sin();
+        let z = theta.cos();
+        for sg in 1..=segments {
+            vn.push([sin_theta * cosines[sg], sin_theta * sines[sg], z]);
+        }
+    }
+    vn.push([0.0, 0.0, -1.0]);
+    m.vnor = Some(vn);
+    (m, uv)
 }
 
 pub fn mesh_line(count: usize, start: V3, delta: V3) -> Mesh {
@@ -361,4 +750,72 @@ pub fn mesh_ico_sphere(radius: f32, sub: usize) -> Mesh {
     let mut m = Mesh::from_faces(pos, &fl, &[]);
     set_sharp_all(&mut m);
     m
+}
+
+/// UV map of the Cube node (corner domain), port of calculate_uvs in mesh_primitive_cuboid.cc
+pub fn cube_uv(n: [i32; 3]) -> Vec<[f32; 2]> {
+    let ex = (n[0].max(2) - 1) as usize;
+    let ey = (n[1].max(2) - 1) as usize;
+    let ez = (n[2].max(2) - 1) as usize;
+    let xd = 0.25f32 / ex as f32;
+    let yd = 0.25f32 / ey as f32;
+    let zd = 0.25f32 / ez as f32;
+    let mut uv = vec![];
+    let f = |v: usize| v as f32;
+    for y in 0..ey {
+        for x in 0..ex {
+            uv.push([0.25 + f(x) * xd, 0.375 - f(y) * yd]);
+            uv.push([0.25 + f(x) * xd, 0.375 - f(y + 1) * yd]);
+            uv.push([0.25 + f(x + 1) * xd, 0.375 - f(y + 1) * yd]);
+            uv.push([0.25 + f(x + 1) * xd, 0.375 - f(y) * yd]);
+        }
+    }
+    for z in 0..ez {
+        for x in 0..ex {
+            uv.push([0.25 + f(x) * xd, 0.375 + f(z) * zd]);
+            uv.push([0.25 + f(x + 1) * xd, 0.375 + f(z) * zd]);
+            uv.push([0.25 + f(x + 1) * xd, 0.375 + f(z + 1) * zd]);
+            uv.push([0.25 + f(x) * xd, 0.375 + f(z + 1) * zd]);
+        }
+    }
+    for y in 0..ey {
+        for x in 0..ex {
+            uv.push([0.25 + f(x) * xd, 0.625 + f(y) * yd]);
+            uv.push([0.25 + f(x + 1) * xd, 0.625 + f(y) * yd]);
+            uv.push([0.25 + f(x + 1) * xd, 0.625 + f(y + 1) * yd]);
+            uv.push([0.25 + f(x) * xd, 0.625 + f(y + 1) * yd]);
+        }
+    }
+    for z in 0..ez {
+        for x in 0..ex {
+            uv.push([1.0 - f(x) * xd, 0.375 + f(z) * zd]);
+            uv.push([1.0 - f(x) * xd, 0.375 + f(z + 1) * zd]);
+            uv.push([1.0 - f(x + 1) * xd, 0.375 + f(z + 1) * zd]);
+            uv.push([1.0 - f(x + 1) * xd, 0.375 + f(z) * zd]);
+        }
+    }
+    for z in 0..ez {
+        for y in 0..ey {
+            uv.push([0.25 - f(y) * yd, 0.375 + f(z) * zd]);
+            uv.push([0.25 - f(y) * yd, 0.375 + f(z + 1) * zd]);
+            uv.push([0.25 - f(y + 1) * yd, 0.375 + f(z + 1) * zd]);
+            uv.push([0.25 - f(y + 1) * yd, 0.375 + f(z) * zd]);
+        }
+    }
+    for z in 0..ez {
+        for y in 0..ey {
+            uv.push([0.50 + f(y) * yd, 0.375 + f(z) * zd]);
+            uv.push([0.50 + f(y + 1) * yd, 0.375 + f(z) * zd]);
+            uv.push([0.50 + f(y + 1) * yd, 0.375 + f(z + 1) * zd]);
+            uv.push([0.50 + f(y) * yd, 0.375 + f(z + 1) * zd]);
+        }
+    }
+    uv
+}
+
+/// UV map of the Grid node
+pub fn grid_uv(m: &Mesh, sx: f32, sy: f32) -> Vec<[f32; 2]> {
+    let dx = if sx == 0.0 { 0.0 } else { 1.0 / sx };
+    let dy = if sy == 0.0 { 0.0 } else { 1.0 / sy };
+    m.cv.iter().map(|&v| { let co = m.pos[v as usize]; [(co[0] + sx * 0.5) * dx, (co[1] + sy * 0.5) * dy] }).collect()
 }

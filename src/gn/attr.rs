@@ -368,17 +368,21 @@ pub fn curve_tangent_field(ctx: &Ctx) -> Vec<Val> {
 pub fn spline_param(ctx: &Ctx, which: u8) -> Vec<Val> {
     match ctx.comp {
         Comp::Curves(c) => {
-            let (fac, len, idx) = super::curveops::spline_parameters(c);
-            let v: Vec<Val> = match which {
-                0 => fac.iter().map(|x| Val::F(*x)).collect(),
-                1 => len.iter().map(|x| Val::F(*x)).collect(),
-                _ => idx.iter().map(|x| Val::I(*x)).collect(),
-            };
             let ty = if which == 2 { Ty::I } else { Ty::F };
-            if ctx.dom == Dom::Point {
-                v
-            } else {
-                adapt_curves(c, Dom::Point, ctx.dom, ty, &v)
+            match ctx.dom {
+                Dom::Point => {
+                    let (fac, len, idx) = super::curveops::spline_parameters(c);
+                    match which {
+                        0 => fac.iter().map(|x| Val::F(*x)).collect(),
+                        1 => len.iter().map(|x| Val::F(*x)).collect(),
+                        _ => idx.iter().map(|x| Val::I(*x)).collect(),
+                    }
+                }
+                Dom::Curve if which < 2 => {
+                    let (fac, len) = super::curveops::spline_parameters_curve(c);
+                    if which == 0 { fac.iter().map(|x| Val::F(*x)).collect() } else { len.iter().map(|x| Val::F(*x)).collect() }
+                }
+                _ => vec![Val::zero(ty); ctx.n],
             }
         }
         _ => vec![Val::zero(if which == 2 { Ty::I } else { Ty::F }); ctx.n],

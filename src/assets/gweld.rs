@@ -903,6 +903,7 @@ pub fn subdivide_ev(m: &GMesh, level: u32, ev: Option<&dyn Fn(usize, usize, f32,
     // ---- faces
     let mut out = GMesh::new();
     out.v = pos;
+    out.e = subdivide_edges(m, level).0;
     let rot = |r: usize, a: i64, b: i64, c: i64, d: i64| -> [i64; 4] {
         let vals = [a, b, c, d];
         [vals[(4 - r) % 4], vals[(1 + 4 - r) % 4], vals[(2 + 4 - r) % 4], vals[(3 + 4 - r) % 4]]
@@ -1047,4 +1048,158 @@ pub fn subdivide_ev(m: &GMesh, level: u32, ev: Option<&dyn Fn(usize, usize, f32,
         }
     }
     out
+}
+
+
+/// Edges of the subdivided mesh in Blender's order (subdiv_foreach_* in subdiv_foreach.cc), with the coarse edge
+/// each one originates from (-1 for edges created inside faces).
+pub fn subdivide_edges(m: &GMesh, level: u32) -> (Vec<[u32; 2]>, Vec<i32>) {
+    let res = (1usize << level) + 1;
+    let nv = m.v.len();
+    let ne = m.e.len();
+    let ce = corner_edges(m);
+    let res2 = res - 2;
+    let pres = (res >> 1) + 1;
+    let edge_off = nv;
+    let inner_off = nv + ne * res2;
+    let mut vtx_off = vec![0usize; m.p.len()];
+    let mut acc = 0usize;
+    for (fi, f) in m.p.iter().enumerate() {
+        vtx_off[fi] = acc;
+        acc += if f.len() == 4 { res2 * res2 } else { 1 + f.len() * ((pres - 2) * (pres - 1)) };
+    }
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut src: Vec<i32> = vec![];
+    // boundary edges: res-1 pieces per coarse edge
+    for (ei, e) in m.e.iter().enumerate() {
+        let mut last = e[0] as usize;
+        for i in 0..res - 2 {
+            let v2 = edge_off + ei * res2 + i;
+            edges.push([last as u32, v2 as u32]);
+            src.push(ei as i32);
+            last = v2;
+        }
+        edges.push([last as u32, e[1]]);
+        src.push(ei as i32);
+    }
+    let mut row = |edges: &mut Vec<[u32; 2]>, src: &mut Vec<i32>, start: usize, n: usize| {
+        let mut v = start;
+        for _ in 0..n.saturating_sub(1) {
+            edges.push([v as u32, v as u32 + 1]);
+            src.push(-1);
+            v += 1;
+        }
+    };
+    let column = |edges: &mut Vec<[u32; 2]>, src: &mut Vec<i32>, start: usize, n: usize| {
+        let mut v = start;
+        for _ in 0..n {
+            edges.push([v as u32, (v + n) as u32]);
+            src.push(-1);
+            v += 1;
+        }
+    };
+    for (fi, f) in m.p.iter().enumerate() {
+        let n = f.len();
+        let start_vertex = inner_off + vtx_off[fi];
+        if n == 4 {
+            row(&mut edges, &mut src, start_vertex, res - 2);
+            for r in 0..(res as i64 - 3).max(0) as usize {
+                let srv = start_vertex + r * (res - 2);
+                column(&mut edges, &mut src, srv, res - 2);
+                row(&mut edges, &mut src, srv + res - 2, res - 2);
+            }
+            for corner in 0..n {
+                let cv = f[corner];
+                let ei = ce[fi][corner] as usize;
+                let ed = m.e[ei];
+                let start_edge_vertex = edge_off + ei * res2;
+                let flip = ed[1] == cv;
+                let mut side_start = start_vertex as i64;
+                let stride: i64;
+                match corner {
+                    0 => stride = 1,
+                    1 => {
+                        side_start += res as i64 - 3;
+                        stride = res as i64 - 2;
+                    }
+                    2 => {
+                        side_start += (res2 * res2) as i64 - 1;
+                        stride = -1;
+                    }
+                    _ => {
+                        side_start += (res2 * (res2.max(1) - 1)) as i64;
+                        stride = -(res as i64 - 2);
+                    }
+                }
+                for i in 0..res - 2 {
+                    let v1 = if flip { start_edge_vertex + (res - i - 3) } else { start_edge_vertex + i };
+                    let v2 = side_start + stride * i as i64;
+                    edges.push([v1 as u32, v2 as u32]);
+                    src.push(-1);
+                }
+            }
+        } else {
+            let pinner = pres - 2;
+            let nipp = (pres - 1) * (pres - 2);
+            let center = start_vertex;
+            let start = center + 1;
+            for corner in 0..n {
+                let sp = start + corner * nipp;
+                row(&mut edges, &mut src, sp, pinner + 1);
+                for r in 0..pinner.saturating_sub(1) {
+                    let srv = sp + r * (pinner + 1);
+                    column(&mut edges, &mut src, srv, pinner + 1);
+                    row(&mut edges, &mut src, srv + pinner + 1, pinner + 1);
+                }
+            }
+            for corner in 0..n {
+                let next = (corner + 1) % n;
+                let mut cur = start + corner * nipp + pinner;
+                let mut nxt = start + next * nipp + nipp - pres + 1;
+                for _ in 0..pinner {
+                    edges.push([cur as u32, nxt as u32]);
+                    src.push(-1);
+                    cur += pinner + 1;
+                    nxt += 1;
+                }
+            }
+            if pres >= 3 {
+                for corner in 0..n {
+                    let end = start + corner * nipp + nipp - 1;
+                    edges.push([center as u32, end as u32]);
+                    src.push(-1);
+                }
+            }
+            let mut prev_corner = n - 1;
+            for corner in 0..n {
+                let cv = f[corner];
+                let ei = ce[fi][corner] as usize;
+                let pei = ce[fi][prev_corner] as usize;
+                {
+                    let ed = m.e[ei];
+                    let start_edge_vertex = edge_off + ei * res2;
+                    let flip = ed[1] == cv;
+                    let side_start = if pres >= 3 { start + nipp * corner } else { center };
+                    for i in 0..pres - 1 {
+                        let v1 = if flip { start_edge_vertex + (res - i - 3) } else { start_edge_vertex + i };
+                        edges.push([v1 as u32, (side_start + i) as u32]);
+                        src.push(-1);
+                    }
+                }
+                if pres >= 3 {
+                    let ed = m.e[pei];
+                    let start_edge_vertex = edge_off + pei * res2;
+                    let flip = ed[1] == cv;
+                    let side_start = start + nipp * corner;
+                    for i in 0..pres - 2 {
+                        let v1 = if flip { start_edge_vertex + (res - i - 3) } else { start_edge_vertex + i };
+                        edges.push([v1 as u32, (side_start + (pinner + 1) * i) as u32]);
+                        src.push(-1);
+                    }
+                }
+                prev_corner = corner;
+            }
+        }
+    }
+    (edges, src)
 }

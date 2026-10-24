@@ -1,7 +1,9 @@
 //! Geometry Nodes interpreter: evaluates Blender 4.2 node groups exported as JSON (tools/gn_export.py).
 pub mod attr;
 pub mod cdt;
+pub mod bullet_hull;
 pub mod csg;
+pub mod dual;
 pub mod curveops;
 pub mod eval;
 pub mod field;

@@ -659,43 +659,239 @@ pub fn merge_by_distance_mesh(m: &Mesh, dist: f32) -> Mesh {
     o
 }
 
+/// run the simple subdivision on float channels (each coarse vertex carries `chans[c][i]`), returning the channels of
+/// the subdivided vertices (bilinear interpolation = how Blender interpolates vertex / corner data)
+fn subdiv_channels(g: &crate::assets::cabnodes::GMesh, level: u32, chans: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    let mut out: Vec<Vec<f32>> = vec![];
+    let mut c = 0;
+    while c < chans.len() {
+        let mut gg = g.clone();
+        for (i, p) in gg.v.iter_mut().enumerate() {
+            *p = [chans[c][i], if c + 1 < chans.len() { chans[c + 1][i] } else { 0.0 }, if c + 2 < chans.len() { chans[c + 2][i] } else { 0.0 }];
+        }
+        let sg = crate::assets::gweld::subdivide(&gg, level);
+        for k in 0..3.min(chans.len() - c) {
+            out.push(sg.v.iter().map(|p| p[k]).collect());
+        }
+        c += 3;
+    }
+    out
+}
+
+fn val_to_chans(ty: Ty, v: &Val, out: &mut Vec<f32>) {
+    match ty {
+        Ty::F => out.push(v.f()),
+        Ty::I => out.push(v.i() as f32),
+        Ty::B => out.push(if v.b() { 1.0 } else { 0.0 }),
+        Ty::V => out.extend(v.v()),
+        Ty::C => out.extend(v.c()),
+        _ => {}
+    }
+}
+fn chans_to_val(ty: Ty, c: &[f32]) -> Val {
+    match ty {
+        Ty::F => Val::F(c[0]),
+        Ty::I => Val::I(c[0].round() as i32),
+        Ty::B => Val::B(c[0] >= 0.5),
+        Ty::V => Val::V([c[0], c[1], c[2]]),
+        Ty::C => Val::C([c[0], c[1], c[2], c[3]]),
+        _ => Val::zero(ty),
+    }
+}
+fn nchan(ty: Ty) -> usize {
+    match ty {
+        Ty::F | Ty::I | Ty::B => 1,
+        Ty::V => 3,
+        Ty::C => 4,
+        _ => 0,
+    }
+}
+
+/// propagate all attributes of `m` onto the subdivided mesh `o` (BKE subdiv_mesh.cc semantics)
+fn subdiv_propagate(m: &Mesh, level: u32, o: &mut Mesh) {
+    use crate::assets::gweld::{subdivide, subdivide_edges};
+    let g = to_gmesh(m);
+    let (_, esrc) = subdivide_edges(&g, level);
+    // face sources
+    let mut fsrc = vec![];
+    for f in 0..m.nf() {
+        let n = m.face_range(f).len();
+        let kids = if n == 4 { 4usize.pow(level) } else { n * 4usize.pow(level - 1) };
+        for _ in 0..kids {
+            fsrc.push(f);
+        }
+    }
+    // corner provenance via a split mesh (every face with private vertices)
+    let mut split = crate::assets::cabnodes::GMesh::new();
+    let mut sv: Vec<usize> = vec![];
+    let mut sp: Vec<Vec<u32>> = vec![];
+    for f in 0..m.nf() {
+        let mut face = vec![];
+        for c in m.face_range(f) {
+            face.push(split.v.len() as u32);
+            split.v.push(m.pos[m.cv[c] as usize]);
+            sv.push(c);
+        }
+        sp.push(face);
+    }
+    for face in &sp {
+        for i in 0..face.len() {
+            split.e.push([face[i], face[(i + 1) % face.len()]]);
+        }
+    }
+    split.p = sp;
+    split.tag = vec![0; m.nf()];
+    for (name, a) in m.attrs.iter() {
+        let nc = nchan(a.ty);
+        match a.dom {
+            Dom::Face => {
+                if fsrc.len() == o.nf() {
+                    o.attrs.insert(name.clone(), Attr { dom: Dom::Face, ty: a.ty, data: fsrc.iter().map(|&i| a.data[i].clone()).collect() });
+                }
+            }
+            Dom::Edge => {
+                let data: Vec<Val> = (0..o.ne()).map(|i| if i < esrc.len() && esrc[i] >= 0 { a.data[esrc[i] as usize].clone() } else { Val::zero(a.ty) }).collect();
+                o.attrs.insert(name.clone(), Attr { dom: Dom::Edge, ty: a.ty, data });
+            }
+            Dom::Point if nc > 0 => {
+                let mut chans = vec![vec![0.0f32; m.nv()]; nc];
+                for (i, v) in a.data.iter().enumerate() {
+                    let mut t = vec![];
+                    val_to_chans(a.ty, v, &mut t);
+                    for k in 0..nc {
+                        chans[k][i] = t[k];
+                    }
+                }
+                let res = subdiv_channels(&g, level, &chans);
+                let n = o.nv();
+                let data: Vec<Val> = (0..n).map(|i| chans_to_val(a.ty, &(0..nc).map(|k| res[k][i]).collect::<Vec<f32>>())).collect();
+                o.attrs.insert(name.clone(), Attr { dom: Dom::Point, ty: a.ty, data });
+            }
+            Dom::Corner if nc > 0 => {
+                let mut chans = vec![vec![0.0f32; split.v.len()]; nc];
+                for (i, v) in a.data.iter().enumerate() {
+                    let mut t = vec![];
+                    val_to_chans(a.ty, v, &mut t);
+                    for k in 0..nc {
+                        chans[k][i] = t[k];
+                    }
+                }
+                let res = subdiv_channels(&split, level, &chans);
+                let ssub = subdivide(&split, level);
+                let mut data = vec![];
+                for q in &ssub.p {
+                    for &vi in q {
+                        data.push(chans_to_val(a.ty, &(0..nc).map(|k| res[k][vi as usize]).collect::<Vec<f32>>()));
+                    }
+                }
+                if data.len() == o.nc() {
+                    o.attrs.insert(name.clone(), Attr { dom: Dom::Corner, ty: a.ty, data });
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = sv;
+}
+
 pub fn subdivide_mesh_simple(m: &Mesh, level: u32) -> Mesh {
     let g = to_gmesh(m);
     let sg = crate::assets::gweld::subdivide(&g, level);
     let mut o = from_gmesh(&sg);
     o.mats = m.mats.clone();
-    // face attributes: every child face copies its parent (n * 4^(level-1) children per face)
     if level > 0 {
-        let mut fsrc = vec![];
-        for f in 0..m.nf() {
-            let n = m.face_range(f).len();
-            let kids = n * 4usize.pow(level - 1);
-            for _ in 0..kids {
-                fsrc.push(f);
-            }
-        }
-        if fsrc.len() == o.nf() {
-            for (name, a) in m.attrs.iter() {
-                if a.dom == Dom::Face {
-                    o.attrs.insert(name.clone(), Attr { dom: Dom::Face, ty: a.ty, data: fsrc.iter().map(|&i| a.data[i].clone()).collect() });
-                }
-            }
-        }
+        subdiv_propagate(m, level, &mut o);
     }
     o
 }
 
 pub fn subsurf_mesh(m: &Mesh, level: usize) -> Mesh {
+    subsurf_mesh_cr(m, level, None)
+}
+
+pub fn subsurf_mesh_cr(m: &Mesh, level: usize, crease: Option<&crate::dhash::HashMap<(u32, u32), f64>>) -> Mesh {
     let mm = crate::mesh::Mesh {
         pos: m.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(),
         faces: m.faces_vec(),
         uv: vec![],
     };
     let q = crate::subdiv::QMesh { pos: mm.pos.clone(), faces: mm.faces.clone() };
-    let r = if level == 0 { q } else { crate::subdiv::catmull_clark(&q, level, None) };
-    let pos: Vec<V3> = r.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
-    let mut o = Mesh::from_faces(pos, &r.faces, &[]);
+    if level == 0 {
+        return m.clone();
+    }
+    let t_cc = crate::subdiv::catmull_clark(&q, level, crease);
+    let t_simple = crate::subdiv::simple_levels(&q, level);
+    // Blender's vertex / edge / face layout (BKE subdiv_foreach), with Catmull-Clark positions mapped onto it
+    let g = to_gmesh(m);
+    let b = crate::assets::gweld::subdivide(&g, level as u32);
+    let mut bpos: Vec<V3> = b.v.clone();
+    let mut mapped = vec![false; b.v.len()];
+    let mut ok = t_simple.pos.len() == b.v.len();
+    if ok {
+        // per coarse face: match B vertices to T vertices by (simple) position
+        let mut bstart = 0usize;
+        let mut tstart = 0usize;
+        for f in 0..m.nf() {
+            let n = m.face_range(f).len();
+            let kids = if n == 4 { 4usize.pow(level as u32) } else { n * 4usize.pow(level as u32 - 1) };
+            let bq = &b.p[bstart..bstart + kids];
+            let tq = &t_simple.faces[tstart..tstart + kids];
+            bstart += kids;
+            tstart += kids;
+            let mut bs: Vec<u32> = bq.iter().flatten().copied().collect();
+            bs.sort();
+            bs.dedup();
+            let mut ts: Vec<u32> = tq.iter().flatten().copied().collect();
+            ts.sort();
+            ts.dedup();
+            if bs.len() != ts.len() {
+                ok = false;
+                break;
+            }
+            let mut used = vec![false; ts.len()];
+            for &bi in &bs {
+                let bp = b.v[bi as usize];
+                let mut best = (f64::MAX, usize::MAX);
+                for (k, &ti) in ts.iter().enumerate() {
+                    if used[k] {
+                        continue;
+                    }
+                    let tp = t_simple.pos[ti as usize];
+                    let d = (bp[0] as f64 - tp[0]).powi(2) + (bp[1] as f64 - tp[1]).powi(2) + (bp[2] as f64 - tp[2]).powi(2);
+                    if d < best.0 {
+                        best = (d, k);
+                    }
+                }
+                if best.1 == usize::MAX {
+                    ok = false;
+                    break;
+                }
+                if mapped[bi as usize] {
+                    continue; // shared vertex, already placed through the neighbouring face
+                }
+                used[best.1] = true;
+                let tp = t_cc.pos[ts[best.1] as usize];
+                bpos[bi as usize] = [tp[0] as f32, tp[1] as f32, tp[2] as f32];
+                mapped[bi as usize] = true;
+            }
+            if !ok {
+                break;
+            }
+        }
+    }
+    let mut o;
+    if ok {
+        let mut bb = b.clone();
+        bb.v = bpos;
+        o = from_gmesh(&bb);
+    } else {
+        let pos: Vec<V3> = t_cc.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        o = Mesh::from_faces(pos, &t_cc.faces, &[]);
+    }
     o.mats = m.mats.clone();
+    if ok {
+        subdiv_propagate(m, level as u32, &mut o);
+    }
     o
 }
 
@@ -912,24 +1108,44 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         "GeometryNodeSubdivisionSurface" => {
             let g = ev.geo(ni, "Mesh")?;
             let lvl = ev.ci(ni, "Level")?.clamp(0, 6) as usize;
-            if ev.cf(ni, "Edge Crease").unwrap_or(0.0) != 0.0 || ev.cf(ni, "Vertex Crease").unwrap_or(0.0) != 0.0 {
-                return Err("SubdivisionSurface creases unsupported".into());
+            let mut crease: Option<crate::dhash::HashMap<(u32, u32), f64>> = None;
+            if let Some(m) = &g.mesh {
+                let comp = Comp::Mesh(m);
+                if ev.has_input(ni, "Edge Crease") {
+                    let ec = eval_on(&ev.field(ni, "Edge Crease")?, comp, Dom::Edge);
+                    let mut mp = crate::dhash::HashMap::default();
+                    for (i, e) in m.edges.iter().enumerate() {
+                        let c = ec[i].f() as f64;
+                        if c > 0.0 {
+                            mp.insert((e[0].min(e[1]), e[0].max(e[1])), c.min(1.0));
+                        }
+                    }
+                    if !mp.is_empty() {
+                        crease = Some(mp);
+                    }
+                }
+                if ev.has_input(ni, "Vertex Crease") {
+                    let vc = eval_on(&ev.field(ni, "Vertex Crease")?, comp, Dom::Point);
+                    if vc.iter().any(|v| v.f() != 0.0) {
+                        return Err("SubdivisionSurface vertex creases unsupported".into());
+                    }
+                }
             }
             // like geometry_set.modify_geometry_sets: also applies to the meshes inside instance references
             let prev = crate::subdiv::set_corner_fixed(node.ps("boundary_smooth") != "ALL");
-            fn rec(g: &Geometry, lvl: usize) -> Geometry {
+            fn rec(g: &Geometry, lvl: usize, cr: Option<&crate::dhash::HashMap<(u32, u32), f64>>) -> Geometry {
                 let mut o = g.clone();
                 if let Some(m) = &g.mesh {
-                    o.mesh = Some(subsurf_mesh(m, lvl));
+                    o.mesh = Some(if lvl == 0 { m.clone() } else { subsurf_mesh_cr(m, lvl, cr) });
                 }
                 if let Some(i) = &g.inst {
                     let mut ni2 = i.clone();
-                    ni2.refs = i.refs.iter().map(|r| Rc::new(rec(r, lvl))).collect();
+                    ni2.refs = i.refs.iter().map(|r| Rc::new(rec(r, lvl, None))).collect();
                     o.inst = Some(ni2);
                 }
                 o
             }
-            let res = rec(&g, lvl);
+            let res = rec(&g, lvl, crease.as_ref());
             crate::subdiv::set_corner_fixed(prev);
             outs(node, vec![("Mesh", rcgeo(res))])
         }
@@ -961,9 +1177,7 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         }
         "GeometryNodeDistributePointsOnFaces" => {
             let g = ev.geo(ni, "Mesh")?;
-            if node.ps("distribute_method") != "RANDOM" {
-                return Err("DistributePointsOnFaces: only RANDOM implemented".into());
-            }
+            let poisson = node.ps("distribute_method") == "POISSON";
             let seed = ev.ci(ni, "Seed")?;
             let mut o = Geometry::default();
             let nname = anon_name("dist_n");
@@ -971,8 +1185,13 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             if let Some(m) = &g.mesh {
                 let comp = Comp::Mesh(m);
                 let sel = selection(ev, ni, comp, Dom::Face)?;
-                let dens: Vec<f32> = eval_on(&ev.field(ni, "Density")?, comp, Dom::Corner).iter().map(|v| v.f()).collect();
-                let (mut pts, nrm, rot) = distribute_random(m, &dens, &sel, seed);
+                let (mut pts, nrm, rot) = if poisson {
+                    let fac: Vec<f32> = eval_on(&ev.field(ni, "Density Factor")?, comp, Dom::Corner).iter().map(|v| v.f()).collect();
+                    distribute_poisson(m, ev.cf(ni, "Distance Min")?, ev.cf(ni, "Density Max")?, &fac, &sel, seed)
+                } else {
+                    let dens: Vec<f32> = eval_on(&ev.field(ni, "Density")?, comp, Dom::Corner).iter().map(|v| v.f()).collect();
+                    distribute_random(m, &dens, &sel, seed)
+                };
                 pts.attrs.insert(nname.clone(), Attr { dom: Dom::Point, ty: Ty::V, data: nrm.iter().map(|v| Val::V(*v)).collect() });
                 pts.attrs.insert(rname.clone(), Attr { dom: Dom::Point, ty: Ty::Q, data: rot.iter().map(|v| Val::Q(*v)).collect() });
                 o.points = Some(pts);
@@ -1046,11 +1265,13 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             if let Some(m) = &g.mesh {
                 pts.extend(m.pos.iter().cloned());
             }
-            if let Some(c) = &g.curves {
-                pts.extend(c.pos.iter().cloned());
-            }
             if let Some(p) = &g.points {
                 pts.extend(p.pos.iter().cloned());
+            }
+            if let Some(c) = &g.curves {
+                for k in 0..c.nc() {
+                    pts.extend(super::curveops::eval_curve(c, k).pos);
+                }
             }
             if let Some(i) = &g.inst {
                 let real = realize_instances(&Geometry { inst: Some(i.clone()), ..Default::default() }, 100);
@@ -1058,7 +1279,7 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                     pts.extend(m.pos.iter().cloned());
                 }
             }
-            outs(node, vec![("Convex Hull", rcgeo(Geometry::from_mesh(convex_hull(&pts))))])
+            outs(node, vec![("Convex Hull", rcgeo(Geometry::from_mesh(hull_mesh(&pts))))])
         }
         "GeometryNodeDuplicateElements" => {
             let g = ev.geo(ni, "Geometry")?;
@@ -1122,11 +1343,23 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                             idx.push(Val::I(j));
                         }
                     }
+                    if std::env::var("GNDUMP").is_ok() {
+                        eprintln!("dup inst: n {} amounts {:?} -> {}", i.n(), am.iter().map(|v| v.i()).collect::<Vec<_>>(), oi.idx.len());
+                    }
                     oi.attrs.insert(anon.clone(), Attr { dom: Dom::Instance, ty: Ty::I, data: idx });
                     o.inst = Some(oi);
                 }
             }
             outs(node, vec![("Geometry", rcgeo(o)), ("Duplicate Index", fld(Rc::new(FNode::Named(anon, Ty::I))))])
+        }
+        "GeometryNodeDualMesh" => {
+            let g = ev.geo(ni, "Mesh")?;
+            let keep = ev.cb(ni, "Keep Boundaries")?;
+            let mut o = (*g).clone();
+            if let Some(m) = &g.mesh {
+                o.mesh = Some(super::dual::dual_mesh(m, keep));
+            }
+            outs(node, vec![("Dual Mesh", rcgeo(o))])
         }
         "GeometryNodeSplitEdges" => {
             let g = ev.geo(ni, "Mesh")?;
@@ -1557,6 +1790,99 @@ pub fn distribute_random(m: &Mesh, density: &[f32], sel: &[bool], seed: i32) -> 
 }
 
 
+/// Distribute Points on Faces, Poisson disk mode (distribute_points_poisson_disk)
+pub fn distribute_poisson(m: &Mesh, min_dist: f32, max_density: f32, factor: &[f32], sel: &[bool], seed: i32) -> (Points, Vec<V3>, Vec<[f32; 4]>) {
+    let seed = seed.wrapping_mul(5383843);
+    let tris = looptris(m);
+    let fnor = face_normals(m);
+    let mut pos: Vec<V3> = vec![];
+    let mut bary: Vec<V3> = vec![];
+    let mut tri_idx: Vec<usize> = vec![];
+    for (ti, (c, _f)) in tris.iter().enumerate() {
+        let v = |k: usize| m.pos[m.cv[c[k]] as usize];
+        let (p0, p1, p2) = (v(0), v(1), v(2));
+        let area = area_tri(p0, p1, p2);
+        let mut rng = BlRng::new(hash2(ti as u32, seed as u32));
+        let amount_fl = area * max_density * 1.0;
+        let fract = amount_fl - amount_fl.floor();
+        let add = fract > rng.get_float();
+        let n = amount_fl as i32 + add as i32;
+        for _ in 0..n {
+            let w = rng.bary();
+            pos.push([p0[0] * w[0] + p1[0] * w[1] + p2[0] * w[2], p0[1] * w[0] + p1[1] * w[1] + p2[1] * w[2], p0[2] * w[0] + p1[2] * w[1] + p2[2] * w[2]]);
+            bary.push(w);
+            tri_idx.push(ti);
+        }
+    }
+    let n = pos.len();
+    let mut elim = vec![false; n];
+    if min_dist > 0.0 {
+        let cell = min_dist;
+        let key = |p: V3| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64, (p[2] / cell).floor() as i64);
+        let mut grid: crate::dhash::HashMap<(i64, i64, i64), Vec<usize>> = crate::dhash::HashMap::default();
+        for (i, p) in pos.iter().enumerate() {
+            grid.entry(key(*p)).or_default().push(i);
+        }
+        let r2 = min_dist * min_dist;
+        for i in 0..n {
+            if elim[i] {
+                continue;
+            }
+            let k = key(pos[i]);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(l) = grid.get(&(k.0 + dx, k.1 + dy, k.2 + dz)) {
+                            for &j in l {
+                                if j != i {
+                                    let d = sub3(pos[j], pos[i]);
+                                    if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= r2 {
+                                        elim[j] = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for i in 0..n {
+        if elim[i] {
+            continue;
+        }
+        let (c, f) = &tris[tri_idx[i]];
+        let fct = |k: usize| if sel[*f] { factor[c[k]].max(0.0) } else { 0.0 };
+        let w = bary[i];
+        let prob = fct(0) * w[0] + fct(1) * w[1] + fct(2) * w[2];
+        let h = super::noise::hf3(w[0], w[1], w[2]);
+        if h > prob {
+            elim[i] = true;
+        }
+    }
+    for i in (0..n).rev() {
+        if elim[i] {
+            pos.swap_remove(i);
+            bary.swap_remove(i);
+            tri_idx.swap_remove(i);
+        }
+    }
+    let mut pts = Points::default();
+    let mut normals = vec![];
+    let mut rots = vec![];
+    let mut ids = vec![];
+    for i in 0..pos.len() {
+        let (_, f) = &tris[tri_idx[i]];
+        pts.pos.push(pos[i]);
+        normals.push(fnor[*f]);
+        rots.push(normal_frame_quat(fnor[*f]));
+        let w = bary[i];
+        ids.push(Val::I(hash2(hash3(w[0].to_bits(), w[1].to_bits(), w[2].to_bits()), tri_idx[i] as u32) as i32));
+    }
+    pts.attrs.insert("id".into(), Attr { dom: Dom::Point, ty: Ty::I, data: ids });
+    (pts, normals, rots)
+}
+
 /// Dijkstra from the end vertices over mesh edges: (next vertex towards the end, total cost); unreachable: (-1, 0)
 pub fn shortest_paths(m: &Mesh, ends: &[bool], cost: &[f32]) -> (Vec<i32>, Vec<f32>) {
     let n = m.nv();
@@ -1596,4 +1922,51 @@ pub fn shortest_paths(m: &Mesh, ends: &[bool], cost: &[f32]) -> (Vec<i32>, Vec<f
         }
     }
     (next, total)
+}
+
+/// hull_from_bullet (node_geo_convex_hull.cc) on top of the Bullet btConvexHullComputer port
+pub fn hull_mesh(pts: &[V3]) -> Mesh {
+    let h = super::bullet_hull::convex_hull_compute(pts);
+    let nv = h.vertices.len();
+    let mut m = Mesh::new();
+    m.pos = h.vertices.clone();
+    if nv <= 2 {
+        if nv == 2 {
+            m.edges.push([0, 1]);
+        }
+        return m;
+    }
+    let loops = h.edges.len();
+    let mut corner_verts = vec![0u32; loops];
+    let mut corner_edges = vec![0u32; loops];
+    let mut edge_index = 0u32;
+    for i in 0..loops {
+        let (vf, vt) = (h.edges[i].source_vertex, h.edges[i].target_vertex);
+        corner_verts[i] = vf as u32;
+        if vf < vt {
+            m.edges.push([vf as u32, vt as u32]);
+            corner_edges[i] = edge_index;
+            corner_edges[h.edges[i].reverse_edge as usize] = edge_index;
+            edge_index += 1;
+        }
+    }
+    m.foff = vec![0];
+    for &f in &h.faces {
+        let e0 = f as usize;
+        let mut e = e0;
+        let mut cnt = 0;
+        loop {
+            m.cv.push(corner_verts[e]);
+            m.ce.push(corner_edges[e]);
+            cnt += 1;
+            e = h.edges[e].next_edge_of_face as usize;
+            if e == e0 {
+                break;
+            }
+        }
+        let last = *m.foff.last().unwrap();
+        m.foff.push(last + cnt);
+    }
+    super::prim::set_sharp_all(&mut m);
+    m
 }

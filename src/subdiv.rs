@@ -294,14 +294,27 @@ pub fn catmull_clark(
         if cur.faces.is_empty() {
             break;
         }
-        let (n, nc) = cc_once(&cur, &cr);
+        let (n, nc) = cc_once(&cur, &cr, false);
         cur = n;
         cr = nc;
     }
     cur
 }
 
-fn cc_once(m: &QMesh, cr: &HashMap<(u32, u32), f64>) -> (QMesh, HashMap<(u32, u32), f64>) {
+/// the same refinement with linear (simple-subdivision) point rules: identical topology and vertex order
+pub fn simple_levels(m: &QMesh, levels: usize) -> QMesh {
+    let mut cur = m.clone();
+    let cr = HashMap::default();
+    for _ in 0..levels {
+        if cur.faces.is_empty() {
+            break;
+        }
+        cur = cc_once(&cur, &cr, true).0;
+    }
+    cur
+}
+
+fn cc_once(m: &QMesh, cr: &HashMap<(u32, u32), f64>, simple: bool) -> (QMesh, HashMap<(u32, u32), f64>) {
     let nv = m.pos.len();
     let nf = m.faces.len();
     let total: usize = m.faces.iter().map(|f| f.len()).sum();
@@ -365,7 +378,7 @@ fn cc_once(m: &QMesh, cr: &HashMap<(u32, u32), f64>) -> (QMesh, HashMap<(u32, u3
                 add(add(pa, pb), add(fp[ef[e][0] as usize], fp[ef[e][1] as usize])),
                 0.25,
             );
-            ep.push(if s > 0.0 { lerp(smooth, mid, s) } else { smooth });
+            ep.push(if simple { mid } else if s > 0.0 { lerp(smooth, mid, s) } else { smooth });
         } else {
             ep.push(mid);
         }
@@ -410,7 +423,7 @@ fn cc_once(m: &QMesh, cr: &HashMap<(u32, u32), f64>) -> (QMesh, HashMap<(u32, u3
     };
     for v in 0..nv {
         let p = m.pos[v];
-        if fcnt[v] == 0 || ecnt[v] == 0 {
+        if simple || fcnt[v] == 0 || ecnt[v] == 0 {
             out.pos.push(p);
             continue;
         }

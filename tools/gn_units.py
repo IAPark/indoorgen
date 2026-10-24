@@ -599,6 +599,12 @@ def inst_cases():
             b.S(sel, "B_INT", 10)
             return b.n("GeometryNodeDeleteGeometry", {"domain": "FACE", "mode": mode}, Geometry=(g, "Mesh"), Selection=(sel, "Result"))
         case(f"DeleteGeometry.FACE.{mode}", build_del2)
+    for dom in ("POINT", "EDGE", "FACE"):
+        for sel_name in ("Top", "Side", "Bottom"):
+            def build_del3(b, dom=dom, sel_name=sel_name):
+                cyl = b.n("GeometryNodeMeshCylinder", {"fill_type": "NGON"}, Vertices=8, Side__Segments=2)
+                return b.n("GeometryNodeDeleteGeometry", {"domain": dom, "mode": "ALL"}, Geometry=(cyl, "Mesh"), Selection=(cyl, sel_name))
+            case(f"DeleteGeometry.cyl.{dom}.{sel_name}", build_del3)
     for dom in ("FACE", "EDGE"):
         def build_ss(b, dom=dom):
             g = b.n("GeometryNodeMeshCube", Size=(1, 2, 3))
@@ -654,6 +660,8 @@ def curve2_cases():
     circ = lambda b: (b.n("GeometryNodeCurvePrimitiveCircle", {"mode": "RADIUS"}, Resolution=6, Radius=1.5), "Curve")
     case("SplineParameter.bezier", lambda b: wire(b, bez(b)))
     case("SplineParameter.circle", lambda b: wire(b, circ(b)))
+    for (a_, b_, cnt_) in (((-1.1234, 0, 0), (1.0987, 0, 0), 200), ((0.3, 0.1, 0), (-1.7, 0.4, 0.2), 33)):
+        case(f"ResampleLine.{cnt_}", lambda b, a_=a_, b_=b_, cnt_=cnt_: wire(b, (b.n("GeometryNodeResampleCurve", {"mode": "COUNT"}, Curve=(b.n("GeometryNodeCurvePrimitiveLine", {"mode": "POINTS"}, Start=a_, End=b_), "Curve"), Count=cnt_), "Curve")))
     case("SetCurveRadius.Tilt", lambda b: wire(b, radius_curve(b)))
     for mode, kw in (("COUNT", {"Count": 5}), ("COUNT", {"Count": 11}), ("LENGTH", {"Length": 0.7}), ("LENGTH", {"Length": 0.8})):
         for src in ("bezier", "circle"):
@@ -705,6 +713,11 @@ def curve2_cases():
     case("CurveLength", lambda b: b.store((b.n("GeometryNodeMeshLine", Count=1), "Mesh"), (b.n("GeometryNodeCurveLength", Curve=bez(b)), "Length"), "L", "POINT", "FLOAT"))
     case("FillCurve.tri", lambda b: b.n("GeometryNodeFillCurve", {"mode": "TRIANGLES"}, Curve=circ(b)))
     case("FillCurve.ngon", lambda b: b.n("GeometryNodeFillCurve", {"mode": "NGONS"}, Curve=circ(b)))
+    for rs in (5, 8, 16, 32, 7, 12):
+        case(f"FillCurve.circle{rs}", lambda b, rs=rs: b.n("GeometryNodeFillCurve", {"mode": "TRIANGLES"}, Curve=(b.n("GeometryNodeCurvePrimitiveCircle", {"mode": "RADIUS"}, Resolution=rs, Radius=0.5), "Curve")))
+    case("FillCurve.star", lambda b: b.n("GeometryNodeFillCurve", {"mode": "TRIANGLES"}, Curve=(b.n("GeometryNodeCurveStar", Points=7, Inner__Radius=0.4, Outer__Radius=1.0), "Curve")))
+    case("FilletCurve.quadfill5", lambda b: wire(b, (b.n("GeometryNodeFilletCurve", {"mode": "POLY"}, Curve=(b.n("GeometryNodeCurvePrimitiveQuadrilateral", Width=0.2, Height=0.7), "Curve"), Radius=0.1, Count=5), "Curve")))
+    case("FillCurve.quadfillet", lambda b: b.n("GeometryNodeFillCurve", {"mode": "TRIANGLES"}, Curve=(b.n("GeometryNodeFilletCurve", {"mode": "POLY"}, Curve=(b.n("GeometryNodeCurvePrimitiveQuadrilateral", Width=0.2, Height=0.7), "Curve"), Radius=0.1, Count=5), "Curve")))
     case("SubdivideCurve", lambda b: wire(b, (b.n("GeometryNodeSubdivideCurve", Curve=radius_curve(b), Cuts=2), "Curve")))
     for st, en in ((0.2, 0.8), (0.0, 0.55)):
         for mode in ("FACTOR", "LENGTH"):
@@ -768,6 +781,32 @@ def curve2_cases():
                 n = b.n("GeometryNodeCurveSplineType", {"spline_type": st}, Curve=c)
                 return wire(b, (n, "Curve"))
             case(f"SplineType.{st}.{src}", mk)
+    def bez5(b):
+        c = (b.n("GeometryNodeCurveSplineType", {"spline_type": "BEZIER"}, Curve=(b.n("GeometryNodeMeshToCurve", Mesh=(b.n("GeometryNodeMeshCircle", Vertices=6, Radius=1.2), "Mesh")), "Curve")), "Curve")
+        return c
+    for ht in ("AUTO", "VECTOR", "ALIGN", "FREE"):
+        for md in ({"LEFT"}, {"RIGHT"}, {"LEFT", "RIGHT"}):
+            def mk(b, ht=ht, md=md):
+                n = b.n("GeometryNodeCurveSetHandles", {"handle_type": ht, "mode": md}, Curve=bez5(b), Selection=b.n("FunctionNodeCompare", {"data_type": "INT", "operation": "LESS_THAN"}, A=(b.index(), "Index"), B=3) if False else True)
+                return wire(b, (n, "Curve"), False)
+            case(f"SetHandleType.{ht}.{'_'.join(sorted(md))}", mk)
+    for side in ("LEFT", "RIGHT"):
+        for pre in ("AUTO", "ALIGN", "VECTOR", "FREE"):
+            def mk(b, side=side, pre=pre):
+                c = bez5(b)
+                if pre != "AUTO":
+                    c = (b.n("GeometryNodeCurveSetHandles", {"handle_type": pre, "mode": {"LEFT", "RIGHT"}}, Curve=c), "Curve")
+                off = b.n("ShaderNodeCombineXYZ", X=0.2, Y=0.35, Z=0.1)
+                n = b.n("GeometryNodeSetCurveHandlePositions", {"mode": side}, Curve=c, Offset=(off, "Vector"))
+                return wire(b, (n, "Curve"), False)
+            case(f"SetHandlePositions.{side}.{pre}", mk)
+    def mk_sp(b):
+        c = bez5(b)
+        idx = b.index()
+        off = b.n("ShaderNodeCombineXYZ", X=0.0, Y=(b.math("MULTIPLY", (idx, "Index"), 0.07), "Value"), Z=0.0)
+        n = b.n("GeometryNodeSetPosition", Geometry=c, Offset=(off, "Vector"))
+        return wire(b, (n, "Geometry"), False)
+    case("SetPosition.bezier", mk_sp)
     case("CurveStar", lambda b: wire(b, (b.n("GeometryNodeCurveStar", Points=5, Inner__Radius=0.5, Outer__Radius=1.2, Twist=0.3), "Curve"), False))
     def spl_len(b):
         c = circ(b)
@@ -984,6 +1023,29 @@ def field2_cases():
         info = b.n("GeometryNodeObjectInfo", {"transform_space": "ORIGINAL"}, Object=ob, As__Instance=True)
         return b.n("GeometryNodeRealizeInstances", Geometry=(info, "Geometry"))
     case("ObjectInfo.original.instance", mk_objinfo2)
+    def mk_collinfo(b, sep, reset, tag):
+        def mkobj(nm, pts, loc, rot=(0, 0, 0), sc=(1, 1, 1)):
+            me = bpy.data.meshes.new(nm)
+            me.from_pydata(pts, [], [(0, 1, 2)] if len(pts) == 3 else [(0, 1, 2, 3)])
+            me.update()
+            ob = bpy.data.objects.new(nm, me)
+            ob.location = loc
+            ob.rotation_euler = rot
+            ob.scale = sc
+            return ob
+        col = bpy.data.collections.new("TCol" + tag)
+        child = bpy.data.collections.new("Child" + tag)
+        child.instance_offset = (0.5, 0.0, 0.25)
+        col.instance_offset = (1.0, -1.0, 0.0)
+        col.children.link(child)
+        for ob in (mkobj("obj10" + tag, [(0, 0, 0), (1, 0, 0), (0, 1, 0)], (1, 2, 3), (0.1, 0.2, 0.3)),
+                   mkobj("Obj2" + tag, [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)], (0, 0, 2), sc=(1.5, 1.0, 0.7))):
+            col.objects.link(ob)
+        child.objects.link(mkobj("ChildObj" + tag, [(0, 0, 0), (2, 0, 0), (0, 2, 0)], (3, 0, 0), (0, 0, 0.7)))
+        info = b.n("GeometryNodeCollectionInfo", {"transform_space": "ORIGINAL"}, Collection=col, Separate__Children=sep, Reset__Children=reset)
+        return b.n("GeometryNodeRealizeInstances", Geometry=(info, "Instances"))
+    for sep, reset in ((False, False), (True, False), (True, True)):
+        case(f"CollectionInfo.{sep}.{reset}", lambda b, sep=sep, reset=reset: mk_collinfo(b, sep, reset, f"{sep}{reset}"))
     def mk_paths(b):
         g = b.n("GeometryNodeMeshGrid", Size__X=2.0, Size__Y=1.0, Vertices__X=5, Vertices__Y=4)
         isend = b.n("FunctionNodeCompare", {"operation": "EQUAL", "data_type": "INT"})
@@ -1097,6 +1159,13 @@ def mesh2_cases():
         return b.n("GeometryNodeTransform", Geometry=(c, "Mesh"), Translation=t, Rotation=rot)
     for op in ("UNION", "INTERSECT", "DIFFERENCE"):
         case(f"MeshBoolean.{op}.cubes", lambda b, op=op: b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": "EXACT"}, Mesh_1=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Mesh_2=[(cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4)), "Geometry")]) if False else _boolean(b, op, cube_at(b, (1, 1, 1), (0, 0, 0)), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))]))
+    def thin(b, n=(4, 6, 10)):
+        c = b.n("GeometryNodeMeshCube", Size=(0.012, 0.05, 0.1), Vertices__X=n[0], Vertices__Y=n[1], Vertices__Z=n[2])
+        cy = b.n("GeometryNodeMeshCylinder", Radius=0.004, Depth=0.1)
+        t = b.n("GeometryNodeTransform", Geometry=(cy, "Mesh"), Translation=(0, 0, 0.02), Rotation=(0.0, 1.5708, 0.0), Scale=(1.2, 1, 1))
+        return _boolean(b, "DIFFERENCE", c, [t])
+    case("MeshBoolean.DIFFERENCE.thin", thin)
+    case("MeshBoolean.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2)))
     case("MeshBoolean.DIFFERENCE.hole", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)]))
     case("MeshBoolean.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))]))
     case("MeshBoolean.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))]))
@@ -1149,6 +1218,17 @@ def dup_cases():
             d = b.n("GeometryNodeDuplicateElements", {"domain": dom}, Geometry=(g, "Mesh"), Amount=b.n("FunctionNodeFloatToInt", Float=amt(b)))
             return b.store((d, "Geometry"), (d, "Duplicate Index"), "di", dom, "INT")
         case(f"DuplicateElements.{dom}", mk)
+    def mk_inst(b):
+        c = b.n("GeometryNodeMeshCube", Size=(0.3, 0.2, 0.1))
+        gi = b.n("GeometryNodeGeometryToInstance")
+        b.ng.links.new(b.out_sock((c, "Mesh")), gi.inputs["Geometry"])
+        d = b.n("GeometryNodeDuplicateElements", {"domain": "INSTANCE"}, Geometry=(gi, "Instances"), Amount=6)
+        di = (d, "Duplicate Index")
+        cx = b.n("ShaderNodeCombineXYZ", X=b.math("MODULO", di, 3.0), Y=b.math("FLOOR", b.math("DIVIDE", di, 3.0)), Z=b.math("MULTIPLY", b.math("FLOOR", b.math("DIVIDE", di, 3.0)), -0.2))
+        sp = b.n("GeometryNodeSetPosition", Geometry=(d, "Geometry"), Offset=cx)
+        r = b.n("GeometryNodeRealizeInstances", Geometry=(sp, "Geometry"))
+        return b.store((r, "Geometry"), (b.index(), "Index"), "i", "POINT", "INT")
+    case("DuplicateElements.INSTANCE", mk_inst)
     def mk_c(b):
         g = b.n("GeometryNodeCurvePrimitiveCircle", {"mode": "RADIUS"}, Resolution=4, Radius=1.0)
         d = b.n("GeometryNodeDuplicateElements", {"domain": "SPLINE"}, Geometry=(g, "Curve"), Amount=2)
@@ -1294,6 +1374,16 @@ def rot_cases():
                 cur = (b.store(cur, (r2e, "Euler"), "rot", "POINT", "FLOAT_VECTOR"), "Geometry")
                 return cur
             out.append((f"DistributePointsOnFaces.{src}.{seed}", dist))
+    for src in ("grid", "sphere"):
+        for seed in (0, 3):
+            def distp(b, src=src, seed=seed):
+                g = {"grid": lambda: b.n("GeometryNodeMeshGrid", Size__X=1.3, Size__Y=0.9, Vertices__X=4, Vertices__Y=3),
+                     "sphere": lambda: b.n("GeometryNodeMeshUVSphere", Segments=8, Rings=5, Radius=0.7)}[src]()
+                d = b.n("GeometryNodeDistributePointsOnFaces", {"distribute_method": "POISSON"}, Mesh=(g, "Mesh"), Distance__Min=0.12, Density__Max=60.0, Density__Factor=0.9, Seed=seed)
+                m = b.n("GeometryNodePointsToVertices", Points=(d, "Points"))
+                cur = (b.store((m, "Mesh"), (d, "Normal"), "nor", "POINT", "FLOAT_VECTOR"), "Geometry")
+                return cur
+            out.append((f"DistributePointsOnFaces.poisson.{src}.{seed}", distp))
     def pts(b):
         p = b.n("GeometryNodePoints", Count=5, Position=b.n("ShaderNodeCombineXYZ", X=b.math("MULTIPLY", (b.index(), "Index"), 0.5), Y=1.0, Z=0.0), Radius=0.2)
         return b.n("GeometryNodePointsToVertices", Points=(p, "Geometry"))
@@ -1366,6 +1456,111 @@ def tex_cases():
                     cur = (b.store(cur, (n, "Position"), "p", "POINT", "FLOAT_VECTOR"), "Geometry")
                 return cur
             case(f"Voronoi.{ft}.{dm}", mk)
+    for kb in (False, True):
+        case(f"DualMesh.ico.{kb}", lambda b, kb=kb: b.n("GeometryNodeDualMesh", Mesh=(b.n("GeometryNodeMeshIcoSphere", Subdivisions=2, Radius=1.0), "Mesh"), Keep__Boundaries=kb))
+        case(f"DualMesh.grid.{kb}", lambda b, kb=kb: b.n("GeometryNodeDualMesh", Mesh=(b.n("GeometryNodeMeshGrid", Size__X=2.0, Size__Y=1.5, Vertices__X=4, Vertices__Y=5), "Mesh"), Keep__Boundaries=kb))
+        case(f"DualMesh.uvsphere.{kb}", lambda b, kb=kb: b.n("GeometryNodeDualMesh", Mesh=(b.n("GeometryNodeMeshUVSphere", Segments=7, Rings=5, Radius=1.0), "Mesh"), Keep__Boundaries=kb))
+        case(f"DualMesh.cylinder.{kb}", lambda b, kb=kb: b.n("GeometryNodeDualMesh", Mesh=(b.n("GeometryNodeMeshCylinder", Vertices=6, Radius=1.0, Depth=2.0), "Mesh"), Keep__Boundaries=kb))
+        case(f"DualMesh.cube.{kb}", lambda b, kb=kb: b.n("GeometryNodeDualMesh", Mesh=(b.n("GeometryNodeMeshCube", Size=(1, 1, 1), Vertices__X=3, Vertices__Y=3, Vertices__Z=3), "Mesh"), Keep__Boundaries=kb))
+    def sd_attr_case(name, base, level, node="GeometryNodeSubdivideMesh"):
+        def mk(b):
+            cur = (base(b), "Mesh")
+            idx = b.index()
+            for nm, dom, k in (("ap", "POINT", 0.37), ("ae", "EDGE", 0.11), ("ac", "CORNER", 0.05), ("af", "FACE", 0.2)):
+                cur = (b.store(cur, b.math("MULTIPLY", (idx, "Index"), k), nm, dom, "FLOAT"), "Geometry")
+            return b.n(node, Mesh=cur, Level=level)
+        case(name, mk)
+    for lv in (1, 2):
+        sd_attr_case(f"SubdivAttrs.grid.{lv}", lambda b: b.n("GeometryNodeMeshGrid", Size__X=2.0, Size__Y=1.5, Vertices__X=4, Vertices__Y=3), lv)
+        sd_attr_case(f"SubdivAttrs.cyl.{lv}", lambda b: b.n("GeometryNodeMeshCylinder", Vertices=5), lv)
+    for lv in (1, 2):
+        sd_attr_case(f"SubsurfAttrs.grid.{lv}", lambda b: b.n("GeometryNodeMeshGrid", Size__X=2.0, Size__Y=1.5, Vertices__X=4, Vertices__Y=3), lv, "GeometryNodeSubdivisionSurface")
+        sd_attr_case(f"SubsurfAttrs.cyl.{lv}", lambda b: b.n("GeometryNodeMeshCylinder", Vertices=5), lv, "GeometryNodeSubdivisionSurface")
+    case("Subsurf.crease", lambda b: b.n("GeometryNodeSubdivisionSurface", Mesh=(b.n("GeometryNodeMeshCube", Size=(1, 2, 3), Vertices__X=3, Vertices__Y=3, Vertices__Z=3), "Mesh"), Level=2, Edge__Crease=(b.n("FunctionNodeCompare", {"data_type": "INT", "operation": "LESS_THAN"}, A=(b.index(), "Index"), B=20) if False else 1.0)))
+    def mat_case(name, f):
+        def mk(b):
+            g = base_grid(b)
+            return b.store((g, "Mesh"), f(b), "r", "POINT", "FLOAT_VECTOR")
+        case(name, mk)
+    def cm(b, vals):
+        n = b.n("FunctionNodeCombineMatrix")
+        for k, v in vals.items():
+            b.S(n, k, v)
+        return n
+    M1 = {"Column 1 Row 1": 0.9, "Column 1 Row 2": 0.3, "Column 2 Row 1": -0.2, "Column 2 Row 2": 1.1, "Column 3 Row 3": 1.3, "Column 4 Row 1": 0.5, "Column 4 Row 2": -0.4, "Column 4 Row 3": 0.2, "Column 3 Row 1": 0.1}
+    mat_case("Matrix.point", lambda b: (b.n("FunctionNodeTransformPoint", Vector=(b.pos(), "Position"), Transform=(cm(b, M1), "Matrix")), "Vector"))
+    mat_case("Matrix.direction", lambda b: (b.n("FunctionNodeTransformDirection", Direction=(b.pos(), "Position"), Transform=(cm(b, M1), "Matrix")), "Direction"))
+    mat_case("Matrix.transpose", lambda b: (b.n("FunctionNodeTransformPoint", Vector=(b.pos(), "Position"), Transform=(b.n("FunctionNodeTransposeMatrix", Matrix=(cm(b, M1), "Matrix")), "Matrix")), "Vector"))
+    mat_case("Matrix.invert", lambda b: (b.n("FunctionNodeTransformPoint", Vector=(b.pos(), "Position"), Transform=(b.n("FunctionNodeInvertMatrix", Matrix=(cm(b, M1), "Matrix")), "Matrix")), "Vector"))
+    mat_case("Matrix.multiply", lambda b: (b.n("FunctionNodeTransformPoint", Vector=(b.pos(), "Position"), Transform=(b.n("FunctionNodeMatrixMultiply", Matrix=(cm(b, M1), "Matrix"), Matrix_001=(cm(b, {"Column 1 Row 1": 2.0, "Column 2 Row 3": 0.5, "Column 4 Row 3": 1.0}), "Matrix")), "Matrix")), "Vector"))
+    mat_case("Matrix.sepcomb", lambda b: (b.n("FunctionNodeTransformPoint", Vector=(b.pos(), "Position"), Transform=(b.n("FunctionNodeTransposeMatrix", Matrix=(b.n("FunctionNodeTransposeMatrix", Matrix=(cm(b, M1), "Matrix")), "Matrix")), "Matrix")), "Vector"))
+    def strjoin(b):
+        g = base_grid(b)
+        j = b.n("GeometryNodeStringJoin", Delimiter="-")
+        for t in ("aa", "bb", "cc"):
+            b.ng.links.new(b.out_sock(b.n("FunctionNodeInputString", {"string": t})), j.inputs["Strings"])
+        st = b.n("GeometryNodeStoreNamedAttribute", {"data_type": "FLOAT", "domain": "POINT"}, Geometry=(g, "Mesh"), Name=(j, "String"), Value=1.0)
+        return st
+    case("StringJoin", strjoin)
+    for ax in ("X", "Z"):
+        for pv in ("AUTO", "Y"):
+            if ax == "X" and pv == "X":
+                continue
+            def mk(b, ax=ax, pv=pv):
+                g = base_grid(b)
+                e2r = b.n("FunctionNodeEulerToRotation", Euler=(b.pos(), "Position"))
+                n = b.n("FunctionNodeAlignRotationToVector", {"axis": ax, "pivot_axis": pv}, Rotation=(e2r, "Rotation"), Factor=0.8, Vector=(0.3, -0.7, 0.5))
+                r2e = b.n("FunctionNodeRotationToEuler", Rotation=(n, "Rotation"))
+                return b.store((g, "Mesh"), (r2e, "Euler"), "r", "POINT", "FLOAT_VECTOR")
+            case(f"AlignRotationToVector.{ax}.{pv}", mk)
+    def uv_case(name, mk_node):
+        def mk(b):
+            n = mk_node(b)
+            return b.store((n, "Mesh"), (n, "UV Map"), "uvm", "CORNER", "FLOAT_VECTOR")
+        case(name, mk)
+    uv_case("UV.Cube", lambda b: b.n("GeometryNodeMeshCube", Size=(1.2, 0.7, 2.0), Vertices__X=3, Vertices__Y=4, Vertices__Z=2))
+    uv_case("UV.Grid", lambda b: b.n("GeometryNodeMeshGrid", Size__X=2.0, Size__Y=1.5, Vertices__X=4, Vertices__Y=5))
+    uv_case("UV.Sphere", lambda b: b.n("GeometryNodeMeshUVSphere", Segments=7, Rings=5, Radius=1.0))
+    for ft in ("NGON", "TRIANGLE_FAN", "NONE"):
+        uv_case(f"UV.Cylinder.{ft}", lambda b, ft=ft: b.n("GeometryNodeMeshCylinder", {"fill_type": ft}, Vertices=6, Side__Segments=2, Fill__Segments=2))
+        uv_case(f"UV.Cone.{ft}", lambda b, ft=ft: b.n("GeometryNodeMeshCone", {"fill_type": ft}, Vertices=6, Side__Segments=2, Fill__Segments=2, Radius__Top=0.4))
+        uv_case(f"UV.ConeTip.{ft}", lambda b, ft=ft: b.n("GeometryNodeMeshCone", {"fill_type": ft}, Vertices=6, Side__Segments=2, Fill__Segments=2))
+    def vor_case(name, dim, ft, dm, extra=None, props=None):
+        def mk(b):
+            g = base_grid(b)
+            pr = {"feature": ft, "distance": dm, "voronoi_dimensions": dim}
+            pr.update(props or {})
+            kw = {"Scale": 3.1, "Randomness": 0.9}
+            kw.update(extra or {})
+            n = b.n("ShaderNodeTexVoronoi", pr, Vector=(b.pos(), "Position"), **kw)
+            if dim in ("1D", "4D"):
+                b.S(n, "W", 0.37)
+            if ft == "SMOOTH_F1":
+                b.S(n, "Smoothness", 0.4)
+            if dm == "MINKOWSKI" and dim != "1D":
+                b.S(n, "Exponent", 1.7)
+            cur = (g, "Mesh")
+            osock = "Radius" if ft == "N_SPHERE_RADIUS" else "Distance"
+            cur = (b.store(cur, (n, osock), "r", "POINT", "FLOAT"), "Geometry")
+            if ft in ("F1", "F2", "SMOOTH_F1"):
+                cur = (b.store(cur, (n, "Color"), "c", "POINT", "FLOAT_COLOR"), "Geometry")
+                if dim != "1D":
+                    cur = (b.store(cur, (n, "Position"), "p", "POINT", "FLOAT_VECTOR"), "Geometry")
+                if dim in ("1D", "4D"):
+                    cur = (b.store(cur, (n, "W"), "w", "POINT", "FLOAT"), "Geometry")
+            return cur
+        case(name, mk)
+    for dim in ("1D", "2D", "4D"):
+        for ft in ("F1", "F2", "SMOOTH_F1", "DISTANCE_TO_EDGE", "N_SPHERE_RADIUS"):
+            vor_case(f"Voronoi.{dim}.{ft}", dim, ft, "EUCLIDEAN")
+        if dim != "1D":
+            vor_case(f"Voronoi.{dim}.F1.MANHATTAN", dim, "F1", "MANHATTAN")
+            vor_case(f"Voronoi.{dim}.F2.CHEBYCHEV", dim, "F2", "CHEBYCHEV")
+            vor_case(f"Voronoi.{dim}.SMOOTH_F1.MINKOWSKI", dim, "SMOOTH_F1", "MINKOWSKI")
+    for ft in ("F1", "F2", "SMOOTH_F1", "DISTANCE_TO_EDGE"):
+        for nm in (False, True):
+            vor_case(f"Voronoi.3D.{ft}.fractal.{nm}", "3D", ft, "EUCLIDEAN", {"Detail": 2.5, "Roughness": 0.6, "Lacunarity": 2.1}, {"normalize": nm})
+    vor_case("Voronoi.2D.F1.fractal", "2D", "F1", "EUCLIDEAN", {"Detail": 1.0, "Roughness": 0.5, "Lacunarity": 2.0}, {"normalize": True})
     for dim in ("1D", "2D", "3D", "4D"):
         def mk(b, dim=dim):
             g = base_grid(b)
@@ -1412,7 +1607,8 @@ def build_cases(out, filt):
             objs = {}
             for nm, o in b.objects.items():
                 objs[nm] = {"mesh": GX.export_mesh(o.data) if o.type == "MESH" else None, "matrix": [x for r in o.matrix_world for x in r]}
-            cases.append({"name": full, "group": ng.name, "inputs": {}, "expect": exp, "objects": objs})
+            objs = {**out.get("objects", {}), **objs}
+            cases.append({"name": full, "group": ng.name, "inputs": {}, "expect": exp, "objects": objs, "collections": out.get("collections")})
         except Exception as e:
             print("BUILD ERROR", full, repr(e))
     return cases

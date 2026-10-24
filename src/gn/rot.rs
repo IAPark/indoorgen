@@ -306,3 +306,60 @@ pub fn blend_color(mode: &str, f: f32, a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     o[3] = a[3] * facm + b[3] * f;
     o
 }
+
+/// angle_signed_on_axis_v3v3_v3 (C version: negative angles are returned as 2*pi - angle)
+fn angle_signed_on_axis_c(v1: V3, v2: V3, axis: V3) -> f32 {
+    let v1p = project_plane(v1, axis);
+    let v2p = project_plane(v2, axis);
+    let mut a = angle_v3v3(v1p, v2p);
+    let tproj = cross3(v2p, v1p);
+    if dot3(tproj, axis) < 0.0 {
+        a = (std::f64::consts::PI * 2.0) as f32 - a;
+    }
+    a
+}
+
+/// Align Rotation to Vector node on quaternions
+pub fn align_rotation_to_vector(old: [f32; 4], factor: f32, vector: V3, axis: &str, pivot: &str) -> [f32; 4] {
+    if vector == [0.0; 3] {
+        return old;
+    }
+    let unit = |a: &str| -> V3 {
+        match a {
+            "Y" => [0.0, 1.0, 0.0],
+            "Z" => [0.0, 0.0, 1.0],
+            _ => [1.0, 0.0, 0.0],
+        }
+    };
+    let main = unit(axis);
+    let old_axis = quat_rotate(old, main);
+    if pivot == "AUTO" {
+        let new_axis = norm3(vector);
+        let cx = |a: V3, b: V3| -> V3 {
+            let (x, y) = ([a[0] as f64, a[1] as f64, a[2] as f64], [b[0] as f64, b[1] as f64, b[2] as f64]);
+            [(x[1] * y[2] - x[2] * y[1]) as f32, (x[2] * y[0] - x[0] * y[2]) as f32, (x[0] * y[1] - x[1] * y[0]) as f32]
+        };
+        let mut raxis = cx(old_axis, new_axis);
+        if raxis == [0.0; 3] {
+            raxis = cx(old_axis, [1.0, 0.0, 0.0]);
+            if raxis == [0.0; 3] {
+                raxis = cx(old_axis, [0.0, 1.0, 0.0]);
+            }
+        }
+        let full = angle_normalized(old_axis, new_axis);
+        let angle = factor * full;
+        quat_mul(axis_angle_to_quat(norm3(raxis), angle), old)
+    } else {
+        let lp = unit(pivot);
+        if lp == main {
+            return old;
+        }
+        let pivot_axis = quat_rotate(old, lp);
+        let mut full = angle_signed_on_axis_c(vector, old_axis, pivot_axis);
+        if full > std::f32::consts::PI {
+            full -= (2.0 * std::f64::consts::PI) as f32;
+        }
+        let angle = factor * full;
+        quat_mul(axis_angle_to_quat(norm3(pivot_axis), angle), old)
+    }
+}

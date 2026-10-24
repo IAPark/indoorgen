@@ -131,6 +131,10 @@ pub fn geo_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             };
             out.refs = refs;
             let nrefs = out.refs.len() as i32;
+            if multi {
+                // without Pick Instance the whole geometry set is one reference
+                out.refs.push(inst_geo.clone());
+            }
             let mut sources: Vec<Comp> = vec![];
             if let Some(m) = &pts.mesh {
                 sources.push(Comp::Mesh(m));
@@ -156,7 +160,7 @@ pub fn geo_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                         continue;
                     }
                     out.xf.push(matrix_from_trs(p[i].v(), rq[i].q(), sc[i].v()));
-                    let k = if multi && pk[i].b() { ix[i].i().rem_euclid(nrefs.max(1)) } else { 0 };
+                    let k = if multi { if pk[i].b() { ix[i].i().rem_euclid(nrefs.max(1)) } else { nrefs } } else { 0 };
                     out.idx.push(k as u32);
                     selected.push(i);
                 }
@@ -433,6 +437,55 @@ pub fn geo_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             o.mesh = Some(mesh);
             outs(node, vec![("Mesh", rcgeo(o))])
         }
+        "GeometryNodeCollectionInfo" => {
+            let name = ev.cval(ni, "Collection")?.s().to_string();
+            let separate = ev.cb(ni, "Separate Children")?;
+            let reset = ev.cb(ni, "Reset Children")?;
+            if !ev.objects.collections.contains_key(&name) {
+                return Ok(Some(outs(node, vec![("Instances", Value::empty_geo())])));
+            }
+            let col = ev.objects.collections[&name].clone();
+            let mut inst = Instances::default();
+            // the modified object's world transform is taken as identity (Relative space is unsupported)
+            if separate {
+                let mut entries: Vec<(String, Geometry, M4)> = vec![];
+                for ch in &col.children {
+                    let mut xf = M4_ID;
+                    if !reset {
+                        let co = ev.objects.collections.get(ch).map_or([0.0; 3], |c| c.offset);
+                        xf[3][0] += co[0];
+                        xf[3][1] += co[1];
+                        xf[3][2] += co[2];
+                        xf[3][0] -= col.offset[0];
+                        xf[3][1] -= col.offset[1];
+                        xf[3][2] -= col.offset[2];
+                    }
+                    entries.push((ch.clone(), ev.objects.collection_geometry(ch), xf));
+                }
+                for ob in &col.objects {
+                    let Some(o) = ev.objects.map.get(ob) else { continue };
+                    let mut xf = M4_ID;
+                    if !reset {
+                        xf[3][0] -= col.offset[0];
+                        xf[3][1] -= col.offset[1];
+                        xf[3][2] -= col.offset[2];
+                        xf = m4_mul(&xf, &o.matrix);
+                    }
+                    entries.push((ob.clone(), o.geo.clone(), xf));
+                }
+                entries.sort_by(|a, b| natural_casecmp(&a.0, &b.0));
+                for (_, g, xf) in entries {
+                    inst.refs.push(Rc::new(g));
+                    inst.idx.push((inst.refs.len() - 1) as u32);
+                    inst.xf.push(xf);
+                }
+            } else {
+                inst.refs.push(Rc::new(ev.objects.collection_geometry(&name)));
+                inst.idx.push(0);
+                inst.xf.push(M4_ID);
+            }
+            outs(node, vec![("Instances", rcgeo(Geometry { inst: Some(inst), ..Default::default() }))])
+        }
         "GeometryNodeObjectInfo" => {
             let name = ev.cval(ni, "Object")?.s().to_string();
             let as_inst = ev.cb(ni, "As Instance").unwrap_or(false);
@@ -581,4 +634,36 @@ pub fn mesh_keep_faces_only(m: &Mesh, keep: &[bool]) -> Mesh {
     }
     std::mem::swap(&mut o, &mut nm);
     o
+}
+
+/// BLI_strcasecmp_natural: case-insensitive, digit runs compare numerically
+pub fn natural_casecmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
+            let si = i;
+            while i < a.len() && a[i].is_ascii_digit() {
+                i += 1;
+            }
+            let sj = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            let na: String = a[si..i].iter().collect::<String>().trim_start_matches('0').to_string();
+            let nb: String = b[sj..j].iter().collect::<String>().trim_start_matches('0').to_string();
+            let o = na.len().cmp(&nb.len()).then(na.cmp(&nb));
+            if o != std::cmp::Ordering::Equal {
+                return o;
+            }
+        } else {
+            let (ca, cb) = (a[i].to_ascii_lowercase(), b[j].to_ascii_lowercase());
+            if ca != cb {
+                return ca.cmp(&cb);
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    (a.len() - i).cmp(&(b.len() - j))
 }

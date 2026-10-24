@@ -186,24 +186,88 @@ pub fn accumulate_lengths(pos: &[V3], cyclic: bool) -> Vec<f32> {
     out
 }
 
-/// (factor, length, index) per control point
+/// Spline Parameter node, point domain: (factor, length, index) per control point
+/// (node_geo_curve_spline_parameter.cc: calculate_point_lengths / convert_lengths_to_factors)
 pub fn spline_parameters(c: &Curves) -> (Vec<f32>, Vec<f32>, Vec<i32>) {
     let mut fac = vec![0.0; c.np()];
     let mut len = vec![0.0; c.np()];
     let mut idx = vec![0; c.np()];
     for k in 0..c.nc() {
-        let e = eval_curve(c, k);
-        let l = accumulate_lengths(&e.pos, c.cyclic[k]);
-        let total = l.last().copied().unwrap_or(0.0);
-        for (j, p) in c.range(k).enumerate() {
-            let at = e.ctrl_at[j];
-            let ll = if at == 0 { 0.0 } else { l[at - 1] };
-            len[p] = ll;
-            fac[p] = if total > 0.0 { ll / total } else { 0.0 };
-            idx[p] = j as i32;
+        let r = c.range(k);
+        let n = r.len();
+        if n == 0 {
+            continue;
+        }
+        let total;
+        if c.kind[k] == CKind::Nurbs {
+            let pos = &c.pos[r.clone()];
+            let mut length = 0.0f32;
+            for i in 0..n.saturating_sub(1) {
+                len[r.start + i] = length;
+                length += len3(sub3(pos[i + 1], pos[i]));
+            }
+            len[r.start + n - 1] = length;
+            if c.cyclic[k] {
+                length += len3(sub3(pos[0], pos[n - 1]));
+            }
+            total = length;
+        } else {
+            let e = eval_curve(c, k);
+            let l = accumulate_lengths(&e.pos, c.cyclic[k]);
+            total = l.last().copied().unwrap_or(0.0);
+            for j in 0..n {
+                let at = e.ctrl_at[j];
+                len[r.start + j] = if j == 0 || at == 0 { 0.0 } else { l[at - 1] };
+            }
+        }
+        for j in 0..n {
+            idx[r.start + j] = j as i32;
+        }
+        // convert lengths to factors
+        if total > 0.0 {
+            let f = 1.0 / total;
+            for j in 0..n {
+                fac[r.start + j] = if j == 0 { len[r.start] } else { len[r.start + j] * f };
+            }
+        } else if n == 1 {
+            fac[r.start] = 0.0;
+        } else {
+            for j in 0..n {
+                fac[r.start + j] = j as f32 / (n as f32 - 1.0);
+            }
         }
     }
     (fac, len, idx)
+}
+
+/// Spline Parameter node, curve domain: (factor, length) per curve = portion of the total length at the curve's start
+pub fn spline_parameters_curve(c: &Curves) -> (Vec<f32>, Vec<f32>) {
+    let nc = c.nc();
+    let mut lengths = vec![0.0f32; nc];
+    let mut length = 0.0f32;
+    let mut last_total = 0.0f32;
+    for k in 0..nc {
+        lengths[k] = length;
+        let e = eval_curve(c, k);
+        let t = accumulate_lengths(&e.pos, c.cyclic[k]).last().copied().unwrap_or(0.0);
+        length += t;
+        last_total = t;
+    }
+    let mut fac = lengths.clone();
+    if nc > 0 {
+        let total = lengths[nc - 1] + last_total;
+        if total > 0.0 {
+            let f = 1.0 / total;
+            for v in fac.iter_mut() {
+                *v *= f;
+            }
+        } else {
+            for (i, v) in fac.iter_mut().enumerate() {
+                *v = i as f32 / (nc as f32 - 1.0);
+            }
+        }
+    }
+    (fac, lengths)
 }
 
 /// evaluated tangents of a curve (poly rule + bezier end correction)
@@ -229,6 +293,17 @@ pub fn eval_tangents(c: &Curves, k: usize, e: &EvalCurve) -> Vec<V3> {
 pub fn curve_tangents(c: &Curves) -> Vec<V3> {
     let mut out = vec![[0.0; 3]; c.np()];
     for k in 0..c.nc() {
+        if c.kind[k] == CKind::Nurbs {
+            // NURBS: tangents of the control polygon (bke::curves::poly::calculate_tangents)
+            let r = c.range(k);
+            if r.len() > 0 {
+                let t = g32::tangents(&c.pos[r.clone()], c.cyclic[k]);
+                for (j, p) in r.enumerate() {
+                    out[p] = t[j];
+                }
+            }
+            continue;
+        }
         let e = eval_curve(c, k);
         let t = eval_tangents(c, k, &e);
         for (j, p) in c.range(k).enumerate() {
@@ -357,6 +432,18 @@ pub fn eval_normals_tilt(c: &Curves, k: usize, e: &EvalCurve, t: &[V3]) -> Vec<V
 pub fn curve_normals(c: &Curves) -> Vec<V3> {
     let mut out = vec![[0.0; 3]; c.np()];
     for k in 0..c.nc() {
+        if c.kind[k] == CKind::Nurbs {
+            // no control-point <-> evaluated-point correspondence: treat the control polygon as a poly curve (no tilt)
+            let r = c.range(k);
+            if r.len() > 0 {
+                let t = g32::tangents(&c.pos[r.clone()], c.cyclic[k]);
+                let n = eval_normals(c, k, &t);
+                for (j, p) in r.enumerate() {
+                    out[p] = n[j];
+                }
+            }
+            continue;
+        }
         let e = eval_curve(c, k);
         let t = eval_tangents(c, k, &e);
         let n = eval_normals_tilt(c, k, &e, &t);
@@ -427,47 +514,33 @@ pub fn lerp_at(pos: &[V3], cyclic: bool, idx: usize, f: f32) -> V3 {
 
 /// length_parameterize::sample_uniform: (segment index, factor) for `count` samples
 pub fn sample_uniform(acc: &[f32], include_last: bool, count: usize) -> Vec<(usize, f32)> {
-    let mut out = Vec::with_capacity(count);
     if acc.is_empty() || count == 0 {
         return vec![(0, 0.0); count];
     }
-    let total = *acc.last().unwrap();
-    let denom = count as f32 - if include_last { 1.0 } else { 0.0 };
-    let step = if denom > 0.0 { total / denom } else { 0.0 };
-    let nseg = acc.len();
-    let mut seg = 0usize;
-    for i in 0..count {
-        if include_last && i == count - 1 {
-            out.push((nseg - 1, 1.0));
-            break;
-        }
-        let len = step * i as f32;
-        while seg < nseg - 1 && acc[seg] < len {
-            seg += 1;
-        }
-        let prev = if seg == 0 { 0.0 } else { acc[seg - 1] };
-        let seglen = acc[seg] - prev;
-        let f = if seglen > 0.0 { (len - prev) / seglen } else { 0.0 };
-        out.push((seg, f));
+    if count == 1 {
+        return vec![(0, 0.0)];
     }
-    out
+    let total = *acc.last().unwrap();
+    let step = total / ((count as i32 - include_last as i32) as f32);
+    (0..count).map(|i| sample_at_length(acc, total.min(i as f32 * step))).collect()
 }
 
-/// (segment, factor) for a length along the curve
+/// length_parameterize::sample_at_length: (segment, factor) for a length along the curve
 pub fn sample_at_length(acc: &[f32], length: f32) -> (usize, f32) {
     if acc.is_empty() {
         return (0, 0.0);
     }
     let total = *acc.last().unwrap();
-    let l = length.clamp(0.0, total);
-    let mut seg = acc.partition_point(|&a| a < l);
-    if seg >= acc.len() {
-        seg = acc.len() - 1;
+    let l = length.max(0.0);
+    if l >= total {
+        return (acc.len() - 1, 1.0);
     }
-    let prev = if seg == 0 { 0.0 } else { acc[seg - 1] };
-    let seglen = acc[seg] - prev;
-    let f = if seglen > 0.0 { (l - prev) / seglen } else { 0.0 };
-    (seg, f)
+    let seg = acc.partition_point(|&a| a <= l);
+    let start = if seg == 0 { 0.0 } else { acc[seg - 1] };
+    let end = acc[seg];
+    let seglen = end - start;
+    let inv = if seglen != 0.0 { 1.0 / seglen } else { 0.0 };
+    (seg, (l - start) * inv)
 }
 
 /// uniform-knot B-spline basis values of the `order` control points ending at `span` (Cox-de Boor)
@@ -510,4 +583,101 @@ pub fn nurbs_basis_knots(order: usize, u: f32, span: usize, knots: &[f32]) -> Ve
         b[j] = saved;
     }
     b
+}
+
+// ---------------------------------------------------------------- bezier handles (curve_bezier.cc / curves_geometry.cc)
+fn vec_handle(p: V3, other: V3) -> V3 {
+    let t = 1.0f32 / 3.0;
+    [p[0] * (1.0 - t) + other[0] * t, p[1] * (1.0 - t) + other[1] * t, p[2] * (1.0 - t) + other[2] * t]
+}
+
+fn aligned_handle(position: V3, other: V3, aligned: V3) -> V3 {
+    let length = len3(sub3(aligned, position));
+    let dir = norm3(sub3(other, position));
+    sub3(position, mul3(dir, length))
+}
+
+fn point_handles(tl: u8, tr: u8, position: V3, prev: V3, next: V3, left: &mut V3, right: &mut V3) {
+    if tl == 1 || tr == 1 {
+        let prev_diff = sub3(position, prev);
+        let next_diff = sub3(next, position);
+        let mut prev_len = len3(prev_diff);
+        let mut next_len = len3(next_diff);
+        if prev_len == 0.0 {
+            prev_len = 1.0;
+        }
+        if next_len == 0.0 {
+            next_len = 1.0;
+        }
+        let nd = [next_diff[0] / next_len, next_diff[1] / next_len, next_diff[2] / next_len];
+        let pd = [prev_diff[0] / prev_len, prev_diff[1] / prev_len, prev_diff[2] / prev_len];
+        let dir = add3(nd, pd);
+        let len = len3(dir) * 2.5614f32;
+        if len != 0.0 {
+            if tl == 1 {
+                let pc = prev_len.min(next_len * 5.0);
+                *left = add3(position, mul3(dir, -(pc / len)));
+            }
+            if tr == 1 {
+                let nc = next_len.min(prev_len * 5.0);
+                *right = add3(position, mul3(dir, nc / len));
+            }
+        }
+    }
+    if tl == 2 {
+        *left = vec_handle(position, prev);
+    }
+    if tr == 2 {
+        *right = vec_handle(position, next);
+    }
+    if tl == 3 && tr != 3 {
+        *left = aligned_handle(position, *right, *left);
+    } else if tl != 3 && tr == 3 {
+        *right = aligned_handle(position, *left, *right);
+    }
+}
+
+/// CurvesGeometry::calculate_bezier_auto_handles
+pub fn calculate_bezier_auto_handles(c: &mut Curves) {
+    for k in 0..c.nc() {
+        if c.kind[k] != CKind::Bezier {
+            continue;
+        }
+        let r = c.range(k);
+        let n = r.len();
+        if n <= 1 {
+            continue;
+        }
+        let cyc = c.cyclic[k];
+        let s = r.start;
+        let pos: Vec<V3> = c.pos[r.clone()].to_vec();
+        let (mut hl, mut hr) = (c.hl[s], c.hr[s]);
+        let prev = if cyc { pos[n - 1] } else { sub3(mul3(pos[0], 2.0), pos[1]) };
+        point_handles(c.htl[s], c.htr[s], pos[0], prev, pos[1], &mut hl, &mut hr);
+        c.hl[s] = hl;
+        c.hr[s] = hr;
+        for i in 1..n - 1 {
+            let (mut hl, mut hr) = (c.hl[s + i], c.hr[s + i]);
+            point_handles(c.htl[s + i], c.htr[s + i], pos[i], pos[i - 1], pos[i + 1], &mut hl, &mut hr);
+            c.hl[s + i] = hl;
+            c.hr[s + i] = hr;
+        }
+        let l = n - 1;
+        let (mut hl, mut hr) = (c.hl[s + l], c.hr[s + l]);
+        let next = if cyc { pos[0] } else { sub3(mul3(pos[l], 2.0), pos[l - 1]) };
+        point_handles(c.htl[s + l], c.htr[s + l], pos[l], pos[l - 1], next, &mut hl, &mut hr);
+        c.hl[s + l] = hl;
+        c.hr[s + l] = hr;
+    }
+}
+
+/// bezier::set_handle_position
+pub fn set_handle_position(position: V3, ty: u8, ty_other: u8, new_handle: V3, handle: &mut V3, handle_other: &mut V3) {
+    if ty == 1 || ty == 2 {
+        return;
+    }
+    *handle = new_handle;
+    if ty_other == 3 {
+        *handle_other = aligned_handle(position, *handle, *handle_other);
+    }
 }

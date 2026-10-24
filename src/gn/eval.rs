@@ -32,9 +32,76 @@ pub struct Object {
     pub matrix: M4,
 }
 
+/// scene collection available to Collection Info (direct objects / child collections in Blender's order)
+#[derive(Clone, Default)]
+pub struct Collection {
+    pub objects: Vec<String>,
+    pub children: Vec<String>,
+    pub offset: V3,
+}
+
 #[derive(Default)]
 pub struct Objects {
     pub map: HashMap<String, Object>,
+    pub collections: HashMap<String, Collection>,
+}
+
+impl Objects {
+    /// all objects of a collection, recursively (FOREACH_COLLECTION_OBJECT_RECURSIVE order, each object once)
+    pub fn collection_objects(&self, name: &str) -> Vec<String> {
+        fn rec(o: &Objects, name: &str, out: &mut Vec<String>) {
+            if let Some(c) = o.collections.get(name) {
+                for ch in &c.children {
+                    rec(o, ch, out);
+                }
+                for ob in &c.objects {
+                    if !out.contains(ob) {
+                        out.push(ob.clone());
+                    }
+                }
+            }
+        }
+        let mut v = vec![];
+        rec(self, name, &mut v);
+        v
+    }
+
+    /// the geometry set a Collection instance reference realizes to: its objects as instances
+    pub fn collection_geometry(&self, name: &str) -> Geometry {
+        let off = self.collections.get(name).map_or([0.0; 3], |c| c.offset);
+        let mut inst = Instances::default();
+        for ob in self.collection_objects(name) {
+            if let Some(o) = self.map.get(&ob) {
+                inst.refs.push(Rc::new(o.geo.clone()));
+                inst.idx.push((inst.refs.len() - 1) as u32);
+                let mut m = o.matrix;
+                m[3][0] -= off[0];
+                m[3][1] -= off[1];
+                m[3][2] -= off[2];
+                inst.xf.push(m);
+            }
+        }
+        Geometry { inst: Some(inst), ..Default::default() }
+    }
+}
+
+thread_local! {
+    static PROF_STACK: RefCell<Vec<f64>> = RefCell::new(vec![]);
+    static PROF_TIMES: RefCell<HashMap<String, (f64, usize)>> = RefCell::new(HashMap::default());
+}
+fn prof_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GNPROF").is_ok())
+}
+/// GNPROF=1: exclusive time per node type (printed by gncheck after each case)
+pub fn prof_report() -> Vec<(String, f64, usize)> {
+    PROF_TIMES.with(|m| {
+        let mut v: Vec<(String, f64, usize)> = m.borrow().iter().map(|(k, (t, n))| (k.clone(), *t, *n)).collect();
+        m.borrow_mut().clear();
+        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        v
+    })
 }
 
 pub struct Ev<'a> {
@@ -57,6 +124,16 @@ pub fn default_value(ty: Ty, tname: &str) -> Value {
     } else {
         Value::konst(Val::zero(ty))
     }
+}
+
+/// nodes that Blender applies to nested instance geometry sets too (main geometry input id)
+pub fn recurse_input(ty: &str) -> Option<&'static str> {
+    Some(match ty {
+        "GeometryNodeCurveToMesh" | "GeometryNodeSetCurveRadius" | "GeometryNodeSetCurveTilt" | "GeometryNodeResampleCurve" | "GeometryNodeFilletCurve" | "GeometryNodeTrimCurve" | "GeometryNodeSubdivideCurve" | "GeometryNodeReverseCurve" | "GeometryNodeFillCurve" | "GeometryNodeSetCurveNormal" | "GeometryNodeCurveSplineType" | "GeometryNodeCurveToPoints" | "GeometryNodeCurveSetHandles" | "GeometryNodeSetCurveHandlePositions" => "Curve",
+        "GeometryNodeStoreNamedAttribute" | "GeometryNodeSetMaterial" | "GeometryNodeSetMaterialIndex" | "GeometryNodeSetShadeSmooth" | "GeometryNodeMergeByDistance" | "GeometryNodeScaleElements" => "Geometry",
+        "GeometryNodeMeshToCurve" | "GeometryNodeTriangulate" | "GeometryNodeExtrudeMesh" | "GeometryNodeFlipFaces" | "GeometryNodeSubdivideMesh" | "GeometryNodeSubdivisionSurface" | "GeometryNodeSplitEdges" | "GeometryNodeDualMesh" => "Mesh",
+        _ => return None,
+    })
 }
 
 /// sockets whose unlinked default is an implicit field (hide_value sockets)
@@ -84,7 +161,28 @@ impl<'a> Ev<'a> {
             return Ok(r.clone());
         }
         let node = &self.g.nodes[ni];
-        let r = self.run(ni, node).map_err(|e| format!("{} ({}): {}", node.name, node.ty, e))?;
+        let prof = prof_enabled();
+        let t0 = if prof { Some(std::time::Instant::now()) } else { None };
+        if prof {
+            PROF_STACK.with(|s| s.borrow_mut().push(0.0));
+        }
+        let r = self.run(ni, node).map_err(|e| format!("{} ({}): {}", node.name, node.ty, e));
+        if let Some(t0) = t0 {
+            let tot = t0.elapsed().as_secs_f64();
+            let child = PROF_STACK.with(|s| s.borrow_mut().pop().unwrap_or(0.0));
+            PROF_STACK.with(|s| {
+                if let Some(top) = s.borrow_mut().last_mut() {
+                    *top += tot;
+                }
+            });
+            PROF_TIMES.with(|m| {
+                let mut m = m.borrow_mut();
+                let e = m.entry(node.ty.clone()).or_insert((0.0, 0));
+                e.0 += tot - child;
+                e.1 += 1;
+            });
+        }
+        let r = r?;
         let r = Rc::new(r);
         self.memo.borrow_mut().insert(ni, r.clone());
         Ok(r)
@@ -130,6 +228,10 @@ impl<'a> Ev<'a> {
                         ins.push(default_value(ifc.ty, ""));
                     }
                 }
+                if std::env::var("GNDUMP_GRP").map_or(false, |v| v == gname) {
+                    let d: Vec<String> = ins.iter().map(|v| match v { Value::F(f) => match &**f { FNode::Const(c) => format!("{:?}", c), _ => "field".into() }, Value::G(_) => "geo".into() }).collect();
+                    eprintln!("group {} inputs {:?}", gname, d);
+                }
                 let mut ev = Ev::new(self.groups, sub, self.objects, ins, self.depth + 1);
                 if !self.probe_path.is_empty() && self.probe_path[0] == node.name {
                     ev.probe_path = self.probe_path[1..].to_vec();
@@ -150,9 +252,12 @@ impl<'a> Ev<'a> {
                 let res = ev.outputs()?;
                 Ok(node.outs.iter().map(|o| sub.outputs.iter().position(|x| x.id == o.id).map(|k| res[k].clone()).unwrap_or_else(|| default_value(o.ty, ""))).collect())
             }
-            _ => super::nodes::dispatch(self, ni, node),
+            t => {
+                super::nodes::dispatch(self, ni, node)
+            }
         }
     }
+
 
     /// values of the group outputs (aligned with g.outputs)
     pub fn outputs(&self) -> Res<Vec<Value>> {
@@ -208,6 +313,10 @@ impl<'a> Ev<'a> {
         }
         if let Some(f) = implicit_default(&node.ty, id) {
             return Ok(Value::F(Rc::new(f)));
+        }
+        if node.ty == "GeometryNodeSetCurveHandlePositions" && id == "Position" {
+            let nm = if node.ps("mode") == "LEFT" { "handle_left" } else { "handle_right" };
+            return Ok(Value::F(Rc::new(FNode::Named(nm.into(), Ty::V))));
         }
         Ok(match &sock.v {
             Some(v) => Value::konst(v.clone()),

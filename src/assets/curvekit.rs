@@ -105,6 +105,7 @@ pub struct FloatCurve {
     range: f32,
     ext_in: [f32; 2],
     ext_out: [f32; 2],
+    extrapolate: bool,
 }
 
 impl FloatCurve {
@@ -114,7 +115,13 @@ impl FloatCurve {
 
     /// `vector[i]` = point i has a VECTOR handle; clip rectangle x range [xmin, xmax]
     pub fn new_ex(pts: &[(f64, f64)], vector: &[bool], xmin: f32, xmax: f32) -> FloatCurve {
+        FloatCurve::new_full(pts, vector, xmin, xmax, true)
+    }
+
+    /// `extrapolate`: CUMA_EXTEND_EXTRAPOLATE (false = horizontal extension)
+    pub fn new_full(pts: &[(f64, f64)], vector: &[bool], xmin: f32, xmax: f32, extrapolate: bool) -> FloatCurve {
         let n = pts.len();
+        let table_range = xmax - xmin;
         let mut mintable = xmin;
         let mut maxtable = xmax;
         let mut bezt = vec![Bez::default(); n];
@@ -191,33 +198,57 @@ impl FloatCurve {
         let mut ext_out = [bezt[a].v[1][0] - bezt[a].v[2][0], bezt[a].v[1][1] - bezt[a].v[2][1]];
         let r = (ext_out[0] * ext_out[0] + ext_out[1] * ext_out[1]).sqrt();
         ext_out = [ext_out[0] / r, ext_out[1] / r];
-        // evenly spaced table; outside the curve's x span the table is extrapolated along the end handles
-        let range = maxtable - mintable;
-        let mut table = vec![[0.0f32; 2]; CM_TABLE + 1];
+        // curvemap_make_table: CM_TABLE equal x distances, linear between the forward-differenced points
+        let range = (1.0f32 / 256.0f32) * table_range;
+        let calc_extend = |x: f32, first: [f32; 2], last: [f32; 2]| -> f32 {
+            if x <= first[0] {
+                if !extrapolate {
+                    return first[1];
+                }
+                if ext_in[0] == 0.0 {
+                    return first[1] + ext_in[1] * 10000.0;
+                }
+                return first[1] + ext_in[1] * (x - first[0]) / ext_in[0];
+            }
+            if x >= last[0] {
+                if !extrapolate {
+                    return last[1];
+                }
+                if ext_out[0] == 0.0 {
+                    return last[1] - ext_out[1] * 10000.0;
+                }
+                return last[1] + ext_out[1] * (x - last[0]) / ext_out[0];
+            }
+            0.0
+        };
         let first = all[0];
         let last = all[totpoint - 1];
-        let mut cur = 0usize;
+        let mut table = vec![[0.0f32; 2]; CM_TABLE + 1];
+        let mut pi = 0usize;
         for a in 0..=CM_TABLE {
-            let cur_x = mintable + range * (a as f32) / (CM_TABLE as f32);
-            if cur_x < first[0] {
-                let y = if ext_in[0] == 0.0 { first[1] + ext_in[1] * 10000.0 } else { first[1] + (cur_x - first[0]) * (ext_in[1] / ext_in[0]) };
-                table[a] = [cur_x, y];
-                continue;
+            let cur_x = mintable + range * (a as f32);
+            while cur_x >= all[pi][0] && pi != totpoint - 1 {
+                pi += 1;
             }
-            if cur_x >= last[0] {
-                let y = if cur_x == last[0] { last[1] } else if ext_out[0] == 0.0 { last[1] + ext_out[1] * 10000.0 } else { last[1] + (cur_x - last[0]) * (ext_out[1] / ext_out[0]) };
-                table[a] = [cur_x, y];
-                continue;
-            }
-            while cur + 1 < totpoint && all[cur + 1][0] < cur_x {
-                cur += 1;
-            }
-            let (p0, p1) = (all[cur], all[(cur + 1).min(totpoint - 1)]);
-            let dx = p1[0] - p0[0];
-            let y = if dx > 0.0 { p0[1] + (cur_x - p0[0]) / dx * (p1[1] - p0[1]) } else { p0[1] };
+            let y = if pi == 0 || (pi == totpoint - 1 && cur_x >= all[pi][0]) {
+                if (cur_x - all[pi][0]).abs() <= 1e-6 {
+                    all[pi][1]
+                } else {
+                    calc_extend(cur_x, first, last)
+                }
+            } else {
+                let mut fac1 = all[pi][0] - all[pi - 1][0];
+                let fac2 = all[pi][0] - cur_x;
+                if fac1 > f32::EPSILON {
+                    fac1 = fac2 / fac1;
+                } else {
+                    fac1 = 0.0;
+                }
+                fac1 * all[pi - 1][1] + (1.0 - fac1) * all[pi][1]
+            };
             table[a] = [cur_x, y];
         }
-        FloatCurve { table, mintable, range: CM_TABLE as f32 / range, ext_in, ext_out }
+        FloatCurve { table, mintable, range: 1.0 / range, ext_in, ext_out, extrapolate }
     }
 
     /// value as the FloatCurve node returns it: the mapping's clip rectangle limits y to [0, 1]
@@ -230,12 +261,17 @@ impl FloatCurve {
         let mut fi = (value - self.mintable) * self.range;
         let i = fi as i32;
         if fi < 0.0 || fi > CM_TABLE as f32 {
-            // extend mode "extrapolated": continue along the end handle directions
             let (first, last) = (self.table[0], self.table[CM_TABLE]);
             if value <= first[0] {
-                return if self.ext_in[0] == 0.0 { (first[1] + self.ext_in[1] * 10000.0) as f64 } else { (first[1] + self.ext_in[1] / self.ext_in[0] * (value - first[0])) as f64 };
+                if !self.extrapolate {
+                    return first[1] as f64;
+                }
+                return if self.ext_in[0] == 0.0 { (first[1] + self.ext_in[1] * 10000.0) as f64 } else { (first[1] + self.ext_in[1] * (value - first[0]) / self.ext_in[0]) as f64 };
             }
-            return if self.ext_out[0] == 0.0 { (last[1] + self.ext_out[1] * 10000.0) as f64 } else { (last[1] + self.ext_out[1] / self.ext_out[0] * (value - last[0])) as f64 };
+            if !self.extrapolate {
+                return last[1] as f64;
+            }
+            return if self.ext_out[0] == 0.0 { (last[1] - self.ext_out[1] * 10000.0) as f64 } else { (last[1] + self.ext_out[1] * (value - last[0]) / self.ext_out[0]) as f64 };
         }
         if i < 0 {
             return self.table[0][1] as f64;

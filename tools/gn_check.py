@@ -223,7 +223,7 @@ def probe_cases(case, prefix=(), max_nodes=400):
             pass
         bpy.data.node_groups.remove(ng2)
         out_cases.append({"name": f"p{k}", "group": case["group"], "inputs": case["inputs"], "mesh": case.get("mesh"),
-                          "objects": case.get("objects"), "probe": path + [s.identifier], "expect": exp,
+                          "objects": case.get("objects"), "collections": case.get("collections"), "probe": path + [s.identifier], "expect": exp,
                           "_node": n.name, "_type": n.bl_idname, "_sock": s.identifier})
     return out_cases
 
@@ -299,6 +299,9 @@ def check_export(exp, group, n, seed=0):
     return cases
 
 
+import hashlib
+
+
 def factory_expect(out, last):
     """expected mesh of the finished asset (geometry only: ExactMesh carries no attributes)"""
     fin = out.get("final")
@@ -307,6 +310,35 @@ def factory_expect(out, last):
         fin["attrs"] = {}
         return fin
     return last["expect"]
+
+
+def cache_path(key):
+    h = hashlib.md5()
+    for f in ("gn_export.py", "gn_check.py", "gn_units.py"):
+        h.update(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), f), "rb").read())
+    h.update(key.encode())
+    os.makedirs("/tmp/gncache", exist_ok=True)
+    return f"/tmp/gncache/{h.hexdigest()}.json"
+
+
+def try_cache(a, key, casefile, keep):
+    """cases computed by Blender are cached under /tmp/gncache (disable with --nocache); returns True when the cache was used"""
+    p = cache_path(key)
+    if "--nocache" not in a and "--bisect" not in a and os.path.exists(p):
+        print("(cached Blender results)")
+        finish(p, a, True)
+        return True
+    return False
+
+
+def store_cache(a, key, casefile):
+    p = cache_path(key)
+    try:
+        if os.path.getsize(casefile) < 30_000_000:
+            import shutil
+            shutil.copy(casefile, p)
+    except Exception:
+        pass
 
 
 def main():
@@ -319,6 +351,9 @@ def main():
     casefile = opt(a, "--cases", f"/tmp/gncases_{os.getpid()}.json")
     bpy.ops.wm.read_factory_settings(use_empty=True)
     if mode == "unit":
+        key = "unit " + " ".join(a[1:])
+        if "--show" not in a and try_cache(a, key, casefile, keep):
+            return
         import gn_units
         filt = [x for x in a[1:] if not x.startswith("-") and x not in (opt(a, "--tol"), opt(a, "--cases"), opt(a, "--filter"))]
         out = GX.new_out()
@@ -335,6 +370,7 @@ def main():
                     print("A", k, v["dom"], v["ty"], v["data"])
             return
         dump_cases(out, casefile)
+        store_cache(a, key, casefile)
         finish(casefile, a, keep)
     elif mode == "group":
         stub = GX.stub_materials
@@ -355,22 +391,30 @@ def main():
     elif mode == "factory":
         # factory MODULE.CLASS SEED [INST]: compare the Rust Factory (make_factory(CLASS)) with Blender's spawn_asset(INST)
         inst = int(a[3]) if len(a) > 3 and not a[3].startswith("-") else 0
+        key = "factory " + " ".join(a[1:3]) + f" {inst}"
+        if try_cache(a, key, casefile, keep):
+            return
         out = GX.export_asset(a[1], int(a[2]), inst)
         cls = a[1].rsplit(".", 1)[1]
         last = out["steps"][-1]
         out["cases"] = [{"name": f"{a[1]}#{a[2]}.{inst}", "group": last["group"], "factory": [cls, int(a[2]), inst], "expect": factory_expect(out, last)}]
         dump_cases(out, casefile)
+        store_cache(a, key, casefile)
         finish(casefile, a, keep)
     elif mode == "asset":
+        key = "asset " + " ".join(a[1:3])
+        if try_cache(a, key, casefile, keep):
+            return
         out = GX.export_asset(a[1], int(a[2]))
         cases = []
         for k, st in enumerate(out["steps"]):
             exp = st.pop("expect", None)
             if exp is None:
                 exp = eval_blender(bpy.data.node_groups[st["group"]], st["inputs"], st["mesh"])
-            cases.append({"name": f"{a[1]}#{a[2]}.step{k}.{st['group']}", "group": st["group"], "keep": st.get("keep"), "inputs": st["inputs"], "out_attrs": st.get("out_attrs"), "mesh": st["mesh"], "expect": exp, "objects": out["objects"]})
+            cases.append({"name": f"{a[1]}#{a[2]}.step{k}.{st['group']}", "group": st["group"], "keep": st.get("keep"), "inputs": st["inputs"], "out_attrs": st.get("out_attrs"), "mesh": st["mesh"], "expect": exp, "objects": out["objects"], "collections": out.get("collections")})
         out["cases"] = cases
         dump_cases(out, casefile)
+        store_cache(a, key, casefile)
         res = finish(casefile, a, keep or "--bisect" in a)
         if "--bisect" in a and res[1] > 0:
             for c in cases:

@@ -28,9 +28,9 @@ pub fn fld(f: Field) -> Value {
 /// nodes that act on each geometry component: Blender applies them recursively to the references of instances
 fn inst_input(ty: &str) -> Option<&'static str> {
     match ty {
-        "GeometryNodeFillCurve" | "GeometryNodeCurveToMesh" | "GeometryNodeTrimCurve" | "GeometryNodeReverseCurve" | "GeometryNodeSetCurveHandlePositions" => Some("Curve"),
-        "GeometryNodeExtrudeMesh" | "GeometryNodeSubdivideMesh" | "GeometryNodeFlipFaces" | "GeometryNodeTriangulate" | "GeometryNodeSplitEdges" => Some("Mesh"),
-        "GeometryNodeSetShadeSmooth" | "GeometryNodeMergeByDistance" | "GeometryNodeResampleCurve" | "GeometryNodeSubdivideCurve" | "GeometryNodeFilletCurve" | "GeometryNodeScaleElements" => Some("Geometry"),
+        "GeometryNodeFillCurve" | "GeometryNodeCurveToMesh" | "GeometryNodeTrimCurve" | "GeometryNodeReverseCurve" | "GeometryNodeSetCurveHandlePositions" | "GeometryNodeSetCurveRadius" | "GeometryNodeSetCurveTilt" | "GeometryNodeCurveSplineType" | "GeometryNodeCurveToPoints" | "GeometryNodeCurveSetHandles" | "GeometryNodeSetCurveNormal" => Some("Curve"),
+        "GeometryNodeExtrudeMesh" | "GeometryNodeSubdivideMesh" | "GeometryNodeFlipFaces" | "GeometryNodeTriangulate" | "GeometryNodeSplitEdges" | "GeometryNodeSubdivisionSurface" | "GeometryNodeDualMesh" | "GeometryNodeMeshToCurve" => Some("Mesh"),
+        "GeometryNodeSetShadeSmooth" | "GeometryNodeMergeByDistance" | "GeometryNodeResampleCurve" | "GeometryNodeSubdivideCurve" | "GeometryNodeFilletCurve" | "GeometryNodeScaleElements" | "GeometryNodeStoreNamedAttribute" | "GeometryNodeSetMaterial" | "GeometryNodeSetMaterialIndex" => Some("Geometry"),
         _ => None,
     }
 }
@@ -202,6 +202,19 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         "ShaderNodeValue" => outs(node, vec![("Value", fld(kf(node.pf("value") as f32)))]),
         "FunctionNodeInputInt" => outs(node, vec![("Integer", fld(konst(Val::I(node.pi("integer") as i32))))]),
         "FunctionNodeInputBool" => outs(node, vec![("Boolean", fld(konst(Val::B(node.pb("boolean")))))]),
+        "GeometryNodeStringJoin" => {
+            let delim = ev.cval(ni, "Delimiter")?.s().to_string();
+            let mut parts: Vec<String> = vec![];
+            for v in ev.input_multi(ni, "Strings")? {
+                if let Value::F(f) = v {
+                    if let Some(c) = as_const(&f) {
+                        parts.push(c.s().to_string());
+                    }
+                }
+            }
+            parts.reverse();
+            outs(node, vec![("String", fld(konst(Val::S(parts.join(&delim).into()))))])
+        }
         "FunctionNodeInputString" => outs(node, vec![("String", fld(konst(Val::S(node.ps("string").into()))))]),
         "FunctionNodeInputVector" => {
             let v: Vec<f32> = node.pj("vector").and_then(|v| v.as_array()).map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or(vec![0.0; 3]);
@@ -253,6 +266,74 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let (x, y, z) = (ev.field(ni, "X")?, ev.field(ni, "Y")?, ev.field(ni, "Z")?);
             let k = kern(|a, n| vec![(0..n).map(|i| Val::V([at(a[0], i).f(), at(a[1], i).f(), at(a[2], i).f()])).collect()]);
             outs(node, vec![("Vector", fld(mf1(k, vec![x, y, z])))])
+        }
+        "FunctionNodeCombineMatrix" => {
+            let mut args = vec![];
+            for c in 1..=4 {
+                for r in 1..=4 {
+                    args.push(ev.field(ni, &format!("Column {} Row {}", c, r))?);
+                }
+            }
+            let k = kern(|a, n| {
+                vec![(0..n)
+                    .map(|i| {
+                        let mut m = [[0.0f32; 4]; 4];
+                        for c in 0..4 {
+                            for r in 0..4 {
+                                m[c][r] = at(a[c * 4 + r], i).f();
+                            }
+                        }
+                        Val::M(Box::new(m))
+                    })
+                    .collect()]
+            });
+            outs(node, vec![("Matrix", fld(mf1(k, args)))])
+        }
+        "FunctionNodeSeparateMatrix" => {
+            let m = ev.field(ni, "Matrix")?;
+            let k = kern(|a, n| (0..16).map(|q| (0..n).map(|i| Val::F(at(a[0], i).m()[q / 4][q % 4])).collect()).collect());
+            let r = mf(k, vec![m], 16);
+            let names: Vec<String> = (1..=4).flat_map(|c| (1..=4).map(move |rr| format!("Column {} Row {}", c, rr))).collect();
+            outs(node, names.iter().enumerate().map(|(q, nm)| (nm.as_str(), fld(r[q].clone()))).collect())
+        }
+        "FunctionNodeTransposeMatrix" => {
+            let m = ev.field(ni, "Matrix")?;
+            let k = kern(|a, n| vec![(0..n).map(|i| { let m = at(a[0], i).m(); let mut t = m; for c in 0..4 { for r in 0..4 { t[c][r] = m[r][c]; } } Val::M(Box::new(t)) }).collect()]);
+            outs(node, vec![("Matrix", fld(mf1(k, vec![m])))])
+        }
+        "FunctionNodeMatrixDeterminant" => {
+            let m = ev.field(ni, "Matrix")?;
+            let k = kern(|a, n| vec![(0..n).map(|i| Val::F(m4_det(&at(a[0], i).m()))).collect()]);
+            outs(node, vec![("Determinant", fld(mf1(k, vec![m])))])
+        }
+        "FunctionNodeInvertMatrix" => {
+            let m = ev.field(ni, "Matrix")?;
+            let k = kern(|a, n| {
+                let mut o = vec![vec![], vec![]];
+                for i in 0..n {
+                    let (inv, ok) = m4_invert(&at(a[0], i).m());
+                    o[0].push(Val::M(Box::new(inv)));
+                    o[1].push(Val::B(ok));
+                }
+                o
+            });
+            let r = mf(k, vec![m], 2);
+            outs(node, vec![("Matrix", fld(r[0].clone())), ("Invertible", fld(r[1].clone()))])
+        }
+        "FunctionNodeMatrixMultiply" => {
+            let (a, b) = (ev.field(ni, "Matrix")?, ev.field(ni, "Matrix_001")?);
+            let k = kern(|x, n| vec![(0..n).map(|i| Val::M(Box::new(super::geom::m4_mul(&at(x[0], i).m(), &at(x[1], i).m())))).collect()]);
+            outs(node, vec![("Matrix", fld(mf1(k, vec![a, b])))])
+        }
+        "FunctionNodeTransformPoint" => {
+            let (v, m) = (ev.field(ni, "Vector")?, ev.field(ni, "Transform")?);
+            let k = kern(|x, n| vec![(0..n).map(|i| Val::V(super::geom::m4_point(&at(x[1], i).m(), at(x[0], i).v()))).collect()]);
+            outs(node, vec![("Vector", fld(mf1(k, vec![v, m])))])
+        }
+        "FunctionNodeTransformDirection" => {
+            let (v, m) = (ev.field(ni, "Direction")?, ev.field(ni, "Transform")?);
+            let k = kern(|x, n| vec![(0..n).map(|i| Val::V(super::geom::m4_dir(&at(x[1], i).m(), at(x[0], i).v()))).collect()]);
+            outs(node, vec![("Direction", fld(mf1(k, vec![v, m])))])
         }
         "ShaderNodeSeparateXYZ" => {
             let v = ev.field(ni, "Vector")?;
@@ -487,13 +568,18 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let clip = c["clip"].as_array().cloned().unwrap_or_default();
             let (cmin, cmax) = (clip.get(2).and_then(|x| x.as_f64()).unwrap_or(0.0), clip.get(4).and_then(|x| x.as_f64()).unwrap_or(1.0));
             let (xmin, xmax) = (clip.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0), clip.get(3).and_then(|x| x.as_f64()).unwrap_or(1.0));
-            let fc = crate::assets::curvekit::FloatCurve::new_ex(&pts, &vecs, xmin as f32, xmax as f32);
+            let extrap = c["ext"].as_str().map_or(true, |e| e != "HORIZONTAL");
+            let use_clip = clip.get(0).and_then(|x| x.as_bool()).unwrap_or(true);
+            let fc = crate::assets::curvekit::FloatCurve::new_full(&pts, &vecs, xmin as f32, xmax as f32, extrap);
             let (fac, v) = (ev.field(ni, "Factor")?, ev.field(ni, "Value")?);
             let k = kern(move |x, n| {
                 vec![(0..n)
                     .map(|i| {
                         let (f, v) = (at(x[0], i).f(), at(x[1], i).f());
-                        let cv = (fc.eval(v as f64) as f32).clamp(cmin as f32, cmax as f32);
+                        let mut cv = fc.eval(v as f64) as f32;
+                        if use_clip {
+                            cv = cv.clamp(cmin as f32, cmax as f32);
+                        }
                         Val::F(v * (1.0 - f) + cv * f)
                     })
                     .collect()]
@@ -504,13 +590,14 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let c = node.pj("curves3").ok_or("curves3 missing")?;
             let clip = c["clip"].as_array().cloned().unwrap_or_default();
             let g = |i: usize, d: f64| clip.get(i).and_then(|x| x.as_f64()).unwrap_or(d);
-            let (xmin, ymin, xmax, ymax) = (g(1, -1.0) as f32, g(2, -1.0) as f32, g(3, 1.0) as f32, g(4, 1.0) as f32);
+            let (xmin, xmax) = (g(1, -1.0) as f32, g(3, 1.0) as f32);
+            let extrap = c["ext"].as_str().map_or(true, |e| e != "HORIZONTAL");
             let mut fcs = vec![];
             for k in 0..3 {
                 let arr = c["pts"][k].as_array().cloned().unwrap_or_default();
                 let pts: Vec<(f64, f64)> = arr.iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
                 let vecs: Vec<bool> = arr.iter().map(|p| p[2].as_str() == Some("VECTOR")).collect();
-                fcs.push(crate::assets::curvekit::FloatCurve::new_ex(&pts, &vecs, xmin, xmax));
+                fcs.push(crate::assets::curvekit::FloatCurve::new_full(&pts, &vecs, xmin, xmax, extrap));
             }
             let (fac, v) = (ev.field(ni, "Fac")?, ev.field(ni, "Vector")?);
             let k = kern(move |x, n| {
@@ -520,7 +607,7 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                         let v = at(x[1], i).v();
                         let mut o = [0.0f32; 3];
                         for c in 0..3 {
-                            let cv = (fcs[c].eval(v[c] as f64) as f32).clamp(ymin, ymax);
+                            let cv = fcs[c].eval(v[c] as f64) as f32;
                             o[c] = v[c] * (1.0 - f) + cv * f;
                         }
                         Val::V(o)
@@ -664,6 +751,13 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let k = kern(move |x, n| vec![(0..n).map(|i| Val::V(align_euler_to_vector(at(x[0], i).v(), at(x[1], i).f(), at(x[2], i).v(), &axis, &pivot))).collect()]);
             outs(node, vec![("Rotation", fld(mf1(k, vec![r, f, v])))])
         }
+        "FunctionNodeAlignRotationToVector" => {
+            let axis = node.ps("axis").to_string();
+            let pivot = node.ps("pivot_axis").to_string();
+            let (r, f, v) = (ev.field(ni, "Rotation")?, ev.field(ni, "Factor")?, ev.field(ni, "Vector")?);
+            let k = kern(move |x, n| vec![(0..n).map(|i| Val::Q(align_rotation_to_vector(at(x[0], i).q(), at(x[1], i).f(), at(x[2], i).v(), &axis, &pivot))).collect()]);
+            outs(node, vec![("Rotation", fld(mf1(k, vec![r, f, v])))])
+        }
         "FunctionNodeRotateEuler" => {
             let axis_angle = node.ps("rotation_type") == "AXIS_ANGLE";
             let local = node.ps("space") == "LOCAL";
@@ -734,4 +828,71 @@ fn cmp_f(op: &str, a: f32, b: f32, c: f32) -> bool {
         "NOT_EQUAL" => (a - b).abs() > c,
         _ => false,
     }
+}
+
+fn m4_det(m: &[[f32; 4]; 4]) -> f32 {
+    let a: Vec<f64> = m.iter().flat_map(|c| c.iter().map(|x| *x as f64)).collect();
+    det4(&a) as f32
+}
+fn det4(a: &[f64]) -> f64 {
+    // a[c*4+r]
+    let g = |r: usize, c: usize| a[c * 4 + r];
+    let mut d = 0.0;
+    for c in 0..4 {
+        let mut mm = [[0.0f64; 3]; 3];
+        for rr in 1..4 {
+            let mut cc2 = 0;
+            for cc in 0..4 {
+                if cc == c {
+                    continue;
+                }
+                mm[rr - 1][cc2] = g(rr, cc);
+                cc2 += 1;
+            }
+        }
+        let m3 = mm[0][0] * (mm[1][1] * mm[2][2] - mm[1][2] * mm[2][1]) - mm[0][1] * (mm[1][0] * mm[2][2] - mm[1][2] * mm[2][0]) + mm[0][2] * (mm[1][0] * mm[2][1] - mm[1][1] * mm[2][0]);
+        d += if c % 2 == 0 { 1.0 } else { -1.0 } * g(0, c) * m3;
+    }
+    d
+}
+fn m4_invert(m: &[[f32; 4]; 4]) -> ([[f32; 4]; 4], bool) {
+    // Gauss-Jordan in f64
+    let mut a = [[0.0f64; 8]; 4];
+    for r in 0..4 {
+        for c in 0..4 {
+            a[r][c] = m[c][r] as f64;
+        }
+        a[r][4 + r] = 1.0;
+    }
+    for i in 0..4 {
+        let mut p = i;
+        for r in i + 1..4 {
+            if a[r][i].abs() > a[p][i].abs() {
+                p = r;
+            }
+        }
+        if a[p][i].abs() < 1e-30 {
+            return ([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], false);
+        }
+        a.swap(i, p);
+        let d = a[i][i];
+        for c in 0..8 {
+            a[i][c] /= d;
+        }
+        for r in 0..4 {
+            if r != i {
+                let f = a[r][i];
+                for c in 0..8 {
+                    a[r][c] -= f * a[i][c];
+                }
+            }
+        }
+    }
+    let mut o = [[0.0f32; 4]; 4];
+    for r in 0..4 {
+        for c in 0..4 {
+            o[c][r] = a[r][4 + c] as f32;
+        }
+    }
+    (o, true)
 }
