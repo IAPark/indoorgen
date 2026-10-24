@@ -178,23 +178,37 @@ pub fn solidify_simple(m: &Mesh, t: f64, edge_order: Option<&[[u32; 2]]>) -> Mes
             [0.0; 3]
         }
     };
+    let normd32 = |a: F3| -> F3 {
+        let d = dot32(a, a);
+        if d > 1.0e-35f32 {
+            let l = d.sqrt();
+            [a[0] / l, a[1] / l, a[2] / l]
+        } else {
+            [0.0; 3]
+        }
+    };
     let mut nrm = vec![[0.0f32; 3]; n];
     for f in &m.faces {
         let k = f.len();
         let p: Vec<F3> = f.iter().map(|&i| pos32[i as usize]).collect();
-        let fnrm: F3 = if k == 4 {
-            let n1 = sub3(p[0], p[2]);
-            let n2 = sub3(p[1], p[3]);
-            norm32([n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]])
-        } else {
-            let n1 = sub3(p[0], p[1]);
-            let n2 = sub3(p[1], p[2]);
-            norm32([n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]])
+        // normals_calc_faces: Newell's method for every face size
+        let fnrm: F3 = {
+            let mut nn = [0.0f32; 3];
+            let mut vp = p[k - 1];
+            for i in 0..k {
+                let vc = p[i];
+                nn[0] += (vp[1] - vc[1]) * (vp[2] + vc[2]);
+                nn[1] += (vp[2] - vc[2]) * (vp[0] + vc[0]);
+                nn[2] += (vp[0] - vc[0]) * (vp[1] + vc[1]);
+                vp = vc;
+            }
+            let r = norm32(nn);
+            if r == [0.0; 3] { [0.0, 0.0, 1.0] } else { r }
         };
         for i in 0..k {
-            let prev = norm32(sub3(p[(i + k - 1) % k], p[i]));
-            let next = norm32(sub3(p[(i + 1) % k], p[i]));
-            let ang = dot32(prev, next).clamp(-1.0, 1.0).acos();
+            let prev = normd32(sub3(p[(i + k - 1) % k], p[i]));
+            let next = normd32(sub3(p[(i + 1) % k], p[i]));
+            let ang = super::legtex::safe_acos_approx(dot32(prev, next));
             for c in 0..3 {
                 nrm[f[i] as usize][c] += fnrm[c] * ang;
             }
@@ -203,7 +217,7 @@ pub fn solidify_simple(m: &Mesh, t: f64, edge_order: Option<&[[u32; 2]]>) -> Mes
     let mut out = Mesh::new();
     out.pos = m.pos.clone();
     for i in 0..n {
-        let u = norm32(nrm[i]);
+        let u = normd32(nrm[i]);
         let tf = t as f32;
         out.pos.push([0, 1, 2].map(|c| (m.pos[i][c] as f32 - u[c] * tf) as f64));
     }

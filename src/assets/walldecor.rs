@@ -89,7 +89,7 @@ impl WallArt {
         bridge_two_loops(&mut m, vec![2, 3, 1, 0], vec![6, 7, 5, 4], 0, 0.0);
         let s = books::solidify_offset(&m, self.depth, 1.0);
         if self.bevel_segments > 0 && std::env::var("WALLSTAGE").is_err() {
-            return super::bevel::bevel(&s, super::bevel::Offset::Width(self.bevel_width), self.bevel_segments, 30f64.to_radians()).unwrap_or(s);
+            return super::bevel3::bevel3(&s, self.bevel_width, self.bevel_segments, 30f64.to_radians()).unwrap_or(s);
         }
         s
     }

@@ -11,6 +11,17 @@ pub mod gn;
 pub mod can;
 pub mod bevel;
 pub mod bowl;
+pub mod bevel3;
+pub mod balloon;
+pub mod gnedit;
+pub mod mollusk;
+pub mod nature;
+pub mod legacynoise;
+pub mod legtex;
+pub mod succulent;
+pub mod snakeplant;
+pub mod spiderplant;
+pub mod chopsticks;
 pub mod bridge;
 pub mod jar;
 pub mod lid;
@@ -57,18 +68,11 @@ pub mod officechair;
 pub mod sofa;
 pub mod doors;
 pub mod doorhandles;
-pub mod bevel3;
 pub mod towel;
 pub mod chair;
 pub mod gnhelpers;
 pub mod bpyops;
 pub mod bevelfull;
-pub mod spiderplant;
-pub mod snakeplant;
-pub mod succulent;
-pub mod gnedit;
-pub mod balloon;
-pub mod chopsticks;
 pub mod gnasset;
 pub mod gnports;
 pub mod bevelgn;
@@ -236,6 +240,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if bottle::handles(c) => bottle::make(c, &mut rng, factory_seed),
         c if lid::handles(c) => lid::make(c, &mut rng, factory_seed),
         c if cup::handles(c) => cup::make(c, &mut rng, factory_seed),
+        c if mollusk::handles(c) => mollusk::make(c, &mut rng, factory_seed),
         c if jar::handles(c) => jar::make(c, &mut rng, factory_seed),
         c if bowl::fruit_handles(c) => bowl::fruit_make(factory_seed),
         c if bowl::handles(c) => bowl::make(c, &mut rng, factory_seed),

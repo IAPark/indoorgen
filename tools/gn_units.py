@@ -441,6 +441,45 @@ def geometry_cases():
         c3 = b.store((b.n("GeometryNodeMeshCylinder", Vertices=4), "Mesh"), 1, "q", "FACE", "INT")
         return b.n("GeometryNodeJoinGeometry", Geometry=[c1, (c2, "Mesh"), c3])
     case("JoinGeometry.attrs", join_attr)
+    for cnt in (23,):
+        def rs_attr(b, cnt=cnt, what="noise"):
+            circ = b.n("GeometryNodeCurvePrimitiveCircle", {"mode": "RADIUS"}, Resolution=32, Radius=0.07)
+            rc = b.n("GeometryNodeResampleCurve", {"mode": "COUNT"}, Curve=(circ, "Curve"), Count=cnt)
+            r1 = b.n("FunctionNodeRandomValue", {"data_type": "FLOAT"}, Min_001=-0.021, Max_001=0.021)
+            r2 = b.n("FunctionNodeRandomValue", {"data_type": "FLOAT"}, Min_001=-0.021, Max_001=0.021)
+            cb = b.n("ShaderNodeCombineXYZ", X=(r1, "Value_001"), Y=(r2, "Value_001"))
+            sp = b.n("GeometryNodeSetPosition", Geometry=(rc, "Curve"), Offset=(cb, "Vector"))
+            if what == "noise":
+                nt = b.n("ShaderNodeTexNoise")
+                st = b.store((sp, "Geometry"), (nt, "Fac"), "r", "POINT", "FLOAT")
+            elif what == "normal":
+                nor = b.n("GeometryNodeInputNormal")
+                st = b.store((sp, "Geometry"), (nor, "Normal"), "r", "POINT", "FLOAT_VECTOR")
+            else:
+                nor = b.n("GeometryNodeInputNormal")
+                al = b.n("FunctionNodeAlignEulerToVector", {"axis": "Y"}, Vector=(nor, "Normal"))
+                st = b.store((sp, "Geometry"), (al, "Rotation"), "r", "POINT", "FLOAT_VECTOR")
+            return b.n("GeometryNodeCurveToMesh", Curve=(st, "Geometry"))
+        for what in ("noise", "normal", "align"):
+            case(f"ResampleAttr.{what}.{cnt}", lambda b, what=what: rs_attr(b, what=what))
+    for cnt in (23, 29):
+        def iop_circle(b, cnt=cnt):
+            circ = b.n("GeometryNodeCurvePrimitiveCircle", {"mode": "RADIUS"}, Resolution=32, Radius=0.07)
+            rc = b.n("GeometryNodeResampleCurve", {"mode": "COUNT"}, Curve=(circ, "Curve"), Count=cnt)
+            r1 = b.n("FunctionNodeRandomValue", {"data_type": "FLOAT"}, Min_001=-0.021, Max_001=0.021)
+            r2 = b.n("FunctionNodeRandomValue", {"data_type": "FLOAT"}, Min_001=-0.021, Max_001=0.021)
+            cb = b.n("ShaderNodeCombineXYZ", X=(r1, "Value_001"), Y=(r2, "Value_001"))
+            sp = b.n("GeometryNodeSetPosition", Geometry=(rc, "Curve"), Offset=(cb, "Vector"))
+            nor = b.n("GeometryNodeInputNormal")
+            al = b.n("FunctionNodeAlignEulerToVector", {"axis": "Y"}, Vector=(nor, "Normal"))
+            line = b.n("GeometryNodeMeshLine", {"mode": "OFFSET"}, Count=2, Offset=(0, 0, 0.5))
+            nt = b.n("ShaderNodeTexNoise")
+            mr = b.n("ShaderNodeMapRange", {"clamp": True}, Value=(nt, "Fac"))
+            b.S(mr, "To Min", 0.6)
+            b.S(mr, "To Max", 1.1)
+            iop = b.n("GeometryNodeInstanceOnPoints", Points=(sp, "Geometry"), Instance=(line, "Mesh"), Rotation=(al, "Rotation"), Scale=(mr, "Result"))
+            return b.n("GeometryNodeRealizeInstances", Geometry=(iop, "Instances"))
+        case(f"InstanceOnPoints.circle_resample.{cnt}", iop_circle)
     def setpos(b):
         g = base_grid(b)
         x, y, z = noisy_xyz(b)
@@ -1284,6 +1323,22 @@ def tex_cases():
             n.mapping.update()
             return b.store((g, "Mesh"), n, "r", "POINT", "FLOAT")
         case(f"FloatCurve.unclamped.{ht}", mk)
+    def mixed(b):
+        g = base_grid(b)
+        x, y, z = noisy_xyz(b)
+        n = b.n("ShaderNodeFloatCurve", Value=x)
+        c = n.mapping.curves[0]
+        pts = [(0.0, 0.1), (0.2, 0.13), (0.4, 0.13), (0.6, 0.1), (0.8, 0.07), (1.0, 0.0)]
+        for i, p in enumerate(pts):
+            if i < 2:
+                c.points[i].location = p
+            else:
+                c.points.new(*p)
+        for i, pt in enumerate(c.points):
+            pt.handle_type = "VECTOR" if i == len(pts) - 1 else "AUTO"
+        n.mapping.update()
+        return b.store((g, "Mesh"), n, "r", "POINT", "FLOAT")
+    case("FloatCurve.mixed_auto_vector_end", mixed)
     def vc(b):
         g = base_grid(b)
         n = b.n("ShaderNodeVectorCurve", Vector=(b.pos(), "Position"), Fac=0.8)

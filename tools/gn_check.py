@@ -240,7 +240,7 @@ def bisect_case(out, case, casefile):
         tmp["cases"] = pcs
         pf = casefile + (f".{case['name'].split('.')[-2] if '.' in case['name'] else ''}.{len(prefix)}" if os.environ.get("GN_KEEPB") else "")
         dump_cases(tmp, pf)
-        rc, o, err = run_rust(pf, [])
+        rc, o, err = run_rust(pf, (["--tol", os.environ["GNTOL"]] if os.environ.get("GNTOL") else []))
         res = {}
         for line in o.splitlines():
             if line.startswith("CASE "):
@@ -255,6 +255,8 @@ def bisect_case(out, case, casefile):
             elif first is None:
                 first = (pc, st)
         loc = " > ".join(prefix) or "<top>"
+        if os.environ.get("GNALL"):
+            print("bisect: failing probes at", loc, [pc["_node"] for pc in pcs if res.get(pc["name"], ("FAIL",))[0] != "PASS"])
         if first is None:
             print(f"bisect: all {len(pcs)} probes at {loc} pass; mismatch must be in the final output stage")
             return

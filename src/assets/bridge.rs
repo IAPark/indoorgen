@@ -465,6 +465,27 @@ fn rotate_about(axis: V3, angle: f64, v: V3) -> V3 {
 /// bridge two closed loops (given in BMesh edge-loop list order: `la` is eloops.first). Appends faces and cut vertices to `m`.
 /// `cuts` >= 0; `shape` = profile_shape_factor (SMOOTH falloff).
 pub fn bridge_two_loops(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64) {
+    bridge_pair(m, la, lb, cuts, shape, &mut None);
+}
+
+pub type EdgeMap = HashMap<(u32, u32), (u32, bool)>;
+fn edge_map(m: &Mesh) -> EdgeMap {
+    let mut ecount: EdgeMap = HashMap::default();
+    for f in &m.faces {
+        add_face_edges(&mut ecount, f);
+    }
+    ecount
+}
+fn add_face_edges(ecount: &mut EdgeMap, f: &[u32]) {
+    for k in 0..f.len() {
+        let (u, w) = (f[k], f[(k + 1) % f.len()]);
+        let e = ecount.entry(ekey(u, w)).or_insert((0, u < w));
+        e.0 += 1;
+    }
+}
+
+/// same, returning the two loop lists after the flips / rotation (what a following pair of a multi-loop bridge sees)
+pub fn bridge_pair(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>) -> (Vec<u32>, Vec<u32>) {
     let pos0 = m.pos.clone();
     let mut a = Lp { v: la, no: [0.0; 3] };
     let mut b = Lp { v: lb, no: [0.0; 3] };
@@ -496,14 +517,10 @@ pub fn bridge_two_loops(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, s
     }
     // winding votes from existing faces
     if !m.faces.is_empty() {
-        let mut ecount: HashMap<(u32, u32), (u32, bool)> = HashMap::default(); // key -> (count, first face has min->max)
-        for f in &m.faces {
-            for k in 0..f.len() {
-                let (u, w) = (f[k], f[(k + 1) % f.len()]);
-                let e = ecount.entry(ekey(u, w)).or_insert((0, u < w));
-                e.0 += 1;
-            }
+        if cache.is_none() {
+            *cache = Some(edge_map(m));
         }
+        let ecount = cache.as_ref().unwrap();
         let mut votes = [0i32; 2];
         let mut dir = 1;
         for (i, l) in [&a, &b].iter().enumerate() {
@@ -594,8 +611,13 @@ pub fn bridge_two_loops(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, s
         faces
     };
     if cuts == 0 {
+        if let Some(c) = cache.as_mut() {
+            for f in &faces {
+                add_face_edges(c, f);
+            }
+        }
         m.faces.extend(faces);
-        return;
+        return (a.v.clone(), bx);
     }
     // ---- subdivide_edgering, PATH interpolation, smooth = 1 ----
     let resolu = cuts + 2;
@@ -731,6 +753,7 @@ pub fn bridge_two_loops(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, s
     for f in &faces {
         emit_slabs(m, f, &on_a, &cut_id, cuts);
     }
+    (a.v.clone(), bx)
 }
 
 /// emit the slabs of one bridge face (tri or quad) from its a-side to its b-side
