@@ -206,7 +206,7 @@ pub fn make_stand_shape(t: &Toilet, tube: &Mesh, bottom: &[V3], shape: f64, orde
     m.pos.extend_from_slice(bottom);
     let la: Vec<u32> = (0..n).collect();
     let lb: Vec<u32> = order.iter().map(|&i| i + n).collect();
-    bridge_two_loops_ex(&mut m, la, lb, 64, shape, false);
+    super::bridge::bridge_two_loops(&mut m, la, lb, 64, shape);
     m
 }
 
