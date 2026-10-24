@@ -44,7 +44,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 |---|---|---|---|
 | F1 | Re-apply the framework agent's unmerged nodes_curves.rs changes (bezier handle nodes, FilletCurve fixes): `todo/framework_nodes_curves_unmerged.diff`; unit fails `curve2:SetHandle*`, `curve2:FilletCurve` | DONE: unit 745 pass / 5 fail (was 724/26) | master's nodes_curves.rs has storage's CDT FillCurve; keep it |
 | F2 | Mesh Boolean exact (Blender EXACT and FLOAT solvers) without fragmentation (Spatula 36806 vs 2236 verts) | todo | blocks K8 K9 D7 |
-| F3 | ConvexHull exact (~1.6e-4 now) | todo | |
+| F3 | ConvexHull exact (~1.6e-4 now) | DONE| bullet_hull.rs (Bullet btConvexHullComputer port) already exact: ConvexHull unit cases pass vertex-exact. |
 | F4 | Unify `bridge_ex.rs` (SURFACE mode) into `bridge.rs` | DONE| bridge_ex.rs removed; bridge.rs has bridge_pair_ex(.., surface) + bridge_two_loops_surface (toiletx uses it). Mechanical merge, builds; no cached asset exercises it yet. |
 | F5 | Remaining unit failures: AlignEulerToVector, SampleNearest ties, DistributePointsOnFaces sphere, VectorCurve | todo | |
 | P1 | Placement: Bathroom 0 diverges at stage 0 it 93: door vs bathtub MPR depth 0.567 vs python-fcl 0.482 for `collide(b,f)` (box-vs-box, support ties) | DONE| Cause: python-fcl (arm64) fuses a*b+c*d into FMAs in libccd (dot/cross/quat/pointTriDist); mpr.rs now emulates it (bit-exact depth/normal/pos vs fcl on the pair). Bathroom 0 identical through 730 iterations; added to selfcheck. |
