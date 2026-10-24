@@ -20,7 +20,7 @@ pub fn is_vector_handle(t: u8) -> bool {
 }
 
 /// number of evaluated points of a bezier segment from control point i to i+1
-fn bezier_seg_res(c: &Curves, k: usize, i: usize, j: usize) -> usize {
+pub fn bezier_seg_res(c: &Curves, k: usize, i: usize, j: usize) -> usize {
     let r = c.range(k);
     if is_vector_handle(c.htr[r.start + i]) && is_vector_handle(c.htl[r.start + j]) {
         1

@@ -326,3 +326,14 @@ pub fn nn_max(a: &[V3], b: &[V3]) -> f64 {
     }
     worst
 }
+
+/// BOOLEAN modifier (EXACT in blender; BSP based here: surface-equal) `first OP second`
+pub fn boolean(op: &str, first: &Mesh, second: &Mesh) -> Mesh {
+    use crate::gn::geom::Mesh as GM;
+    let conv = |m: &Mesh| GM::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[]);
+    let r = crate::gn::csg::mesh_boolean(op, &conv(first), &[&conv(second)]);
+    let mut o = Mesh::new();
+    o.pos = r.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+    o.faces = r.faces_vec();
+    o
+}
