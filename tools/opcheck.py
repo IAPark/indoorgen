@@ -13,8 +13,8 @@ case.json (all keys optional except verts/polys):
   loops       [[v..],[v..]]  vertex loops (bridge_edge_loops / fill_grid select the edges between consecutive loop verts)
   crease_edges [[a,b,w]]   bevel_weight_edges [[a,b,w]]   bevel_weight_verts [[i,w]]
   other       {"verts","polys","loc":[x,y,z]}   second object for BOOLEAN
-  params      default op parameters (the --params JSON overrides key by key)
-Result json: {"op","call","params","verts","polys","edges"}  ("call" = exact bpy call(s) used).
+  params      default op parameters (the --params JSON overrides key by key; sel_*/loops/other keys inside params override the case's)
+Result json: {"op","call","params","verts","polys","edges","in_edges"}  ("call" = exact bpy call(s) used).
 Selection defaults: edge ops select all edges, face ops all faces.  Params are passed straight to the bpy operator / modifier
 properties, so any property of the Blender API can be given.  Add an op: write `def op_name(c, p)` and register it in OPS.
 `modifier` is the generic op: params {"type":"WELD","merge_threshold":0.1,...}; modifier properties are set with setattr.
@@ -22,6 +22,7 @@ properties, so any property of the Blender API can be given.  Add an op: write `
 import sys, json, math, argparse, contextlib
 
 CALLS = []
+IN_EDGES = []   # edge list (Blender's own order) of the input mesh, saved as "in_edges" so the Rust side can use the same edge order
 
 def rec(s):
     CALLS.append(s)
@@ -75,6 +76,7 @@ def load_case(bpy, c):
             vals[i] = w
         a.data.foreach_set("value", vals)
     activate(bpy, ob)
+    IN_EDGES[:] = [list(e.vertices) for e in me.edges]
     return ob
 
 @contextlib.contextmanager
@@ -289,8 +291,11 @@ def run(op, case, params):
     del CALLS[:]
     c = dict(case)
     p = dict(c.get("params", {})); p.update(params)
+    for k in [k for k in p if k.startswith("sel_") or k in ("loops", "other")]:   # selections may be given in --params too
+        c[k] = p.pop(k)
     bpy, ob, used = OPS[op](c, p)
     r = result(bpy, ob)
+    r["in_edges"] = IN_EDGES
     r.update(op=op, call=list(CALLS), params=used)
     return r
 

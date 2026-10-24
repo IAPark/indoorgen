@@ -21,6 +21,8 @@ type Res = Result<Mesh, String>;
 struct Case {
     j: Value,
     mesh: Mesh,
+    /// the Blender mesh's edge list (from the blender result "in_edges"; Blender orders edges of a from_pydata mesh by its own rule)
+    edges: Option<Vec<[u32; 2]>>,
 }
 
 fn f3(v: &Value) -> [f64; 3] {
@@ -46,11 +48,16 @@ fn ps<'a>(p: &'a Value, k: &str, d: &'a str) -> &'a str {
 }
 
 /// Blender-style edge list of a face mesh (first use order of the corners)
-fn edge_list(m: &Mesh) -> (Vec<[u32; 2]>, Vec<Vec<u32>>, Vec<Vec<usize>>) {
+fn edge_list(m: &Mesh, order: &Option<Vec<[u32; 2]>>) -> (Vec<[u32; 2]>, Vec<Vec<u32>>, Vec<Vec<usize>>) {
     let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
     let mut edges = vec![];
     let mut ce = vec![];
     let mut ef: Vec<Vec<usize>> = vec![];
+    for e in order.iter().flatten() {
+        emap.insert((e[0].min(e[1]), e[0].max(e[1])), edges.len() as u32);
+        edges.push(*e);
+        ef.push(vec![]);
+    }
     for (fi, f) in m.faces.iter().enumerate() {
         let mut fe = vec![];
         for c in 0..f.len() {
@@ -149,7 +156,7 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
     use infinigen::bm::bevel::*;
     use infinigen::bm::*;
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    let (edges, ce, ef) = edge_list(&c.mesh);
+    let (edges, ce, ef) = edge_list(&c.mesh, &c.edges);
     let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
     infinigen::assets::bevmod::set_mesh_vert_normals(&mut bm, &pos, &c.mesh.faces);
     let o = BevelOpts {
@@ -189,7 +196,7 @@ fn r_bevel_mod(c: &Case, p: &Value) -> Res {
     if ps(p, "offset_type", "OFFSET") != "OFFSET" {
         return Err("offset_type != OFFSET".into());
     }
-    infinigen::assets::bevmod::bevel_modifier(&c.mesh, pf(p, "width", 0.1), seg, angle, pb(p, "use_clamp_overlap", true), pf(p, "profile", 0.5) as f32)
+    infinigen::assets::bevmod::bevel_modifier_ex(&c.mesh, pf(p, "width", 0.1), seg, angle, pb(p, "use_clamp_overlap", true), pf(p, "profile", 0.5) as f32, c.edges.as_deref())
 }
 
 fn r_solidify(c: &Case, p: &Value) -> Res {
@@ -282,7 +289,7 @@ fn from_gn(r: &infinigen::gn::geom::Mesh) -> Mesh {
 
 fn r_boolean(c: &Case, p: &Value) -> Res {
     if ps(p, "solver", "EXACT") != "EXACT" {
-        return Err("boolean: only solver EXACT (BSP csg, surface-equal)".into());
+        return Err("boolean: only solver EXACT (BSP csg, surface-equal); FAST not ported".into());
     }
     let o = c.j.get("other").ok_or("case needs \"other\"")?;
     let mut om = mesh_of(&o["verts"], &o["polys"], true);
@@ -650,6 +657,10 @@ fn main() {
         }
     }
     // the blender result's params (defaults filled in python) are authoritative when comparing
+    for k in params.as_object().unwrap().keys().filter(|k| k.starts_with("sel_") || *k == "loops" || *k == "other").cloned().collect::<Vec<_>>() {
+        j[&k] = params[&k].clone();
+        params.as_object_mut().unwrap().remove(&k);
+    }
     let tol: f64 = arg("--tol").map_or(1e-5, |s| s.parse().unwrap());
     let name = j.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()).unwrap_or_else(|| std::path::Path::new(&inp).file_stem().unwrap().to_string_lossy().to_string());
     let (_, req_default, f) = match OPS.iter().find(|o| o.0 == op) {
@@ -663,7 +674,9 @@ fn main() {
     let round32 = true;
     let mesh = mesh_of(&j["verts"], &j["polys"], round32);
     j["verts"] = json!(mesh.pos);
-    let c = Case { j, mesh };
+    let blender_json: Option<Value> = arg("--blender").map(|bp| serde_json::from_str(&std::fs::read_to_string(&bp).unwrap()).unwrap());
+    let edges = blender_json.as_ref().and_then(|b| b.get("in_edges")).map(|e| e.as_array().unwrap().iter().map(|x| [x[0].as_u64().unwrap() as u32, x[1].as_u64().unwrap() as u32]).collect());
+    let c = Case { j, mesh, edges };
     let t0 = std::time::Instant::now();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&c, &params)));
     let r = match r {
@@ -681,11 +694,10 @@ fn main() {
     if let Some(o) = arg("--out") {
         std::fs::write(&o, json!({"op": op, "verts": rs.pos, "polys": rs.faces}).to_string()).unwrap();
     }
-    let Some(bp) = arg("--blender") else {
+    let Some(b) = blender_json else {
         println!("RESULT {op} {name} level=none required={required} status=NOBLENDER verts={} faces={}", rs.pos.len(), rs.faces.len());
         return;
     };
-    let b: Value = serde_json::from_str(&std::fs::read_to_string(&bp).unwrap()).unwrap();
     if let Some(call) = b.get("call") {
         println!("blender call: {}", call);
     }

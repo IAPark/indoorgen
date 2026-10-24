@@ -44,7 +44,7 @@ bool_diff_box|boolean|cube_box|{"operation":"DIFFERENCE"}
 bool_union_box|boolean|cube_box|{"operation":"UNION"}
 bool_inter_box|boolean|cube_box|{"operation":"INTERSECT"}
 bool_diff_hole|boolean|cube_hole|{"operation":"DIFFERENCE"}
-bool_float_diff|boolean|cube_box|{"operation":"DIFFERENCE","solver":"FLOAT"}
+bool_fast_diff|boolean|cube_box|{"operation":"DIFFERENCE","solver":"FAST"}
 tri_cube|triangulate|cube|{}
 tri_sheared|triangulate|sheared|{}
 tri_lshape|triangulate|lshape|{}
