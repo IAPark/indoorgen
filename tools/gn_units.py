@@ -1091,8 +1091,8 @@ def field2_cases():
     return out
 
 
-def _boolean(b, op, m1, others):
-    n = b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": "EXACT"}, **{"Mesh 1": m1})
+def _boolean(b, op, m1, others, solver="EXACT"):
+    n = b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": solver}, **({"Mesh 1": m1} if m1 is not None else {}))
     for o in others:
         b.ng.links.new(b.out_sock(o), n.inputs["Mesh 2"])
     return n
@@ -1159,15 +1159,27 @@ def mesh2_cases():
         return b.n("GeometryNodeTransform", Geometry=(c, "Mesh"), Translation=t, Rotation=rot)
     for op in ("UNION", "INTERSECT", "DIFFERENCE"):
         case(f"MeshBoolean.{op}.cubes", lambda b, op=op: b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": "EXACT"}, Mesh_1=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Mesh_2=[(cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4)), "Geometry")]) if False else _boolean(b, op, cube_at(b, (1, 1, 1), (0, 0, 0)), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))]))
-    def thin(b, n=(4, 6, 10)):
+    def thin(b, n=(4, 6, 10), solver="EXACT"):
         c = b.n("GeometryNodeMeshCube", Size=(0.012, 0.05, 0.1), Vertices__X=n[0], Vertices__Y=n[1], Vertices__Z=n[2])
         cy = b.n("GeometryNodeMeshCylinder", Radius=0.004, Depth=0.1)
         t = b.n("GeometryNodeTransform", Geometry=(cy, "Mesh"), Translation=(0, 0, 0.02), Rotation=(0.0, 1.5708, 0.0), Scale=(1.2, 1, 1))
-        return _boolean(b, "DIFFERENCE", c, [t])
+        return _boolean(b, "DIFFERENCE", c, [t], solver)
     case("MeshBoolean.DIFFERENCE.thin", thin)
     case("MeshBoolean.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2)))
     case("MeshBoolean.DIFFERENCE.hole", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)]))
     case("MeshBoolean.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))]))
+    # FLOAT solver (BMesh intersect)
+    for op in ("UNION", "INTERSECT", "DIFFERENCE"):
+        case(f"MeshBoolean.FLOAT.{op}.cubes", lambda b, op=op: _boolean(b, op, cube_at(b, (1, 1, 1), (0, 0, 0)), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
+        case(f"MeshBoolean.FLOAT.{op}.cylcube", lambda b, op=op: _boolean(b, op, cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.7, Depth=1.0)], "FLOAT"))
+        case(f"MeshBoolean.FLOAT.{op}.sphere", lambda b, op=op: _boolean(b, op, b.n("GeometryNodeMeshUVSphere", Segments=12, Rings=8, Radius=1.0), [cube_at(b, (1.2, 1.2, 1.2), (0.5, 0.3, 0.2), (0.0, 0.0, 0.3))], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.hole", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.holegrid", lambda b: _boolean(b, "DIFFERENCE", b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))], "FLOAT"))
+    case("MeshBoolean.FLOAT.UNION.multi", lambda b: _boolean(b, "UNION", None, [cube_at(b, (1, 1, 1), (0, 0, 0)), cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4)), cube_at(b, (1, 1, 1), (-0.3, 0.1, 0.5), (0.4, 0.1, 0.2))], "FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.thin", lambda b: thin(b, solver="FLOAT"))
+    case("MeshBoolean.FLOAT.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2), "FLOAT"))
+    case("MeshBoolean.FLOAT.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
     case("MeshBoolean.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))]))
     def two_cubes(b):
         c1 = b.n("GeometryNodeMeshCube", Size=(1, 1, 1))

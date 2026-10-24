@@ -87,7 +87,10 @@ fn fill_normal(bm: &BMesh, pos: &[V3], edges: &[[usize; 2]]) -> V3 {
             }
         }
     }
-    let mut nors: Vec<(f32, V3)> = vec![];
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct SortNormal(f32, V3);
+    let mut nors: Vec<SortNormal> = vec![];
     let mut is_degenerate = true;
     for &v in &order {
         let mut value = -1.0f32;
@@ -111,7 +114,7 @@ fn fill_normal(bm: &BMesh, pos: &[V3], edges: &[[usize; 2]]) -> V3 {
                 no = [-no[0], -no[1], -no[2]];
             }
         }
-        nors.push((value, no));
+        nors.push(SortNormal(value, no));
     }
     if std::env::var_os("DBGN").is_some() {
         eprintln!("raw {:?}", nors.iter().map(|n| (n.0.to_bits(), if n.1[2] > 0.0 { 1 } else if n.1[2] < 0.0 { -1 } else { 0 })).collect::<Vec<_>>());
@@ -119,7 +122,7 @@ fn fill_normal(bm: &BMesh, pos: &[V3], edges: &[[usize; 2]]) -> V3 {
     let mut normal = [0.0f32; 3];
     if !is_degenerate {
         // qsort descending by value
-        crate::bm::qsort::qsort(&mut nors, &|a, b| if a.0 < b.0 { 1 } else if a.0 > b.0 { -1 } else { 0 });
+        crate::bm::qsort::qsort_f32_reverse(&mut nors);
         normal = nors[0].1;
         for n in nors.iter_mut() {
             if n.0 == -1.0 {

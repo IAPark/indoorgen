@@ -126,3 +126,38 @@ pub fn qsort<T>(a: &mut [T], cmp: &dyn Fn(&T, &T) -> i32) {
         return;
     }
 }
+
+/// libc `qsort` with `BLI_sortutil_cmp_float_reverse` on elements whose first field is an `f32` key (descending order).
+/// On macOS this calls the system qsort (the very function Blender uses, so the order of equal keys is identical).
+#[cfg(target_os = "macos")]
+pub fn qsort_f32_reverse<T>(a: &mut [T]) {
+    use std::os::raw::{c_int, c_void};
+    extern "C" {
+        fn qsort(base: *mut c_void, n: usize, size: usize, cmp: extern "C" fn(*const c_void, *const c_void) -> c_int);
+    }
+    extern "C" fn cmp(x: *const c_void, y: *const c_void) -> c_int {
+        let (x, y) = unsafe { (*(x as *const f32), *(y as *const f32)) };
+        if x < y {
+            1
+        } else if x > y {
+            -1
+        } else {
+            0
+        }
+    }
+    unsafe { qsort(a.as_mut_ptr() as *mut c_void, a.len(), std::mem::size_of::<T>(), cmp) }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn qsort_f32_reverse<T: Copy>(a: &mut [T]) {
+    let key = |t: &T| unsafe { *(t as *const T as *const f32) };
+    qsort(a, &|x, y| {
+        let (x, y) = (key(x), key(y));
+        if x < y {
+            1
+        } else if x > y {
+            -1
+        } else {
+            0
+        }
+    });
+}
