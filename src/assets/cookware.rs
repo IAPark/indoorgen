@@ -89,7 +89,8 @@ impl Pan {
             let _taper = r.log_uniform(0.3, 0.8);
             let _rot = r.uniform(-std::f64::consts::PI / 6.0, 0.0);
             pan.bar_x_offset = pan.bar_radius * r.uniform(-0.1, 0.1);
-            let _gd = r.log_uniform(0.5, 1.0) * pan.thickness;
+            pan.has_guard = !pan.has_bar;
+            pan.guard_depth = r.log_uniform(0.5, 1.0) * pan.thickness;
             pan.scale = r.log_uniform(0.1, 0.15);
         }
         pan.seed = a.randint(0, 1_000_000) as u64;
@@ -136,6 +137,8 @@ impl Factory for Pan {
             x_guard: self.x_guard,
             guard_depth: self.guard_depth,
             n,
+            fill_offset: 0,
+            has_handle: self.has_handle,
         };
         let m = super::pangeom::pan_unit_mesh(&p)?;
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -159,67 +162,68 @@ impl Factory for Pan {
         let s = self.scale;
         Some(([lo[0] * s, lo[1] * s, 0.0], [hi[0] * s, hi[1] * s, (hi[2] - zmin) * s]))
     }
-    fn asset(&self, _i: u64) -> Asset {
+    fn asset(&self, i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let body = spec("pan", weighted(&mut r, CUP), self.seed);
-        let handle_m = spec("pan_handle", weighted(&mut r, CUP), self.seed + 1);
+        let mut ri = inst_rng(self.fseed, i);
+        let n = 4 * (ri.log_uniform(4.0, 8.0) as usize);
+        let off = ri.randint(0, (n / 4) as i64) as usize;
+        let p = super::pangeom::PanParams {
+            r_expand: self.r_expand,
+            r_mid: self.r_mid,
+            depth: self.depth,
+            x_handle: self.x_handle,
+            z_handle: self.z_handle,
+            z_handle_mid: self.z_handle_mid,
+            s_handle: self.s_handle,
+            thickness: self.thickness,
+            has_guard: self.has_guard,
+            x_guard: self.x_guard,
+            guard_depth: self.guard_depth,
+            n,
+            fill_offset: off,
+            has_handle: self.has_handle,
+        };
+        let mut m = super::pangeom::pan_unit_mesh(&p).expect("pan");
+        // origin2lowest(vertical): lowest z -> 0; scale
+        // PotFactory.create_asset has no origin2lowest
+        let zmin = if self.pot { 0.0 } else { m.pos.iter().map(|q| q[2] as f32).fold(f32::INFINITY, f32::min) };
+        let s = self.scale as f32;
+        for q in m.pos.iter_mut() {
+            *q = [(q[0] as f32 * s) as f64, (q[1] as f32 * s) as f64, ((q[2] as f32 - zmin) * s) as f64];
+        }
         let mut a = Asset::default();
-        let s = self.scale;
-        let prof: Vec<(f64, f64)> = chaikin_open(&[(0.0, 0.0), (1.0, 0.0), (self.r_mid, self.depth / 2.0), (self.r_expand, self.depth)], 2)
-            .into_iter().map(|(x, z)| (x * s, z * s)).collect();
-        let m = Mesh::vessel(0.0, 0.0, &prof, (self.thickness * s).max(0.003), 40);
-        let b = m.bounds();
-        a.mesh(m, &body, Some(b));
-        let top = self.depth * s;
-        if self.has_handle {
-            let (x0, x1) = (self.r_expand * s, (self.r_expand + self.x_handle) * s);
-            let w = 0.12 * s;
-            let h = Mesh::cuboid([x0 - 0.002, -w / 2.0, top - 0.012 * s * 3.0], [x1, w / 2.0, top]);
-            let hb = h.bounds();
-            a.mesh(h, &handle_m, Some(hb));
-        }
-        if self.has_bar {
-            for sgn in [-1.0, 1.0] {
-                let rr = self.bar_radius * s;
-                let cx = sgn * (self.r_expand * s + rr * 0.8);
-                let z = self.bar_height * s;
-                let n = 14;
-                let pts: Vec<V3> = (0..=n).map(|k| { let t = 2.0 * PI * k as f64 / n as f64; [cx + sgn * rr * 0.6 * t.cos() - sgn * rr * 0.6, 0.0, z + rr * 0.9 * t.sin()] }).collect();
-                for k in 0..n {
-                    let l = limb(pts[k], pts[k + 1], rr * 0.2, rr * 0.2, true);
-                    let lb = l.bounds();
-                    a.mesh(l, &handle_m, Some(lb));
-                }
-            }
-        }
-        let _ = self.pot;
+        a.mesh(m, &body, None);
         a
     }
 }
 
 pub struct Tv {
-    width: f64,
-    height: f64,
-    depth: f64,
-    side: f64,
-    bottom: f64,
-    extrude: f64,
-    has_extrude: bool,
-    two_legs: bool,
-    leg_len: f64,
-    leg_len_y: f64,
-    leg_r: f64,
-    leg_w: f64,
-    emission: f64,
-    seed: u64,
+    pub bevel_w: f64,
+    pub leg_bevel: f64,
+    pub fseed: u64,
+    pub width: f64,
+    pub height: f64,
+    pub depth: f64,
+    pub side: f64,
+    pub bottom: f64,
+    pub extrude: f64,
+    pub has_extrude: bool,
+    pub two_legs: bool,
+    pub leg_len: f64,
+    pub leg_len_y: f64,
+    pub leg_r: f64,
+    pub leg_w: f64,
+    pub emission: f64,
+    pub seed: u64,
 }
 
 impl Tv {
-    fn new(rng: &mut Rng, monitor: bool) -> Tv {
+    pub fn new(rng: &mut Rng, monitor: bool) -> Tv {
         let mut r = rng.clone();
         let aspect = [9.0 / 16.0, 3.0 / 4.0][r.choice_idx(2)];
         let width = r.uniform(0.6, 2.1);
-        let _bevel = r.uniform(0.0, 0.01);
+        let bevel_w = r.uniform(0.0, 0.01);
         let side = r.log_uniform(0.005, 0.01);
         let bottom = r.uniform(0.005, 0.03);
         let depth = r.uniform(0.02, 0.04);
@@ -230,10 +234,11 @@ impl Tv {
         let leg_len_y = r.uniform(0.1, 0.15);
         let leg_r = r.uniform(0.008, 0.015);
         let leg_w = r.uniform(0.5, 0.8);
+        let leg_bevel = r.uniform(0.01, 0.02);
         let emission = 0.0;
         // MonitorFactory.__init__ re-seeds FixedSeed(factory_seed): width = log_uniform(0.4, 0.8) from the stream start, single-legged
         let (width, two_legs) = if monitor { (rng.clone().log_uniform(0.4, 0.8), false) } else { (width, two_legs) };
-        Tv { width, height: aspect * width, depth, side, bottom, extrude, has_extrude, two_legs, leg_len, leg_len_y, leg_r, leg_w, emission, seed: r.randint(0, 1_000_000) as u64 }
+        Tv { bevel_w, leg_bevel, fseed: 0, width, height: aspect * width, depth, side, bottom, extrude, has_extrude, two_legs, leg_len, leg_len_y, leg_r, leg_w, emission, seed: r.randint(0, 1_000_000) as u64 }
     }
 }
 
@@ -248,45 +253,18 @@ impl Factory for Tv {
         a.cuboid(lo, hi, &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
-    fn asset(&self, _i: u64) -> Asset {
+    fn asset(&self, i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let shell = spec("tv_body", weighted(&mut r, NEUTRAL), self.seed);
         let stand = spec("tv_leg", weighted(&mut r, NEUTRAL), self.seed + 1);
-        let screen = spec_material("tv_screen", json!({"cls": "art.Art", "kwargs": {}, "seed": self.seed + 2}), [0.05, 0.05, 0.06]);
-        let (tw, th) = (self.width + 2.0 * self.side, self.height + self.side + self.bottom);
+        let _screen = spec_material("tv_screen", json!({"cls": "art.Art", "kwargs": {}, "seed": self.seed + 2}), [0.05, 0.05, 0.06]);
+        let mut ri = inst_rng(self.fseed, i);
+        let b = super::tvx::build(self, &mut ri);
         let mut a = Asset::default();
-        let d = self.depth;
-        // body (back shell, bezelled) and the screen quad on the front (-y) face
-        let mut body = Mesh::cuboid([-tw / 2.0, 0.0, 0.0], [tw / 2.0, d, th]);
-        if self.has_extrude {
-            body.append(&Mesh::cuboid([-tw * 0.2, d, th * 0.25], [tw * 0.2, d + self.extrude, th * 0.6]));
+        a.mesh(b.body, &shell, None);
+        for l in b.legs {
+            a.mesh(l, &stand, None);
         }
-        let bb = body.bounds();
-        a.mesh(body, &shell, Some(bb));
-        let (sx0, sx1, sz0, sz1) = (-self.width / 2.0, self.width / 2.0, self.bottom, self.bottom + self.height);
-        let mut sc = Mesh::new();
-        sc.add_quad([sx0, -0.001, sz0], [sx1, -0.001, sz0], [sx1, -0.001, sz1], [sx0, -0.001, sz1]);
-        sc.uv = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        a.mesh(sc, &screen, Some(([sx0, -0.002, sz0], [sx1, 0.0, sz1])));
-        let lr = self.leg_r;
-        if self.two_legs {
-            for sgn in [-1.0, 1.0] {
-                let x = sgn * tw / 2.0 * self.leg_w;
-                for sy in [-1.0, 1.0] {
-                    let l = limb([x * 0.9, d / 2.0, th * 0.35], [x, d / 2.0 + sy * self.leg_len_y / 2.0, -self.leg_len], lr, lr, true);
-                    let lb = l.bounds();
-                    a.mesh(l, &stand, Some(lb));
-                }
-            }
-        } else {
-            let l = limb([0.0, d / 2.0, th * 0.3], [0.0, d / 2.0, -self.leg_len], lr, lr, true);
-            let lb = l.bounds();
-            a.mesh(l, &stand, Some(lb));
-            let foot = Mesh::cuboid([-self.leg_w * tw * 0.25, d / 2.0 - self.leg_len_y / 2.0, -self.leg_len - lr], [self.leg_w * tw * 0.25, d / 2.0 + self.leg_len_y / 2.0, -self.leg_len + lr]);
-            let fb = foot.bounds();
-            a.mesh(foot, &stand, Some(fb));
-        }
-        let _ = (self.emission, WOODS.len());
         a.transform(&Mat4::rot_z(PI / 2.0));
         a
     }
@@ -304,7 +282,15 @@ pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
             p.fseed = fseed;
             Box::new(p)
         }
-        "TVFactory" => Box::new(Tv::new(rng, false)),
-        _ => Box::new(Tv::new(rng, true)),
+        "TVFactory" => {
+            let mut t = Tv::new(rng, false);
+            t.fseed = fseed;
+            Box::new(t)
+        }
+        _ => {
+            let mut t = Tv::new(rng, true);
+            t.fseed = fseed;
+            Box::new(t)
+        }
     })
 }

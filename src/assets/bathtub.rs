@@ -14,7 +14,7 @@ pub struct Built {
     pub stages: Vec<(String, String, Mesh)>,
 }
 
-fn stage(st: &mut Vec<(String, String, Mesh)>, name: &str, key: &str, m: &Mesh) {
+pub fn stage(st: &mut Vec<(String, String, Mesh)>, name: &str, key: &str, m: &Mesh) {
     st.push((name.to_string(), key.to_string(), m.clone()));
 }
 
@@ -49,17 +49,35 @@ fn centers_normals(m: &Mesh) -> (Vec<V3>, Vec<V3>) {
     (super::bpyx::face_centers(m), super::bpyx::face_normals(m))
 }
 
-/// linear subdivision of a polyline's loose edges (SUBSURF on a wire mesh interpolates new vertices linearly)
+/// SUBSURF (Catmull-Clark, limit surface) on a wire polyline: cubic B-spline refinement, then limit positions; ends fixed
 fn subdivide_wire(pts: &[V3], levels: i64) -> Vec<V3> {
     let mut cur = pts.to_vec();
     for _ in 0..levels {
-        let mut nx = vec![cur[0]];
-        for w in cur.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            nx.push([((a[0] as f32 + b[0] as f32) * 0.5) as f64, ((a[1] as f32 + b[1] as f32) * 0.5) as f64, ((a[2] as f32 + b[2] as f32) * 0.5) as f64]);
-            nx.push(b);
+        let n = cur.len();
+        let mut nx = vec![];
+        for i in 0..n {
+            let v = if i == 0 || i == n - 1 {
+                cur[i]
+            } else {
+                let (a, b) = (cur[i - 1], cur[i + 1]);
+                [(a[0] + 6.0 * cur[i][0] + b[0]) / 8.0, (a[1] + 6.0 * cur[i][1] + b[1]) / 8.0, (a[2] + 6.0 * cur[i][2] + b[2]) / 8.0]
+            };
+            nx.push(v);
+            if i + 1 < n {
+                let b = cur[i + 1];
+                nx.push([(cur[i][0] + b[0]) / 2.0, (cur[i][1] + b[1]) / 2.0, (cur[i][2] + b[2]) / 2.0]);
+            }
         }
         cur = nx;
+    }
+    if levels > 0 {
+        let n = cur.len();
+        let src = cur.clone();
+        for i in 1..n - 1 {
+            for k in 0..3 {
+                cur[i][k] = (src[i - 1][k] + 4.0 * src[i][k] + src[i + 1][k]) / 6.0;
+            }
+        }
     }
     cur
 }
@@ -86,7 +104,11 @@ pub fn make_legs(t: &Bathtub, obj: &Mesh, r: &mut Rng) -> Vec<Mesh> {
             let rr = [q[0], q[1], 0.0];
             let pts = subdivide_wire(&[pp, q, rr], t.leg_sub);
             let tube = super::gnhelpers::geo_radius_ex(&[pts], t.leg_radius, 32, 0.004, false);
-            let mut leg = bevel_def_seg(&tube, t.leg_radius * r.uniform(0.3, 0.7), 1);
+            let bw = t.leg_radius * r.uniform(0.3, 0.7);
+            if let Ok(d) = std::env::var("LEGDUMP") {
+                std::fs::write(format!("{d}/legpre{}.json", legs.len()), serde_json::json!({"v": tube.pos, "p": tube.faces, "w": bw}).to_string()).unwrap();
+            }
+            let mut leg = bevel_def_seg(&tube, bw, 1);
             for p in leg.pos.iter_mut() {
                 p[2] = (p[2] as f32 + t.leg_radius as f32) as f64;
             }
@@ -252,27 +274,53 @@ pub fn orient_outward(m: &mut Mesh) {
     }
 }
 
-pub fn find_hole(obj: &Mesh, x: f64, y: f64) -> V3 {
+/// `find_hole`: up-facing face centre closest to (x, y) in L1. On mirror-symmetric meshes (centred hole of sinks, freestanding tubs)
+/// the winners tie in exact arithmetic and float32 rounding of Blender's subdivision decides which one python gets; that cannot be
+/// reproduced without bit-exact OpenSubdiv, so the side is a fixed empirical choice (about half of the cases match).
+pub fn find_hole(obj: &Mesh, x: f64, y: f64, extent: (f64, f64)) -> V3 {
     let (co, nor) = centers_normals(obj);
-    let mut best = (f64::INFINITY, 0usize);
+    let score: Vec<f64> = (0..co.len())
+        .map(|i| {
+            let up = if nor[i][2] > 0.0 { 1.0 } else { 0.0 };
+            ((co[i][0] - x).abs() + (co[i][1] - y).abs()) - up
+        })
+        .collect();
+    let m = score.iter().cloned().fold(f64::INFINITY, f64::min);
+    // best empirical choice (float noise decides in Blender): tubs lower x, sinks higher x
+    let low_x = !extent.0.is_nan() && extent.0 > 1.2;
+    let low_y = true;
+    let mut best = usize::MAX;
     for i in 0..co.len() {
-        let up = if nor[i][2] > 0.0 { 1.0 } else { 0.0 };
-        let v = ((co[i][0] - x).abs() + (co[i][1] - y).abs()) - up;
-        if v < best.0 {
-            best = (v, i);
+        if score[i] > m + 1e-6 {
+            continue;
+        }
+        if best == usize::MAX {
+            best = i;
+            continue;
+        }
+        let (c, b) = (co[i], co[best]);
+        let tx = (c[0] - b[0]).abs() > 1e-6;
+        let ty = (c[1] - b[1]).abs() > 1e-6;
+        let better = if ty { (c[1] < b[1]) == low_y } else if tx { (c[0] < b[0]) == low_x } else { false };
+        if better {
+            best = i;
         }
     }
-    co[best.1]
+    if std::env::var("HOLEDBG").is_ok() {
+        let cands: Vec<_> = (0..co.len()).filter(|&i| score[i] <= m + 1e-6).map(|i| (co[i][0], co[i][1], score[i])).collect();
+        eprintln!("HOLE target ({x:.6},{y:.6}) extent {:?} f32-above {} {} chosen ({:.6},{:.6}) cands {:?}", extent, low_x, low_y, co[best][0], co[best][1], cands);
+    }
+    co[best]
 }
 
 pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool) -> Mesh {
     let mut loc = if t.alcove {
-        find_hole(obj, t.width / 2.0, t.size / 2.0)
+        find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size))
     } else {
-        find_hole(obj, r.uniform(0.35, 0.4) * t.width, t.size / 2.0)
+        find_hole(obj, r.uniform(0.35, 0.4) * t.width, t.size / 2.0, (t.width, t.size))
     };
     if centered {
-        loc = find_hole(obj, t.width / 2.0, t.size / 2.0);
+        loc = find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size));
     }
     let mut g = super::hwexact::bpy_cylinder();
     for p in g.v.iter_mut() {
@@ -281,7 +329,134 @@ pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool) -> Mesh {
     from_g(&super::hwexact::apply_obj(&g, [t.hole_radius, t.hole_radius, 0.005], [0.0; 3], loc, true))
 }
 
+/// make_base minus make_cutter (BOOLEAN DIFFERENCE, EXACT) constructed directly: the box with the part of the cutter below the box top
+/// as cavity, the top face split into two polygons by two chords at the x = width side (what the exact boolean's dissolve leaves)
+pub fn alcove_body(t: &Bathtub, stages: &mut Vec<(String, String, Mesh)>) -> Mesh {
+    let d = t.depth;
+    let (lower, upper) = if t.has_curve { (t.contour(t.thickness, 1.0), t.contour(t.thickness, -1.0)) } else { (t.contour(t.thickness, 0.0), t.contour(t.thickness, 0.0)) };
+    let n = lower.len();
+    let mut cage = Mesh::new();
+    for k in 0..n {
+        let (a, b) = (lower[n - 1 - k], upper[n - 1 - k]);
+        cage.pos.push([a[0], a[1], t.thickness]);
+        cage.pos.push([b[0], b[1], d * 2.0 - t.thickness]);
+    }
+    cage.faces = bathfree::cylinder_topology(n);
+    let cage = super::subsurf::subsurf_bl(&cage, t.alcove_levels, true);
+    let cutter = super::subsurf::subsurf_bl(&cage, 5 - t.alcove_levels, false);
+    // cavity = cutter faces below the box top, normals into the cavity
+    let tol = 1e-6;
+    let keep: Vec<bool> = cutter.faces.iter().map(|f| f.iter().all(|&v| cutter.pos[v as usize][2] <= d + tol)).collect();
+    assert!(cutter.faces.iter().enumerate().all(|(i, f)| keep[i] || f.iter().all(|&v| cutter.pos[v as usize][2] >= d - tol)), "cutter faces crossing the box top plane are not supported");
+    let mut cav = separate_faces(&cutter, &keep);
+    for p in cav.pos.iter_mut() {
+        if (p[2] - d).abs() < tol {
+            p[2] = d;
+        }
+    }
+    let ctr = [t.width / 2.0, t.size / 2.0, d / 2.0];
+    let mut s = 0.0;
+    for f in &cav.faces {
+        let nn = super::bpyops::face_normal(&cav, f);
+        let c = f.iter().fold([0.0; 3], |a, &v| [a[0] + cav.pos[v as usize][0], a[1] + cav.pos[v as usize][1], a[2] + cav.pos[v as usize][2]]);
+        let c = [c[0] / f.len() as f64 - ctr[0], c[1] / f.len() as f64 - ctr[1], c[2] / f.len() as f64 - ctr[2]];
+        s += nn[0] * c[0] + nn[1] * c[1] + nn[2] * c[2];
+    }
+    if s > 0.0 {
+        for f in cav.faces.iter_mut() {
+            f.reverse();
+        }
+    }
+    let loops = boundary_loops(&cav);
+    assert_eq!(loops.len(), 1, "alcove rim loops");
+    let mut rim = loops[0].clone();
+    let area: f64 = (0..rim.len()).map(|i| {
+        let (a, b) = (cav.pos[rim[i] as usize], cav.pos[rim[(i + 1) % rim.len()] as usize]);
+        a[0] * b[1] - b[0] * a[1]
+    }).sum();
+    if area < 0.0 {
+        rim.reverse();
+    }
+    // box
+    let (w, sz) = (t.width, t.size);
+    let base = cav.pos.len() as u32;
+    let mut m = cav.clone();
+    let corners = [[0.0, 0.0], [w, 0.0], [w, sz], [0.0, sz]];
+    for z in [0.0, d] {
+        for c in corners {
+            m.pos.push([c[0], c[1], z]);
+        }
+    }
+    let bot = |i: usize| base + i as u32;
+    let top = |i: usize| base + 4 + i as u32;
+    for i in 0..4 {
+        let j = (i + 1) % 4;
+        m.faces.push(vec![bot(i), bot(j), top(j), top(i)]);
+    }
+    m.faces.push(vec![bot(0), bot(3), bot(2), bot(1)]);
+    // chords from the two x = width corners to the nearest rim vertices
+    let nearest = |c: [f64; 2]| -> usize {
+        let mut b = (f64::INFINITY, 0);
+        for (k, &v) in rim.iter().enumerate() {
+            let p = m.pos[v as usize];
+            let dd = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2);
+            if dd < b.0 {
+                b = (dd, k);
+            }
+        }
+        b.1
+    };
+    let (ia, ib) = (nearest(corners[1]), nearest(corners[2]));
+    let nr = rim.len();
+    // polygon A: O1, O2, b, (rim CW from b to a), a ; polygon B: O2, O3, O0, O1, a, (rim CW from a to b), b
+    let mut pa = vec![top(1), top(2)];
+    let mut k = ib;
+    loop {
+        pa.push(rim[k]);
+        if k == ia {
+            break;
+        }
+        k = (k + nr - 1) % nr;
+    }
+    let mut pb = vec![top(2), top(3), top(0), top(1)];
+    let mut k = ia;
+    loop {
+        pb.push(rim[k]);
+        if k == ib {
+            break;
+        }
+        k = (k + nr - 1) % nr;
+    }
+    m.faces.push(pa);
+    m.faces.push(pb);
+    stage(stages, "prehole", "prehole", &m);
+    m
+}
+
+pub fn build_alcove(t: &Bathtub, r: &mut Rng) -> Built {
+    let mut stages = vec![];
+    let obj = alcove_body(t, &mut stages);
+    let hole = add_hole(t, &obj, r, false);
+    stage(&mut stages, "hole", "hole", &hole);
+    let rot = |m: &Mesh| -> Mesh {
+        let mut o = m.clone();
+        for p in o.pos.iter_mut() {
+            *p = [-p[1], p[0], p[2]];
+        }
+        o
+    };
+    let amt = t.beveler_amount * 5.0;
+    let sharp = (70.0f32).to_radians();
+    let body = super::bevmod::bevel_sharp_op(&rot(&obj), sharp, amt, 5, true).expect("bevel");
+    let hole_b = super::bevmod::bevel_sharp_op(&rot(&hole), sharp, amt, 5, true).expect("bevel hole");
+    stage(&mut stages, "final", "final", &join(&[&body, &hole_b]));
+    Built { body, hole: hole_b, extra: vec![], stages }
+}
+
 pub fn build(t: &Bathtub, r: &mut Rng) -> Built {
+    if t.alcove {
+        return build_alcove(t, r);
+    }
     let mut stages = vec![];
     let p = bowl_params(t);
     let bowl = bathfree::make_bowl(&p);

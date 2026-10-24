@@ -301,6 +301,16 @@ fn pad_bevel(m: &Mesh) -> Mesh {
     })
 }
 
+/// divide for the back slab: garbled hulls are left undivided (the z draw is still consumed)
+fn back_divide(m: &Mesh, dist: f64, garbled: bool, r: &mut Rng) -> Mesh {
+    if garbled {
+        r.uniform(0.5, 1.0);
+        m.clone()
+    } else {
+        divide(m, dist, r)
+    }
+}
+
 fn ceil_cuts(size: f64, dist: f64) -> usize {
     (size / dist).ceil() as usize
 }
@@ -353,22 +363,17 @@ impl BedSpec {
             y0 -= d;
             y1 += d;
         }
-        let ldims = {
-            let pts: Vec<V3> = legs.iter().flatten().cloned().collect();
-            let ext = |k: usize| pts.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max) - pts.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min);
-            [ext(0), ext(1), ext(2)]
-        };
         let m = box_walls([x0, y0, -c.leg_height * zf], [x1, y1, 0.0]);
         if std::env::var("BEDDBG").is_ok() {
             eprintln!("leg decor box {:?} {:?} (leg_height {} zf {}) walls verts {}", [x0, y0, -c.leg_height * zf], [x1, y1, 0.0], c.leg_height, zf, m.pos.len());
         }
         match self.leg_decor {
             0 => {
-                let g = divide_dims(&m, ldims, self.dot_distance, r);
+                let g = divide(&m, self.dot_distance, r);
                 coil(&g, self, r)
             }
             1 => {
-                let g = divide_dims(&m, ldims, self.panel_distance, r);
+                let g = divide(&m, self.panel_distance, r);
                 let sel = vec![true; g.faces.len()];
                 pad_bevel(&inset_individual(&g, &sel, self.panel_margin, self.panel_margin))
             }
@@ -394,16 +399,20 @@ impl BedSpec {
         if self.c.back_type == 3 && decors.len() > 1 {
             limbs.push(decors.remove(1));
         }
+        // posts with many (float-noisy, collinear) points make python's convex hull degenerate: its edge rings are not axis parallel,
+        // so divide() subdivides (almost) nothing there; model that as an undivided slab
+        if std::env::var("BEDDBG").is_ok() { eprintln!("backs n {:?} xspread {:?}", backs.iter().map(|b| b.len()).collect::<Vec<_>>(), backs.iter().map(|b| b.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max) - b.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min)).collect::<Vec<_>>()); }
+        let garbled = backs.iter().any(|b| b.len() > 2 && b.iter().any(|p| (p[0] as f32) != (b[0][0] as f32) || (p[1] as f32) != (b[0][1] as f32)));
         if self.c.bed_back <= 1 {
             // coiled / pad: the hull slab of the back rails on top of the (bisected) bridge panel
             let t = c.thickness.min(c.leg_thickness);
             let (xh, yc) = (c.width / 2.0 - c.leg_thickness / 2.0, -c.leg_thickness / 2.0);
             let slab = Mesh::cuboid([-xh, yc - t / 2.0, 0.0], [xh, yc + t / 2.0, c.back_height]).welded(1e-9);
             let mut g = if self.c.bed_back == 0 {
-                let g = divide(&slab, self.dot_distance, r);
+                let g = back_divide(&slab, self.dot_distance, garbled, r);
                 coil(&g, self, r)
             } else {
-                let g = divide(&slab, self.panel_distance, r);
+                let g = back_divide(&slab, self.panel_distance, garbled, r);
                 let sel: Vec<bool> = g.faces.iter().map(|f| face_normal(&g, f)[1].abs() > 0.5).collect();
                 let ins = inset_individual(&g, &sel, self.panel_margin, self.panel_margin);
                 if std::env::var("BEDDBG").is_ok() {
@@ -424,7 +433,7 @@ impl BedSpec {
         for l in &legs {
             limbs.push(c.solidify_limb(l, 2, c.leg_thickness));
         }
-        for b in &backs {
+                for b in &backs {
             limbs.push(c.solidify_limb(b, 2, c.back_thickness));
         }
         (seat, limbs, panels)
@@ -566,7 +575,9 @@ impl Factory for Bed {
         p.use_pressure = true;
         p.pressure = pressure;
         p.use_self_collision = s.sheet_folded;
-        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &Calib::default());
+        let mut cal = Calib::default();
+        cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
+        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
         let sheet = subsurf(&sheet, 2, false);

@@ -299,6 +299,12 @@ pub struct KcSpec {
 
 /// KitchenCabinetBaseFactory.create_asset(i): `r` is the instance stream (FixedSeed(int_hash((fseed, i)))).
 pub fn kitchen_cabinet_gmesh(r: &mut Rng, spec: &KcSpec, o: RampedOpts) -> GMesh {
+    kitchen_cabinet_gmesh_ex(r, spec, o, None).0
+}
+
+/// Same, for a factory object that already built an instance: the frame's random parameters (`frame_rnd`, filled into the python
+/// factory's `frame_params` by its first cabinet) persist and are not drawn again. Returns the parameters in use.
+pub fn kitchen_cabinet_gmesh_ex(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd: Option<(f64, f64, f64, f64)>) -> (GMesh, (f64, f64, f64, f64)) {
     use super::cabnodes::*;
     let f = |x: f64| x as f32;
     let (dx, _dy, dz) = (spec.dims[0], spec.dims[1], spec.dims[2]);
@@ -307,7 +313,7 @@ pub fn kitchen_cabinet_gmesh(r: &mut Rng, spec: &KcSpec, o: RampedOpts) -> GMesh
     let cell_h: Vec<f64> = vec![(dz - 0.06) / num_h as f64; num_h];
     let (side_t, div_t, bottom_h) = (0.02, 0.02, 0.06);
     // frame random params (drawn once, by the first cabinet's frame)
-    let mut rnd: Option<(f64, f64, f64, f64)> = None;
+    let mut rnd: Option<(f64, f64, f64, f64)> = frame_rnd;
     let mut frames: Vec<GMesh> = vec![];
     let mut attach_comps: Vec<Option<GMesh>> = vec![];
     let mut y_trans = vec![];
@@ -409,7 +415,7 @@ pub fn kitchen_cabinet_gmesh(r: &mut Rng, spec: &KcSpec, o: RampedOpts) -> GMesh
             out.tag.push(g.tag[i]);
         }
     }
-    out
+    (out, rnd.unwrap())
 }
 
 fn clip_(x: f64, lo: f64, hi: f64) -> f64 {

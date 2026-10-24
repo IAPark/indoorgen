@@ -25,6 +25,7 @@ struct Patch {
     idx: Option<usize>,
 }
 
+#[derive(Clone)]
 pub struct GnTemplate {
     raw: J,
     patches: Vec<Patch>,
@@ -55,6 +56,21 @@ impl GnTemplate {
         GnTemplate { raw, patches }
     }
 
+    pub fn clone_template(&self) -> GnTemplate {
+        self.clone()
+    }
+
+    /// overwrite the default of a group interface input (e.g. values a factory drew when it built the node group)
+    pub fn set_group_default(&mut self, group: &str, id: &str, v: J) {
+        if let Some(ins) = self.raw["groups"][group]["inputs"].as_array_mut() {
+            for i in ins.iter_mut() {
+                if i["id"].as_str() == Some(id) {
+                    i["default"] = v.clone();
+                }
+            }
+        }
+    }
+
     /// the groups with every parameter patch applied
     pub fn instantiate(&self, params: &Params) -> gn::Groups {
         let mut j = self.raw.clone();
@@ -74,6 +90,24 @@ impl GnTemplate {
             *cur = if is_int { J::from(v as i64) } else { J::from(v) };
         }
         gn::load::load_groups(j)
+    }
+
+    /// evaluate a group with every input at its (patched) interface default; returns the geometry outputs by name (instances realized)
+    pub fn run_group(&self, group: &str) -> Result<Vec<(String, GGeom)>, String> {
+        let groups = self.instantiate(&Params::default());
+        let g = groups.map.get(group).ok_or("missing group")?;
+        let objects = gn::Objects::default();
+        let outs = gn::eval(&groups, group, &HashMap::default(), &objects)?;
+        let mut res = vec![];
+        for (k, o) in g.outputs.iter().enumerate() {
+            if o.ty != Ty::Geo {
+                continue;
+            }
+            if let gn::Value::G(gg) = &outs[k].1 {
+                res.push((o.name.clone(), gn::meshops::realize_instances(&(**gg).clone(), 1000)));
+            }
+        }
+        Ok(res)
     }
 
     /// evaluate the first recorded step (modifier) with the given parameters; returns the first geometry output

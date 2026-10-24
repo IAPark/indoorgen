@@ -90,6 +90,9 @@ pub mod bevmod;
 pub mod toiletx;
 pub mod bathkit;
 pub mod bathtub;
+pub mod taps;
+pub mod bathsink;
+pub mod tvx;
 pub mod solid;
 pub mod windows;
 pub mod shelves;
@@ -229,6 +232,7 @@ pub fn unseeded() -> Option<Vec<f64>> {
 pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> {
     let mut rng = Rng::seeded(factory_seed);
     match class {
+        "TapFactory" => Some(Box::new(taps::TapFactory { fseed: factory_seed })),
         c if shelves::handles(c) => shelves::make(c, &mut rng, factory_seed),
         c if succulent::handles(c) => succulent::make(c, &mut rng, factory_seed),
         c if balloon::handles(c) => balloon::make(c, &mut rng, factory_seed),

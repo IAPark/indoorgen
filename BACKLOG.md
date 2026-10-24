@@ -7,25 +7,25 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 ## Seating / bedroom (worker: seat)
 | id | item | status | notes |
 |---|---|---|---|
-| S1 | Bed: frame, mattress (coiled + wrapped), pillow base + Bed assembly using the Rust cloth (src/assets/cloth.rs, clothes.rs). Replace approximate seating.rs Bed | todo | furniture agent had started `bed.rs` (salvaged on master); Blanket/Comforter pre-sim exact; cloth sim approximate by design |
-| S2 | Roll towels (TowelFactory roll type): bevel keeps fewer coincident duplicate vertices than Blender on zero-area strips (seed 4: 47390 vs 47770) | todo | pre-bevel mesh exact |
-| S3 | OfficeChair/BarChair: gn_check failures | todo | hand port exists |
-| S4 | Sofa/ArmChair exact vertex order (surface already exact) | todo | low priority |
-| S5 | Chair performance: Rust 0.4-0.9 s vs python 0.13 s per chair | todo | profile; bevelfull? |
+| S1 | Bed: frame, mattress, pillow base + Bed assembly using the Rust cloth | partial (committed) | Vertex counts match python for frame (seeds 2,5 exact), mattress (coiled counts exact, wrapped), sheet, cover, pillows, towel. refcmp BedFrame: seed5 PASS, seed2 2e-4 (python TRIANGULATE-beauty diagonal rule unknown; coil smoothing sensitive). MattressFactory coiled mean 1e-3, wrapped 3e-3 (pressure x0.2 calib). Pillow mean 3e-3..9e-3. Bed whole: sheet/cover drape approximate (mean 0.07-0.2); comforter pressure x0.85 calib. Open: back panel (pad/coiled) uses a regular slab, python hull is garbled (fewer dots); beauty triangulation; fold bisect untested vs python. Tools: tools/pycoil.py pybedparts.py pybedfull.py cmpbed.py jcmp.py; REFSTUB=1 set by refcmp (python cache stubs material draws). UPDATE: triangulate uses polyfill::quad_split_24_beauty (mattress coiled mean 3e-4..9e-4; exact diagonals need Blender face loop start order). Leg-decor divide uses FRESH dims (the earlier stale-dims theory was a REFSTUB artefact). Headboard hull: the 66-point posts carry 1e-6 float noise, python convex_hull on them is chaotic (clean 8/6 hull in seed 3, garbled 16/20 in 0,1,4,8); modelled as garbled = undivided slab (BedFrame seeds 1,4,8 mean 2e-4..4e-3, counts within 5-15%; seed 3 is the clean-hull case, 44368 vs 48034). Seed 7: python leg pad bevel explodes (bbox 1.8 off), ignore. BedFrame 5,6 PASS, 2: 1.7e-4. Cached BedFrame/Mattress seeds 6-8 |
+| S2 | Roll towels bevel duplicates | analysed, open | Python bevel (11944 verts) vs Rust (11864): all positions identical (9252 unique), only the multiplicity of coincident verts differs (python 36 clusters of 14-18, Rust 4 clusters of ~100): vertex-mesh construction at the zero-length roll start/end strips. f32 face normals made it worse. Surface error mean <=1e-5 (seed 7: 4.6e-4) |
+| S3 | OfficeChair/BarChair | done (on master) | refcmp 6/6 PASS, polys identical, both classes |
+| S4 | Sofa/ArmChair exact vertex order (surface already exact) | not started | low priority |
+| S5 | Chair performance | done | adjust_chain least squares was dense O(np^2*rows); now sparse (CGNR above 48 unknowns). Chair 0.4-1.1 s -> 0.1-0.2 s (python 0.13-0.55 s), same refcmp numbers |
 
 ## Bathroom / kitchen (worker: bath)
 | id | item | status | notes |
 |---|---|---|---|
-| K1 | Toilet mesh | todo | storage agent started `toiletx.rs` (uses bridge_ex SURFACE mode) |
-| K2 | BathroomSink, StandingSink | todo | placeholders exact |
-| K3 | Bathtub (alcove + freestanding) mesh | todo | bounds exact |
-| K4 | Kitchen SinkFactory mesh | todo | bounds exact (ksink.rs) |
-| K5 | TV / Monitor | todo | |
-| K6 | Pan, Pot (+Lid) meshes | todo | bounds exact |
-| K7 | KitchenSpace / KitchenIsland countertop slab + top cabinets | todo | |
-| K8 | Oven gas variant (`use_gas=1`): exact boolean + bevel | todo | needs F2 |
+| K1 | Toilet mesh | partial | refcmp 4/6 pass (mean 1e-7). open: seed 3 (cover fill_grid corner tie gives a different grid size; surface equal, mean 1e-7, only a local bevel max 7e-4; seat-cut boolean implemented via csg but untested because no cached seed has it), seed 4 (solidify NON_MANIFOLD vertices on fold geometry differ <=7e-4 -> stand ring/bevel max 1.5e-3). code: toiletx.rs, bathkit.rs |
+| K2 | BathroomSink, StandingSink | partial | bathsink.rs; vertex counts equal, 2/6 pass each; remaining misses are ONLY the 1cm drain-hole position (mirror-symmetric face tie decided by f32 noise in Blender; max err 5e-3, mean 5e-6) |
+| K3 | Bathtub (alcove + freestanding) mesh | done (5/6) | bathtub.rs; freestanding+base/legs and alcove pass (mean<=1e-7); seed 2 alcove has a sliver at a boolean chord (max 1e-2 local, mean 7e-6) |
+| K4 | Kitchen SinkFactory mesh | done 6/6 | gn template data/gn/ksink.json + TapFactory (taps.rs, data/gn/tap.json; 6/6) |
+| K5 | TV / Monitor | partial | tvx.rs: Monitor 6/6, TV 3/6 (the has_depth_extrude variant: bridge of the opened bevel loop to the plane differs in places, max 8e-3; screen boolean uses the BSP csg so no exact vertex order) |
+| K6 | Pan, Pot (+Lid) meshes | partial | cage with exact fill_grid cap (f32 corner pick + offset) + beauty tris, handle, solidify, guard, subsurf: Pan seeds 3,4 and Pot 1,3,4 pass (mean<=2e-8). open: handle hole (boolean, 60% of pans: only the 1cm hole region differs, mean 1e-6..5e-5) and Pot bars (torus boolean + split, 50% of pots); Lid not started |
+| K7 | KitchenSpace / KitchenIsland countertop slab + top cabinets | done 12/12 | shelves.rs assemble(): exact cabinets (frame params persist across instances of one factory object: cabdoor::kitchen_cabinet_gmesh_ex) + slab |
+| K8 | Oven gas variant (`use_gas=1`): exact boolean + bevel | todo | F2 (EXACT+FLOAT booleans) now available in this branch (merge work/frame) |
 | K9 | Microwave: Mesh Boolean (FLOAT solver) mismatch | done (FLOAT port) | src/gn/fbool.rs + src/bm/{isect,bvh,edgenet,kern,cdata}.rs. Microwave seed 0: 7724 verts vs Blender 7697-7741 and Blender is itself non-deterministic run to run (GHash keyed by BMEdge pointers; surface dist between two Blender runs ~1.5e-2, same as Rust vs Blender). Instances in Mesh 2 now supported (transforms). |
-| K10 | Aquarium contents (plants/corals) | todo | low priority |
+| K10 | Aquarium contents (plants/corals) | todo (not started) | low priority |
 | K11 | Scenes used the approximate `asset()` even where `exact()` existed. FIXED (orchestrator): `assets::scene_asset()` uses exact geometry + nearest-part materials, used by `RealAssets::visual/solver_asset` and refcmp (use `--raw` for plain asset()). KitchenCabinet, SingleCabinet, SimpleDesk, SidetableDesk, Hardware now PASS. Still failing: KitchenSpace/KitchenIsland/Sink/Monitor/TV/Pan/Pot | partly done | high value: kitchens are judged sparse/odd |
 
 ## Decor / plants (worker: decor)
@@ -48,6 +48,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | F3 | ConvexHull exact (~1.6e-4 now) | DONE| bullet_hull.rs (Bullet btConvexHullComputer port) already exact: ConvexHull unit cases pass vertex-exact. |
 | F4 | Unify `bridge_ex.rs` (SURFACE mode) into `bridge.rs` | DONE| bridge_ex.rs removed; bridge.rs has bridge_pair_ex(.., surface) + bridge_two_loops_surface (toiletx uses it). Mechanical merge, builds; no cached asset exercises it yet. |
 | F5 | Remaining unit failures: AlignEulerToVector, SampleNearest ties, DistributePointsOnFaces sphere, VectorCurve | done (partly)| unit 747 pass / 3 fail. AlignEulerToVector fixed (antiparallel projections give -angle); VectorCurve passes. Remaining: SampleNearest.FACE tie (BVH traversal order), DistributePointsOnFaces.sphere rot at one near-gimbal element (Blender normal differs from every f32 facet-normal formula by ~14 ulp, euler amplifies). Both ignorable. |
+| F6 | Generic op harness: `tools/opcheck.py OP params in.json` runs one Blender op/modifier (bevel, solidify, bridge_edge_loops, fill_grid, subsurf, boolean, triangulate, remesh, ...) on a given {verts, polys} and `target/fast/opcheck` runs the Rust port on the same input; report first differing vertex/face. Generalises bath's bevsub/bridgecmp. Also per-stage python dumps for any asset | todo | requested by bath + seat retrospectives |
 | P1 | Placement: Bathroom 0 diverges at stage 0 it 93: door vs bathtub MPR depth 0.567 vs python-fcl 0.482 for `collide(b,f)` (box-vs-box, support ties) | DONE| Cause: python-fcl (arm64) fuses a*b+c*d into FMAs in libccd (dot/cross/quat/pointTriDist); mpr.rs now emulates it (bit-exact depth/normal/pos vs fcl on the pair). Bathroom 0 identical through 730 iterations; added to selfcheck. |
 | P2 | Placement: DiningRoom 0 diverges at stage 2 it 15 (wall_decorations term) | DONE| Same root cause as P1 (FMA in libccd); DiningRoom 0 identical through 770 iterations (add to selfcheck if wanted). |
 | P0 | **TOP PRIORITY (quality)**: Rust room mesh. Standalone `gen2 1 Kitchen` places 24 objects vs python 40; with only STATE0 (python room mesh) it places 41. Rust `shell::room_geom` emits only the visible interior surfaces (kitchen: 94 tris, sup 24.2 m2, wall 51.5 m2, no INTERIOR-tagged faces) while python's solidified room is a closed shell with thickness (224 tris: int 140.6/128, vis 105.7, sup 51.7, ceil 51.7, wall 124.6). Port python's room solidify (core/constraints/example_solver/room/solidifier.py + decorate split) so the Rust room mesh matches python's (same tags, ideally same face order: compare against STATE0 dumps with `ROOMSTAT=1 gen2 ...`). Then measure object counts standalone vs python on Kitchen 1, Bedroom 1, LivingRoom 1 | DONE (geometry); object counts statistical| shell::solid_room builds the python solver room (uncut closed shell: outer prism + visible mitre-inset cavity, tags from face centres, interior flag from exterior-edge proximity): tags/areas/tri counts equal python for Kitchen 1 (224 tris; only the interior-flag area split differs because floor triangulation is earcut not Blender fill). Python/STATE0 mixes show counts swing 23..45 for identical tags => standalone divergence is chaotic. 19-case benchmark vs python object counts (tmp/allcnt.sh): mean py 30.3 / new 33.7 / old room 28.2 over 11 cases with python data. Face order not matched (fill/scanfill). |
@@ -64,3 +65,15 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 |---|---|---|---|
 | E1 | First blind pass (2026-10-24, 11 rooms x cornerA, 3 sonnet judges, neutral prompt): **Rust preferred 8/33 = 24%** | done | losses: camera inside objects (garbled close-up, black near-clip triangle) -> render camera fixed for both sides; Rust beds are slabs (S1); dark Rust bathroom floors/lighting (Bathroom 4 lum 43 vs 87); sparse-looking Rust rooms (LivingRoom 4, Bedroom 4); 'floating' rugs (both sides) |
 | E2 | Second pass after S1/D1-D5 + camera fix: re-render BOTH sides (camera code changed), 14 rooms x 2 views, 3 judges | todo | |
+
+
+## Notes from worker bath (2026-10-24)
+- Shared fixes: BEVEL modifier wrapper now sets BMVert.no from Mesh::vert_normals (angle weights safe_acos_approx) -- bevel of folded geometry was wrong
+  without it (`bevmod::set_mesh_vert_normals`, `bevel_sharp_op` = bpy.ops.mesh.bevel on sharp edges). `subsurf::subsurf_bl` = Blender output layout (faces start corner, vertex order)
+  via gweld::subdivide. GN: Bezier TrimCurve keeps the Bezier (de Casteljau), CurveToMesh passes a mesh without curves through.
+- refcache.py: `weighted_sample` stub now consumes the original's random draws (REFCACHE_STUB=1 for the old behaviour); classes whose constructor draws
+  geometry parameters AFTER a weighted_sample (BevelSharp amount in Bathtub, ...) differ otherwise. Regenerate caches of such classes.
+- refcmp triangulates n-gons with polyfill (fan triangulation of concave n-gons gave false 1e-3 errors); `DUMPRS=dir refcmp` dumps rust/python meshes
+  (tools/nnhash.py a.json b.json = vertex nearest-neighbour check that ignores triangulation). tools/bevsub.py + bin bevsub, tools/bridgetest.py + bin bridgecmp:
+  run Blender's BEVEL modifier / bridge_edge_loops and the Rust port on the same {v,p} input (shrink a failure with tools/subsel.py / subfaces.py).
+- Known ties decided by float noise in Blender (not reproducible): drain-hole face choice in sinks/tubs (find_hole), fill_grid start vertex when the loop corners tie.

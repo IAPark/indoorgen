@@ -145,6 +145,12 @@ fn mean_value_weights(c: [[f64; 2]; 4], co: [f64; 2]) -> [f64; 4] {
 
 /// bpy.ops.mesh.fill_grid(use_interp_simple=True) on a single closed edge loop (cyclic vertex list `lp`, even length)
 pub fn fill_grid_loop(lp: &[V]) -> Mesh {
+    fill_grid_loop_ex(lp, false)
+}
+
+/// `first_is_best`: the loop is already rotated so that its first vertex is the corner Blender selects (bpy fill_grid: first vertex with
+/// the maximum f32 angle deviation, offset applied); the f64 angle search below is skipped
+pub fn fill_grid_loop_ex(lp: &[V], first_is_best: bool) -> Mesh {
     let n = lp.len();
     let half = n / 2;
     // corner angles |pi - angle(prev, v, next)|
@@ -159,7 +165,7 @@ pub fn fill_grid_loop(lp: &[V]) -> Mesh {
         .collect();
     let mut best = 0;
     for i in 0..n {
-        if ang[i] > ang[best] {
+        if !first_is_best && ang[i] > ang[best] {
             best = i;
         }
     }
