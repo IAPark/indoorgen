@@ -239,6 +239,21 @@ fn r_bridge(c: &Case, p: &Value) -> Res {
     if ps(p, "interpolation", "PATH") == "LINEAR" || pf(p, "smoothness", 0.0) != 0.0 {
         return Err("bridge: only PATH interpolation, smoothness 0 supported".into());
     }
+    let mut l = l;
+    if let Ok(r) = std::env::var("LOOPB_ROT") {
+        let k: usize = r.parse().unwrap();
+        l[1].rotate_left(k);
+    }
+    if std::env::var("LOOPB_REV").is_ok() {
+        l[1].reverse();
+    }
+    if std::env::var("LOOPA_REV").is_ok() {
+        l[0].reverse();
+    }
+    if let Ok(r) = std::env::var("LOOPA_ROT") {
+        let k: usize = r.parse().unwrap();
+        l[0].rotate_left(k);
+    }
     let mut m = c.mesh.clone();
     let cuts = pi(p, "number_cuts", 0) as usize;
     let shape = pf(p, "profile_shape_factor", 0.0);
@@ -306,6 +321,15 @@ fn r_boolean(c: &Case, p: &Value) -> Res {
         }
     }
     let op = ps(p, "operation", "DIFFERENCE");
+    if std::env::var("BOOL_BSP").is_err() {
+        let mut a = infinigen::mesh::Mesh::new();
+        a.pos = c.mesh.pos.clone();
+        a.faces = c.mesh.faces.clone();
+        let mut b = infinigen::mesh::Mesh::new();
+        b.pos = om.pos.clone();
+        b.faces = om.faces.clone();
+        return Ok(infinigen::assets::bathkit::boolean_exact(op, &a, &b));
+    }
     Ok(from_gn(&infinigen::gn::csg::mesh_boolean(op, &gn_of(&c.mesh), &[&gn_of(&om)])))
 }
 
@@ -368,7 +392,7 @@ fn r_displace(c: &Case, p: &Value) -> Res {
     }
     let dir = match ps(p, "direction", "NORMAL") { "X" => DispDir::X, "Y" => DispDir::Y, "Z" => DispDir::Z, "NORMAL" => DispDir::Normal, d => return Err(format!("direction {d}")) };
     let mut v: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    displace(&mut v, &c.mesh.faces, &tex, pf(p, "strength", 1.0), pf(p, "mid_level", 0.5), dir, None);
+    displace(&mut v, &c.mesh.faces, Some(&tex), pf(p, "strength", 1.0), pf(p, "mid_level", 0.5), dir, None);
     let mut m = c.mesh.clone();
     m.pos = v.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     Ok(m)

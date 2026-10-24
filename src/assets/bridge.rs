@@ -256,11 +256,12 @@ fn normal_tri(a: V3, b: V3, c: V3) -> Option<[f32; 3]> {
     let n1 = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let n2 = [b[0] - c[0], b[1] - c[1], b[2] - c[2]];
     let n = [n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]];
-    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    if l == 0.0 {
-        None
+    let d = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+    if d > 1.0e-35f32 {
+        let r = 1.0f32 / d.sqrt();
+        Some([n[0] * r, n[1] * r, n[2] * r])
     } else {
-        Some([n[0] / l, n[1] / l, n[2] / l])
+        None
     }
 }
 fn angle_nn(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -298,82 +299,106 @@ fn ekey(a: u32, b: u32) -> (u32, u32) {
     (a.min(b), a.max(b))
 }
 
-/// triangulate (quad: shorter-normal-angle diagonal) + beautify_fill(method angle, restrict tag)
+/// bridge post-processing for loops of different length: `triangulate` (quads: BEAUTY) then `beautify_fill` (method angle, restricted to
+/// edges between the two loops), with BMesh's `e->l` (the most recently attached radial loop) tracked through attach "times", since it
+/// decides the vertex labelling of the rotation cost and with it the sign of near-zero costs on flat quads.
 fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>) -> Vec<[u32; 3]> {
+    if let Ok(d) = std::env::var("BEAUTYDUMP") {
+        let _ = std::fs::write(format!("{d}/beauty_in.json"), serde_json::json!({"quads": quads, "side": side.iter().map(|(k, v)| (k.to_string(), *v)).collect::<std::collections::BTreeMap<_, _>>()}).to_string());
+    }
     let mut tris: Vec<[u32; 3]> = vec![];
+    // attach time of the loop of face `tri` on edge `key`
+    let mut stamp: HashMap<((u32, u32), usize), u64> = HashMap::default();
+    let mut clock = 0u64;
+    let mut edge_order: Vec<(u32, u32)> = vec![];
+    let mut edge_seen: crate::dhash::HashSet<(u32, u32)> = Default::default();
+    // 1. face creation (bridge loop): edges are created on demand in loop order
+    let mut ctime: Vec<u64> = vec![];
     for f in quads {
-        if f.len() == 3 {
-            tris.push([f[0], f[1], f[2]]);
-        } else {
-            // split along 2-4 (l_v1 = second vertex) or 1-3 by the beauty cost, as BM_face_triangulate
-            let (a, b, c, d) = (f[0], f[1], f[2], f[3]);
-            let cost = rot_cost(pos, &HashMap::default(), d, a, b, c); // current diag a-c? evaluated below by angle
-            let _ = cost;
-            let p = |v: u32| pos[v as usize];
-            let ang = |t1: [u32; 3], t2: [u32; 3]| -> f32 {
-                match (normal_tri(p(t1[0]), p(t1[1]), p(t1[2])), normal_tri(p(t2[0]), p(t2[1]), p(t2[2]))) {
-                    (Some(x), Some(y)) => angle_nn(x, y),
-                    _ => f32::MAX,
-                }
-            };
-            let a_ac = ang([a, b, c], [a, c, d]);
-            let a_bd = ang([a, b, d], [b, c, d]);
-            if a_bd < a_ac {
-                tris.push([a, b, d]);
-                tris.push([b, c, d]);
-            } else {
-                tris.push([a, b, c]);
-                tris.push([a, c, d]);
+        clock += 1;
+        ctime.push(clock);
+        for k in 0..f.len() {
+            let key = ekey(f[k], f[(k + 1) % f.len()]);
+            if edge_seen.insert(key) {
+                edge_order.push(key);
             }
         }
     }
-    // edge map
-    let mut edges: Vec<(u32, u32)> = vec![];
+    // 2. triangulate (new triangles are created in face order, so their loops are attached after every bridge face)
+    for (qi, f) in quads.iter().enumerate() {
+        if f.len() == 3 {
+            let id = tris.len();
+            tris.push([f[0], f[1], f[2]]);
+            for k in 0..3 {
+                stamp.insert((ekey(f[k], f[(k + 1) % 3]), id), ctime[qi]);
+            }
+        } else {
+            let (a, b, c, d) = (f[0], f[1], f[2], f[3]);
+            let p = |v: u32| pos[v as usize];
+            let co = [p(a), p(b), p(c), p(d)].map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]);
+            let (t1, t2) = if super::polyfill::quad_split_24_beauty(co) { ([a, b, c], [a, c, d]) } else { ([b, c, d], [b, d, a]) };
+            for t in [t1, t2] {
+                clock += 1;
+                let id = tris.len();
+                tris.push(t);
+                for k in 0..3 {
+                    stamp.insert((ekey(t[k], t[(k + 1) % 3]), id), clock);
+                }
+            }
+            let dg = if t1[0] == a { ekey(a, c) } else { ekey(b, d) };
+            if edge_seen.insert(dg) {
+                edge_order.push(dg);
+            }
+        }
+    }
+    // edge -> faces
     let mut emap: HashMap<(u32, u32), Vec<usize>> = HashMap::default();
     for (fi, t) in tris.iter().enumerate() {
         for k in 0..3 {
-            let key = ekey(t[k], t[(k + 1) % 3]);
-            let e = emap.entry(key).or_insert_with(|| {
-                edges.push(key);
-                vec![]
-            });
-            e.push(fi);
+            emap.entry(ekey(t[k], t[(k + 1) % 3])).or_default().push(fi);
         }
     }
-    // candidate slots: edges with exactly two triangle faces
-    let mut slots: Vec<(u32, u32)> = edges.iter().cloned().filter(|k| emap[k].len() == 2).collect();
+    // candidate slots in BMesh edge order
+    let mut slots: Vec<(u32, u32)> = edge_order.iter().cloned().filter(|k| emap.get(k).map(|l| l.len() == 2).unwrap_or(false)).collect();
     let mut slot_of: HashMap<(u32, u32), usize> = slots.iter().cloned().enumerate().map(|(i, k)| (k, i)).collect();
     let mut states: Vec<Vec<([u32; 2], [u32; 2])>> = vec![vec![]; slots.len()];
-    let quad_of = |tris: &Vec<[u32; 3]>, emap: &HashMap<(u32, u32), Vec<usize>>, key: (u32, u32)| -> Option<[u32; 4]> {
-        let fs = &emap[&key];
+    // (v1, v2, v3, v4) of bm_edge_calc_rotate_beauty: e->l = loop of the face E with the latest attach time, running p -> q
+    let quad_of = |tris: &Vec<[u32; 3]>, emap: &HashMap<(u32, u32), Vec<usize>>, stamp: &HashMap<((u32, u32), usize), u64>, key: (u32, u32)| -> Option<[u32; 4]> {
+        let fs = emap.get(&key)?;
         if fs.len() != 2 {
             return None;
         }
-        // f1 contains directed key.0 -> key.1 ; v2 = key.0, v4 = key.1
+        let (ea, eb) = (fs[0], fs[1]);
+        let ta = stamp.get(&(key, ea)).copied().unwrap_or(0);
+        let tb = stamp.get(&(key, eb)).copied().unwrap_or(0);
+        let (e_f, o_f) = if tb > ta { (eb, ea) } else { (ea, eb) };
+        let t = tris[e_f];
         let mut res = None;
-        for &fi in fs {
-            let t = tris[fi];
-            for k in 0..3 {
-                if t[k] == key.0 && t[(k + 1) % 3] == key.1 {
-                    let v1 = t[(k + 2) % 3];
-                    // the other face has key.1 -> key.0
-                    let o = if fs[0] == fi { fs[1] } else { fs[0] };
-                    let u = tris[o];
-                    for j in 0..3 {
-                        if u[j] == key.1 && u[(j + 1) % 3] == key.0 {
-                            let v3 = u[(j + 2) % 3];
-                            res = Some([v1, key.0, v3, key.1]);
-                        }
-                    }
-                }
+        for k in 0..3 {
+            if ekey(t[k], t[(k + 1) % 3]) == key {
+                let (pv, qv, xe) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+                let u = tris[o_f];
+                let xo = (0..3).map(|j| u[j]).find(|&w| w != pv && w != qv)?;
+                res = Some([xe, pv, xo, qv]);
             }
         }
         res
     };
+    let edge_state = |q: [u32; 4]| -> ([u32; 2], [u32; 2]) {
+        // (edge verts, opposite verts) ordered small -> large
+        let (v, f) = ([q[1].min(q[3]), q[1].max(q[3])], [q[0].min(q[2]), q[0].max(q[2])]);
+        (v, f)
+    };
     let mut heap = Heap::new();
     for (i, k) in slots.iter().enumerate() {
-        if let Some(q) = quad_of(&tris, &emap, *k) {
+        if let Some(q) = quad_of(&tris, &emap, &stamp, *k) {
+            if q[0] == q[2] {
+                continue;
+            }
             let c = rot_cost(pos, side, q[0], q[1], q[2], q[3]);
+            if std::env::var("BRIDGEDBG").is_ok() {
+                eprintln!("beautify edge {:?} labels {:?} cost {:e} swapped {:e}", k, q, c, rot_cost(pos, side, q[2], q[3], q[0], q[1]));
+            }
             if c < 0.0 {
                 heap.insert(c, i);
             }
@@ -381,50 +406,68 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
     }
     while let Some(i) = heap.pop_min() {
         let key = slots[i];
-        let q = match quad_of(&tris, &emap, key) {
+        let q = match quad_of(&tris, &emap, &stamp, key) {
             Some(q) => q,
             None => continue,
         };
-        let (v1, v2, v3, v4) = (q[0], q[1], q[2], q[3]);
-        let newkey = ekey(v1, v3);
+        // (x_E, p, x_O, q_)
+        let (xe, pv, xo, qv) = (q[0], q[1], q[2], q[3]);
+        let newkey = ekey(xe, xo);
         if emap.contains_key(&newkey) {
             continue; // BM_EDGEROT_CHECK_EXISTS
         }
-        // rotate
         let fs = emap.remove(&key).unwrap();
-        tris[fs[0]] = [v1, v2, v3];
-        tris[fs[1]] = [v1, v3, v4];
-        // fix the four outer edges' face lists
-        for (a, b) in [(v1, v2), (v2, v3), (v3, v4), (v4, v1)] {
-            let l = emap.get_mut(&ekey(a, b)).unwrap();
-            l.retain(|f| *f != fs[0] && *f != fs[1]);
+        // the two old triangles: the one holding (q_, x_E),(x_E, p) and the one holding (p, x_O),(x_O, q_)
+        let find = |a: u32, b: u32| -> usize { *emap[&ekey(a, b)].iter().find(|&&f| fs.contains(&f)).unwrap() };
+        let f_e = find(xe, pv); // E side (also holds (q_, x_E))
+        let f_o = find(pv, xo);
+        let _ = (f_e, f_o);
+        // new triangles: f1 = [x_E, p, x_O] (arc x_E -> x_O through p), f2 = [x_E, x_O, q_] (gets e_new->l)
+        let (n1, n2) = (fs[0], fs[1]);
+        // keep the incidence stamps of the four outer edges, move them to the new faces
+        let mut outer: Vec<((u32, u32), usize, u64, usize)> = vec![];
+        for (a, b, newf) in [(xe, pv, n1), (pv, xo, n1), (xo, qv, n2), (qv, xe, n2)] {
+            let k2 = ekey(a, b);
+            let old = *emap[&k2].iter().find(|&&f| fs.contains(&f)).unwrap();
+            let st = stamp.remove(&(k2, old)).unwrap_or(0);
+            outer.push((k2, old, st, newf));
         }
-        emap.get_mut(&ekey(v1, v2)).unwrap().push(fs[0]);
-        emap.get_mut(&ekey(v2, v3)).unwrap().push(fs[0]);
-        emap.get_mut(&ekey(v3, v4)).unwrap().push(fs[1]);
-        emap.get_mut(&ekey(v4, v1)).unwrap().push(fs[1]);
-        emap.insert(newkey, vec![fs[0], fs[1]]);
+        stamp.remove(&(key, fs[0]));
+        stamp.remove(&(key, fs[1]));
+        tris[n1] = [xe, pv, xo];
+        tris[n2] = [xe, xo, qv];
+        for (k2, old, st, newf) in outer {
+            let l = emap.get_mut(&k2).unwrap();
+            l.retain(|f| *f != old);
+            l.push(newf);
+            stamp.insert((k2, newf), st);
+        }
+        emap.insert(newkey, vec![n1, n2]);
+        // radial order of the new edge: l_f1 (in f1) first, then l_f2 (in f2) -> e->l is in f2
+        stamp.insert((newkey, n1), u64::MAX - 1);
+        stamp.insert((newkey, n2), u64::MAX);
         slot_of.remove(&key);
         slot_of.insert(newkey, i);
         slots[i] = newkey;
-        // state memory: current state
-        let cur = (ekey_arr(newkey), ekey_arr(ekey(v2, v4)));
+        let cur = (ekey_arr(newkey), ekey_arr(ekey(pv, qv)));
         states[i].push(cur);
-        // update the four outer edges
-        for (a, b) in [(v2, v3), (v1, v2), (v3, v4), (v4, v1)] {
-            // order as l->next->e, l->prev->e, ... (order only affects heap ties)
+        // bm_edge_update_beauty_cost: e->l->next->e, e->l->prev->e, radial_next->next->e, radial_next->prev->e
+        for (a, b) in [(xo, qv), (qv, xe), (xe, pv), (pv, xo)] {
             let k2 = ekey(a, b);
-            if let Some(&s) = slot_of.get(&k2) {
-                heap.remove(s);
-                if let Some(q2) = quad_of(&tris, &emap, k2) {
-                    // alternate state check
-                    let alt = (ekey_arr(ekey(q2[0], q2[2])), ekey_arr(ekey(q2[1], q2[3])));
-                    if states[s].contains(&alt) {
+            if let Some(&sl) = slot_of.get(&k2) {
+                heap.remove(sl);
+                if let Some(q2) = quad_of(&tris, &emap, &stamp, k2) {
+                    let (v, f) = edge_state(q2);
+                    let alt = (f, v);
+                    if states[sl].contains(&alt) {
+                        continue;
+                    }
+                    if q2[0] == q2[2] {
                         continue;
                     }
                     let c = rot_cost(pos, side, q2[0], q2[1], q2[2], q2[3]);
                     if c < 0.0 {
-                        heap.insert(c, s);
+                        heap.insert(c, sl);
                     }
                 }
             }
@@ -530,6 +573,9 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
     b.no = newell32(&pos0, &b.v);
     let dot_a = dot32(a.no, el_dir32);
     let dot_b = dot32(b.no, el_dir32);
+    if std::env::var("BRIDGEDBG").is_ok() {
+        eprintln!("bridge: a.no {:?} b.no {:?} el_dir {:?} dot_a {} dot_b {}", a.no, b.no, el_dir32, dot_a, dot_b);
+    }
     let eps = 1e-5f32;
     if dot32(el_dir32, el_dir32) < eps || (dot_a.abs() < eps && dot_b.abs() < eps) {
         if dot32(a.no, b.no) < 0.0 {
@@ -567,6 +613,9 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
             }
             dir = -dir;
         }
+        if std::env::var("BRIDGEDBG").is_ok() {
+            eprintln!("bridge: votes {:?} a0 {:?} b0 {:?}", votes, a.v[0], b.v[0]);
+        }
         if votes[0] != 0 || votes[1] != 0 {
             let mut fl = [false, false];
             let (mut v0, mut v1) = (votes[0], votes[1]);
@@ -590,6 +639,9 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
             }
         }
     }
+    if std::env::var("BRIDGEFLIPB").is_ok() {
+        flip(&mut b);
+    }
     let mut bx = b.v.clone();
     if na_len > nb_len {
         expand(&mut bx, na_len);
@@ -611,6 +663,9 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
                 best = l;
                 kbest = Some(k);
             }
+        }
+        if let Ok(r) = std::env::var("BRIDGEROT") {
+            kbest = Some(r.parse().unwrap());
         }
         if let Some(k) = kbest {
             if std::env::var("BRIDGEDBG").is_ok() {
