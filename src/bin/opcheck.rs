@@ -161,7 +161,7 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
     let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
     infinigen::assets::bevmod::set_mesh_vert_normals(&mut bm, &pos, &c.mesh.faces);
     let o = BevelOpts {
-        offset: pf(p, "offset", 0.1) as f32,
+        offset: if ps(p, "offset_type", "OFFSET") == "PERCENT" { pf(p, "offset_pct", 0.0) } else { pf(p, "offset", 0.1) } as f32,
         offset_type: bevel_otype(ps(p, "offset_type", "OFFSET"))?,
         segments: pi(p, "segments", 1) as i32,
         profile: pf(p, "profile", 0.5) as f32,
@@ -170,9 +170,6 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
         mat_nr: -1,
     };
     if ps(p, "affect", "EDGES") == "VERTICES" {
-        return Err("bevel: affect=VERTICES (vertex-only bevel) not ported: bm_mesh_bevel has no vertex_only mode".into());
-    }
-    if false {
         for v in bm.vert_ids() {
             bm.verts[v].flag &= !ELEM_TAG;
         }
@@ -182,7 +179,7 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
         for v in sel_idx(c, "sel_verts", pos.len()) {
             bm.verts[v].flag |= ELEM_TAG;
         }
-        bm_mesh_bevel(&mut bm, &o)?;
+        bm_mesh_bevel_ex(&mut bm, &o, true)?;
     } else {
         let sel = sel_edges(c, &edges, &ef)?;
         bevel_edges(&mut bm, &sel, &o)?;
