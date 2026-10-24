@@ -77,27 +77,54 @@ impl Lid {
         }
         let z_off = best.1;
         let pts: Vec<[f64; 3]> = vec![[-w, 0.0, 0.0], [-w, 0.0, h], [w, 0.0, h], [w, 0.0, 0.0]];
-        let seg = 1usize << self.sub;
-        let mut line: Vec<[f64; 3]> = vec![];
-        for e in 0..3 {
-            for j in 0..seg {
-                let u = j as f32 / seg as f32;
-                let (a, b) = (pts[e], pts[e + 1]);
-                line.push([0, 1, 2].map(|k| (a[k] as f32 + (b[k] as f32 - a[k] as f32) * u) as f64));
+        // SUBSURF on a wire: boundary-rule refinement ((a + 6p + b) / 8, midpoints), then the limit position ((a + 4p + b) / 6)
+        let mut line: Vec<[f64; 3]> = pts.clone();
+        for _ in 0..self.sub {
+            let n0 = line.len();
+            let mut nl = vec![];
+            for i in 0..n0 {
+                let p = line[i];
+                if i == 0 || i == n0 - 1 {
+                    nl.push(p);
+                } else {
+                    let (a, b) = (line[i - 1], line[i + 1]);
+                    nl.push([0, 1, 2].map(|k| (a[k] + 6.0 * p[k] + b[k]) / 8.0));
+                }
+                if i + 1 < n0 {
+                    let q = line[i + 1];
+                    nl.push([0, 1, 2].map(|k| (p[k] + q[k]) / 2.0));
+                }
+            }
+            line = nl;
+        }
+        if self.sub > 0 {
+            let src = line.clone();
+            for i in 1..src.len() - 1 {
+                line[i] = [0, 1, 2].map(|k| (src[i - 1][k] + 4.0 * src[i][k] + src[i + 1][k]) / 6.0);
             }
         }
-        line.push(pts[3]);
-        let n = line.len();
+        let line: Vec<[f64; 3]> = line.iter().map(|p| [f32r(p[0]), f32r(p[1]), f32r(p[2])]).collect();
+        // OpenSubdiv vertex order: coarse vertices, then the 2^L - 1 interior points of every coarse edge
+        let l = self.sub as usize;
+        let seg = 1usize << l;
+        let nb = 3 * seg + 1;
+        let mut ordered = vec![[0.0; 3]; nb];
+        for (si, p) in line.iter().enumerate() {
+            let bi = if si % seg == 0 { si / seg } else { 4 + (si / seg) * (seg - 1) + (si % seg - 1) };
+            ordered[bi] = *p;
+        }
+        let n = nb;
         let mut m = Mesh::new();
-        m.pos = line.clone();
-        for p in &line {
+        m.pos = ordered.clone();
+        for p in &ordered {
             m.pos.push([p[0], p[1] + 2.0 * t, p[2]]);
         }
-        for i in 0..n - 1 {
-            m.faces.push(vec![i as u32, (i + 1) as u32, (n + i + 1) as u32, (n + i) as u32]);
-        }
+        m.faces = EXT_FACES[l].iter().map(|f| f.to_vec()).collect();
+        let _ = n;
         let s = books::solidify_offset(&m, t, 0.0);
-        let mut b = match super::bevelfull::bevel_angle(&s, self.thickness / 2.0, 4, 30f64.to_radians(), true) {
+        dumpp("hsolid", &s);
+        let eo: Vec<(u32, u32)> = SOLID_EDGES[l].iter().map(|e| (e[0], e[1])).collect();
+        let mut b = match super::bevelfull::bevel_angle_ex(&s, self.thickness / 2.0, 4, 30f64.to_radians(), false, Some(&eo)) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("lid handle bevel: {e}");
@@ -182,3 +209,13 @@ fn dumpp(name: &str, m: &Mesh) {
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(Lid::new(fs)))
 }
+
+// generated from tmp/ext2.py: Blender's extrude_edges_move face order / SOLIDIFY edge order for the lid handle wire (subdivision level 0..2)
+const EXT_FACES_0: &[&[u32]] = &[&[3,2,6,7],&[2,1,5,6],&[1,0,4,5]];
+const SOLID_EDGES_0: &[&[u32]] = &[&[0,1],&[1,2],&[2,3],&[4,5],&[5,6],&[6,7],&[7,3],&[2,6],&[1,5],&[0,4],&[8,9],&[9,10],&[10,11],&[12,13],&[13,14],&[14,15],&[15,11],&[10,14],&[9,13],&[8,12],&[0,8],&[1,9],&[2,10],&[3,11],&[4,12],&[5,13],&[6,14],&[7,15]];
+const EXT_FACES_1: &[&[u32]] = &[&[6,2,9,13],&[5,1,8,12],&[4,0,7,11],&[3,6,13,10],&[2,5,12,9],&[1,4,11,8]];
+const SOLID_EDGES_1: &[&[u32]] = &[&[0,4],&[4,1],&[1,5],&[5,2],&[2,6],&[6,3],&[7,11],&[11,8],&[8,12],&[12,9],&[9,13],&[13,10],&[13,6],&[2,9],&[12,5],&[1,8],&[11,4],&[0,7],&[10,3],&[14,18],&[18,15],&[15,19],&[19,16],&[16,20],&[20,17],&[21,25],&[25,22],&[22,26],&[26,23],&[23,27],&[27,24],&[27,20],&[16,23],&[26,19],&[15,22],&[25,18],&[14,21],&[24,17],&[0,14],&[1,15],&[2,16],&[3,17],&[4,18],&[5,19],&[6,20],&[7,21],&[8,22],&[9,23],&[10,24],&[11,25],&[12,26],&[13,27]];
+const EXT_FACES_2: &[&[u32]] = &[&[6,5,18,19],&[11,10,23,24],&[9,8,21,22],&[1,6,19,14],&[12,11,24,25],&[4,0,13,17],&[2,9,22,15],&[7,1,14,20],&[3,12,25,16],&[5,4,17,18],&[10,2,15,23],&[8,7,20,21]];
+const SOLID_EDGES_2: &[&[u32]] = &[&[0,4],&[4,5],&[5,6],&[6,1],&[1,7],&[7,8],&[8,9],&[9,2],&[2,10],&[10,11],&[11,12],&[12,3],&[13,17],&[17,18],&[18,19],&[19,14],&[14,20],&[20,21],&[21,22],&[22,15],&[15,23],&[23,24],&[24,25],&[25,16],&[19,6],&[5,18],&[24,11],&[10,23],&[22,9],&[8,21],&[14,1],&[25,12],&[17,4],&[0,13],&[15,2],&[20,7],&[16,3],&[26,30],&[30,31],&[31,32],&[32,27],&[27,33],&[33,34],&[34,35],&[35,28],&[28,36],&[36,37],&[37,38],&[38,29],&[39,43],&[43,44],&[44,45],&[45,40],&[40,46],&[46,47],&[47,48],&[48,41],&[41,49],&[49,50],&[50,51],&[51,42],&[45,32],&[31,44],&[50,37],&[36,49],&[48,35],&[34,47],&[40,27],&[51,38],&[43,30],&[26,39],&[41,28],&[46,33],&[42,29],&[0,26],&[1,27],&[2,28],&[3,29],&[4,30],&[5,31],&[6,32],&[7,33],&[8,34],&[9,35],&[10,36],&[11,37],&[12,38],&[13,39],&[14,40],&[15,41],&[16,42],&[17,43],&[18,44],&[19,45],&[20,46],&[21,47],&[22,48],&[23,49],&[24,50],&[25,51]];
+const EXT_FACES: [&[&[u32]]; 3] = [EXT_FACES_0, EXT_FACES_1, EXT_FACES_2];
+const SOLID_EDGES: [&[&[u32]]; 3] = [SOLID_EDGES_0, SOLID_EDGES_1, SOLID_EDGES_2];
