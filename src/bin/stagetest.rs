@@ -67,6 +67,25 @@ fn main() {
         }
         return;
     }
+    if a[1] == "bbox" {
+        // bbox CLASS SEEDS
+        for sd in a[3].split(',') {
+            let fs: u64 = sd.parse().unwrap();
+            let t0 = std::time::Instant::now();
+            let f = infinigen::assets::make_factory(&a[2], fs).unwrap();
+            let asset = f.asset(0);
+            let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+            let mut nv = 0;
+            for p in &asset.parts {
+                nv += p.mesh.pos.len();
+                for q in &p.mesh.pos {
+                    for k in 0..3 { lo[k] = lo[k].min(q[k]); hi[k] = hi[k].max(q[k]); }
+                }
+            }
+            println!("BBOX {} {} {} {:.3?} {:.3?} {:.1}s", a[2], fs, nv, lo, hi, t0.elapsed().as_secs_f64());
+        }
+        return;
+    }
     if a[1] == "leaf" {
         let xs: Vec<f64> = a[2].split(',').map(|x| x.parse().unwrap()).collect();
         let ys: Vec<f64> = a[3].split(',').map(|x| x.parse().unwrap()).collect();

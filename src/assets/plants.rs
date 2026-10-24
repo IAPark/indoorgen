@@ -461,14 +461,8 @@ impl Factory for PlantContainer {
         }
         match self.kind {
             Kind::Cactus => {
-                let h = r.uniform(0.6, 1.0);
-                let w = r.uniform(0.15, 0.3);
-                plant.append(&Mesh::ellipsoid([0.0, 0.0, h / 2.0], [w, w, h / 2.0], 18, 10));
-                for k in 0..r.randint(0, 3) {
-                    let a = k as f64 * 2.1 + r.uniform(0.0, 1.0);
-                    plant.append(&Mesh::ellipsoid([a.cos() * w * 1.2, a.sin() * w * 1.2, h * 0.55], [w * 0.4, w * 0.4, h * 0.25], 12, 8));
-                }
-                leaf_mat = Material::diffuse(&format!("cactus:{i}"), [0.15, 0.4 + 0.1 * r.f64() as f32, 0.15], 0.5);
+                plant = super::cactus::CactusFactory::new(self.factory_seed).mesh(i, 0.003);
+                leaf_mat = Material::diffuse(&format!("cactus:{i}"), [0.1, 0.3, 0.12], 0.5);
             }
             Kind::Mushroom => {
                 let h = r.uniform(0.5, 0.9);
