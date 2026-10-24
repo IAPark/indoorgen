@@ -31,6 +31,7 @@ cases['bridge_sq'] = {"verts": sq(.5, 0) + sq(.8, 1, 0.3), "polys": [], "edges":
 o8 = lambda r, z, a: [[r*math.cos(a+2*math.pi*k/8), r*math.sin(a+2*math.pi*k/8), z] for k in range(8)]
 cases['bridge_oct'] = {"verts": o8(.6, 0, 0) + o8(1.0, .8, 0.2), "polys": [], "edges": [[i,(i+1)%8] for i in range(8)] + [[8+i,8+(i+1)%8] for i in range(8)],
                        "loops": [list(range(8)), list(range(8, 16))]}
+cases['bridge_cone'] = {"verts": o8(1.0, 0.3, 0) + o8(0.6, 0, 0), "polys": [], "edges": [[i,(i+1)%8] for i in range(8)] + [[8+i,8+(i+1)%8] for i in range(8)], "loops": [list(range(8)), list(range(8, 16))]}
 rect = [[x,0,0] for x in range(4)] + [[4,y,0] for y in range(0,2)] + [[x,2,0] for x in range(4,0,-1)] + [[0,y,0] for y in range(2,0,-1)]
 cases['rect12'] = {"verts": rect, "polys": [], "edges": [[i,(i+1)%12] for i in range(12)], "loops": [list(range(12))]}
 cases['oct8'] = {"verts": o8(1.0, 0, 0.1), "polys": [], "edges": [[i,(i+1)%8] for i in range(8)], "loops": [list(range(8))]}

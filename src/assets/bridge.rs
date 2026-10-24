@@ -516,6 +516,32 @@ pub fn bridge_two_loops_surface(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: 
 
 /// `surface`: interpolation="SURFACE" instead of PATH
 pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>, surface: bool) -> (Vec<u32>, Vec<u32>) {
+    bridge_pair_opts(m, la, lb, cuts, shape, cache, if surface { Interp::Surface } else { Interp::Path }, 1.0, "SMOOTH")
+}
+
+/// `interpolation` of bridge_edge_loops
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Interp {
+    Linear,
+    Path,
+    Surface,
+}
+
+/// bmesh_subd_falloff_calc (profile_shape enum of bridge_edge_loops)
+pub fn subd_falloff(kind: &str, v: f64) -> f64 {
+    match kind {
+        "SPHERE" => (2.0 * v - v * v).max(0.0).sqrt(),
+        "ROOT" => v.max(0.0).sqrt(),
+        "SHARP" => v * v,
+        "LINEAR" => v,
+        "INVERSE_SQUARE" => v * (2.0 - v),
+        _ => 3.0 * v * v - 2.0 * v * v * v,
+    }
+}
+
+/// full bridge_edge_loops options: `smooth` = smoothness (bezier handle scale, Blender default 1.0), `profile_shape` = enum name
+pub fn bridge_pair_opts(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, shape: f64, cache: &mut Option<EdgeMap>, mode: Interp, smooth: f64, profile_shape: &str) -> (Vec<u32>, Vec<u32>) {
+    let surface = mode == Interp::Surface;
     let pos0 = m.pos.clone();
     let mut a = Lp { v: la, no: [0.0; 3] };
     let mut b = Lp { v: lb, no: [0.0; 3] };
@@ -686,7 +712,7 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
         } else {
             len(sub(cb, ca))
         };
-        (l * 0.5) * fac
+        (l * 0.5) * fac * smooth
     };
     let ha = add(ca, mul(na, hl));
     let hb = add(cb, mul(nb, hl));
@@ -744,7 +770,7 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
             if shape != 0.0 {
                 let mut fac = i as f64 / (resolu - 1) as f64;
                 fac = (1.0 - 2.0 * (0.5 - fac).abs()).abs();
-                fac = 3.0 * fac * fac - 2.0 * fac * fac * fac;
+                fac = subd_falloff(profile_shape, fac);
                 s += fac * shape;
             }
             s
@@ -797,7 +823,7 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
         if surface {
             let (co_a, co_b) = (pos0[x as usize], pos0[y as usize]);
             let (no_a, no_b) = (tan[&x], tan[&y]);
-            let hl2 = handle_len3(co_a, no_a, co_b, no_b);
+            let hl2 = handle_len3(co_a, no_a, co_b, no_b) * smooth;
             let (h_a, h_b) = (add(co_a, mul(no_a, hl2)), add(co_b, mul(no_b, hl2)));
             let mut st = vec![[0.0; 3]; resolu];
             for k in 0..3 {
@@ -810,6 +836,21 @@ pub fn bridge_pair_ex(m: &mut Mesh, la: Vec<u32>, lb: Vec<u32>, cuts: usize, sha
                 let mut p = st[i];
                 if shape != 0.0 {
                     p = add(mul(cm[i], 1.0 - falloff[i]), mul(p, falloff[i]));
+                }
+                ids.push((base + newpos.len()) as u32);
+                newpos.push(p);
+            }
+            cut_id.insert((x, y), ids);
+            continue;
+        }
+        if mode == Interp::Linear {
+            for i in 1..resolu - 1 {
+                let t = i as f64 / (resolu - 1) as f64;
+                let (px, py) = (pos0[x as usize], pos0[y as usize]);
+                let mut p = add(mul(px, 1.0 - t), mul(py, t));
+                if shape != 0.0 {
+                    let lc = add(mul(ca, 1.0 - t), mul(cb, t));
+                    p = add(mul(lc, 1.0 - falloff[i]), mul(p, falloff[i]));
                 }
                 ids.push((base + newpos.len()) as u32);
                 newpos.push(p);

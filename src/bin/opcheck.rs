@@ -236,17 +236,15 @@ fn r_bridge(c: &Case, p: &Value) -> Res {
     if l.len() != 2 {
         return Err("bridge: exactly two loops supported".into());
     }
-    if ps(p, "interpolation", "PATH") == "LINEAR" || pf(p, "smoothness", 0.0) != 0.0 {
-        return Err("bridge: only PATH interpolation, smoothness 0 supported".into());
-    }
     let mut m = c.mesh.clone();
     let cuts = pi(p, "number_cuts", 0) as usize;
     let shape = pf(p, "profile_shape_factor", 0.0);
-    if ps(p, "interpolation", "PATH") == "SURFACE" {
-        infinigen::assets::bridge::bridge_two_loops_surface(&mut m, l[0].clone(), l[1].clone(), cuts, shape);
-    } else {
-        infinigen::assets::bridge::bridge_two_loops(&mut m, l[0].clone(), l[1].clone(), cuts, shape);
-    }
+    let mode = match ps(p, "interpolation", "PATH") {
+        "LINEAR" => infinigen::assets::bridge::Interp::Linear,
+        "SURFACE" => infinigen::assets::bridge::Interp::Surface,
+        _ => infinigen::assets::bridge::Interp::Path,
+    };
+    infinigen::assets::bridge::bridge_pair_opts(&mut m, l[0].clone(), l[1].clone(), cuts, shape, &mut None, mode, pf(p, "smoothness", 1.0), ps(p, "profile_shape", "SMOOTH"));
     Ok(m)
 }
 

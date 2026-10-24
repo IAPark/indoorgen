@@ -196,7 +196,7 @@ def op_bevel(c, p):
 
 def op_bridge(c, p):
     bpy = setup(); ob = load_case(bpy, c)
-    d = dict(number_cuts=0, interpolation="PATH", smoothness=0.0, profile_shape_factor=0.0)
+    d = dict(number_cuts=0, interpolation="PATH", smoothness=1.0, profile_shape_factor=0.0)
     d.update(p)
     with edit_mode(bpy, ob):
         select_loops(bpy, ob, c)
