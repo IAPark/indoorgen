@@ -139,6 +139,7 @@ impl Factory for Pan {
             n,
             fill_offset: 0,
             has_handle: self.has_handle,
+            hole: None,
         };
         let m = super::pangeom::pan_unit_mesh(&p)?;
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -168,6 +169,8 @@ impl Factory for Pan {
         let mut ri = inst_rng(self.fseed, i);
         let n = 4 * (ri.log_uniform(4.0, 8.0) as usize);
         let off = ri.randint(0, (n / 4) as i64) as usize;
+        let hole_rad = ri.uniform(0.06, 0.1);
+        let hole_u2 = ri.uniform(0.8, 0.9);
         let p = super::pangeom::PanParams {
             r_expand: self.r_expand,
             r_mid: self.r_mid,
@@ -183,6 +186,7 @@ impl Factory for Pan {
             n,
             fill_offset: off,
             has_handle: self.has_handle,
+            hole: if self.has_handle_hole { Some((self.r_expand + hole_u2 * self.x_handle, hole_rad)) } else { None },
         };
         let mut m = super::pangeom::pan_unit_mesh(&p).expect("pan");
         // origin2lowest(vertical): lowest z -> 0; scale

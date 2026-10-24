@@ -51,6 +51,7 @@ pub mod gweld;
 pub mod hwexact;
 pub mod bathfree;
 pub mod pangeom;
+pub mod prismcut;
 pub mod ksink;
 pub mod books;
 pub mod textdraw;

@@ -2,11 +2,9 @@
 import json,sys,numpy as np
 a=json.load(open(sys.argv[1]))[sys.argv[2]]; b=json.load(open(sys.argv[3]))
 A=np.array(a['v']); B=np.array(b['v'])
+from scipy.spatial import cKDTree
 def nn(X,Y):
-    out=[]
-    for i in range(0,len(X),500):
-        d=np.linalg.norm(X[i:i+500,None,:]-Y[None,:,:],axis=2); out.append(d.min(1))
-    return np.concatenate(out)
+    return cKDTree(Y).query(X)[0]
 da=nn(A,B); db=nn(B,A)
 print('py->rs vertex dist: max %.4g count>1e-4: %d / %d'%(da.max(),(da>1e-4).sum(),len(A)))
 print('rs->py vertex dist: max %.4g count>1e-4: %d / %d'%(db.max(),(db>1e-4).sum(),len(B)))
