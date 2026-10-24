@@ -26,7 +26,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | K8 | Oven gas variant (`use_gas=1`): exact boolean + bevel | todo | needs F2 |
 | K9 | Microwave: Mesh Boolean (FLOAT solver) mismatch | todo | needs F2 |
 | K10 | Aquarium contents (plants/corals) | todo | low priority |
-| K11 | Make `asset()` use the exact geometry (with per-part materials) for KitchenCabinet, SingleCabinet, SimpleDesk, SidetableDesk, Hardware (exact only via `exact()` today; scenes render the approximations); also KitchenSpace/KitchenIsland/Sink/Monitor/TV/Pan/Pot fail refcmp | todo | high value: kitchens are judged sparse/odd |
+| K11 | Scenes used the approximate `asset()` even where `exact()` existed. FIXED (orchestrator): `assets::scene_asset()` uses exact geometry + nearest-part materials, used by `RealAssets::visual/solver_asset` and refcmp (use `--raw` for plain asset()). KitchenCabinet, SingleCabinet, SimpleDesk, SidetableDesk, Hardware now PASS. Still failing: KitchenSpace/KitchenIsland/Sink/Monitor/TV/Pan/Pot | partly done | high value: kitchens are judged sparse/odd |
 
 ## Decor / plants (worker: decor)
 | id | item | status | notes |

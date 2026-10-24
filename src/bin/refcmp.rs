@@ -154,7 +154,7 @@ fn main() {
                 continue;
             }
         };
-        let asset = f.asset(*i);
+        let asset = if a.iter().any(|x| x == "--raw") { f.asset(*i) } else { scene_asset(&*f, *i) };
         if let Some(d) = opt("--dump") {
             std::fs::create_dir_all(&d).unwrap();
             for (k, p) in asset.parts.iter().enumerate() {
