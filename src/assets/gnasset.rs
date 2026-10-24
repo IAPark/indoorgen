@@ -25,6 +25,7 @@ struct Patch {
     idx: Option<usize>,
 }
 
+#[derive(Clone)]
 pub struct GnTemplate {
     raw: J,
     patches: Vec<Patch>,
@@ -53,6 +54,21 @@ impl GnTemplate {
             });
         }
         GnTemplate { raw, patches }
+    }
+
+    pub fn clone_template(&self) -> GnTemplate {
+        self.clone()
+    }
+
+    /// overwrite the default of a group interface input (e.g. values a factory drew when it built the node group)
+    pub fn set_group_default(&mut self, group: &str, id: &str, v: J) {
+        if let Some(ins) = self.raw["groups"][group]["inputs"].as_array_mut() {
+            for i in ins.iter_mut() {
+                if i["id"].as_str() == Some(id) {
+                    i["default"] = v.clone();
+                }
+            }
+        }
     }
 
     /// the groups with every parameter patch applied
