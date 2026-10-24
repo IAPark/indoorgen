@@ -1,0 +1,721 @@
+//! shelves/*.py: LargeShelf, SimpleBookcase, CellShelf, TVStand, SimpleDesk, SidetableDesk, SingleCabinet, KitchenCabinet, KitchenSpace/Island
+use super::*;
+
+pub fn handles(c: &str) -> bool {
+    matches!(
+        c,
+        "LargeShelfFactory" | "SimpleBookcaseFactory" | "CellShelfFactory" | "TVStandFactory" | "SimpleDeskFactory" | "SidetableDeskFactory" | "SingleCabinetFactory" | "KitchenCabinetFactory" | "KitchenSpaceFactory" | "KitchenIslandFactory"
+    )
+}
+
+fn clip(x: f64, lo: f64, hi: f64) -> f64 {
+    x.max(lo).min(hi)
+}
+
+fn shelf_mat(rng: &mut Rng, p: &[f64]) -> Material {
+    // ["white", "black_wood", "wood"] style choices
+    let i = rng.choice_p(p);
+    match i {
+        0 => mat("shelf_white", [0.82, 0.8, 0.76], 0.5),
+        1 => mat("shelf_black_wood", [0.08, 0.06, 0.05], 0.45),
+        _ => mat("shelf_wood", [0.45, 0.3, 0.17], 0.5),
+    }
+}
+
+/// Frame of boards: shared by LargeShelf / SingleCabinet / KitchenCabinet
+struct Frame {
+    depth: f64,
+    cell_w: Vec<f64>,
+    cell_h: Vec<f64>,
+    side_t: f64,
+    div_t: f64,
+    bottom_h: f64,
+    back_t: f64,
+}
+
+impl Frame {
+    fn width(&self) -> f64 {
+        let n = self.cell_w.len();
+        (n - 1) as f64 * self.side_t * 2.0 + (n - 1) as f64 * 0.001 + self.cell_w.iter().sum::<f64>()
+    }
+    fn height(&self) -> f64 {
+        (self.cell_h.len() + 1) as f64 * self.div_t + self.bottom_h + self.cell_h.iter().sum::<f64>()
+    }
+    fn build(&self, a: &mut Asset, m: &Material) {
+        let (w, h, d) = (self.width(), self.height(), self.depth);
+        // x: depth (back at -d/2 .. front at +d/2), y: width, z: height
+        let x0 = -d / 2.0;
+        let x1 = d / 2.0;
+        a.cuboid([x0, -(w + 2.0 * self.side_t) / 2.0, 0.0], [x0 + self.back_t, (w + 2.0 * self.side_t) / 2.0, h], m);
+        // side boards
+        let n = self.cell_w.len();
+        let mut dist = -(w + self.side_t) / 2.0;
+        let mut xs = vec![dist];
+        for cw in &self.cell_w {
+            dist += self.side_t + cw;
+            xs.push(dist);
+            dist += self.side_t + 0.001;
+            xs.push(dist);
+        }
+        xs.pop();
+        for y in &xs {
+            a.cuboid([x0, y - self.side_t / 2.0, 0.0], [x1, y + self.side_t / 2.0, h], m);
+        }
+        // division boards per cell
+        let mut zs = vec![self.bottom_h + self.div_t / 2.0];
+        let mut z = zs[0];
+        for ch in &self.cell_h {
+            z += ch + self.div_t;
+            zs.push(z);
+        }
+        for i in 0..n {
+            let yc = (xs[2 * i] + xs[2 * i + 1]) / 2.0;
+            let cw = self.cell_w[i];
+            for z in &zs {
+                a.board([x0 + self.back_t, yc - cw / 2.0, z - self.div_t / 2.0], [x1, yc + cw / 2.0, z + self.div_t / 2.0], m);
+            }
+        }
+    }
+}
+
+fn large_shelf_frame(rng: &mut Rng, dims: [f64; 3], bottom_h: f64, side_t: f64, div_t: f64, cell_h: Vec<f64>, cell_w: Vec<f64>, depth: f64) -> Frame {
+    let _ = (rng, dims);
+    Frame { depth, cell_w, cell_h, side_t, div_t, bottom_h, back_t: 0.01 }
+}
+
+pub struct LargeShelf {
+    fseed: u64,
+}
+
+impl LargeShelf {
+    fn new(_rng: &mut Rng, factory_seed: u64) -> LargeShelf {
+        // the python factory has no init draws: LargeShelfFactory.get_asset_params samples everything per instance
+        LargeShelf { fseed: factory_seed }
+    }
+}
+
+impl LargeShelf {
+    fn params(&self, inst: u64) -> (cabnodes::ShelfParams, Material) {
+        let mut r = inst_rng(self.fseed, inst);
+        // sample_params()
+        let dims = [r.uniform(0.25, 0.35), r.uniform(0.3, 2.0), r.uniform(0.9, 2.0)];
+        let bottom_h = 0.083;
+        let depth = dims[0] - 0.01;
+        let num_h = (((dims[2] - 0.083) / 0.3) as usize).max(1);
+        let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
+        let num_v = ((dims[1] / 0.5) as usize).max(1);
+        let cell_w = vec![dims[1] / num_v as f64; num_v];
+        // get_asset_params(): remaining draws in python order
+        let side_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        let y_gap = r.uniform(0.01, 0.05);
+        let div_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        let screw_depth = r.uniform(0.001, 0.004);
+        let screw_r = r.uniform(0.001, 0.004);
+        let screw_wgap = r.uniform(0.0, 0.02);
+        for (lo, hi) in [(0.025, 0.06), (0.05, 0.1), (0.01, 0.025), (0.002, 0.005), (0.0, 0.05)] {
+            r.uniform(lo, hi);
+        }
+        let mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
+        let mut p = cabnodes::ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap, bottom_h, div_t, screw_depth, screw_r, screw_wgap, cell_w, cell_h, ..Default::default() };
+        p.derive();
+        (p, mat)
+    }
+}
+
+impl Factory for LargeShelf {
+    fn asset(&self, inst: u64) -> Asset {
+        let (p, mat) = self.params(inst);
+        cabnodes::shelf_frame(&p, &mat, &mat)
+    }
+    fn exact(&self, inst: u64) -> Option<cabnodes::ExactMesh> {
+        let (p, _) = self.params(inst);
+        Some(cabnodes::shelf_gmesh(&p, true).to_exact())
+    }
+}
+
+pub struct SimpleBookcase {
+    fseed: u64,
+}
+
+impl SimpleBookcase {
+    fn new(_rng: &mut Rng, factory_seed: u64) -> SimpleBookcase {
+        // python factory has no init draws; everything is sampled per instance in get_asset_params
+        SimpleBookcase { fseed: factory_seed }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct BookParams {
+    pub d: f64,
+    pub w: f64,
+    pub h: f64,
+    pub st: f64,
+    pub dt: f64,
+    pub gap: f64,
+    pub bt: f64,
+    pub screw_depth: f64,
+    pub screw_r: f64,
+    pub screw_gap: f64,
+    pub at: f64,
+    pub aw: f64,
+    pub atl: f64,
+    pub abl: f64,
+}
+
+impl SimpleBookcase {
+    fn params(&self, i: u64) -> BookParams {
+        let mut r = inst_rng(self.fseed, i);
+        let dims = [r.uniform(0.25, 0.4), r.uniform(0.5, 0.7), r.uniform(0.7, 0.9)];
+        let (d, w, h) = (dims[0] - 0.015, dims[1], dims[2]);
+        let st = r.uniform(0.005, 0.03);
+        let dt = clip(r.normal(0.015, 0.005), 0.005, 0.025);
+        let gap = clip(r.normal(0.14, 0.05), 0.0, 0.2);
+        let bt = r.uniform(0.01, 0.02);
+        let screw_depth = r.uniform(0.002, 0.008);
+        let screw_r = r.uniform(0.003, 0.008);
+        let screw_gap = r.uniform(0.03, 0.1);
+        let at = r.uniform(0.002, 0.005);
+        let aw = r.uniform(0.01, 0.04);
+        let atl = r.uniform(0.03, 0.1);
+        let abl = r.uniform(0.02, 0.05);
+        BookParams { d, w, h, st, dt, gap, bt, screw_depth, screw_r, screw_gap, at, aw, atl, abl }
+    }
+}
+
+impl Factory for SimpleBookcase {
+    fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
+        Some(cabnodes::bookcase_gmesh(&self.params(i)).to_exact())
+    }
+    fn asset(&self, i: u64) -> Asset {
+        let _bp = self.params(i);
+        let mut r = inst_rng(self.fseed, i);
+        // sample_params(): Dimensions (depth+0.015, width, height)
+        let dims = [r.uniform(0.25, 0.4), r.uniform(0.5, 0.7), r.uniform(0.7, 0.9)];
+        let (d, w, h) = (dims[0] - 0.015, dims[1], dims[2]);
+        // get_asset_params() draws in python order
+        let st = r.uniform(0.005, 0.03);
+        let dt = clip(r.normal(0.015, 0.005), 0.005, 0.025);
+        let gap = clip(r.normal(0.14, 0.05), 0.0, 0.2);
+        let bt = r.uniform(0.01, 0.02);
+        let screw_depth = r.uniform(0.002, 0.008);
+        let screw_r = r.uniform(0.003, 0.008);
+        let screw_gap = r.uniform(0.03, 0.1);
+        let at = r.uniform(0.002, 0.005);
+        let aw = r.uniform(0.01, 0.04);
+        let atl = r.uniform(0.03, 0.1);
+        let abl = r.uniform(0.02, 0.05);
+        let m = mat("bookcase_white", [0.85, 0.84, 0.8], 0.5);
+        let metal = mat("bookcase_metal", [0.5, 0.5, 0.52], 0.3);
+        let mut a = Asset::default();
+        use cabnodes::*;
+        let push = |a: &mut Asset, mesh: Mesh, mt: &Material, sup: bool| {
+            let b = mesh.bounds();
+            a.mesh(mesh, mt, Some(b));
+            if sup {
+                a.supports.push(b);
+            }
+        };
+        // side boards
+        let sx = (w - st) * -0.5;
+        push(&mut a, cube_at([st, d, h], [sx, 0.0, h * 0.5]), &m, false);
+        push(&mut a, cube_at([st, d, h], [-sx, 0.0, h * 0.5]), &m, false);
+        // division boards
+        let mult = dt * 0.5;
+        let add = gap + mult;
+        let sub = h - mult;
+        let zs = [add, (sub + add) * 0.5, sub];
+        for z in zs {
+            push(&mut a, cube_at([w - st * 2.0, d, dt], [0.0, 0.0, z]), &m, true);
+        }
+        // back board
+        push(&mut a, cube_at([w, bt, h], [0.0, d * -0.5 + bt * -0.5, h * 0.5]), &m, false);
+        // screw heads (axis along x), mirrored in x
+        let sy = d * 0.5 - screw_gap;
+        let z_top = h - dt * 0.5;
+        let z_bot = dt * 0.5 + gap;
+        let pts = [(sy, z_top), (sy, z_bot), (-sy, z_top), (0.0, (z_top + z_bot) * 0.5), (-sy, z_bot)];
+        let mut sc = Mesh::new();
+        for (y, z) in pts {
+            let mut c = cylinder_node(32, screw_r, screw_depth);
+            c.transform(&Mat4::rot_y(R90));
+            c.transform(&Mat4::translation([w * 0.5, y, z]));
+            sc.append(&c);
+        }
+        let mut sc2 = sc.clone();
+        sc2.transform(&Mat4::scale([-1.0, 1.0, 1.0]));
+        sc.append(&sc2);
+        push(&mut a, sc, &metal, false);
+        // attach gadgets
+        let zt = h - dt;
+        push(&mut a, cube_at([aw, atl, at], [0.0, (d - atl) * -0.5, zt]), &metal, false);
+        push(&mut a, cube_at([aw, at, abl], [0.0, d * -0.5, zt - abl * 0.5]), &metal, false);
+        a.transform(&Mat4::rot_z(-R90));
+        a
+    }
+}
+
+pub struct CellShelf {
+    dims: [f64; 3],
+    cell: f64,
+    hn: usize,
+    vn: usize,
+    div_t: f64,
+    ext_t: f64,
+    attach: f64,
+    mat: Material,
+}
+
+impl CellShelf {
+    fn new(rng: &mut Rng, tv: bool) -> CellShelf {
+        let mut r = rng.clone();
+        let mut dims = if tv {
+            [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.3, 0.5)]
+        } else {
+            [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.35, 2.1)]
+        };
+        let hn = ((dims[1] / 0.35) as usize).max(1);
+        let cell = dims[1] / hn as f64;
+        let vn = ((dims[2] / cell) as usize).max(1);
+        dims[2] = vn as f64 * cell;
+        let div_t = clip(r.normal(0.015, 0.005), 0.008, 0.022);
+        let ext_t = clip(r.normal(0.04, 0.005), 0.028, 0.052);
+        let attach = clip(r.normal(0.05, 0.02), 0.02, 0.1);
+        let mat = shelf_mat(&mut r, &[0.3, 0.2, 0.5]);
+        CellShelf { dims, cell, hn, vn, div_t, ext_t, attach, mat }
+    }
+}
+
+impl Factory for CellShelf {
+    fn exact(&self, _i: u64) -> Option<cabnodes::ExactMesh> {
+        Some(cabnodes::cellshelf_gmesh(self.dims[0], self.cell, self.hn, self.vn, self.div_t, self.ext_t, self.attach).to_exact())
+    }
+    fn asset(&self, _i: u64) -> Asset {
+        use cabnodes::*;
+        let mut a = Asset::default();
+        let (d, c, h, v, dv, e) = (self.dims[0], self.cell, self.hn as f64, self.vn as f64, self.div_t, self.ext_t);
+        let leg = 0.0;
+        let m = &self.mat;
+        let push = |a: &mut Asset, mesh: Mesh, sup: bool| {
+            let b = mesh.bounds();
+            a.mesh(mesh, m, Some(b));
+            if sup {
+                a.supports.push(b);
+            }
+        };
+        let z5 = (v - 1.0) * dv + v * c; // inner height (side_z)
+        // side boards
+        let add7 = c * h + (e + dv * (h - 1.0));
+        let sx = 0.5 * add7;
+        for sg in [1.0, -1.0] {
+            push(&mut a, cube_at([e, d, z5], [sg * sx, d * 0.5, z5 * 0.5 + (e + leg)]), false);
+        }
+        // top / bottom boards
+        let bx = (e * 2.0 + dv * (h - 1.0)) + c * h + 0.002;
+        let zb = e * 0.5 + leg;
+        let zt = zb + e + v * c + dv * (v - 1.0);
+        push(&mut a, cube_at([bx, d, e], [0.0, d * 0.5, zb]), true);
+        push(&mut a, cube_at([bx, d, e], [0.0, d * 0.5, zt]), true);
+        // vertical divisions
+        for i in 1..self.hn {
+            let i = i as f64;
+            let x = (0.5 * (h - 1.0) - i + 0.5) * dv + c * (h * 0.5 - i);
+            push(&mut a, cube_at([dv, d - 0.001, z5], [x, d * 0.5, (leg + e) + z5 * 0.5]), false);
+        }
+        // horizontal divisions
+        for j in 1..self.vn {
+            let j = j as f64;
+            let z = j * c + (j - 1.0) * dv + (e + leg + dv * 0.5);
+            push(&mut a, cube_at([h * c + (h - 1.0) * dv, d, dv], [0.0, d * 0.5, z]), true);
+        }
+        // attach gadget (no backboard)
+        let sz = self.attach;
+        let ax = (bx * 0.5 - e) - sz * 0.5;
+        let az = (leg + z5 + e - 0.02) - sz * 0.5;
+        push(&mut a, cube_at([sz, 0.001, sz], [-ax, 0.0, az]), false);
+        push(&mut a, cube_at([sz, 0.001, sz], [ax, 0.0, az]), false);
+        // screw heads
+        let sxx = (bx - e) * 0.5;
+        let sy = e * 0.5;
+        let szz = z5 + leg + e * 2.0;
+        let mut sc = Mesh::new();
+        for (x, y) in [(sxx, sy), (sxx, d - sy), (-sxx, d - sy), (-sxx, sy)] {
+            let mut cyl = cylinder_node(32, 0.005, 0.001);
+            cyl.transform(&Mat4::translation([x, y, szz]));
+            sc.append(&cyl);
+        }
+        push(&mut a, sc, false);
+        a.transform(&Mat4::rot_z(-R90));
+        a
+    }
+    fn placeholder(&self, _i: u64) -> Option<Asset> {
+        let (x, y, z) = (self.dims[0], self.dims[1], self.dims[2]);
+        let mut a = Asset::default();
+        let m = mat("ph", [0.5; 3], 0.5);
+        a.cuboid([0.0, -y / 2.0 * 1.1, 0.0], [x, y / 2.0 * 1.1, z + (self.vn as f64 - 1.0) * self.div_t + 2.0 * self.ext_t], &m);
+        Some(a)
+    }
+}
+
+pub struct SimpleDesk {
+    side: bool,
+    fseed: u64,
+}
+
+impl SimpleDesk {
+    fn new(_rng: &mut Rng, side: bool, fseed: u64) -> SimpleDesk {
+        SimpleDesk { side, fseed }
+    }
+}
+
+pub struct DeskParams {
+    d: f64,
+    w: f64,
+    h: f64,
+    top_white: bool,
+    leg_white: bool,
+    leg_r: f64,
+    leg_dist: f64,
+    t: f64,
+}
+
+impl SimpleDesk {
+    fn params(&self, i: u64) -> DeskParams {
+        // all draws happen per instance in python (get_asset_params): dims, two material choices, then leg params
+        let mut r = inst_rng(self.fseed, i);
+        let (d, w, h) = if self.side {
+            let w = 0.55 * r.normal(1.0, 0.1);
+            (w, w, w * r.normal(1.0, 0.05))
+        } else {
+            (r.uniform(0.5, 0.75), r.uniform(0.8, 2.0), r.uniform(0.6, 0.8))
+        };
+        let top_white = r.choice_idx(2) == 0;
+        let leg_white = r.choice_idx(2) == 0;
+        let leg_r = r.uniform(0.01, 0.025);
+        let leg_dist = r.uniform(0.035, 0.07);
+        let t = r.uniform(0.01, 0.03);
+        DeskParams { d, w, h, top_white, leg_white, leg_r, leg_dist, t }
+    }
+}
+
+impl Factory for SimpleDesk {
+    fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
+        let p = self.params(i);
+        Some(cabnodes::desk_gmesh(p.d, p.w, p.h, p.leg_r, p.leg_dist, p.t).to_exact())
+    }
+    fn asset(&self, i: u64) -> Asset {
+        let p = self.params(i);
+        let (d, w, h, t, leg_r, leg_dist) = (p.d, p.w, p.h, p.t, p.leg_r, p.leg_dist);
+        let top = if p.top_white { mat("desk_top_white", [0.85, 0.85, 0.83], 0.4) } else { mat("desk_top_black", [0.1, 0.08, 0.07], 0.4) };
+        let leg = if p.leg_white { mat("leg_white", [0.9, 0.9, 0.9], 0.3) } else { mat("leg_black", [0.05, 0.05, 0.05], 0.3) };
+        let mut a = Asset::default();
+        a.board([-d / 2.0, -w / 2.0, h - t], [d / 2.0, w / 2.0, h], &top);
+        for sx in [-1.0, 1.0] {
+            for sy in [-1.0, 1.0] {
+                a.cylinder(sx * (d / 2.0 - leg_dist), sy * (w / 2.0 - leg_dist), 0.0, h - t, leg_r, &leg);
+            }
+        }
+        a
+    }
+}
+
+pub struct SingleCabinet {
+    dims: [f64; 3],
+    fseed: u64,
+}
+
+impl SingleCabinet {
+    fn new(rng: &mut Rng, fseed: u64) -> SingleCabinet {
+        // init draws only the dimensions (SingleCabinetFactory.sample_params under FixedSeed)
+        let mut r = rng.clone();
+        let dims = [r.uniform(0.25, 0.35), r.uniform(0.3, 0.7), r.uniform(0.9, 1.8)];
+        SingleCabinet { dims, fseed }
+    }
+}
+
+impl Factory for SingleCabinet {
+    fn exact(&self, inst: u64) -> Option<cabnodes::ExactMesh> {
+        let mut r = inst_rng(self.fseed, inst);
+        Some(cabdoor::single_cabinet_gmesh(&mut r, self.dims, Default::default()).to_exact())
+    }
+    fn asset(&self, inst: u64) -> Asset {
+        let dims = self.dims;
+        let num_h = (((dims[2] - 0.083) / 0.3) as usize).max(1);
+        let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
+        // per-instance draws (python get_asset_params): frame material choice, then the large-shelf parameters
+        let mut r = inst_rng(self.fseed, inst);
+        let mat = shelf_mat(&mut r, &[0.5, 0.2, 0.3]);
+        let side_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        let _bottom_gap = r.uniform(0.01, 0.05);
+        let div_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        let frame = Frame { depth: dims[0] - 0.01, cell_w: vec![dims[1]], cell_h, side_t, div_t, bottom_h: 0.083, back_t: 0.01 };
+        let mut a = Asset::default();
+        frame.build(&mut a, &mat);
+        // doors on the front: one if the cabinet is narrower than 0.55 else two
+        let (w, h, d) = (frame.width() + 2.0 * frame.side_t, frame.height(), frame.depth);
+        let nd = if w < 0.55 { 1 } else { 2 };
+        let dw = if nd == 1 { w } else { w / 2.0 - 0.0005 };
+        for k in 0..nd {
+            let y0 = if nd == 1 { -w / 2.0 } else { -w / 2.0 + k as f64 * (w / 2.0 + 0.0005) };
+            a.cuboid([d / 2.0, y0, frame.bottom_h], [d / 2.0 + 0.015, y0 + dw, h], &mat);
+        }
+        a
+    }
+    fn placeholder(&self, _i: u64) -> Option<Asset> {
+        let (x, y, z) = (self.dims[0], self.dims[1], self.dims[2]);
+        let mut a = Asset::default();
+        let m = mat("ph", [0.5; 3], 0.5);
+        a.cuboid([-x / 2.0 * 1.2, -y / 2.0 * 1.2, 0.0], [x / 2.0 * 1.2, y / 2.0 * 1.2, (z + 0.083) * 1.02], &m);
+        Some(a)
+    }
+}
+
+pub struct KitchenCabinet {
+    dims: [f64; 3],
+    widths: Vec<f64>,
+    mat: Material,
+    fseed: Option<u64>, // Some => standalone factory: dims/widths are sampled per instance (python get_asset_params)
+}
+
+impl KitchenCabinet {
+    fn with_dims(rng: &mut Rng, dims: Option<[f64; 3]>) -> KitchenCabinet {
+        let mut r = rng.clone();
+        let dims = dims.unwrap_or_else(|| [r.uniform(0.25, 0.35), r.uniform(1.0, 4.0), r.uniform(0.5, 1.3)]);
+        let n = ((dims[1] / 0.45) as usize).max(1);
+        let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
+        let s: f64 = ws.iter().sum();
+        let mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
+        KitchenCabinet { dims, widths: ws.iter().map(|w| w / s * dims[1]).collect(), mat, fseed: None }
+    }
+    /// instance-level sampling in python order: dims (3 uniforms), then one U(0.55,1) per cell
+    fn from_instance(fseed: u64, inst: u64) -> KitchenCabinet {
+        let mut r = inst_rng(fseed, inst);
+        let dims = [r.uniform(0.25, 0.35), r.uniform(1.0, 4.0), r.uniform(0.5, 1.3)];
+        let n = ((dims[1] / 0.45) as usize).max(1);
+        let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
+        let s: f64 = ws.iter().sum();
+        let mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
+        KitchenCabinet { dims, widths: ws.iter().map(|w| w / s * dims[1]).collect(), mat, fseed: Some(fseed) }
+    }
+    fn build(&self, a: &mut Asset, origin: V3) {
+        let (d, w, h) = (self.dims[0], self.dims[1], self.dims[2]);
+        let t = 0.02;
+        let (x0, x1) = (origin[0] - d / 2.0 - 0.005, origin[0] + d / 2.0 + 0.005);
+        let mut y = origin[1] - w / 2.0;
+        let z0 = origin[2];
+        a.cuboid([x0, y, z0], [x0 + 0.01, origin[1] + w / 2.0, z0 + h], &self.mat);
+        let mut ys = vec![y];
+        for cw in &self.widths {
+            y += cw;
+            ys.push(y);
+        }
+        for yy in &ys {
+            a.cuboid([x0, yy - t / 2.0, z0], [x1, yy + t / 2.0, z0 + h], &self.mat);
+        }
+        a.board([x0, origin[1] - w / 2.0, z0], [x1, origin[1] + w / 2.0, z0 + t], &self.mat);
+        a.board([x0, origin[1] - w / 2.0, z0 + h - t], [x1, origin[1] + w / 2.0, z0 + h], &self.mat);
+        for k in 0..self.widths.len() {
+            a.cuboid([x1, ys[k] + 0.001, z0 + 0.06], [x1 + 0.015, ys[k + 1] - 0.001, z0 + h - 0.0], &self.mat);
+        }
+    }
+}
+
+impl Factory for KitchenCabinet {
+    fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
+        let fs = self.fseed?;
+        let mut r = inst_rng(fs, i);
+        let spec = cabdoor::KcSpec { dims: self.dims, widths: self.widths.clone(), drawer_only: false };
+        Some(cabdoor::kitchen_cabinet_gmesh(&mut r, &spec, Default::default()).to_exact())
+    }
+    fn asset(&self, i: u64) -> Asset {
+        let mut a = Asset::default();
+        if let Some(fs) = self.fseed {
+            KitchenCabinet::from_instance(fs, i).build(&mut a, [0.0, 0.0, 0.0]);
+        } else {
+            self.build(&mut a, [0.0, 0.0, 0.0]);
+        }
+        a
+    }
+    fn placeholder(&self, _i: u64) -> Option<Asset> {
+        let (x, y, z) = (self.dims[0] + 0.01, self.dims[1], self.dims[2]);
+        let num_w = (y / 0.45).max(1.0);
+        let width = (num_w - 1.0) * 0.02 * 2.0 + (num_w - 1.0) * 0.001 + y;
+        let height = (((z - 0.06) / 0.3) as i64 + 1) as f64 * 0.02 + 0.06 + z;
+        let mut a = Asset::default();
+        a.cuboid([-x / 2.0, -width / 2.0, 0.0], [x / 2.0, width / 2.0, height], &mat("ph", [0.5; 3], 0.5));
+        Some(a)
+    }
+}
+
+pub struct KitchenSpace {
+    dims: [f64; 3],
+    island: bool,
+    bottom_h: f64,
+    top_h: f64,
+    factory_seed: u64,
+}
+
+impl KitchenSpace {
+    fn new(rng: &mut Rng, island: bool, factory_seed: u64) -> KitchenSpace {
+        let mut r = rng.clone();
+        let mut dims = [r.uniform(0.7, 1.0), r.uniform(1.7, 5.0), r.uniform(2.3, 2.5)];
+        if island {
+            dims[0] *= r.uniform(1.5, 2.0);
+        }
+        let bottom_h = r.uniform(0.8, 1.0);
+        let top_h = r.uniform(0.8, 1.0);
+        KitchenSpace { dims, island, bottom_h, top_h, factory_seed }
+    }
+}
+
+impl KitchenSpace {
+    /// KitchenCabinetFactory(fseed, dimensions=(x, y - 0.15, bottom_h), drawer_only=True)(i=0)
+    fn bottom_cabinet(&self) -> cabnodes::GMesh {
+        let [x, y, _z] = self.dims;
+        let dims = [x, y - 0.15, self.bottom_h];
+        let mut r = Rng::seeded(self.factory_seed);
+        let n = ((dims[1] / 0.45) as usize).max(1);
+        let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
+        let s = np_sum(&ws);
+        let widths: Vec<f64> = ws.iter().map(|w| w / s * dims[1]).collect();
+        let mut ri = inst_rng(self.factory_seed, 0);
+        let spec = cabdoor::KcSpec { dims, widths, drawer_only: true };
+        cabdoor::kitchen_cabinet_gmesh(&mut ri, &spec, Default::default())
+    }
+}
+
+/// numpy float64 pairwise sum (n < 128: 8-way unrolled blocks)
+pub fn np_sum(a: &[f64]) -> f64 {
+    let n = a.len();
+    if n < 8 {
+        let mut s = 0.0;
+        for x in a {
+            s += x;
+        }
+        s
+    } else {
+        let mut r = [0.0; 8];
+        r.copy_from_slice(&a[..8]);
+        let mut i = 8;
+        while i + 8 <= n - (n % 8) {
+            for j in 0..8 {
+                r[j] += a[i + j];
+            }
+            i += 8;
+        }
+        let mut res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        while i < n {
+            res += a[i];
+            i += 1;
+        }
+        res
+    }
+}
+
+impl Factory for KitchenSpace {
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !self.island {
+            return None;
+        }
+        let e = self.bottom_cabinet();
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for v in &e.v {
+            for k in 0..3 {
+                lo[k] = lo[k].min(v[k] as f64);
+                hi[k] = hi[k].max(v[k] as f64);
+            }
+        }
+        // countertop slab (geometry_nodes_add_cabinet_top): generate_table_top(thickness 0.05, 4-gon, profile width 1.414 * x range,
+        // aspect (y range / x range), fillet ratio 0.01, vertical fillet 0.01) translated to (0, y centre, bbox max z)
+        let (xr, yr) = (hi[0] - lo[0], hi[1] - lo[1]);
+        let top = super::tableparts::table_top_exact(4, xr * 1.414, yr / xr, 0.01, 0.05, 0.01);
+        let (tlo, thi) = top.bounds();
+        let ycen = (lo[1] + hi[1]) / 2.0;
+        for k in 0..3 {
+            let off = [0.0, ycen, hi[2]][k];
+            lo[k] = lo[k].min(tlo[k] + off);
+            hi[k] = hi[k].max(thi[k] + off);
+        }
+        Some((lo, hi))
+    }
+    fn placeholder_exact(&self, _i: u64) -> Option<cabnodes::ExactMesh> {
+        if self.island {
+            return None;
+        }
+        let [x, y, z] = self.dims;
+        let b1 = cabnodes::new_bbox_exact([-x / 2.0 * 1.08, 0.0, 0.0], [x / 2.0 * 1.08, y, self.bottom_h + 0.13]);
+        let b2 = cabnodes::new_bbox_exact([-x / 2.0, 0.0, z - self.top_h - 0.1], [x * 0.16, y, z]);
+        let mut e = b1.clone();
+        e.names[5] = "support".into();
+        e.names[11] = "support".into();
+        let mut n2 = b2.clone();
+        n2.names = (0..12).map(|i| if i % 6 == 5 { "top".to_string() } else { String::new() }).collect();
+        let base = e.verts.len() as u32;
+        e.verts.extend(n2.verts.iter().cloned());
+        // objects are joined first (quads: box1 then box2), then triangulated: first triangles in place, second triangles appended
+        let p2: Vec<Vec<u32>> = n2.polys.iter().map(|p| p.iter().map(|v| v + base).collect()).collect();
+        let mut polys = vec![];
+        let mut names = vec![];
+        for half in 0..2 {
+            for (pp, nn) in [(&e.polys, &e.names), (&p2, &n2.names)] {
+                for k in 0..6 {
+                    polys.push(pp[half * 6 + k].clone());
+                    names.push(nn[half * 6 + k].clone());
+                }
+            }
+        }
+        e.polys = polys;
+        e.names = names;
+        Some(e)
+    }
+    fn asset(&self, _i: u64) -> Asset {
+        let [x, y, z] = self.dims;
+        let mut a = Asset::default();
+        let mut r = Rng::seeded(self.factory_seed ^ 0x5bd1);
+        let shelf_mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
+        let counter = mat("countertop", [0.75, 0.74, 0.72], 0.3);
+        // bottom cabinets (origin at one end, y from 0 to length)
+        let kc = KitchenCabinet::with_dims(&mut r, Some([x, y - 0.15, self.bottom_h]));
+        let mut kc2 = kc;
+        kc2.mat = shelf_mat.clone();
+        kc2.build(&mut a, [0.0, y / 2.0, 0.0]);
+        a.board([-x / 2.0 * 1.04, 0.0, self.bottom_h], [x / 2.0 * 1.04, y, self.bottom_h + 0.04], &counter);
+        if !self.island {
+            let top_mid = r.uniform(1.0, 1.3);
+            let tw = (y - top_mid) / 2.0 - 0.05;
+            for (y0, w) in [(0.0, tw), (y - tw, tw)] {
+                let k = KitchenCabinet::with_dims(&mut r, Some([x / 2.0, w, self.top_h]));
+                k.build(&mut a, [-x / 4.0 + x / 4.0 - x / 4.0, y0 + w / 2.0, z - self.top_h]);
+            }
+            let k = KitchenCabinet::with_dims(&mut r, Some([x * 0.66, top_mid, self.top_h * 0.8]));
+            k.build(&mut a, [-x / 6.0 + x * 0.33 - x * 0.33, y / 2.0, z - self.top_h * 0.8]);
+        }
+        a
+    }
+    fn placeholder(&self, _i: u64) -> Option<Asset> {
+        let [x, y, z] = self.dims;
+        let mut a = Asset::default();
+        let m = mat("ph", [0.5; 3], 0.5);
+        a.board([-x / 2.0 * 1.08, 0.0, 0.0], [x / 2.0 * 1.08, y, self.bottom_h + 0.13], &m);
+        if !self.island {
+            a.cuboid([-x / 2.0, 0.0, z - self.top_h - 0.1], [x * 0.16, y, z], &m);
+        }
+        Some(a)
+    }
+}
+
+pub fn make(c: &str, rng: &mut Rng, factory_seed: u64) -> Option<Box<dyn Factory>> {
+    let seed = factory_seed;
+    Some(match c {
+        "LargeShelfFactory" => Box::new(LargeShelf::new(rng, seed)),
+        "SimpleBookcaseFactory" => Box::new(SimpleBookcase::new(rng, factory_seed)),
+        "CellShelfFactory" => Box::new(CellShelf::new(rng, false)),
+        "TVStandFactory" => Box::new(CellShelf::new(rng, true)),
+        "SimpleDeskFactory" => Box::new(SimpleDesk::new(rng, false, factory_seed)),
+        "SidetableDeskFactory" => Box::new(SimpleDesk::new(rng, true, factory_seed)),
+        "SingleCabinetFactory" => Box::new(SingleCabinet::new(rng, factory_seed)),
+        "KitchenCabinetFactory" => Box::new(KitchenCabinet { fseed: Some(factory_seed), ..KitchenCabinet::with_dims(rng, None) }),
+        "KitchenSpaceFactory" => Box::new(KitchenSpace::new(rng, false, seed)),
+        "KitchenIslandFactory" => Box::new(KitchenSpace::new(rng, true, seed)),
+        _ => return None,
+    })
+}

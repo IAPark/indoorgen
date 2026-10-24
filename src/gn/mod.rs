@@ -1,0 +1,27 @@
+//! Geometry Nodes interpreter: evaluates Blender 4.2 node groups exported as JSON (tools/gn_export.py).
+pub mod attr;
+pub mod cdt;
+pub mod csg;
+pub mod curveops;
+pub mod eval;
+pub mod field;
+pub mod geom;
+pub mod load;
+pub mod math;
+pub mod meshops;
+pub mod noise;
+pub mod nodes;
+pub mod nodes_geo;
+pub mod nodes_geo2;
+pub mod nodes_mesh;
+pub mod nodes_fields;
+pub mod nodes_curves;
+pub mod nodes_text;
+pub mod prim;
+pub mod rot;
+pub mod val;
+
+pub use eval::{apply_out_attrs, eval, eval_probe, probe_mesh, Ev, Objects, Value};
+pub use geom::*;
+pub use load::{load_file, Groups};
+pub use val::{Ty, Val};

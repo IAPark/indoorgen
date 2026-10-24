@@ -1,0 +1,6 @@
+[env]
+PKG_CONFIG_PATH = "/Users/lume/work/geos-3.11.4/lib/pkgconfig"
+GEOS_LIB_DIR = "/Users/lume/work/geos-3.11.4/lib"
+GEOS_VERSION = "3.11.4"
+[build]
+rustflags = ["-C", "link-arg=-Wl,-rpath,/Users/lume/work/geos-3.11.4/lib"]

@@ -1,0 +1,27 @@
+[package]
+name = "infinigen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+geos = { version = "11", features = ["v3_11_0"] }
+indexmap = "2"
+nalgebra = "0.33"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+anyhow = "1"
+md5 = "0.8.1"
+earcutr = "0.5.0"
+parry3d-f64 = "0.18"
+
+[profile.release]
+opt-level = 3
+debug = 0
+
+# fast edit-compile loop for agents: incremental, many codegen units (runtime ~10-30% slower than release)
+[profile.fast]
+inherits = "release"
+opt-level = 2
+incremental = true
+codegen-units = 256

@@ -1,0 +1,253 @@
+//! Room-level score terms (home_room_constraints "room" score + graph_coherent).
+use super::consts::*;
+use super::state::*;
+use crate::shp::*;
+use std::collections::BTreeSet;
+
+fn norm2(v: P2) -> P2 {
+    let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if n > 0.0 {
+        [v[0] / n, v[1] / n]
+    } else {
+        v
+    }
+}
+
+fn access_angle(state: &RoomState, x: &str) -> f64 {
+    if state.graphs.is_empty() {
+        return 0.0;
+    }
+    let graph = &state.graphs[room_level(x)];
+    if graph.root() == x {
+        return 0.0;
+    }
+    let root = centroid(state.poly(graph.root()));
+    let co = centroid(state.poly(x));
+    let mut best = std::f64::consts::PI;
+    for n in graph.valid_neighbours(x) {
+        let co_ = centroid(state.poly(n));
+        let a = norm2([co_[0] - co[0], co_[1] - co[1]]);
+        let b = norm2([root[0] - co[0], root[1] - co[1]]);
+        let dot = (1.0 - 1e-6) * (a[0] * b[0] + a[1] * b[1]);
+        best = best.min(dot.acos());
+    }
+    best
+}
+
+fn aspect_ratio(state: &RoomState, c: &str) -> f64 {
+    let (x, y, xx, yy) = bounds(state.poly(c));
+    let a = (xx - x) / (yy - y);
+    a.max(1.0 / a)
+}
+
+fn convexity(state: &RoomState, x: &str) -> f64 {
+    area(&convex_hull(state.poly(x))) / area(state.poly(x))
+}
+
+fn n_verts(state: &RoomState, x: &str) -> f64 {
+    exterior(state.poly(x)).len() as f64
+}
+
+fn grid_line_count(state: &RoomState, ks: &[&str], c: &RoomConstants, dir: char) -> f64 {
+    let mut s = BTreeSet::new();
+    for k in ks {
+        for p in exterior(state.poly(k)) {
+            let v = if dir == 'x' { p[0] } else { p[1] };
+            s.insert((v / c.unit).trunc() as i64);
+        }
+    }
+    s.len() as f64
+}
+
+fn narrowness(state: &RoomState, x: &str, c: &RoomConstants, thresh: f64) -> f64 {
+    let p = buffer(state.poly(x), 0.0);
+    let mut count = 0.0;
+    let n = (thresh / c.unit) as i32;
+    for i in 0..n {
+        let q = buffer(&buffer_full(&p, -c.unit / 2.0 * i as f64, Join::Mitre, Cap::Flat, 16, false), 0.0);
+        if !(is_valid(&q) && is_polygon(&q) && area(&q) > 0.0) {
+            count += 100.0;
+        } else {
+            count += length(&p) - length(&buffer_full(&q, c.unit / 2.0 * i as f64, Join::Mitre, Cap::Flat, 16, false));
+        }
+    }
+    count
+}
+
+fn rel_value<'a>(state: &'a RoomState, from: &str, to: &str) -> &'a G {
+    &state.objs[from].relations.iter().find(|r| r.target == to).unwrap().value
+}
+
+fn hinge_sq(a: f64, norm: f64) -> f64 {
+    let x = (a / norm).ln();
+    let h = if x < 0.0 {
+        -x
+    } else if x > 0.4 {
+        x - 0.4
+    } else {
+        0.0
+    };
+    h * h
+}
+
+/// The "room" score term, in terms of weights/definitions from home.py (single story).
+pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
+    let rooms: Vec<&String> = state.valid_rooms().map(|(k, _)| k).collect();
+    let of = |t: &str| rooms.iter().copied().filter(move |k| room_type(k) == t).collect::<Vec<_>>();
+    let mut total = 0.0;
+
+    // access angle
+    let s: f64 = rooms
+        .iter()
+        .filter(|k| !matches!(room_type(k), "utility" | "bathroom" | "closet"))
+        .map(|k| (access_angle(state, k) - std::f64::consts::FRAC_PI_2).max(0.0))
+        .sum();
+    total += s * 5.0;
+
+    // area
+    let area_terms: [(&str, f64); 10] = [
+        ("kitchen", 20.0),
+        ("bedroom", 40.0),
+        ("living-room", 40.0),
+        ("dining-room", 20.0),
+        ("closet", 5.0),
+        ("bathroom", 8.0),
+        ("utility", 5.0),
+        ("garage", 25.0),
+        ("balcony", 8.0),
+        ("staircase-room", 25.0),
+    ];
+    let mut s = 0.0;
+    for (t, norm) in area_terms {
+        for k in of(t) {
+            s += hinge_sq(area(state.poly(k)), norm);
+        }
+    }
+    total += s * 500.0;
+
+    // aspect ratio
+    let mut s = 0.0;
+    for t in ["kitchen", "bedroom", "living-room", "dining-room"] {
+        for k in of(t) {
+            s += aspect_ratio(state, k).ln();
+        }
+    }
+    total += s * 50.0;
+    let mut s = 0.0;
+    for t in ["closet", "bathroom"] {
+        for k in of(t) {
+            s += aspect_ratio(state, k).ln();
+        }
+    }
+    total += s * 40.0;
+
+    // convexity, vertex count (non-hallway)
+    let nonhall: Vec<&&String> = rooms.iter().filter(|k| room_type(k) != "hallway").collect();
+    total += nonhall.iter().map(|k| convexity(state, k).ln()).sum::<f64>() * 5.0;
+    total += nonhall.iter().map(|k| (n_verts(state, k) - 6.0).max(0.0).powf(1.5)).sum::<f64>() * 1.0;
+
+    // exterior sharing
+    let ext_tags = ["bedroom", "balcony", "dining-room", "kitchen", "living-room"];
+    let ext_name = room_name(EXTERIOR, 0, 0);
+    let ext_len = length(state.poly(&ext_name));
+    let mut s = 0.0;
+    for t in ext_tags {
+        for k in of(t) {
+            s += length(rel_value(state, &ext_name, k)) / ext_len;
+        }
+    }
+    total += s * -10.0;
+    let mut s = 0.0;
+    for t in ext_tags {
+        for k in of(t) {
+            let mls = rel_value(state, &ext_name, k);
+            let nv: usize = parts(mls).iter().map(|ls| if is_empty(ls) { 0 } else { coords_of(ls).len() }).sum();
+            s += (nv as f64 - 2.0).max(0.0);
+        }
+    }
+    total += s * -1.0;
+
+    // grid lines
+    let all: Vec<&str> = rooms.iter().map(|k| k.as_str()).collect();
+    total += (grid_line_count(state, &all, c, 'x') + grid_line_count(state, &all, c, 'y')) * 2.0;
+    let mut s = 0.0;
+    for k in &all {
+        s += grid_line_count(state, &[k], c, 'x') + grid_line_count(state, &[k], c, 'y');
+    }
+    total += s * 2.0;
+
+    // hallway / staircase area
+    let mut s = 0.0;
+    for t in ["hallway", "staircase-room"] {
+        for k in of(t) {
+            s += area(state.poly(k));
+        }
+    }
+    total += s * 20.0;
+
+    // narrowness
+    let narrow_set = ["bathroom", "utility", "staircase-room", "hallway", "balcony"];
+    let mut s = 0.0;
+    for k in &rooms {
+        if !narrow_set.contains(&room_type(k)) {
+            s += narrowness(state, k, c, 2.5);
+        }
+    }
+    total += s * 2000.0;
+    let mut s = 0.0;
+    for t in narrow_set {
+        for k in of(t) {
+            s += narrowness(state, k, c, 2.0);
+        }
+    }
+    total += s * 2000.0;
+
+    // staircase room terms (only with a staircase room)
+    let ph = room_name(STAIRCASE, 0, 0);
+    for k in of("staircase-room") {
+        let pa = area(state.poly(&ph));
+        let inter = area(&intersection(state.poly(k), state.poly(&ph)));
+        total += inter / pa * -50.0;
+        let h = inter / pa;
+        let hinge = if h < c.staircase_thresh {
+            c.staircase_thresh - h
+        } else if h > 1.0 {
+            h - 1.0
+        } else {
+            0.0
+        };
+        total += hinge * 1e5;
+        total += (area(state.poly(k)) / pa - inter) * 5.0;
+    }
+    total
+}
+
+/// graph_coherent violation count.
+pub fn graph_coherent(state: &RoomState, c: &RoomConstants) -> f64 {
+    let mut count = 0.0;
+    for (i, graph) in state.graphs.iter().enumerate() {
+        for k in &graph.names {
+            let ns = graph.neighbours(k);
+            for r in &state.objs[k].relations {
+                if ns.contains(r.target.as_str()) && !segment_filter(&r.value, c.segment_margin) {
+                    count += if room_type(k) == EXTERIOR { 2.0 } else { 1.0 };
+                }
+            }
+        }
+        let total_area: f64 = graph
+            .names
+            .iter()
+            .filter(|n| !graph.invalid.contains(&graph.names.iter().position(|m| m == *n).unwrap()))
+            .map(|n| area(state.poly(n)))
+            .sum();
+        if (total_area - area(state.poly(&room_name(EXTERIOR, i, 0)))).abs() > 0.01 {
+            count += 1.0;
+        }
+        if i > 0 && !c.fixed_contour {
+            if !contains(state.poly(&room_name(EXTERIOR, i - 1, 0)), state.poly(&room_name(EXTERIOR, i, 0))) {
+                count += 1.0;
+            }
+        }
+    }
+    count
+}
