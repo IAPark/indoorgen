@@ -283,7 +283,13 @@ impl TowelSpec {
             eprintln!("BW {}", bw);
             return m;
         }
-        m = bevel_angle(&m, bw, 2, 30f64.to_radians(), false).unwrap_or(m);
+        m = match bevel_angle(&m, bw, 2, 30f64.to_radians(), false) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("towel bevel failed: {e}");
+                m
+            }
+        };
         if std::env::var("TW_STAGE").ok().as_deref() == Some("bevel") {
             return m;
         }
