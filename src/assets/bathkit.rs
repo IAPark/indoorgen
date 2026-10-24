@@ -225,6 +225,10 @@ pub fn bevel_def(m: &Mesh, width: f64, segments: i32) -> Mesh {
     super::bevmod::bevel_modifier(m, width, segments, Some(ang), true, 0.5).expect("bevel")
 }
 
+pub fn bevel_def_seg(m: &Mesh, width: f64, segments: i32) -> Mesh {
+    bevel_def(m, width, segments)
+}
+
 /// SUBSURF modifier, SIMPLE type
 pub fn simple_subsurf(m: &Mesh, levels: usize) -> Mesh {
     let q = crate::subdiv::QMesh::new(m.pos.clone(), m.faces.clone());
@@ -278,4 +282,47 @@ pub fn edge_loop_quads(m: &Mesh, e: (u32, u32)) -> Vec<u32> {
         v = w;
     }
     lp
+}
+
+/// max over `a` of the distance to the nearest point of `b` (spatial hash; exact)
+pub fn nn_max(a: &[V3], b: &[V3]) -> f64 {
+    if b.is_empty() || a.is_empty() {
+        return f64::INFINITY;
+    }
+    let cell = 0.01f64;
+    let key = |p: &V3| [(p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64, (p[2] / cell).floor() as i64];
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    for (i, p) in b.iter().enumerate() {
+        grid.entry(key(p)).or_default().push(i as u32);
+    }
+    let mut worst = 0.0f64;
+    for p in a {
+        let k = key(p);
+        let mut best = f64::INFINITY;
+        let mut rad = 1i64;
+        loop {
+            for dx in -rad..=rad {
+                for dy in -rad..=rad {
+                    for dz in -rad..=rad {
+                        if dx.abs().max(dy.abs()).max(dz.abs()) < rad && rad > 1 {
+                            continue;
+                        }
+                        if let Some(v) = grid.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) {
+                            for &i in v {
+                                let q = b[i as usize];
+                                let d = ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
+                                best = best.min(d);
+                            }
+                        }
+                    }
+                }
+            }
+            if best <= rad as f64 * cell || rad > 200 {
+                break;
+            }
+            rad += 1;
+        }
+        worst = worst.max(best);
+    }
+    worst
 }

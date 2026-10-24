@@ -17,6 +17,10 @@ fn report(name: &str, got: (&[[f64; 3]], &[Vec<u32>]), j: &Value, key: &str) {
         std::fs::write(format!("{d}/{name}.json"), js.to_string()).unwrap();
     }
     let Some((v, f)) = load(j, key) else { println!("{name}: no stage {key}"); return };
+    if !got.0.is_empty() {
+        let vn = infinigen::assets::bathkit::nn_max(got.0, &v).max(infinigen::assets::bathkit::nn_max(&v, got.0));
+        print!("vnn {vn:.2e} ");
+    }
     let ok_counts = format!("verts {}/{} faces {}/{}", got.0.len(), v.len(), got.1.len(), f.len());
     // wire stages (no faces): compare vertices directly
     if f.is_empty() && got.1.is_empty() {

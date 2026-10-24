@@ -115,3 +115,61 @@ fn simple_subdiv(m: &Mesh, levels: usize) -> Mesh {
     }
     cur
 }
+
+/// Same surface as `subsurf`, but with Blender's output vertex / face order and corner order (the layout of BKE_subdiv_to_mesh,
+/// replicated by gweld::subdivide): the topology comes from gweld, the (limit) positions from `subsurf`, matched through the
+/// simple-subdivision positions both layouts share.
+pub fn subsurf_bl(m: &Mesh, levels: usize, simple: bool) -> Mesh {
+    use super::cabnodes::GMesh;
+    if levels == 0 {
+        return m.clone();
+    }
+    let mut g = GMesh::new();
+    g.v = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    g.p = m.faces.clone();
+    g.tag = vec![0; g.p.len()];
+    g.e = super::bathkit::edge_list(&m.faces).into_iter().map(|(a, b)| [a, b]).collect();
+    let gb = super::gweld::subdivide(&g, levels as u32);
+    let mut out = Mesh::new();
+    out.faces = gb.p.clone();
+    if simple {
+        out.pos = gb.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+        return out;
+    }
+    let q = QMesh { pos: m.pos.clone(), faces: m.faces.clone() };
+    let cc = catmull_clark(&q, levels, None);
+    let limit = limit_positions(&cc);
+    let sp = crate::subdiv::simple_levels(&q, levels).pos;
+    assert_eq!(sp.len(), gb.v.len(), "subsurf_bl: layouts differ in size");
+    let cell = 1e-4f64;
+    let key = |p: [f64; 3]| [(p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64, (p[2] / cell).floor() as i64];
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    for (i, p) in sp.iter().enumerate() {
+        grid.entry(key(*p)).or_default().push(i as u32);
+    }
+    let mut pos = Vec::with_capacity(gb.v.len());
+    for p in &gb.v {
+        let p = [p[0] as f64, p[1] as f64, p[2] as f64];
+        let k = key(p);
+        let mut best = (f64::INFINITY, u32::MAX);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(v) = grid.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) {
+                        for &i in v {
+                            let s = sp[i as usize];
+                            let d = (s[0] - p[0]).powi(2) + (s[1] - p[1]).powi(2) + (s[2] - p[2]).powi(2);
+                            if d < best.0 {
+                                best = (d, i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(best.1 != u32::MAX && best.0 < 1e-8, "subsurf_bl: vertex match failed");
+        pos.push(limit[best.1 as usize]);
+    }
+    out.pos = pos;
+    out
+}
