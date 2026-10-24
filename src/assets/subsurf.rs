@@ -6,7 +6,7 @@ use crate::subdiv::{catmull_clark, QMesh};
 use crate::dhash::HashMap;
 
 pub fn subsurf(m: &Mesh, levels: usize, simple: bool) -> Mesh {
-    subsurf_bs(m, levels, simple, true)
+    subsurf_bs(m, levels, simple, false)
 }
 
 /// `preserve_corners`: SUBSURF boundary_smooth PRESERVE_CORNERS (valence-2 boundary vertices stay fixed); false = 'ALL' (the modifier default:
