@@ -80,6 +80,8 @@ pub mod gnasset;
 pub mod gnports;
 pub mod bevelgn;
 pub mod stagecmp;
+pub mod stagefile;
+pub mod dualcon;
 pub mod solidnm;
 pub mod bpyx;
 pub mod bevmod;
