@@ -1,3 +1,4 @@
 /target
 *.glb
 /tools/__pycache__
+/tmp/
