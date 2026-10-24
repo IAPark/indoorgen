@@ -1,0 +1,1791 @@
+diff --git a/src/gn/cdt.rs b/src/gn/cdt.rs
+new file mode 100644
+index 0000000..799d004
+--- /dev/null
++++ b/src/gn/cdt.rs
+@@ -0,0 +1,1177 @@
++//! Port of Blender 4.2 `blenlib/intern/delaunay_2d.cc` (double precision, exact Shewchuk predicates), used by
++//! Fill Curve.  The face/edge ordering of the result is part of the observable behaviour (vertex/face indices of the
++//! filled mesh), so the divide-and-conquer triangulation, constraint insertion and output preparation are ported
++//! step by step, with SymEdge pointers replaced by indices (edge e owns symedges 2e and 2e+1; sym(s) = s ^ 1).
++
++use robust::{incircle, orient2d, Coord};
++
++const NIL: usize = usize::MAX;
++
++#[derive(Clone, Copy, PartialEq, Eq, Debug)]
++pub enum OutType {
++    Inside,
++    InsideWithHoles,
++    Constraints,
++    ConstraintsValidBmesh,
++    ConstraintsValidBmeshWithHoles,
++}
++
++pub struct CdtResult {
++    pub vert: Vec<[f64; 2]>,
++    pub edge: Vec<(usize, usize)>,
++    pub face: Vec<Vec<usize>>,
++}
++
++fn c(p: [f64; 2]) -> Coord<f64> {
++    Coord { x: p[0], y: p[1] }
++}
++fn orient(a: [f64; 2], b: [f64; 2], cc: [f64; 2]) -> i32 {
++    let d = orient2d(c(a), c(b), c(cc));
++    if d > 0.0 { 1 } else if d < 0.0 { -1 } else { 0 }
++}
++fn incirc(a: [f64; 2], b: [f64; 2], cc: [f64; 2], d: [f64; 2]) -> i32 {
++    let r = incircle(c(a), c(b), c(cc), c(d));
++    if r > 0.0 { 1 } else if r < 0.0 { -1 } else { 0 }
++}
++fn in_line(a: [f64; 2], b: [f64; 2], cc: [f64; 2]) -> bool {
++    let ab = [b[0] - a[0], b[1] - a[1]];
++    let ac = [cc[0] - a[0], cc[1] - a[1]];
++    if ab[0] * ac[0] + ab[1] * ac[1] < 0.0 {
++        return false;
++    }
++    let bc = [cc[0] - b[0], cc[1] - b[1]];
++    bc[0] * ac[0] + bc[1] * ac[1] >= 0.0
++}
++
++#[derive(PartialEq, Clone, Copy, Debug)]
++enum IKind {
++    Colinear,
++    None,
++    Exact,
++    Cross,
++}
++fn isect_seg_seg(v1: [f64; 2], v2: [f64; 2], v3: [f64; 2], v4: [f64; 2]) -> (IKind, f64) {
++    let div = (v2[0] - v1[0]) * (v4[1] - v3[1]) - (v2[1] - v1[1]) * (v4[0] - v3[0]);
++    if div == 0.0 {
++        return (IKind::Colinear, 0.0);
++    }
++    let lambda = ((v1[1] - v3[1]) * (v4[0] - v3[0]) - (v1[0] - v3[0]) * (v4[1] - v3[1])) / div;
++    let mu = ((v1[1] - v3[1]) * (v2[0] - v1[0]) - (v1[0] - v3[0]) * (v2[1] - v1[1])) / div;
++    if (0.0..=1.0).contains(&lambda) && (0.0..=1.0).contains(&mu) {
++        if lambda == 0.0 || lambda == 1.0 || mu == 0.0 || mu == 1.0 {
++            (IKind::Exact, lambda)
++        } else {
++            (IKind::Cross, lambda)
++        }
++    } else {
++        (IKind::None, lambda)
++    }
++}
++
++#[derive(Clone, Copy)]
++struct CrossData {
++    lambda: f64,
++    vert: usize,
++    inn: usize,
++    out: usize,
++}
++impl CrossData {
++    fn new() -> Self {
++        CrossData { lambda: 0.0, vert: NIL, inn: NIL, out: NIL }
++    }
++}
++
++struct Cdt {
++    co: Vec<[f64; 2]>,
++    vsym: Vec<usize>,
++    vmerge: Vec<i64>,
++    vvisit: Vec<i32>,
++    next: Vec<usize>,
++    rot: Vec<usize>,
++    svert: Vec<usize>,
++    sface: Vec<usize>,
++    eids: Vec<Vec<i32>>,
++    fsym: Vec<usize>,
++    fids: Vec<Vec<i32>>,
++    fvisit: Vec<i32>,
++    fdel: Vec<bool>,
++    fhole: Vec<bool>,
++    outer: usize,
++    visit_count: i32,
++    input_vert_num: usize,
++    face_edge_offset: i32,
++}
++
++fn sym(s: usize) -> usize {
++    s ^ 1
++}
++fn eof(s: usize) -> usize {
++    s >> 1
++}
++
++impl Cdt {
++    fn prev(&self, s: usize) -> usize {
++        self.rot[self.next[self.rot[s]]]
++    }
++    fn add_vert(&mut self, p: [f64; 2]) -> usize {
++        self.co.push(p);
++        self.vsym.push(NIL);
++        self.vmerge.push(-1);
++        self.vvisit.push(0);
++        self.co.len() - 1
++    }
++    fn add_face(&mut self) -> usize {
++        self.fsym.push(NIL);
++        self.fids.push(vec![]);
++        self.fvisit.push(0);
++        self.fdel.push(false);
++        self.fhole.push(false);
++        self.fsym.len() - 1
++    }
++    fn add_edge(&mut self, v1: usize, v2: usize, fleft: usize, fright: usize) -> usize {
++        let e = self.eids.len();
++        self.eids.push(vec![]);
++        self.next.extend([NIL, NIL]);
++        self.rot.extend([NIL, NIL]);
++        self.svert.extend([v1, v2]);
++        self.sface.extend([fleft, fright]);
++        if self.vsym[v1] == NIL {
++            self.vsym[v1] = 2 * e;
++        }
++        if self.vsym[v2] == NIL {
++            self.vsym[v2] = 2 * e + 1;
++        }
++        e
++    }
++    fn add_ids(dst: &mut Vec<i32>, src: &[i32]) {
++        for &v in src {
++            if !dst.contains(&v) {
++                dst.push(v);
++            }
++        }
++    }
++    fn add_diagonal(&mut self, s1: usize, s2: usize) -> usize {
++        let fold = self.sface[s1];
++        let fnew = self.add_face();
++        let s1prev = self.prev(s1);
++        let s1prevsym = sym(s1prev);
++        let s2prev = self.prev(s2);
++        let s2prevsym = sym(s2prev);
++        let ed = self.add_edge(self.svert[s1], self.svert[s2], fnew, fold);
++        let sd = 2 * ed;
++        let sds = 2 * ed + 1;
++        self.next[sd] = s2;
++        self.next[sds] = s1;
++        self.next[s2prev] = sds;
++        self.next[s1prev] = sd;
++        self.rot[s1] = sd;
++        self.rot[sd] = s1prevsym;
++        self.rot[s2] = sds;
++        self.rot[sds] = s2prevsym;
++        let mut se = s2;
++        while se != sd {
++            self.sface[se] = fnew;
++            se = self.next[se];
++        }
++        let src = self.fids[fold].clone();
++        Self::add_ids(&mut self.fids[fnew], &src);
++        ed
++    }
++    fn add_vert_to_symedge_edge(&mut self, v: usize, se: usize) -> usize {
++        let se_rot = self.rot[se];
++        let se_rotsym = sym(se_rot);
++        let e = self.add_edge(v, self.svert[se], self.sface[se], self.sface[se]);
++        let (ns, nss) = (2 * e, 2 * e + 1);
++        self.next[ns] = se;
++        self.next[nss] = ns;
++        self.rot[ns] = ns;
++        self.rot[nss] = se_rot;
++        self.rot[se] = nss;
++        self.next[se_rotsym] = nss;
++        e
++    }
++    fn connect_separate_parts(&mut self, se1: usize, se2: usize) -> usize {
++        let se1_rot = self.rot[se1];
++        let se1_rotsym = sym(se1_rot);
++        let se2_rot = self.rot[se2];
++        let se2_rotsym = sym(se2_rot);
++        let e = self.add_edge(self.svert[se1], self.svert[se2], self.outer, self.outer);
++        let (ns, nss) = (2 * e, 2 * e + 1);
++        self.next[ns] = se2;
++        self.next[nss] = se1;
++        self.rot[ns] = se1_rot;
++        self.rot[nss] = se2_rot;
++        self.rot[se1] = ns;
++        self.rot[se2] = nss;
++        self.next[se1_rotsym] = ns;
++        self.next[se2_rotsym] = nss;
++        e
++    }
++    fn split_edge(&mut self, se: usize, lambda: f64) -> usize {
++        let a = self.co[self.svert[se]];
++        let b = self.co[self.svert[self.next[se]]];
++        let sesym = sym(se);
++        let sesymprev = self.prev(sesym);
++        let sesymprevsym = sym(sesymprev);
++        let senext = self.next[se];
++        let v = self.add_vert([a[0] * (1.0 - lambda) + b[0] * lambda, a[1] * (1.0 - lambda) + b[1] * lambda]);
++        let e = self.add_edge(v, self.svert[self.next[se]], self.sface[se], self.sface[sesym]);
++        self.svert[sesym] = v;
++        let (newse, newsesym) = (2 * e, 2 * e + 1);
++        self.next[se] = newse;
++        self.next[newsesym] = sesym;
++        self.next[newse] = senext;
++        self.rot[newse] = sesym;
++        self.rot[sesym] = newse;
++        self.rot[senext] = newsesym;
++        self.rot[newsesym] = sesymprevsym;
++        self.next[sesymprev] = newsesym;
++        let nv = self.svert[newsesym];
++        if self.vsym[nv] == sesym {
++            self.vsym[nv] = newsesym;
++        }
++        let src = self.eids[eof(se)].clone();
++        Self::add_ids(&mut self.eids[e], &src);
++        e
++    }
++    fn delete_edge(&mut self, se: usize) {
++        let sesym = sym(se);
++        let v1 = self.svert[se];
++        let v2 = self.svert[sesym];
++        let aface = self.sface[se];
++        let bface = self.sface[sesym];
++        let f = self.next[se];
++        let h = self.prev(se);
++        let i = self.next[sesym];
++        let j = self.prev(sesym);
++        let jsym = sym(j);
++        let hsym = sym(h);
++        let v1_isolated = i == se;
++        let v2_isolated = f == sesym;
++        if !v1_isolated {
++            self.next[h] = i;
++            self.rot[i] = hsym;
++        }
++        if !v2_isolated {
++            self.next[j] = f;
++            self.rot[f] = jsym;
++        }
++        if !v1_isolated && !v2_isolated && aface != bface {
++            let mut k = i;
++            while k != f {
++                self.sface[k] = aface;
++                k = self.next[k];
++            }
++        }
++        if v1_isolated {
++            self.vsym[v1] = NIL;
++        } else if self.vsym[v1] == se {
++            self.vsym[v1] = i;
++        }
++        if v2_isolated {
++            self.vsym[v2] = NIL;
++        } else if self.vsym[v2] == sesym {
++            self.vsym[v2] = f;
++        }
++        self.next[se] = NIL;
++        self.rot[se] = NIL;
++        self.next[sesym] = NIL;
++        self.rot[sesym] = NIL;
++        if !v1_isolated && !v2_isolated && aface != bface {
++            self.fdel[bface] = true;
++            if self.outer == bface {
++                self.outer = aface;
++            }
++        }
++    }
++
++    fn is_constrained(&self, e: usize) -> bool {
++        !self.eids[e].is_empty()
++    }
++    fn is_deleted(&self, e: usize) -> bool {
++        self.next[2 * e] == NIL
++    }
++    fn find_symedge_between(&self, v1: usize, v2: usize) -> usize {
++        let start = self.vsym[v1];
++        let mut t = start;
++        loop {
++            if self.svert[self.next[t]] == v2 {
++                return t;
++            }
++            t = self.rot[t];
++            if t == start {
++                return NIL;
++            }
++        }
++    }
++    fn find_symedge_with_face(&self, v: usize, f: usize) -> usize {
++        let start = self.vsym[v];
++        let mut t = start;
++        loop {
++            if self.sface[t] == f {
++                return t;
++            }
++            t = self.rot[t];
++            if t == start {
++                return NIL;
++            }
++        }
++    }
++    fn vert_touches_face(&self, v: usize, f: usize) -> bool {
++        let start = self.vsym[v];
++        let mut se = start;
++        loop {
++            if self.sface[se] == f {
++                return true;
++            }
++            se = self.rot[se];
++            if se == start {
++                return false;
++            }
++        }
++    }
++
++    // ---------------------------------------------------------------- divide and conquer
++    fn vert_left_of(&self, v: usize, se: usize) -> bool {
++        orient(self.co[v], self.co[self.svert[se]], self.co[self.svert[self.next[se]]]) > 0
++    }
++    fn vert_right_of(&self, v: usize, se: usize) -> bool {
++        orient(self.co[v], self.co[self.svert[self.next[se]]], self.co[self.svert[se]]) > 0
++    }
++    fn dc_tri_valid(&self, se: usize, basel: usize, basel_sym: usize) -> bool {
++        orient(self.co[self.svert[self.next[se]]], self.co[self.svert[basel_sym]], self.co[self.svert[basel]]) > 0
++    }
++    fn vco(&self, se: usize) -> [f64; 2] {
++        self.co[self.svert[se]]
++    }
++
++    fn dc_tri(&mut self, sites: &[usize], start: usize, end: usize) -> (usize, usize) {
++        let n = end - start;
++        if n <= 1 {
++            return (NIL, NIL);
++        }
++        if n <= 3 {
++            let v1 = sites[start];
++            let v2 = sites[start + 1];
++            let ea = self.add_edge(v1, v2, self.outer, self.outer);
++            self.next[2 * ea] = 2 * ea + 1;
++            self.next[2 * ea + 1] = 2 * ea;
++            self.rot[2 * ea] = 2 * ea;
++            self.rot[2 * ea + 1] = 2 * ea + 1;
++            if n == 2 {
++                return (2 * ea, 2 * ea + 1);
++            }
++            let v3 = sites[start + 2];
++            let eb = self.add_vert_to_symedge_edge(v3, 2 * ea + 1);
++            let o = orient(self.co[v1], self.co[v2], self.co[v3]);
++            if o > 0 {
++                self.add_diagonal(2 * eb, 2 * ea);
++                return (2 * ea, 2 * eb);
++            } else if o < 0 {
++                self.add_diagonal(2 * ea, 2 * eb);
++                return (self.rot[2 * ea], self.rot[2 * eb]);
++            } else {
++                return (2 * ea, 2 * eb);
++            }
++        }
++        let n2 = n / 2;
++        let (mut ldo, mut ldi) = self.dc_tri(sites, start, start + n2);
++        let (mut rdi, mut rdo) = self.dc_tri(sites, start + n2, end);
++        // lower common tangent
++        loop {
++            if self.vert_left_of(self.svert[rdi], ldi) {
++                ldi = self.next[ldi];
++            } else if self.vert_right_of(self.svert[ldi], rdi) {
++                rdi = self.rot[sym(rdi)];
++            } else {
++                break;
++            }
++        }
++        let ebasel = self.connect_separate_parts(self.next[sym(rdi)], ldi);
++        let mut basel = 2 * ebasel;
++        let mut basel_sym = 2 * ebasel + 1;
++        if self.svert[ldi] == self.svert[ldo] {
++            ldo = basel_sym;
++        }
++        if self.svert[rdi] == self.svert[rdo] {
++            rdo = basel;
++        }
++        loop {
++            let mut lcand = self.rot[basel_sym];
++            let mut rcand = self.next[basel_sym];
++            if self.dc_tri_valid(lcand, basel, basel_sym) {
++                while incirc(self.vco(basel_sym), self.vco(basel), self.vco(self.next[lcand]), self.vco(self.next[self.rot[lcand]])) > 0 {
++                    let t = self.rot[lcand];
++                    self.delete_edge(sym(lcand));
++                    lcand = t;
++                }
++            }
++            if self.dc_tri_valid(rcand, basel, basel_sym) {
++                while incirc(self.vco(basel_sym), self.vco(basel), self.vco(self.next[rcand]), self.vco(self.next[self.next[sym(rcand)]])) > 0 {
++                    let t = self.next[sym(rcand)];
++                    self.delete_edge(rcand);
++                    rcand = t;
++                }
++            }
++            let valid_l = self.dc_tri_valid(lcand, basel, basel_sym);
++            let valid_r = self.dc_tri_valid(rcand, basel, basel_sym);
++            if !valid_l && !valid_r {
++                break;
++            }
++            let eb = if !valid_l || (valid_r && incirc(self.vco(self.next[lcand]), self.vco(lcand), self.vco(rcand), self.vco(self.next[rcand])) > 0) {
++                self.add_diagonal(self.next[rcand], basel_sym)
++            } else {
++                self.add_diagonal(self.next[basel_sym], sym(lcand))
++            };
++            basel = 2 * eb;
++            basel_sym = 2 * eb + 1;
++        }
++        (ldo, rdo)
++    }
++
++    fn initial_triangulation(&mut self) {
++        let n = self.co.len();
++        if n <= 1 {
++            return;
++        }
++        let mut sites: Vec<usize> = (0..n).collect();
++        sites.sort_by(|&a, &b| {
++            let (ca, cb) = (self.co[a], self.co[b]);
++            ca[0].partial_cmp(&cb[0]).unwrap().then(ca[1].partial_cmp(&cb[1]).unwrap()).then(a.cmp(&b))
++        });
++        // merges
++        let ns = sites.len();
++        let mut i = 0;
++        while i + 1 < ns {
++            let mut j = i + 1;
++            while j < ns && self.co[sites[j]] == self.co[sites[i]] {
++                self.vmerge[sites[j]] = sites[i] as i64;
++                j += 1;
++            }
++            if j - i > 1 {
++                i = j - 1;
++            }
++            i += 1;
++        }
++        let comp: Vec<usize> = sites.iter().copied().filter(|&v| self.vmerge[v] < 0).collect();
++        if comp.is_empty() {
++            return;
++        }
++        self.dc_tri(&comp, 0, comp.len());
++    }
++
++    // ---------------------------------------------------------------- constraints
++    fn re_delaunay_triangulate(&mut self, se: usize) {
++        if self.sface[se] == self.outer || self.sface[sym(se)] == self.outer {
++            return;
++        }
++        let mut count = 1;
++        let mut ss = self.next[se];
++        while ss != se {
++            count += 1;
++            ss = self.next[ss];
++        }
++        if count <= 3 {
++            return;
++        }
++        let first = self.next[self.next[se]];
++        let a = self.svert[se];
++        let b = self.svert[self.next[se]];
++        let mut cv = self.svert[first];
++        let mut cse = first;
++        let mut ss = self.next[first];
++        while ss != se {
++            let v = self.svert[ss];
++            if incirc(self.co[a], self.co[b], self.co[cv], self.co[v]) > 0 {
++                cv = v;
++                cse = ss;
++            }
++            ss = self.next[ss];
++        }
++        let mut ebc = NIL;
++        let mut eca = NIL;
++        if self.find_symedge_between(b, cv) == NIL {
++            ebc = self.add_diagonal(self.next[se], cse);
++        }
++        if self.find_symedge_between(cv, a) == NIL {
++            eca = self.add_diagonal(cse, se);
++        }
++        if ebc != NIL {
++            self.re_delaunay_triangulate(2 * ebc + 1);
++        }
++        if eca != NIL {
++            self.re_delaunay_triangulate(2 * eca + 1);
++        }
++    }
++
++    fn fill_through_vert(&self, v: usize, cd_out: usize, cd: &mut CrossData, cd_next: &mut CrossData) {
++        cd_next.lambda = 0.0;
++        cd_next.vert = v;
++        cd_next.inn = NIL;
++        cd_next.out = NIL;
++        if cd.lambda == 0.0 {
++            cd.out = cd_out;
++        } else {
++            let mut se = sym(cd.inn);
++            if self.svert[se] != v {
++                se = self.next[se];
++                if self.svert[se] != v {
++                    se = self.next[se];
++                }
++            }
++            cd_next.inn = se;
++        }
++    }
++
++    fn fill_for_intersect(&self, curco: [f64; 2], v2: usize, t: usize, cd: &mut CrossData, cd_next: &mut CrossData) {
++        let va = self.svert[t];
++        let vb = self.svert[self.next[t]];
++        let se_vcvb = sym(self.next[t]);
++        let se_vcva = self.next[self.next[t]];
++        let (kind, lambda) = isect_seg_seg(self.co[va], self.co[vb], curco, self.co[v2]);
++        match kind {
++            IKind::Cross => {
++                let d = [self.co[va][0] - self.co[vb][0], self.co[va][1] - self.co[vb][1]];
++                let len_ab = (d[0] * d[0] + d[1] * d[1]).sqrt();
++                let eps = 0.0;
++                if lambda * len_ab <= eps {
++                    self.fill_through_vert(va, se_vcva, cd, cd_next);
++                } else if (1.0 - lambda) * len_ab <= eps {
++                    self.fill_through_vert(vb, se_vcvb, cd, cd_next);
++                } else {
++                    *cd_next = CrossData { lambda, vert: NIL, inn: t, out: NIL };
++                    if cd.lambda == 0.0 {
++                        cd.out = se_vcva;
++                    }
++                }
++            }
++            IKind::Exact => {
++                if lambda == 0.0 {
++                    self.fill_through_vert(va, se_vcva, cd, cd_next);
++                } else if lambda == 1.0 {
++                    self.fill_through_vert(vb, se_vcvb, cd, cd_next);
++                } else {
++                    *cd_next = CrossData { lambda, vert: NIL, inn: t, out: NIL };
++                    if cd.lambda == 0.0 {
++                        cd.out = se_vcva;
++                    }
++                }
++            }
++            IKind::None => {
++                if lambda <= 0.5 {
++                    self.fill_through_vert(va, se_vcva, cd, cd_next);
++                } else {
++                    self.fill_through_vert(vb, se_vcvb, cd, cd_next);
++                }
++            }
++            IKind::Colinear => {
++                let d2 = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
++                if d2(self.co[va], self.co[v2]) <= d2(self.co[vb], self.co[v2]) {
++                    self.fill_through_vert(va, se_vcva, cd, cd_next);
++                } else {
++                    self.fill_through_vert(vb, se_vcvb, cd, cd_next);
++                }
++            }
++        }
++    }
++
++    fn next_crossing_from_vert(&self, cd: &mut CrossData, cd_next: &mut CrossData, v2: usize) -> bool {
++        let tstart = self.vsym[cd.vert];
++        let mut t = tstart;
++        let vcur = cd.vert;
++        loop {
++            let va = self.svert[self.next[t]];
++            let vb = self.svert[self.next[self.next[t]]];
++            let orient1 = orient(self.co[self.svert[t]], self.co[va], self.co[v2]);
++            if orient1 == 0 && in_line(self.co[vcur], self.co[va], self.co[v2]) {
++                self.fill_through_vert(va, t, cd, cd_next);
++                return true;
++            }
++            if self.sface[t] != self.outer {
++                let orient2 = orient(self.co[vcur], self.co[vb], self.co[v2]);
++                if orient1 > 0 && orient2 < 0 {
++                    let tt = self.next[t];
++                    self.fill_for_intersect(self.co[vcur], v2, tt, cd, cd_next);
++                    return true;
++                }
++            }
++            t = self.rot[t];
++            if t == tstart {
++                return false;
++            }
++        }
++    }
++
++    fn next_crossing_from_edge(&self, cd: &mut CrossData, cd_next: &mut CrossData, v2: usize) {
++        let va = self.svert[cd.inn];
++        let vb = self.svert[self.next[cd.inn]];
++        let (a, b) = (self.co[va], self.co[vb]);
++        let l = cd.lambda;
++        let curco = [a[0] * (1.0 - l) + b[0] * l, a[1] * (1.0 - l) + b[1] * l];
++        let se_ac = self.next[sym(cd.inn)];
++        let vc = self.svert[self.next[se_ac]];
++        let o = orient(curco, self.co[v2], self.co[vc]);
++        if o < 0 {
++            self.fill_for_intersect(curco, v2, self.next[se_ac], cd, cd_next);
++        } else if o > 0 {
++            self.fill_for_intersect(curco, v2, se_ac, cd, cd_next);
++        } else {
++            *cd_next = CrossData { lambda: 0.0, vert: vc, inn: self.next[se_ac], out: NIL };
++        }
++    }
++
++    fn add_edge_constraint(&mut self, v1: usize, v2: usize, input_id: i32, want_edges: bool) -> Vec<usize> {
++        let mut edge_list: Vec<usize> = vec![];
++        if v1 == v2 {
++            return edge_list;
++        }
++        let t0 = self.find_symedge_between(v1, v2);
++        if t0 != NIL {
++            let e = eof(t0);
++            Self::add_ids(&mut self.eids[e], &[input_id]);
++            if want_edges {
++                edge_list.push(e);
++            }
++            return edge_list;
++        }
++        self.visit_count += 1;
++        let visit = self.visit_count;
++        let mut crossings: Vec<CrossData> = vec![CrossData { lambda: 0.0, vert: v1, inn: NIL, out: NIL }];
++        loop {
++            let n = crossings.len();
++            if crossings[n - 1].vert == v2 {
++                break;
++            }
++            let mut cd = crossings[n - 1];
++            let mut cd_next = CrossData::new();
++            let ok;
++            if cd.lambda == 0.0 {
++                ok = self.next_crossing_from_vert(&mut cd, &mut cd_next, v2);
++            } else {
++                self.next_crossing_from_edge(&mut cd, &mut cd_next, v2);
++                ok = true;
++            }
++            crossings[n - 1] = cd;
++            crossings.push(cd_next);
++            if !ok || crossings.len() == 100000 {
++                return edge_list;
++            }
++            if crossings[n].lambda == 0.0 {
++                let v = crossings[n].vert;
++                if self.vvisit[v] == visit {
++                    return edge_list;
++                }
++                self.vvisit[v] = visit;
++            }
++        }
++        // post-process
++        let nc = crossings.len();
++        for i in 2..nc {
++            if crossings[i].lambda == 0.0 {
++                let v = crossings[i].vert;
++                let mut j = i - 1;
++                while j > 0 {
++                    let cp = crossings[j];
++                    if (cp.lambda == 0.0 && cp.vert != v) || (cp.lambda != 0.0 && self.svert[cp.inn] != v && self.svert[self.next[cp.inn]] != v) {
++                        break;
++                    }
++                    crossings[j].lambda = -1.0;
++                    j -= 1;
++                }
++                if j < i - 1 {
++                    let cp = crossings[j];
++                    if cp.lambda == 0.0 {
++                        let se = self.find_symedge_between(cp.vert, v);
++                        if se == NIL {
++                            return edge_list;
++                        }
++                        crossings[j].out = se;
++                        crossings[i].inn = NIL;
++                    } else {
++                        let se = self.find_symedge_with_face(v, self.sface[sym(cp.inn)]);
++                        if se == NIL {
++                            return edge_list;
++                        }
++                        crossings[i].inn = se;
++                    }
++                }
++            }
++        }
++        // split constrained edges
++        for i in 0..nc {
++            let cd = crossings[i];
++            if cd.lambda != 0.0 && cd.lambda != -1.0 && self.is_constrained(eof(cd.inn)) {
++                let e = self.split_edge(cd.inn, cd.lambda);
++                crossings[i].vert = self.svert[2 * e];
++            }
++        }
++        // remove crossed non-constrained edges
++        for i in 0..nc {
++            let cd = crossings[i];
++            if cd.lambda != 0.0 && cd.lambda != -1.0 && !self.is_constrained(eof(cd.inn)) {
++                self.delete_edge(cd.inn);
++            }
++        }
++        // insert segments
++        let mut tstart = crossings[0].out;
++        for i in 1..nc {
++            let cd = crossings[i];
++            if cd.lambda == -1.0 {
++                continue;
++            }
++            let mut t = NIL;
++            let mut tnext = NIL;
++            let mut edge = NIL;
++            if cd.lambda != 0.0 {
++                if self.is_constrained(eof(cd.inn)) {
++                    t = self.vsym[cd.vert];
++                    tnext = self.next[sym(t)];
++                }
++            } else {
++                t = cd.inn;
++                tnext = cd.out;
++                if t == NIL {
++                    let mut j = i as i64 - 1;
++                    while j >= 0 {
++                        if crossings[j as usize].lambda != -1.0 {
++                            break;
++                        }
++                        j -= 1;
++                    }
++                    let cp = crossings[j.max(0) as usize];
++                    edge = eof(cp.out);
++                    Self::add_ids(&mut self.eids[edge], &[input_id]);
++                    if want_edges {
++                        edge_list.push(edge);
++                    }
++                }
++            }
++            if t != NIL {
++                if self.svert[self.next[tstart]] == self.svert[t] {
++                    edge = eof(tstart);
++                } else {
++                    edge = self.add_diagonal(tstart, t);
++                }
++                Self::add_ids(&mut self.eids[edge], &[input_id]);
++                if want_edges {
++                    edge_list.push(edge);
++                }
++                self.re_delaunay_triangulate(2 * edge);
++                self.re_delaunay_triangulate(2 * edge + 1);
++            }
++            if i < nc - 1 && tnext != NIL {
++                tstart = tnext;
++            }
++        }
++        edge_list
++    }
++
++    fn add_face_ids(&mut self, face_symedge: usize, face_id: i32, fedge_start: i32, fedge_end: i32) {
++        self.visit_count += 1;
++        let visit = self.visit_count;
++        let mut stack = vec![face_symedge];
++        while let Some(se0) = stack.pop() {
++            let face = self.sface[se0];
++            if self.fvisit[face] == visit {
++                continue;
++            }
++            self.fvisit[face] = visit;
++            Self::add_ids(&mut self.fids[face], &[face_id]);
++            let mut se = self.next[se0];
++            while se != se0 {
++                let in_range = self.eids[eof(se)].iter().any(|&id| id >= fedge_start && id <= fedge_end);
++                if !in_range {
++                    let ss = sym(se);
++                    if self.fvisit[self.sface[ss]] != visit {
++                        stack.push(ss);
++                    }
++                }
++                se = self.next[se];
++            }
++        }
++    }
++
++    fn add_face_constraints(&mut self, faces: &[Vec<usize>], out: OutType) -> usize {
++        let nv = self.input_vert_num;
++        let mut maxflen = 0;
++        for f in faces {
++            maxflen = maxflen.max(f.len());
++        }
++        let mut off = 1;
++        let want = (maxflen as i32).max(self.face_edge_offset);
++        if want > 0 {
++            while off < want {
++                off *= 10;
++            }
++        }
++        self.face_edge_offset = off;
++        let mut added = 0;
++        let mut face_symedge0 = NIL;
++        for (f, face) in faces.iter().enumerate() {
++            if face.len() <= 2 {
++                continue;
++            }
++            let fedge_start = (f as i32 + 1) * self.face_edge_offset;
++            for i in 0..face.len() {
++                let iv1 = face[i];
++                let iv2 = face[(i + 1) % face.len()];
++                if iv1 >= nv || iv2 >= nv {
++                    continue;
++                }
++                added += 1;
++                let v1 = self.resolve(iv1);
++                let v2 = self.resolve(iv2);
++                let el = self.add_edge_constraint(v1, v2, 0, true);
++                if let Some(&fe) = el.first() {
++                    face_symedge0 = 2 * fe;
++                    if self.svert[face_symedge0] != v1 {
++                        face_symedge0 = 2 * fe + 1;
++                    }
++                }
++            }
++            let fedge_end = fedge_start + face.len() as i32 - 1;
++            if face_symedge0 != NIL {
++                self.add_face_ids(face_symedge0, 0, fedge_start, fedge_end);
++                if matches!(out, OutType::ConstraintsValidBmesh | OutType::ConstraintsValidBmeshWithHoles) {
++                    self.add_face_ids(face_symedge0, f as i32, fedge_start, fedge_end);
++                }
++            }
++        }
++        added
++    }
++    fn resolve(&self, i: usize) -> usize {
++        if self.vmerge[i] != -1 {
++            self.vmerge[i] as usize
++        } else {
++            i
++        }
++    }
++
++    // ---------------------------------------------------------------- output preparation
++    fn dissolve_symedge(&mut self, se0: usize) {
++        let mut se = se0;
++        let mut symse = sym(se);
++        if self.sface[symse] == self.outer {
++            se = sym(se);
++            symse = sym(se);
++        }
++        let of = self.outer;
++        if self.fsym[of] == se || self.fsym[of] == symse {
++            if self.next[self.next[se]] == se {
++                self.fsym[of] = NIL;
++            } else {
++                self.fsym[of] = self.next[self.next[se]];
++            }
++        } else {
++            let f1 = self.sface[se];
++            if self.fsym[f1] == se {
++                self.fsym[f1] = self.next[se];
++            }
++            let f2 = self.sface[symse];
++            if self.fsym[f2] == symse {
++                self.fsym[f2] = self.next[symse];
++            }
++        }
++        self.delete_edge(se);
++    }
++
++    fn remove_non_constraint_edges(&mut self) {
++        for e in 0..self.eids.len() {
++            if !self.is_deleted(e) && !self.is_constrained(e) {
++                self.dissolve_symedge(2 * e);
++            }
++        }
++    }
++
++    fn remove_non_constraint_edges_leave_valid_bmesh(&mut self) {
++        if self.eids.is_empty() {
++            return;
++        }
++        let mut diss: Vec<(f64, usize)> = vec![];
++        for e in 0..self.eids.len() {
++            if !self.is_deleted(e) && !self.is_constrained(e) {
++                let a = self.co[self.svert[2 * e]];
++                let b = self.co[self.svert[2 * e + 1]];
++                diss.push(((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2), e));
++            }
++        }
++        diss.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
++        for (_, e) in diss {
++            let se = 2 * e;
++            let mut dissolve = true;
++            let fleft = self.sface[se];
++            let fright = self.sface[sym(se)];
++            if fleft != self.outer && fright != self.outer && (!self.fids[fleft].is_empty() || !self.fids[fright].is_empty()) {
++                let mut se2 = self.next[se];
++                while dissolve && se2 != se {
++                    if self.sface[sym(se2)] == fright || (self.svert[se2] != self.svert[self.next[se]] && self.vert_touches_face(self.svert[se2], fright)) {
++                        dissolve = false;
++                    }
++                    se2 = self.next[se2];
++                }
++            }
++            if dissolve {
++                self.dissolve_symedge(se);
++            }
++        }
++    }
++
++    fn remove_outer_edges_until_constraints(&mut self) {
++        self.visit_count += 1;
++        let visit = self.visit_count;
++        let of = self.outer;
++        self.fvisit[of] = visit;
++        let mut fstack: Vec<usize> = vec![];
++        let se_start = self.fsym[of];
++        let mut se = se_start;
++        loop {
++            if !self.is_constrained(eof(se)) {
++                let fs = self.sface[sym(se)];
++                if self.fvisit[fs] != visit {
++                    fstack.push(fs);
++                }
++            }
++            se = self.next[se];
++            if se == se_start {
++                break;
++            }
++        }
++        while let Some(f) = fstack.pop() {
++            if self.fvisit[f] == visit {
++                continue;
++            }
++            self.fvisit[f] = visit;
++            let se_start = self.fsym[f];
++            let mut se = se_start;
++            let mut to_dissolve: Vec<usize> = vec![];
++            loop {
++                if !self.is_constrained(eof(se)) {
++                    let fs = self.sface[sym(se)];
++                    if self.fvisit[fs] != visit {
++                        fstack.push(fs);
++                    } else {
++                        to_dissolve.push(se);
++                    }
++                }
++                se = self.next[se];
++                if se == se_start {
++                    break;
++                }
++            }
++            // linked-list prepend then pop: processed in reverse push order of prepend = last prepended first
++            while let Some(se) = to_dissolve.pop() {
++                if self.next[se] != NIL {
++                    self.dissolve_symedge(se);
++                }
++            }
++        }
++    }
++
++    fn remove_faces_in_holes(&mut self) {
++        for i in 0..self.fsym.len() {
++            if !self.fdel[i] && self.fhole[i] {
++                self.fdel[i] = true;
++                let se_start = self.fsym[i];
++                let mut se = se_start;
++                loop {
++                    let se_next = self.next[se];
++                    if !self.is_constrained(eof(se)) {
++                        self.next[se] = NIL;
++                    }
++                    se = se_next;
++                    if se == se_start || se == NIL {
++                        break;
++                    }
++                }
++            }
++        }
++    }
++
++    fn detect_holes(&mut self) {
++        let nf = self.fsym.len();
++        let mut fstack: Vec<usize> = vec![];
++        let mut region_rep: Vec<usize> = vec![];
++        for i in 0..nf {
++            self.fvisit[i] = -1;
++        }
++        let mut cur_region: i32 = -1;
++        self.fvisit[self.outer] = -2;
++        for i in 0..nf {
++            if !self.fdel[i] && self.fsym[i] != NIL && self.fvisit[i] == -1 {
++                fstack.push(i);
++                cur_region += 1;
++                region_rep.push(i);
++                while let Some(f) = fstack.pop() {
++                    if self.fvisit[f] != -1 {
++                        continue;
++                    }
++                    self.fvisit[f] = cur_region;
++                    let se_start = self.fsym[f];
++                    let mut se = se_start;
++                    loop {
++                        if !self.is_constrained(eof(se)) {
++                            let fs = self.sface[sym(se)];
++                            if !self.fdel[fs] && self.fvisit[fs] == -1 {
++                                fstack.push(fs);
++                            }
++                        }
++                        se = self.next[se];
++                        if se == se_start {
++                            break;
++                        }
++                    }
++                }
++            }
++        }
++        cur_region += 1;
++        self.visit_count = cur_region;
++        let ray_end = [123456.0, 654321.0];
++        for &f in &region_rep {
++            let s0 = self.fsym[f];
++            let a = self.co[self.svert[s0]];
++            let b = self.co[self.svert[self.next[s0]]];
++            let cc = self.co[self.svert[self.next[self.next[s0]]]];
++            let mid = [(a[0] + b[0] + cc[0]) / 3.0, (a[1] + b[1] + cc[1]) / 3.0];
++            let mut hits = 0;
++            for e in 0..self.eids.len() {
++                if !self.is_deleted(e) && self.is_constrained(e) {
++                    if self.fvisit[self.sface[2 * e]] == self.fvisit[self.sface[2 * e + 1]] {
++                        continue;
++                    }
++                    let (k, _) = isect_seg_seg(ray_end, mid, self.co[self.svert[2 * e]], self.co[self.svert[2 * e + 1]]);
++                    if k == IKind::Cross {
++                        hits += 1;
++                    }
++                }
++            }
++            self.fhole[f] = hits % 2 == 0;
++        }
++        for i in 0..nf {
++            let region = self.fvisit[i];
++            if region < 0 {
++                continue;
++            }
++            self.fhole[i] = self.fhole[region_rep[region as usize]];
++        }
++    }
++
++    fn prepare_for_output(&mut self, out: OutType) {
++        if self.eids.is_empty() {
++            return;
++        }
++        for e in 0..self.eids.len() {
++            if !self.is_deleted(e) {
++                for k in 0..2 {
++                    let f = self.sface[2 * e + k];
++                    if self.fsym[f] == NIL {
++                        self.fsym[f] = 2 * e + k;
++                    }
++                }
++            }
++        }
++        let need_holes = matches!(out, OutType::InsideWithHoles | OutType::ConstraintsValidBmeshWithHoles);
++        if need_holes {
++            self.detect_holes();
++        }
++        match out {
++            OutType::Constraints => self.remove_non_constraint_edges(),
++            OutType::ConstraintsValidBmesh => self.remove_non_constraint_edges_leave_valid_bmesh(),
++            OutType::Inside => self.remove_outer_edges_until_constraints(),
++            OutType::InsideWithHoles => {
++                self.remove_outer_edges_until_constraints();
++                self.remove_faces_in_holes();
++            }
++            OutType::ConstraintsValidBmeshWithHoles => {
++                self.remove_outer_edges_until_constraints();
++                self.remove_non_constraint_edges_leave_valid_bmesh();
++                self.remove_faces_in_holes();
++            }
++        }
++    }
++}
++
++/// Constrained Delaunay triangulation of the polygons `faces` (indices into `verts`), like
++/// `blender::meshintersect::delaunay_2d_calc` with `need_ids = false`, epsilon 0.
++pub fn delaunay_2d(verts: &[[f64; 2]], faces: &[Vec<usize>], out: OutType) -> CdtResult {
++    let mut d = Cdt {
++        co: vec![],
++        vsym: vec![],
++        vmerge: vec![],
++        vvisit: vec![],
++        next: vec![],
++        rot: vec![],
++        svert: vec![],
++        sface: vec![],
++        eids: vec![],
++        fsym: vec![],
++        fids: vec![],
++        fvisit: vec![],
++        fdel: vec![],
++        fhole: vec![],
++        outer: 0,
++        visit_count: 0,
++        input_vert_num: verts.len(),
++        face_edge_offset: 0,
++    };
++    d.outer = d.add_face();
++    for &p in verts {
++        d.add_vert(p);
++    }
++    d.initial_triangulation();
++    // (no input edges)
++    d.face_edge_offset = 0;
++    let added = d.add_face_constraints(faces, out);
++    let mut out = out;
++    if added == 0 && !matches!(out, OutType::Inside | OutType::Constraints) {
++        out = OutType::Inside;
++    }
++    d.prepare_for_output(out);
++    // output
++    let nvt = d.co.len();
++    let mut map = vec![0usize; nvt];
++    let mut nv = 0;
++    for i in 0..nvt {
++        if d.vmerge[i] == -1 {
++            map[i] = nv;
++            nv += 1;
++        }
++    }
++    let mut res = CdtResult { vert: vec![], edge: vec![], face: vec![] };
++    if nv == 0 {
++        return res;
++    }
++    for i in 0..nvt {
++        if d.vmerge[i] != -1 {
++            map[i] = map[d.vmerge[i] as usize];
++        }
++    }
++    for i in 0..nvt {
++        if d.vmerge[i] == -1 {
++            res.vert.push(d.co[i]);
++        }
++    }
++    for e in 0..d.eids.len() {
++        if !d.is_deleted(e) {
++            res.edge.push((map[d.svert[2 * e]], map[d.svert[2 * e + 1]]));
++        }
++    }
++    for f in 0..d.fsym.len() {
++        if !d.fdel[f] && f != d.outer {
++            let se_start = d.fsym[f];
++            if se_start == NIL {
++                continue;
++            }
++            let mut face = vec![];
++            let mut se = se_start;
++            loop {
++                face.push(map[d.svert[se]]);
++                se = d.next[se];
++                if se == se_start || se == NIL {
++                    break;
++                }
++            }
++            res.face.push(face);
++        }
++    }
++    res
++}
+diff --git a/src/gn/nodes_curves.rs b/src/gn/nodes_curves.rs
+index feba501..9b0287f 100644
+--- a/src/gn/nodes_curves.rs
++++ b/src/gn/nodes_curves.rs
+@@ -287,6 +287,101 @@ pub fn curve_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
+             }
+             outs(node, vec![("Curve", rcgeo(o))])
+         }
++        "GeometryNodeCurveSetHandles" => {
++            let g = ev.geo(ni, "Curve")?;
++            let ty: u8 = match node.ps("handle_type") {
++                "FREE" => 0,
++                "VECTOR" => 2,
++                "ALIGN" => 3,
++                _ => 1,
++            };
++            let (mut left, mut right) = (false, false);
++            if let Some(serde_json::Value::Array(a)) = node.pj("mode") {
++                for m in a {
++                    match m.as_str() {
++                        Some("LEFT") => left = true,
++                        Some("RIGHT") => right = true,
++                        _ => {}
++                    }
++                }
++            } else {
++                left = true;
++                right = true;
++            }
++            let mut o = (*g).clone();
++            if let Some(c) = o.curves.as_mut() {
++                let sel = selection(ev, ni, Comp::Curves(g.curves.as_ref().unwrap()), Dom::Point)?;
++                for i in 0..c.np() {
++                    if sel[i] {
++                        if left {
++                            c.htl[i] = ty;
++                        }
++                        if right {
++                            c.htr[i] = ty;
++                        }
++                    }
++                }
++                calculate_bezier_auto_handles(c);
++            }
++            outs(node, vec![("Curve", rcgeo(o))])
++        }
++        "GeometryNodeSetCurveHandlePositions" => {
++            let g = ev.geo(ni, "Curve")?;
++            let use_left = node.ps("mode") != "RIGHT";
++            let mut o = (*g).clone();
++            if let Some(c) = o.curves.as_mut() {
++                let comp = Comp::Curves(g.curves.as_ref().unwrap());
++                let sel = selection(ev, ni, comp, Dom::Point)?;
++                let pos = eval_on(&ev.field(ni, "Position")?, comp, Dom::Point);
++                let off = eval_on(&ev.field(ni, "Offset")?, comp, Dom::Point);
++                for i in 0..c.np() {
++                    if !sel[i] {
++                        continue;
++                    }
++                    let (mut t, mut t_other) = if use_left { (c.htl[i], c.htr[i]) } else { (c.htr[i], c.htl[i]) };
++                    // update_handle_types_for_movement
++                    match t {
++                        1 => {
++                            if t_other == 1 {
++                                t = 3;
++                                t_other = 3;
++                            } else {
++                                t = 0;
++                            }
++                        }
++                        2 => t = 0,
++                        3 => {
++                            if t_other != 3 {
++                                t = 0;
++                            }
++                        }
++                        _ => {}
++                    }
++                    if use_left {
++                        c.htl[i] = t;
++                        c.htr[i] = t_other;
++                    } else {
++                        c.htr[i] = t;
++                        c.htl[i] = t_other;
++                    }
++                    let newp = add3(pos[i].v(), off[i].v());
++                    let position = c.pos[i];
++                    if use_left {
++                        let (mut h, mut ho) = (c.hl[i], c.hr[i]);
++                        set_handle_position(position, t, t_other, newp, &mut h, &mut ho);
++                        c.hl[i] = h;
++                        c.hr[i] = ho;
++                    } else {
++                        let (mut h, mut ho) = (c.hr[i], c.hl[i]);
++                        set_handle_position(position, t, t_other, newp, &mut h, &mut ho);
++                        c.hr[i] = h;
++                        c.hl[i] = ho;
++                    }
++                }
++                calculate_bezier_auto_handles(c);
++            }
++            outs(node, vec![("Curve", rcgeo(o))])
++        }
+         "GeometryNodeCurvePrimitiveBezierSegment" => {
+             let res = ev.ci(ni, "Resolution")?.max(1);
+             let (p0, mut h0, mut h1, p1) = (ev.cv(ni, "Start")?, ev.cv(ni, "Start Handle")?, ev.cv(ni, "End Handle")?, ev.cv(ni, "End")?);
+@@ -613,11 +708,15 @@ pub fn curve_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
+             let g = ev.geo(ni, "Curve")?;
+             let rad = ev.field(ni, "Radius")?;
+             let limit = ev.cb(ni, "Limit Radius")?;
+-            let count = if ev.has_input(ni, "Count") { Some(ev.ci(ni, "Count")?.max(1) as usize) } else { None };
++            let count = if ev.has_input(ni, "Count") { Some(ev.field(ni, "Count")?) } else { None };
+             let mut o = (*g).clone();
+             if let Some(c) = &g.curves {
+                 let rv = eval_on(&rad, Comp::Curves(c), Dom::Point);
+-                o.curves = Some(fillet_curve(c, &rv, limit, count.unwrap_or(1), node.ps("mode") == "BEZIER"));
++                let cv = match &count {
++                    Some(f) => eval_on(f, Comp::Curves(c), Dom::Point),
++                    None => vec![Val::I(1); c.np()],
++                };
++                o.curves = Some(fillet_curve(c, &rv, &cv, limit, node.ps("mode") == "BEZIER"));
+             }
+             outs(node, vec![("Curve", rcgeo(o))])
+         }
+@@ -699,41 +798,163 @@ pub fn mesh_to_curve(m: &Mesh, sel: &[bool]) -> Curves {
+     c
+ }
+ 
+-pub fn fill_curve(c: &Curves, ngons: bool) -> Mesh {
+-    let mut m = Mesh::new();
+-    let mut faces: Vec<Vec<u32>> = vec![];
+-    for k in 0..c.nc() {
+-        let e = eval_curve(c, k);
+-        let base = m.pos.len() as u32;
+-        // coincident points (within the CDT epsilon) are merged
+-        let mut up: Vec<V3> = vec![];
+-        for p in &e.pos {
+-            if up.last().map_or(true, |q| len3(sub3(*p, *q)) > 1e-5) {
+-                up.push(*p);
++fn area2(p: &[[f32; 2]]) -> f64 {
++    let mut a = 0.0f64;
++    for i in 0..p.len() {
++        let (u, v) = (p[i], p[(i + 1) % p.len()]);
++        a += u[0] as f64 * v[1] as f64 - v[0] as f64 * u[1] as f64;
++    }
++    a
++}
++
++fn pip(pt: [f32; 2], poly: &[[f32; 2]]) -> bool {
++    let mut inside = false;
++    let n = poly.len();
++    let mut j = n - 1;
++    for i in 0..n {
++        let (a, b) = (poly[i], poly[j]);
++        if (a[1] > pt[1]) != (b[1] > pt[1]) && pt[0] < (b[0] - a[0]) * (pt[1] - a[1]) / (b[1] - a[1]) + a[0] {
++            inside = !inside;
++        }
++        j = i;
++    }
++    inside
++}
++
++/// triangulate a CCW outer loop with CW hole loops (indices into `pts`) by bridging the holes (keyhole) and ear clipping
++fn triangulate_with_holes(pts: &[[f32; 2]], outer: Vec<usize>, holes: Vec<Vec<usize>>) -> Vec<[usize; 3]> {
++    let mut ring = outer;
++    let mut holes = holes;
++    // rightmost hole first
++    holes.sort_by(|a, b| {
++        let ma = a.iter().map(|&i| pts[i][0]).fold(f32::MIN, f32::max);
++        let mb = b.iter().map(|&i| pts[i][0]).fold(f32::MIN, f32::max);
++        mb.partial_cmp(&ma).unwrap()
++    });
++    for h in holes {
++        // hole vertex with max x
++        let (hk, _) = h.iter().enumerate().max_by(|a, b| pts[*a.1][0].partial_cmp(&pts[*b.1][0]).unwrap()).unwrap();
++        let hp = pts[h[hk]];
++        // nearest visible ring vertex to the right: cast ray +x, take the closest crossing edge, pick its endpoint with max x
++        let n = ring.len();
++        let mut best: Option<(f32, usize)> = None;
++        for i in 0..n {
++            let (a, b) = (pts[ring[i]], pts[ring[(i + 1) % n]]);
++            if (a[1] <= hp[1]) != (b[1] <= hp[1]) || a[1] == hp[1] || b[1] == hp[1] {
++                if a[1] == b[1] {
++                    continue;
++                }
++                let t = (hp[1] - a[1]) / (b[1] - a[1]);
++                if !(0.0..=1.0).contains(&t) {
++                    continue;
++                }
++                let x = a[0] + t * (b[0] - a[0]);
++                if x >= hp[0] && best.map_or(true, |(bx, _)| x < bx) {
++                    let k = if a[0] > b[0] { i } else { (i + 1) % n };
++                    best = Some((x, k));
++                }
+             }
+         }
+-        while up.len() > 1 && len3(sub3(up[0], *up.last().unwrap())) <= 1e-5 {
+-            up.pop();
++        let mut k = match best {
++            Some((_, k)) => k,
++            None => 0,
++        };
++        // among ring vertices inside the triangle (hp, crossing, k) pick the one with the smallest angle (earcut)
++        let m = pts[ring[k]];
++        let cross_x = best.map_or(m[0], |b| b.0);
++        let (mut tan_min, mut found) = (f32::MAX, k);
++        for i in 0..n {
++            let q = pts[ring[i]];
++            if q[0] >= hp[0].min(cross_x) && q[0] <= m[0].max(cross_x) && q != m {
++                let tri = [hp, [cross_x, hp[1]], m];
++                let s0 = ((tri[1][0] - tri[0][0]) * (q[1] - tri[0][1]) - (tri[1][1] - tri[0][1]) * (q[0] - tri[0][0])) as f64;
++                let s1 = ((tri[2][0] - tri[1][0]) * (q[1] - tri[1][1]) - (tri[2][1] - tri[1][1]) * (q[0] - tri[1][0])) as f64;
++                let s2 = ((tri[0][0] - tri[2][0]) * (q[1] - tri[2][1]) - (tri[0][1] - tri[2][1]) * (q[0] - tri[2][0])) as f64;
++                let inside = (s0 >= 0.0 && s1 >= 0.0 && s2 >= 0.0) || (s0 <= 0.0 && s1 <= 0.0 && s2 <= 0.0);
++                if inside {
++                    let t = ((q[1] - hp[1]).abs()) / (q[0] - hp[0]).abs().max(1e-30);
++                    if t < tan_min {
++                        tan_min = t;
++                        found = i;
++                    }
++                }
++            }
+         }
+-        let e = EvalCurve { pos: up, ctrl_at: vec![], interp: vec![], cr: None };
+-        m.pos.extend_from_slice(&e.pos);
+-        let n = e.pos.len();
+-        if n < 3 {
+-            continue;
++        k = found;
++        // splice: ring[..=k], hole starting at hk (full cycle), hole[hk] again, ring[k..]
++        let mut nr: Vec<usize> = ring[..=k].to_vec();
++        for j in 0..=h.len() {
++            nr.push(h[(hk + j) % h.len()]);
+         }
+-        if ngons {
+-            faces.push((0..n as u32).map(|i| base + i).collect());
+-        } else {
+-            let co: Vec<[f32; 2]> = e.pos.iter().map(|p| [p[0], p[1]]).collect();
+-            let mut tris = crate::assets::polyfill::polyfill_calc(&co);
+-            delaunay_flip(&co, &mut tris);
+-            for t in tris {
+-                faces.push(vec![base + t[0], base + t[1], base + t[2]]);
++        nr.push(ring[k]);
++        nr.extend_from_slice(&ring[k + 1..]);
++        ring = nr;
++    }
++    // ear clipping
++    let mut tris = vec![];
++    let mut idx: Vec<usize> = ring;
++    let mut guard = 0;
++    while idx.len() > 3 && guard < 100000 {
++        guard += 1;
++        let n = idx.len();
++        let mut clipped = false;
++        for i in 0..n {
++            let (ia, ib, ic) = (idx[(i + n - 1) % n], idx[i], idx[(i + 1) % n]);
++            let (a, b, c) = (pts[ia], pts[ib], pts[ic]);
++            let cr = (b[0] - a[0]) as f64 * (c[1] - a[1]) as f64 - (b[1] - a[1]) as f64 * (c[0] - a[0]) as f64;
++            if cr <= 0.0 {
++                continue;
++            }
++            let mut ok = true;
++            for &j in &idx {
++                let q = pts[j];
++                if q == a || q == b || q == c {
++                    continue;
++                }
++                let s0 = (b[0] - a[0]) as f64 * (q[1] - a[1]) as f64 - (b[1] - a[1]) as f64 * (q[0] - a[0]) as f64;
++                let s1 = (c[0] - b[0]) as f64 * (q[1] - b[1]) as f64 - (c[1] - b[1]) as f64 * (q[0] - b[0]) as f64;
++                let s2 = (a[0] - c[0]) as f64 * (q[1] - c[1]) as f64 - (a[1] - c[1]) as f64 * (q[0] - c[0]) as f64;
++                if s0 >= 0.0 && s1 >= 0.0 && s2 >= 0.0 {
++                    ok = false;
++                    break;
++                }
++            }
++            if ok {
++                tris.push([ia, ib, ic]);
++                idx.remove(i);
++                clipped = true;
++                break;
+             }
+         }
++        if !clipped {
++            // degenerate: drop a vertex
++            idx.remove(0);
++        }
++    }
++    if idx.len() == 3 {
++        tris.push([idx[0], idx[1], idx[2]]);
+     }
+-    let pos = m.pos.clone();
+-    let mut mm = Mesh::from_faces(pos, &faces, &[]);
++    tris
++}
++
++pub fn fill_curve(c: &Curves, ngons: bool) -> Mesh {
++    // Blender: one CDT over all curves (evaluated points, XY only), see cdt.rs
++    let mut verts: Vec<[f64; 2]> = vec![];
++    let mut faces_in: Vec<Vec<usize>> = vec![];
++    for k in 0..c.nc() {
++        let e = eval_curve(c, k);
++        let base = verts.len();
++        for p in &e.pos {
++            verts.push([p[0] as f64, p[1] as f64]);
++        }
++        faces_in.push((base..verts.len()).collect());
++    }
++    let ot = if ngons { super::cdt::OutType::ConstraintsValidBmeshWithHoles } else { super::cdt::OutType::InsideWithHoles };
++    let r = super::cdt::delaunay_2d(&verts, &faces_in, ot);
++    let pos: Vec<V3> = r.vert.iter().map(|p| [p[0] as f32, p[1] as f32, 0.0]).collect();
++    let faces: Vec<Vec<u32>> = r.face.iter().map(|f| f.iter().map(|&i| i as u32).collect()).collect();
++    let keep: Vec<[u32; 2]> = r.edge.iter().map(|&(a, b)| [a as u32, b as u32]).collect();
++    let mut mm = Mesh::from_faces(pos, &faces, &keep);
+     set_sharp_all(&mut mm);
+     mm
+ }
+@@ -826,102 +1047,215 @@ pub fn trim_curve(c: &Curves, sel: &[bool], start: &[Val], end: &[Val], by_len:
+     o
+ }
+ 
+-pub fn fillet_curve(c: &Curves, radius: &[Val], limit: bool, count: usize, bezier: bool) -> Curves {
+-    let _ = bezier;
++/// angle_v3v3 (normalizes both inputs with normalize_v3, then angle_normalized_v3v3)
++fn angle_v3v3(a: V3, b: V3) -> f32 {
++    let (a, b) = (norm3_c(a), norm3_c(b));
++    let saasin = |x: f32| x.clamp(-1.0, 1.0).asin();
++    if dot3(a, b) >= 0.0 {
++        2.0 * saasin(len3(sub3(b, a)) / 2.0)
++    } else {
++        let bn = [-b[0], -b[1], -b[2]];
++        (std::f64::consts::PI as f32) - 2.0 * saasin(len3(sub3(bn, a)) / 2.0)
++    }
++}
++
++fn fillet_limit_radius(pp: V3, p: V3, pn: V3, ap: f32, a: f32, an: f32, rp: f32, r: f32, rn: f32) -> f32 {
++    let disp = r * (a / 2.0).tan();
++    let disp_p = rp * (ap / 2.0).tan();
++    let seg_p = len3(sub3(p, pp));
++    let tot_p = disp_p + disp;
++    let f_p = safe_div(seg_p, tot_p).clamp(0.0, 1.0);
++    let disp_n = rn * (an / 2.0).tan();
++    let seg_n = len3(sub3(p, pn));
++    let tot_n = disp_n + disp;
++    let f_n = safe_div(seg_n, tot_n).clamp(0.0, 1.0);
++    r * f_p.min(f_n)
++}
++
++/// vector handle: interpolate(p, other, 1/3)
++fn vector_handle(p: V3, other: V3) -> V3 {
++    let t = 1.0f32 / 3.0;
++    [p[0] * (1.0 - t) + other[0] * t, p[1] * (1.0 - t) + other[1] * t, p[2] * (1.0 - t) + other[2] * t]
++}
++
++/// Port of blender::geometry::fillet_curves (geometry/intern/fillet_curves.cc).  `counts` = per point Count field
++/// (ignored in Bezier mode, where it is 1).
++pub fn fillet_curve(c: &Curves, radius: &[Val], counts: &[Val], limit: bool, bezier: bool) -> Curves {
+     let mut o = Curves::new();
+     o.has_radius = c.has_radius;
++    let pi32 = std::f64::consts::PI as f32;
++    let _ = pi32;
++    let has_bezier = c.kind.iter().any(|k| *k == CKind::Bezier);
++    // destination point <- source point, for attribute gathering
++    let mut gather: Vec<usize> = vec![];
+     for k in 0..c.nc() {
+         let r = c.range(k);
+         let n = r.len();
+         let cyc = c.cyclic[k];
+         let pos: Vec<V3> = c.pos[r.clone()].to_vec();
+-        if n < 3 {
+-            o.push_kind(c.kind[k], &pos, cyc);
++        if n == 0 {
++            o.push_kind(c.kind[k], &[], cyc);
+             continue;
+         }
+-        let nseg = if cyc { n } else { n - 1 };
+-        let dirs: Vec<V3> = (0..nseg).map(|i| norm3(sub3(pos[(i + 1) % n], pos[i]))).collect();
+-        let seglen: Vec<f32> = (0..nseg).map(|i| len3(sub3(pos[(i + 1) % n], pos[i]))).collect();
+-        let mut angle = vec![0.0f32; n];
+-        let mut disp = vec![0.0f32; n];
+-        let mut has = vec![false; n];
++        let mut cnt: Vec<usize> = (0..n).map(|i| if bezier { 2 } else { (counts[r.start + i].i().max(0) + 1) as usize }).collect();
++        if !cyc {
++            cnt[0] = 1;
++            cnt[n - 1] = 1;
++        }
+         for i in 0..n {
+-            if !cyc && (i == 0 || i == n - 1) {
+-                continue;
++            if radius[r.start + i].f() == 0.0 {
++                cnt[i] = 1;
+             }
+-            let dp = dirs[(i + nseg - 1) % nseg];
+-            let dn = dirs[i % nseg];
+-            let a = angle_norm(dp.map(|x| -x), dn);
+-            angle[i] = a;
+-            let rad = radius[r.start + i].f();
+-            if rad == 0.0 || a < 1e-4 || (std::f32::consts::PI - a) < 1e-4 {
++        }
++        // directions and angles
++        let mut dirs = vec![[0.0f32; 3]; n];
++        for i in 0..n.saturating_sub(1) {
++            dirs[i] = norm3(sub3(pos[i + 1], pos[i]));
++        }
++        dirs[n - 1] = norm3(sub3(pos[0], pos[n - 1]));
++        let neg = |v: V3| [-v[0], -v[1], -v[2]];
++        let mut angles = vec![0.0f32; n];
++        angles[0] = (std::f64::consts::PI - angle_v3v3(neg(dirs[n - 1]), dirs[0]) as f64) as f32;
++        for i in 1..n {
++            angles[i] = (std::f64::consts::PI - angle_v3v3(neg(dirs[i - 1]), dirs[i]) as f64) as f32;
++        }
++        let rin: Vec<f32> = (0..n).map(|i| radius[r.start + i].f()).collect();
++        let radii: Vec<f32> = if limit {
++            let mut rc = vec![0.0f32; n];
++            if cyc {
++                rc[0] = fillet_limit_radius(pos[n - 1], pos[0], pos[1 % n], angles[n - 1], angles[0], angles[1 % n], rin[n - 1], rin[0], rin[1 % n]);
++                for i in 1..n.saturating_sub(1) {
++                    rc[i] = fillet_limit_radius(pos[i - 1], pos[i], pos[i + 1], angles[i - 1], angles[i], angles[i + 1], rin[i - 1], rin[i], rin[i + 1]);
++                }
++                if n >= 2 {
++                    rc[n - 1] = fillet_limit_radius(pos[n - 2], pos[n - 1], pos[0], angles[n - 2], angles[n - 1], angles[0], rin[n - 2], rin[n - 1], rin[0]);
++                }
++            } else {
++                let last = n - 1;
++                rc[0] = 0.0;
++                for i in 1..last.max(1) {
++                    let (ip, in_) = (i - 1, i + 1);
++                    let rp = if ip == 0 { 0.0 } else { rin[ip] };
++                    let rn = if in_ == last { 0.0 } else { rin[in_] };
++                    rc[i] = fillet_limit_radius(pos[ip], pos[i], pos[in_], angles[ip], angles[i], angles[in_], rp, rin[i], rn);
++                }
++                rc[last] = 0.0;
++            }
++            rc
++        } else {
++            rin.clone()
++        };
++        // positions
++        let mut dst: Vec<V3> = vec![];
++        let mut arcs: Vec<std::ops::Range<usize>> = vec![];
++        for i in 0..n {
++            let start = dst.len();
++            if cnt[i] == 1 {
++                dst.push(pos[i]);
++                gather.push(r.start + i);
++                arcs.push(start..start + 1);
+                 continue;
+             }
+-            has[i] = true;
+-            // negative radii degenerate to `count + 1` copies of the vertex (measured against Blender)
+-            disp[i] = if rad < 0.0 { 0.0 } else { rad / (a * 0.5).tan() };
++            let ip = if i == 0 { n - 1 } else { i - 1 };
++            let angle = angles[i];
++            let rad = radii[i];
++            let displacement = rad * (angle / 2.0).tan();
++            let prev_dir = neg(dirs[ip]);
++            let next_dir = dirs[i];
++            let arc_start = add3(pos[i], mul3(prev_dir, displacement));
++            let arc_end = add3(pos[i], mul3(next_dir, displacement));
++            let nmid = cnt[i] - 2;
++            dst.push(arc_start);
++            if nmid > 0 {
++                let axis = neg(norm3(cross3(prev_dir, next_dir)));
++                let sum = add3(next_dir, prev_dir);
++                let center_direction = norm3(mul3(sum, 0.5));
++                let distance_to_center = (rad * rad + displacement * displacement).sqrt();
++                let center = add3(pos[i], mul3(center_direction, distance_to_center));
++                let segment_angle = angle / (nmid + 1) as f32;
++                for j in 0..nmid {
++                    let ang = segment_angle * (j + 1) as f32;
++                    let (si, co) = (ang.sin(), ang.cos());
++                    let ico = 1.0 - co;
++                    let nsi = [axis[0] * si, axis[1] * si, axis[2] * si];
++                    let n00 = (axis[0] * axis[0]) * ico;
++                    let n01 = (axis[0] * axis[1]) * ico;
++                    let n11 = (axis[1] * axis[1]) * ico;
++                    let n02 = (axis[0] * axis[2]) * ico;
++                    let n12 = (axis[1] * axis[2]) * ico;
++                    let n22 = (axis[2] * axis[2]) * ico;
++                    let m = [[n00 + co, n01 + nsi[2], n02 - nsi[1]], [n01 - nsi[2], n11 + co, n12 + nsi[0]], [n02 + nsi[1], n12 - nsi[0], n22 + co]];
++                    let v = sub3(arc_start, center);
++                    let rv = [m[0][0] * v[0] + m[1][0] * v[1] + m[2][0] * v[2], m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2], m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2]];
++                    dst.push(add3(rv, center));
++                }
++            }
++            dst.push(arc_end);
++            for _ in 0..cnt[i] {
++                gather.push(r.start + i);
++            }
++            arcs.push(start..dst.len());
+         }
+-        if limit {
+-            // each segment is shared by its two corner fillets
+-            let orig = disp.clone();
++        let first_dst = o.pos.len();
++        o.push_kind(c.kind[k], &dst, cyc);
++        let kk = o.nc() - 1;
++        o.res[kk] = c.res[k];
++        // handles
++        if c.kind[k] == CKind::Bezier && has_bezier {
++            let nd = dst.len();
++            let last = nd - 1;
+             for i in 0..n {
+-                if !has[i] {
++                let arc = arcs[i].clone();
++                let rs = r.start + i;
++                if arc.len() == 1 {
++                    o.hl[first_dst + arc.start] = c.hl[rs];
++                    o.hr[first_dst + arc.start] = c.hr[rs];
++                    o.htl[first_dst + arc.start] = c.htl[rs];
++                    o.htr[first_dst + arc.start] = c.htr[rs];
+                     continue;
+                 }
+-                let ip = (i + n - 1) % n;
+-                let in_ = (i + 1) % n;
+-                let lp = seglen[(i + nseg - 1) % nseg];
+-                let ln = seglen[i % nseg];
+-                let avail = |j: usize, l: f32| -> f32 {
+-                    if has[j] && (cyc || (j != 0 && j != n - 1)) {
+-                        let tot = orig[i] + orig[j];
+-                        if tot > 0.0 {
+-                            l * orig[i] / tot
+-                        } else {
+-                            l
+-                        }
+-                    } else {
+-                        l
++                let (a, b) = (arc.start, arc.end - 1);
++                let prev = if a == 0 { last } else { a - 1 };
++                let next = if b == last { 0 } else { b + 1 };
++                if bezier {
++                    let ip = if i == 0 { n - 1 } else { i - 1 };
++                    let prev_dir = neg(dirs[ip]);
++                    let next_dir = dirs[i];
++                    o.hl[first_dst + a] = vector_handle(dst[a], dst[prev]);
++                    o.hr[first_dst + b] = vector_handle(dst[b], dst[next]);
++                    o.htl[first_dst + a] = 2;
++                    o.htr[first_dst + b] = 2;
++                    let handle_length = (4.0f32 / 3.0) * radii[i] * (angles[i] / 4.0).tan();
++                    o.hr[first_dst + a] = sub3(dst[a], mul3(prev_dir, handle_length));
++                    o.hl[first_dst + b] = sub3(dst[b], mul3(next_dir, handle_length));
++                    o.htr[first_dst + a] = 3;
++                    o.htl[first_dst + b] = 3;
++                } else {
++                    for j in arc.clone() {
++                        o.htl[first_dst + j] = 2;
++                        o.htr[first_dst + j] = 2;
+                     }
+-                };
+-                let m = avail(ip, lp).min(avail(in_, ln));
+-                disp[i] = orig[i].min(m);
++                    o.hl[first_dst + a] = vector_handle(dst[a], dst[prev]);
++                    o.hr[first_dst + b] = vector_handle(dst[b], dst[next]);
++                    for j in (a + 1)..b {
++                        o.hr[first_dst + j] = vector_handle(dst[j], dst[j - 1]);
++                        o.hl[first_dst + j] = vector_handle(dst[j], dst[j + 1]);
++                    }
++                }
+             }
+         }
+-        let mut pts: Vec<V3> = vec![];
+-        let mut src: Vec<usize> = vec![];
+-        for i in 0..n {
+-            if !has[i] {
+-                pts.push(pos[i]);
+-                src.push(i);
+-                continue;
+-            }
+-            let dp = dirs[(i + nseg - 1) % nseg];
+-            let dn = dirs[i % nseg];
+-            let back = dp.map(|x| -x);
+-            let d = disp[i];
+-            let t0 = add3(pos[i], mul3(back, d));
+-            let t1 = add3(pos[i], mul3(dn, d));
+-            let a = angle[i];
+-            let rr = d * (a * 0.5).tan();
+-            let bis = norm3(add3(back, dn));
+-            let cen = add3(pos[i], mul3(bis, rr / (a * 0.5).sin()));
+-            let (v0, v1) = (sub3(t0, cen), sub3(t1, cen));
+-            let axis = norm3(cross3(v0, v1));
+-            let sweep = len3(cross3(v0, v1)).atan2(dot3(v0, v1));
+-            let cnt = count + 1;
+-            for j in 0..cnt {
+-                let th = sweep * j as f32 / (cnt - 1).max(1) as f32;
+-                let v = rotate_around(v0, axis, th);
+-                pts.push(add3(cen, v));
+-                src.push(i);
+-            }
+-        }
+-        o.push_poly(&pts, cyc);
+-        let base = o.pos.len() - pts.len();
+-        for (j, &s) in src.iter().enumerate() {
+-            o.radius[base + j] = c.radius[r.start + s];
+-            o.tilt[base + j] = c.tilt[r.start + s];
++    }
++    // point attributes
++    for j in 0..gather.len() {
++        let s = gather[j];
++        o.radius[j] = c.radius[s];
++        o.tilt[j] = c.tilt[s];
++    }
++    for (name, a) in c.attrs.iter() {
++        if a.dom == Dom::Point {
++            o.attrs.insert(name.clone(), Attr { dom: Dom::Point, ty: a.ty, data: gather.iter().map(|&s| a.data[s].clone()).collect() });
++        } else {
++            o.attrs.insert(name.clone(), a.clone());
+         }
+     }
+     o

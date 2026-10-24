@@ -19,7 +19,7 @@ import numpy as np
 import gn_export as GX
 from gn_export import extract_mesh, ATTR_FIELDS
 
-GNCHECK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", "release", "gncheck")
+GNCHECK = os.environ.get("GNCHECK") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "target", os.environ.get("GNPROFILE", "fast"), "gncheck")
 
 def clean(o):
     """replace nan/inf (not valid JSON for serde) by null / +-3.4e38"""
