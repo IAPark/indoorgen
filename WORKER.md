@@ -42,6 +42,11 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
 - Blender orders the edges of a mesh by its own rule; opcheck passes the recorded `in_edges` to the Rust bevel so the vertex order can match.
 
 ## Rules that bit us before
+- Placeholder / bounding-box geometry must be float32-bit-exact vs python (`PHTOL=1e-12 target/fast/phcheck <oracle>`):
+  the solver's lockstep depends on it (1e-7 differences still change placement). Treat it as part of "done" for any asset.
+- If you delegate to a sub-agent, give it its OWN worktree (`tools/newworker.sh <name>`); two agents in one worktree interleave commits.
+- macOS tools: BSD `sed -i ''` (not GNU), no `timeout`; prefer small python edits for multi-line changes.
+- Object counts per room are chaotic per seed; judge solver/room changes with `tools/countbench.sh` (means over all rooms).
 - Use `crate::dhash::{HashMap, HashSet}` (`HashMap::default()`), never std RandomState maps (nondeterministic output).
 - Reuse before writing: bevel = `src/bm/bevel.rs` (exact bmesh bevel) / `src/assets/bevelfull.rs` (modifier); bridge loops =
   `src/assets/bridge.rs`; fill_grid/solidify = `src/assets/bpyops.rs`; subdivision = `src/subdiv.rs`, gn SubdivisionSurface;
