@@ -196,6 +196,8 @@ struct Bevel<'a> {
     fno: Vec<V>,
     edges: Vec<Edge>,
     vedges: Vec<Vec<usize>>,
+    /// Blender mesh edge index of every edge (None: order of first appearance)
+    erank: Option<Vec<usize>>,
     vno: Vec<V>,
     etag: Vec<bool>,
     vtag: Vec<bool>,
@@ -267,7 +269,7 @@ impl<'a> Bevel<'a> {
         }
         let seg_2 = if seg <= 1 { 0 } else { seg.next_power_of_two().max(4) };
         let (pro_xy, pro_xy_2) = if seg > 1 { (even_xy(seg), even_xy(seg_2)) } else { (vec![], vec![]) };
-        Bevel { m, width_mode, fno, etag: vec![false; edges.len()], edges, vedges, vno, vtag: vec![false; m.pos.len()], offset, seg, seg_2, pro_xy, pro_xy_2, bvs: vec![], bv_of: HashMap::default(), out_pos: vec![], out_faces: vec![] }
+        Bevel { m, width_mode, fno, etag: vec![false; edges.len()], edges, vedges, erank: None, vno, vtag: vec![false; m.pos.len()], offset, seg, seg_2, pro_xy, pro_xy_2, bvs: vec![], bv_of: HashMap::default(), out_pos: vec![], out_faces: vec![] }
     }
 
     fn co(&self, v: u32) -> V {
@@ -340,6 +342,20 @@ impl<'a> Bevel<'a> {
         }
         if order.len() != inc.len() {
             return Err(format!("edge ordering failed ({} of {})", order.len(), inc.len()));
+        }
+        if let Some(rank) = &self.erank {
+            // Blender: edges[0] = first tagged edge in disk order; the walk goes to whichever face neighbour comes first in the disk
+            // cycle, and the array is reversed if that walk is clockwise (then edges[0] is the ccw successor of the first edge)
+            let n = order.len();
+            let all_faced = inc.iter().all(|&e| in_f(self, e).is_some());
+            if n >= 3 && all_faced {
+                let f0 = inc.iter().cloned().find(|&e| self.etag[e]).unwrap();
+                let p = order.iter().position(|&e| e == f0).unwrap();
+                let succ = order[(p + 1) % n];
+                let pred = order[(p + n - 1) % n];
+                let shift = if rank[succ] < rank[pred] { p } else { (p + 1) % n };
+                order.rotate_left(shift);
+            }
         }
         let mut ehs: Vec<Eh> = vec![];
         for &e in &order {
@@ -1548,6 +1564,7 @@ impl<'a> Bevel<'a> {
     }
 
     fn tri_corner_test(&self, bvi: usize) -> i32 {
+        if std::env::var("NOTRI").is_ok() { return -1; }
         let bv = &self.bvs[bvi];
         if bv.vm.n != 3 {
             return 0;
@@ -2217,7 +2234,28 @@ fn map_apply_unused() {}
 
 /// BEVEL modifier (limit method ANGLE, width offset, circular profile): `angle_limit` in radians
 pub fn bevel_angle(m: &Mesh, width: f64, segments: usize, angle_limit: f64, width_mode: bool) -> Result<Mesh, String> {
+    bevel_angle_ex(m, width, segments, angle_limit, width_mode, None)
+}
+
+/// like `bevel_angle`, with the mesh edge order of the Blender mesh (`edge_order`: vertex pairs in Blender's edge index order); the
+/// order decides which edge starts the vertex edge ring and with it the vertex patch variant of Blender
+pub fn bevel_angle_ex(m: &Mesh, width: f64, segments: usize, angle_limit: f64, width_mode: bool, edge_order: Option<&[(u32, u32)]>) -> Result<Mesh, String> {
     let mut b = Bevel::new(m, width, segments.max(1), width_mode);
+    if let Some(eo) = edge_order {
+        let mut rank = vec![usize::MAX / 2; b.edges.len()];
+        let idx: HashMap<(u32, u32), usize> = b.edges.iter().enumerate().map(|(i, e)| ((e.v[0], e.v[1]), i)).collect();
+        for (r, &(x, y)) in eo.iter().enumerate() {
+            if let Some(&i) = idx.get(&(x.min(y), x.max(y))) {
+                rank[i] = r;
+            }
+        }
+        for v in 0..b.vedges.len() {
+            let mut l = b.vedges[v].clone();
+            l.sort_by_key(|&e| rank[e]);
+            b.vedges[v] = l;
+        }
+        b.erank = Some(rank);
+    }
     // tag edges
     for e in 0..b.edges.len() {
         if b.edges[e].faces.len() == 2 {

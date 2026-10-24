@@ -56,6 +56,71 @@ fn main() {
             let m = match which.as_str() { "frame" => parts.frame.clone(), "door" => { let mut m = parts.door.clone(); m.append(&parts.glass); m.append(&parts.louver); m }, _ => spec.assemble(&parts) };
             (m, &a[4])
         }
+        "bed" => {
+            use infinigen::assets::bed::*;
+            let mut b = BedSpec::frame(a[2].parse().unwrap());
+            if let Ok(v) = std::env::var("SX") { b.seat_sub_x = v.parse().unwrap(); }
+            if let Ok(v) = std::env::var("SY") { b.seat_sub_y = v.parse().unwrap(); }
+            let (mesh, name) = (b.part(&a[3]), a[3].clone());
+            let _ = (&mut b, name);
+            (mesh, &a[4])
+        }
+        "chairseat" => {
+            let spec = infinigen::assets::chair::ChairSpec::new(a[2].parse().unwrap());
+            if std::env::var("DBGP").is_ok() { eprintln!("{:?}", spec); }
+            let stage: usize = std::env::var("STAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+            (spec.make_seat_stage(stage), &a[3])
+        }
+        "chairleg" => {
+            use infinigen::assets::chair::*;
+            let spec = ChairSpec::new(a[2].parse().unwrap());
+            let i: usize = a[3].parse().unwrap();
+            let paths = if i < 4 { spec.make_legs() } else { spec.make_backs() };
+            let path = &paths[if i < 4 { i } else { i - 4 }];
+            let t = if i < 4 { spec.leg_thickness } else { spec.back_thickness };
+            let m = if spec.is_leg_round { square_tube(path, t) } else { infinigen::assets::gnhelpers::geo_radius(&[path.clone()], t / 2.0, 32, 0.004) };
+            let stage: usize = std::env::var("STAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+            let m = if stage >= 1 && spec.is_leg_round { infinigen::assets::bevelfull::bevel_angle(&m, spec.bevel_width, 8, 30f64.to_radians(), false).unwrap() } else { m };
+            (m, &a[4])
+        }
+        "chairdecor" => {
+            use infinigen::assets::chair::*;
+            let spec = ChairSpec::new(a[2].parse().unwrap());
+            let mut r = infinigen::assets::inst_rng(spec.fseed, 0);
+            let legs = spec.make_legs();
+            let d = spec.make_leg_decors(&legs, &mut r);
+            let i: usize = a[3].parse().unwrap();
+            (d[i].clone(), &a[4])
+        }
+        "chairarm" => {
+            use infinigen::assets::chair::*;
+            let spec = ChairSpec::new(a[2].parse().unwrap());
+            let seat = spec.make_seat_stage(4);
+            let backs = spec.make_backs();
+            let d = spec.make_arms(&seat, &backs);
+            let i: usize = a[3].parse().unwrap();
+            (d[i].clone(), &a[4])
+        }
+        "chairbackdecor" => {
+            use infinigen::assets::chair::*;
+            let spec = ChairSpec::new(a[2].parse().unwrap());
+            let mut r = infinigen::assets::inst_rng(spec.fseed, 0);
+            let legs = spec.make_legs();
+            let _ = spec.make_leg_decors(&legs, &mut r);
+            let backs = spec.make_backs();
+            let d = spec.make_back_decors(&backs, &mut r);
+            let i: usize = a[3].parse().unwrap();
+            (d[i].clone(), &a[4])
+        }
+        "towel" => {
+            use infinigen::assets::towel::*;
+            let fseed: u64 = a[2].parse().unwrap();
+            // the python TowelFactory(seed) constructor stream (global numpy seed = seed in the test harness)
+            let mut r = infinigen::rng::Rng::seeded(fseed);
+            let spec = TowelSpec::from_stream(fseed, &mut r);
+            if std::env::var("DBGP").is_ok() { eprintln!("{:?}", spec); }
+            (spec.build(0), &a[3])
+        }
         "window" => {
             use infinigen::assets::windows::*;
             let fseed: u64 = a[2].parse().unwrap();

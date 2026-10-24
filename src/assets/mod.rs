@@ -68,12 +68,14 @@ pub mod curvekit;
 pub mod officechair;
 pub mod sofa;
 pub mod doors;
-pub mod doorhandles;
-pub mod towel;
-pub mod chair;
-pub mod gnhelpers;
-pub mod bpyops;
 pub mod bevelfull;
+pub mod bpyops;
+pub mod gnhelpers;
+pub mod chair;
+pub mod bed;
+pub mod coil;
+pub mod towel;
+pub mod doorhandles;
 pub mod gnasset;
 pub mod gnports;
 pub mod bevelgn;
@@ -240,6 +242,9 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if decor::handles(c) => decor::make(c, &mut rng, factory_seed),
         c if sofa::handles(c) => sofa::make(c, &mut rng),
         c if officechair::handles(c) => officechair::make(c, &mut rng, factory_seed),
+        "BedFactory" if unseeded().is_some() && bed::make(factory_seed).is_some() => bed::make(factory_seed),
+        c if chair::handles(c) => chair::make(c, &mut rng, factory_seed),
+        c if towel::handles(c) && unseeded().is_some() => towel::make(c, &mut rng, factory_seed),
         c if stools::handles(c) => stools::make(c, &mut rng),
         c if foodbox::handles(c) => foodbox::make(c, &mut rng, factory_seed),
         c if cutlery::handles(c) => cutlery::make(c, &mut rng, factory_seed),

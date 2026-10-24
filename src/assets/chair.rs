@@ -58,6 +58,7 @@ pub struct ChairSpec {
     pub arm_profile: [f64; 2],
     pub back_thickness: f64,
     pub back_type: usize, // 0 whole 1 partial 2 horizontal-bar 3 vertical-bar
+    pub bed_back: usize, // bed only: 0 coiled 1 pad 2 whole 3 horizontal-bar 4 vertical-bar
     pub back_profile: Vec<(f64, f64)>,
     pub back_vertical_cuts: i64,
     pub back_partial_scale: f64,
@@ -68,6 +69,16 @@ pub struct ChairSpec {
 
 impl ChairSpec {
     pub fn new(fseed: u64) -> ChairSpec {
+        Self::new_impl(fseed, false)
+    }
+
+    /// ChairFactory.__init__ as run by BedFrameFactory (back_types is the bed table: coiled, pad, whole, horizontal-bar, vertical-bar);
+    /// `bed_back` holds the bed back type, `back_type` the equivalent chair back type (coiled / pad / whole -> 0)
+    pub fn new_bed(fseed: u64) -> ChairSpec {
+        Self::new_impl(fseed, true)
+    }
+
+    fn new_impl(fseed: u64, bed: bool) -> ChairSpec {
         let mut r = Rng::seeded(fseed);
         let r = &mut r;
         let width = r.uniform(0.4, 0.5);
@@ -98,7 +109,12 @@ impl ChairSpec {
         let arm_mid = [r.uniform(-0.03, 0.03), r.uniform(-0.03, 0.09), r.uniform(-0.09, 0.03)];
         let arm_profile = [r.log_uniform(0.1, 3.0), r.log_uniform(0.1, 3.0)];
         let back_thickness = r.uniform(0.04, 0.05);
-        let back_type = r.choice_p(&[0.25, 0.25, 0.25, 0.25]);
+        let (back_type, bed_back) = if bed {
+            let b = r.choice_p(&[0.3, 0.3, 0.2, 0.1, 0.1]);
+            (match b { 3 => 2, 4 => 3, _ => 0 }, b)
+        } else {
+            (r.choice_p(&[0.25, 0.25, 0.25, 0.25]), 0)
+        };
         let back_vertical_cuts = r.randint(1, 4);
         let back_partial_scale = r.uniform(1.0, 1.4);
         // materials (same stream): limb class (+init +call draws), surface class, panel class
@@ -109,7 +125,7 @@ impl ChairSpec {
         let mut p = Rng::seeded(fseed);
         let p = &mut p;
         let (mut lx, mut ly, mut bx, mut by) = (0.0, [0.0, 0.0], 0.0, 0.0);
-        if leg_type != 0 {
+        if leg_type != 0 && !bed {
             lx = width * p.uniform(0.05, 0.2);
             ly = [size * p.uniform(0.05, 0.2), size * p.uniform(0.05, 0.2)];
             bx = width * p.uniform(-0.1, 0.15);
@@ -140,7 +156,7 @@ impl ChairSpec {
             3 => vec![(p.uniform(0.8, 0.9), 1.0)],
             _ => vec![(0.0, 1.0)],
         };
-        ChairSpec { fseed, width, size, thickness, bevel_width, seat_back, seat_mid, seat_mid_x, seat_mid_z, seat_front, is_seat_round, is_seat_subsurf, leg_thickness, limb_profile, leg_height, back_height, is_leg_round, leg_type, leg_x_offset: lx, leg_y_offset: ly, back_x_offset: bx, back_y_offset: by, has_leg_x_bar, has_leg_y_bar, leg_offset_bar, has_arm, arm_thickness, arm_height, arm_y, arm_z, arm_mid, arm_profile, back_thickness, back_type, back_profile, back_vertical_cuts, back_partial_scale, surface_cls, limb_cls, panel_cls }
+        ChairSpec { fseed, width, size, thickness, bevel_width, seat_back, seat_mid, seat_mid_x, seat_mid_z, seat_front, is_seat_round, is_seat_subsurf, leg_thickness, limb_profile, leg_height, back_height, is_leg_round, leg_type, leg_x_offset: lx, leg_y_offset: ly, back_x_offset: bx, back_y_offset: by, has_leg_x_bar, has_leg_y_bar, leg_offset_bar, has_arm, arm_thickness, arm_height, arm_y, arm_z, arm_mid, arm_profile, back_thickness, back_type, bed_back, back_profile, back_vertical_cuts, back_partial_scale, surface_cls, limb_cls, panel_cls }
     }
 
     /// make_seat() stages: 0 curve outline, 1 grid, 2 solidified, 3 subsurf, 4 bevel
@@ -189,7 +205,7 @@ fn v3(p: [f32; 3]) -> V3 {
 
 impl ChairSpec {
     /// ChairFactory.make_limb(leg_ends, leg_starts): bezier from start to end (axes / scale per leg type), shifted by the leg thickness
-    fn make_limb(&self, starts: &[V3], ends: &[V3]) -> Vec<Vec<V3>> {
+    pub fn make_limb(&self, starts: &[V3], ends: &[V3]) -> Vec<Vec<V3>> {
         let mut out = vec![];
         for (s, e) in starts.iter().zip(ends.iter()) {
             let anchors = [[s[0], s[1], s[2]], [e[0], e[1], e[2]]];

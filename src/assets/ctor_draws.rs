@@ -414,10 +414,10 @@ pub fn ctor_draws(class: &str, rng: &mut Rng) -> Option<Vec<f64>> {
         }
         "BedFactory" => {
             // rg(sheet_types) (4 weights), sheet_folded, has_cover
-            wsample(rng, &[4.0, 4.0, 4.0, 1.0]);
-            rng.f64();
-            rng.f64();
-            None
+            let st = wsample(rng, &[4.0, 4.0, 4.0, 1.0]);
+            let folded = rng.f64() < 0.5;
+            let cover = rng.f64() < 0.5;
+            Some(vec![st as f64, folded as u8 as f64, cover as u8 as f64])
         }
         "TowelFactory" => {
             // width, length (= width * lu), thickness, fold_type (0 fold / 1 roll), folds, extra_thickness (= thickness * u), material index
@@ -496,4 +496,33 @@ pub fn words_between(before: &Rng, after: &Rng) -> Option<u32> {
         c.next_u32();
     }
     None
+}
+
+/// BlanketFactory / ComforterFactory / BoxComforterFactory __init__ on the current stream: (width, size, thickness, margin)
+pub fn blanket_ctor(rng: &mut Rng, box_comforter: bool) -> [f64; 4] {
+    let w = rng.log_uniform(0.9, 1.2);
+    let s = w * rng.log_uniform(0.4, 0.7);
+    let t = rng.log_uniform(0.004, 0.008);
+    pick_and_generate(rng, &fabrics_plus(&[(Mat::ArtFabric, 3.0)]));
+    let m = if box_comforter { rng.uniform(0.3, 0.4) } else { 0.0 };
+    [w, s, t, m]
+}
+
+/// PillowFactory.__init__ on the current stream: (shape 0 square 1 rectangle 2 circle 3 torus, width, size, bevel, thickness, extrude, has_seam, seam_radius)
+pub fn pillow_ctor(rng: &mut Rng) -> [f64; 8] {
+    let shape = wsample(rng, &[4.0, 4.0, 1.0, 1.0]);
+    let width = rng.uniform(0.4, 0.7);
+    let size = if shape == 0 { width } else { width * rng.log_uniform(0.6, 0.8) };
+    let bevel = rng.uniform(0.02, 0.05);
+    let thickness = rng.log_uniform(0.006, 0.008);
+    let extrude = if rng.f64() < 0.5 { thickness * rng.log_uniform(1.0, 8.0) } else { 0.0 };
+    let seam = rng.f64() < 0.3 && shape != 3;
+    let seam_r = rng.uniform(0.01, 0.02);
+    pick_and_generate(rng, &fabrics_plus(&[]));
+    [shape as f64, width, size, bevel, thickness, extrude, seam as u8 as f64, seam_r]
+}
+
+/// TowelFactory material pick (after the numeric draws of TowelSpec::from_stream)
+pub fn towel_material_draw(rng: &mut Rng) -> usize {
+    pick_and_generate_idx(rng, &fabrics_plus(&[(Mat::ArtRug, 2.0), (Mat::Rug, 5.0)]))
 }
