@@ -11,6 +11,8 @@ pub struct RoomMeshes {
     pub wall: Mesh,
     pub floor: Mesh,
     pub ceiling: Mesh,
+    /// python-style closed solidified shell (outer + visible cavity, cutters subtracted), tagged
+    pub solid: Vec<crate::furn::geom::Tri>,
 }
 
 fn triangulate(poly: &G, z: f64, up: bool) -> Mesh {
@@ -174,6 +176,7 @@ pub fn build_shells(c: &RoomConstants, state: &RoomState, cutters: &[Cutter]) ->
             wall,
             floor: triangulate(&cavity, z0, true),
             ceiling: triangulate(&cavity, z1, false),
+            solid: solid_room(c, name, poly, cutters, &ext_centers(state, name)),
         });
     }
     out
@@ -186,6 +189,7 @@ pub fn room_geom(c: &RoomConstants, m: &RoomMeshes) -> ObjGeom {
     let wt = c.wall_thickness;
     let (z0, z1) = (wt / 2.0, c.wall_height - wt / 2.0);
     let mut tris: Vec<Tri> = vec![];
+    let _ = &m.solid;
     let mut push = |mesh: &Mesh, default: u32| {
         for t in &mesh.triangles() {
             let v = [mesh.pos[t[0] as usize], mesh.pos[t[1] as usize], mesh.pos[t[2] as usize]];
@@ -236,8 +240,150 @@ pub fn room_geom(c: &RoomConstants, m: &RoomMeshes) -> ObjGeom {
             proxies.push((Proxy::Hull(pts), WALL | VISIBLE));
         }
     }
+    let tris = if m.solid.is_empty() || std::env::var_os("OLDROOM").is_some() { tris } else { m.solid.clone() };
     let mut g = ObjGeom::from_tris(tris, proxies);
     // the reference room mesh is the full hollow shell: its bounding box spans the polygon bbox and the wall height
     let _ = &mut g;
     g
+}
+
+fn ext_centers(state: &RoomState, name: &str) -> Vec<P2> {
+    let mut out = vec![];
+    for (k, o) in state.objs.iter() {
+        if room_type(k) != EXTERIOR {
+            continue;
+        }
+        if let Some(r) = o.relations.iter().find(|r| r.target == name) {
+            for ls in parts(&r.value) {
+                let cs = coords_of(&ls);
+                for w in cs.windows(2) {
+                    out.push([(w[0][0] + w[1][0]) / 2.0, (w[0][1] + w[1][1]) / 2.0]);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// holes of the cutters that cross the wall edge p0->p1 (CCW cavity side on the left); `target` is the signed offset of the
+/// cutter centre from the edge line.
+fn edge_holes(cutters: &[Cutter], name: &str, p0: P2, p1: P2, target: f64) -> Vec<Hole> {
+    let l = ((p1[0] - p0[0]).powi(2) + (p1[1] - p0[1]).powi(2)).sqrt();
+    let d = [(p1[0] - p0[0]) / l, (p1[1] - p0[1]) / l];
+    let n = [-d[1], d[0]];
+    let mut holes = vec![];
+    for ct in cutters.iter().filter(|ct| ct.rooms.iter().any(|r| r == name)) {
+        let ax = [ct.rot_z.cos(), ct.rot_z.sin()];
+        if (d[0] * ax[1] - d[1] * ax[0]).abs() > 0.02 {
+            continue;
+        }
+        let rel = [ct.loc[0] - p0[0], ct.loc[1] - p0[1]];
+        let off = rel[0] * n[0] + rel[1] * n[1];
+        if (off - target).abs() > 0.03 {
+            continue;
+        }
+        let sc = rel[0] * d[0] + rel[1] * d[1];
+        let h = ct.dims[0] / 2.0;
+        holes.push(Hole { s0: sc - h, s1: sc + h, z0: ct.loc[2] - ct.dims[2] / 2.0, z1: ct.loc[2] + ct.dims[2] / 2.0 });
+    }
+    holes
+}
+
+/// Port of RoomSolidifier.make_room: the solver's room object is the *uncut* closed shell = outer prism (polygon, z 0..H,
+/// not visible) + inner cavity (visible; the polygon inset by wall_thickness/2 with even/mitre offset).  Face tags come
+/// from the prism face centres (floor / ceiling / wall) and from the proximity of the face centre to the exterior edges
+/// (interior flag); the inner faces copy them.  (Cutters are subtracted only from a mesh copy, not from the solver object.)
+pub fn solid_room(c: &RoomConstants, _name: &str, poly: &G, _cutters: &[Cutter], ext: &[P2]) -> Vec<crate::furn::geom::Tri> {
+    use crate::furn::geom::{Tri, CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
+    let wt = c.wall_thickness;
+    let h = c.wall_height;
+    let (low, high) = (wt / 2.0, h - wt / 2.0);
+    let is_int = |x: f64, y: f64| -> bool { !ext.iter().any(|e| (x - e[0]).abs() + (y - e[1]).abs() < wt * 4.0) };
+    let pc = c.canonicalize(poly).unwrap_or_else(|_| poly.clone());
+    let outer_poly = segmentize(&pc, c.door_width);
+    let mut tris: Vec<Tri> = vec![];
+    for part in parts(&outer_poly) {
+        if !is_polygon(&part) || area(&part) <= 0.0 {
+            continue;
+        }
+        let part = orient(&part);
+        let mut rings = vec![exterior(&part)];
+        rings.extend(interiors(&part));
+        let rings: Vec<Vec<P2>> = rings.into_iter().map(|mut r| { r.pop(); r }).collect();
+        // inset (mitre) of every ring vertex
+        let mut inset: Vec<P2> = vec![];
+        for r in &rings {
+            let n = r.len();
+            let nrm = |a: P2, b: P2| -> P2 {
+                let l = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt().max(1e-12);
+                [-(b[1] - a[1]) / l, (b[0] - a[0]) / l]
+            };
+            for i in 0..n {
+                let n0 = nrm(r[(i + n - 1) % n], r[i]);
+                let n1 = nrm(r[i], r[(i + 1) % n]);
+                let k = (wt / 2.0) / (1.0 + n0[0] * n1[0] + n0[1] * n1[1]).max(0.05);
+                inset.push([r[i][0] + (n0[0] + n1[0]) * k, r[i][1] + (n0[1] + n1[1]) * k]);
+            }
+        }
+        let flat: Vec<P2> = rings.iter().flatten().copied().collect();
+        // floor / ceiling: the same triangulation for outer and inner layer
+        let mut fl = Mesh::new();
+        {
+            let mut f2: Vec<f64> = vec![];
+            let mut holes = vec![];
+            for (ri, r) in rings.iter().enumerate() {
+                if ri > 0 {
+                    holes.push(f2.len() / 2);
+                }
+                for p in r {
+                    f2.extend([p[0], p[1]]);
+                }
+            }
+            for t in earcutr::earcut(&f2, &holes, 2).unwrap_or_default().chunks(3) {
+                fl.pos.clear();
+                let _ = t;
+            }
+            let ts = earcutr::earcut(&f2, &holes, 2).unwrap_or_default();
+            for t in ts.chunks(3) {
+                let (a, b, cc) = (flat[t[0]], flat[t[1]], flat[t[2]]);
+                let ccw = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]) > 0.0;
+                let tri = if ccw { [t[0], t[1], t[2]] } else { [t[0], t[2], t[1]] };
+                let ctr = [(a[0] + b[0] + cc[0]) / 3.0, (a[1] + b[1] + cc[1]) / 3.0];
+                let int = if is_int(ctr[0], ctr[1]) { INTERIOR } else { 0 };
+                let p3 = |pts: &[P2], i: usize, z: f64| -> V3 { [pts[i][0], pts[i][1], z] };
+                // outer floor (down), outer ceiling (up), inner floor (up), inner ceiling (down)
+                tris.push(Tri { v: [p3(&flat, tri[0], 0.0), p3(&flat, tri[2], 0.0), p3(&flat, tri[1], 0.0)], tags: SUPPORT | int });
+                tris.push(Tri { v: [p3(&flat, tri[0], h), p3(&flat, tri[1], h), p3(&flat, tri[2], h)], tags: CEILING | int });
+                tris.push(Tri { v: [p3(&inset, tri[0], low), p3(&inset, tri[1], low), p3(&inset, tri[2], low)], tags: SUPPORT | int | VISIBLE });
+                tris.push(Tri { v: [p3(&inset, tri[0], high), p3(&inset, tri[2], high), p3(&inset, tri[1], high)], tags: CEILING | int | VISIBLE });
+            }
+        }
+        let mut base = 0;
+        for r in &rings {
+            let n = r.len();
+            for i in 0..n {
+                let (i0, i1) = (base + i, base + (i + 1) % n);
+                let (a, b) = (flat[i0], flat[i1]);
+                let int = if is_int((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0) { INTERIOR } else { 0 };
+                let q3 = |pts: &[P2], j: usize, z: f64| -> V3 { [pts[j][0], pts[j][1], z] };
+                // outer wall faces away from the cavity (region on the left of a->b)
+                let oq = [q3(&flat, i0, 0.0), q3(&flat, i1, 0.0), q3(&flat, i1, h), q3(&flat, i0, h)];
+                tris.push(Tri { v: [oq[0], oq[1], oq[2]], tags: WALL | int });
+                tris.push(Tri { v: [oq[0], oq[2], oq[3]], tags: WALL | int });
+                let iq = [q3(&inset, i0, low), q3(&inset, i0, high), q3(&inset, i1, high), q3(&inset, i1, low)];
+                tris.push(Tri { v: [iq[0], iq[1], iq[2]], tags: WALL | int | VISIBLE });
+                tris.push(Tri { v: [iq[0], iq[2], iq[3]], tags: WALL | int | VISIBLE });
+            }
+            base += n;
+        }
+    }
+    tris
+}
+
+fn exterior_line(g: &G) -> G {
+    let mut tot = vec![];
+    for p in parts(g) {
+        tot.extend(exterior(&p));
+    }
+    linestring(&tot).unwrap()
 }

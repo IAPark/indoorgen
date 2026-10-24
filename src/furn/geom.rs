@@ -556,3 +556,10 @@ pub fn hull_ok(pts: &[V3]) -> bool {
     let p: Vec<na::Point3<f64>> = pts.iter().map(|p| na::Point3::new(p[0], p[1], p[2])).collect();
     SharedShape::convex_hull(&p).is_some()
 }
+
+/// true when the triangle normal points up (+z component positive)
+pub fn tri_nz(v: &[V3; 3]) -> bool {
+    let a = [v[1][0] - v[0][0], v[1][1] - v[0][1]];
+    let b = [v[2][0] - v[0][0], v[2][1] - v[0][1]];
+    a[0] * b[1] - a[1] * b[0] > 0.0
+}
