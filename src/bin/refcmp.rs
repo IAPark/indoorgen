@@ -126,7 +126,6 @@ fn main() {
         eprintln!("usage: refcmp CLASS [SEEDS] [--inst I] [--dir DIR] [--tol-mean X] [--tol-max X] [--quiet]");
         std::process::exit(2);
     }
-    std::env::set_var("REFSTUB", "1");
     let opt = |k: &str| a.iter().position(|x| x == k).map(|i| a[i + 1].clone());
     let cls = &a[1];
     let dir = opt("--dir").unwrap_or_else(|| format!("{}/work/refcache", std::env::var("HOME").unwrap()));
@@ -152,6 +151,9 @@ fn main() {
     for (s, i, path) in &files {
         n += 1;
         let (h, py) = read_ref(path).expect("bad cache file");
+        // caches made with the old no-draw weighted_sample stub need Rust's material draws skipped too (REFSTUB);
+        // new caches (header ws_draws=true) consume the draws exactly like a real python run, so Rust must as well
+        if h["ws_draws"].as_bool().unwrap_or(false) { std::env::remove_var("REFSTUB") } else { std::env::set_var("REFSTUB", "1") }
         let t0 = std::time::Instant::now();
         let mut rng = Rng::seeded(*s);
         set_unseeded(ctor_draws::ctor_draws(cls, &mut rng));

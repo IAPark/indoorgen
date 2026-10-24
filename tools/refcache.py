@@ -99,7 +99,7 @@ def main():
                 sizes = np.concatenate(sizes) if sizes else np.zeros(0, np.uint32)
                 idx = np.concatenate(idx) if idx else np.zeros(0, np.uint32)
                 too_big = len(V) > 600_000
-                hdr = dict(cls=cls, module=mod, fseed=s, inst=inst, nv=int(len(V)), nf=int(len(sizes)), secs=round(time.time() - t0, 3), objects=nobj, too_big=too_big)
+                hdr = dict(cls=cls, module=mod, fseed=s, inst=inst, ws_draws=os.environ.get("REFCACHE_STUB") != "1", nv=int(len(V)), nf=int(len(sizes)), secs=round(time.time() - t0, 3), objects=nobj, too_big=too_big)
                 hb = json.dumps(hdr).encode()
                 with open(path, "wb") as fh:
                     fh.write(b"RCv1"); fh.write(struct.pack("<I", len(hb))); fh.write(hb)
