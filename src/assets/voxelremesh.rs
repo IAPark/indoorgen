@@ -73,6 +73,38 @@ fn closest(p: D3, a: D3, b: D3, c: D3) -> (D3, u8) {
     ([a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w], 6)
 }
 
+#[cfg(has_openvdb)]
+extern "C" {
+    fn vdb_remesh_voxel(pts: *const f32, npts: i32, tris: *const u32, ntri: i32, voxel: f32, adapt: f32, iso: f32, out_pts: *mut *mut f32, out_npts: *mut i32, out_quads: *mut *mut u32, out_nquads: *mut i32, out_tris: *mut *mut u32, out_ntris: *mut i32) -> i32;
+    fn vdb_free(p: *mut std::ffi::c_void);
+}
+
+/// BKE_mesh_remesh_voxel through the linked OpenVDB (vertex / face order as Blender's: quads first, then triangles)
+#[cfg(has_openvdb)]
+pub fn voxel_remesh_vdb(pos: &[F3], tris: &[[u32; 3]], voxel: f32) -> SurfaceNets {
+    let flat: Vec<f32> = pos.iter().flat_map(|p| p.iter().copied()).collect();
+    let tf: Vec<u32> = tris.iter().flat_map(|t| t.iter().copied()).collect();
+    let (mut op, mut oq, mut ot) = (std::ptr::null_mut::<f32>(), std::ptr::null_mut::<u32>(), std::ptr::null_mut::<u32>());
+    let (mut np, mut nq, mut nt) = (0i32, 0i32, 0i32);
+    unsafe {
+        vdb_remesh_voxel(flat.as_ptr(), pos.len() as i32, tf.as_ptr(), tris.len() as i32, voxel, 0.0, 0.0, &mut op, &mut np, &mut oq, &mut nq, &mut ot, &mut nt);
+        let v: Vec<F3> = (0..np as usize).map(|i| [*op.add(3 * i), *op.add(3 * i + 1), *op.add(3 * i + 2)]).collect();
+        let mut f: Vec<Vec<u32>> = vec![];
+        for i in 0..nq as usize {
+            let q = [*oq.add(4 * i), *oq.add(4 * i + 1), *oq.add(4 * i + 2), *oq.add(4 * i + 3)];
+            f.push(vec![q[0], q[3], q[2], q[1]]);
+        }
+        for i in 0..nt as usize {
+            let t = [*ot.add(3 * i), *ot.add(3 * i + 1), *ot.add(3 * i + 2)];
+            f.push(vec![t[2], t[1], t[0]]);
+        }
+        vdb_free(op as *mut _);
+        vdb_free(oq as *mut _);
+        vdb_free(ot as *mut _);
+        SurfaceNets { v, f }
+    }
+}
+
 pub struct SurfaceNets {
     pub v: Vec<F3>,
     pub f: Vec<Vec<u32>>,
@@ -80,6 +112,17 @@ pub struct SurfaceNets {
 
 /// BKE_mesh_remesh_voxel(mesh, voxel_size, adaptivity 0, isovalue 0) on the corner triangles of a mesh
 pub fn voxel_remesh(pos: &[F3], tris: &[[u32; 3]], voxel: f32) -> SurfaceNets {
+    #[cfg(has_openvdb)]
+    {
+        if std::env::var("NOVDB").is_err() {
+            return voxel_remesh_vdb(pos, tris, voxel);
+        }
+    }
+    voxel_remesh_nets(pos, tris, voxel)
+}
+
+/// pure-Rust approximation (used when OpenVDB is not linked)
+pub fn voxel_remesh_nets(pos: &[F3], tris: &[[u32; 3]], voxel: f32) -> SurfaceNets {
     let vs = voxel as f64;
     let p: Vec<D3> = pos.iter().map(|q| [q[0] as f64 / vs, q[1] as f64 / vs, q[2] as f64 / vs]).collect();
     // pseudo normals
