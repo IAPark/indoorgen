@@ -419,6 +419,7 @@ pub fn ctor_draws(class: &str, rng: &mut Rng) -> Option<Vec<f64>> {
             let cover = rng.f64() < 0.5;
             Some(vec![st as f64, folded as u8 as f64, cover as u8 as f64])
         }
+        "PillowFactory" => Some(pillow_ctor(rng).to_vec()),
         "TowelFactory" => {
             // width, length (= width * lu), thickness, fold_type (0 fold / 1 roll), folds, extra_thickness (= thickness * u), material index
             let w = rng.log_uniform(0.3, 0.6);

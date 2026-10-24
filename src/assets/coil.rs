@@ -421,6 +421,10 @@ pub fn make_coiled(m: &Mesh, dot_distance: f64, dot_depth: f64, dot_size: f64, r
     let verts: Vec<u32> = (0..d.pos.len() as u32).filter(|&v| deg[v as usize] == 16).collect();
     let radius = dot_distance * radius_u;
     let out = bevel_and_extrude(&d, &verts, radius, dot_depth);
+    if std::env::var("COIL_STAGE").map(|v| v == "extr").unwrap_or(false) {
+        return out.mesh;
+    }
+    if std::env::var("COIL_DBG").is_ok() { eprintln!("tufts {} tipfaces {} verts {} deg16 {}", verts.len(), out.tip.len(), out.mesh.pos.len(), verts.len()); }
     let scaled = scale_islands(&out.mesh, &out.tip, dot_size / radius);
     if std::env::var("COIL_STAGE").map(|v| v == "scale").unwrap_or(false) {
         return scaled;

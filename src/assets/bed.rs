@@ -7,6 +7,8 @@ use super::matdraw::*;
 use crate::mesh::*;
 use crate::rng::Rng;
 use super::bevelfull::bevel_angle_ex;
+use super::bpyx::inset_individual;
+use super::coil::face_normal;
 
 pub const BEDFRAME: Table = &[("metal.BrushedMetal", 1.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 1.0), ("wood.Wood", 7.0), ("ceramic.Plaster", 2.0)];
 
@@ -209,6 +211,11 @@ const FABRICS_W: Table = &[("fabric.CoarseKnitFabric", 1.0), ("fabric.FineKnitFa
 pub struct Bed {
     pub s: BedSpec,
     pub fseed: u64,
+    pub frame_only: bool,
+}
+
+pub fn make_frame(fseed: u64) -> Option<Box<dyn Factory>> {
+    Some(Box::new(Bed { s: BedSpec::frame(fseed), fseed, frame_only: true }))
 }
 
 pub fn make(fseed: u64) -> Option<Box<dyn Factory>> {
@@ -220,17 +227,34 @@ pub fn make(fseed: u64) -> Option<Box<dyn Factory>> {
     s.sheet_type = v[0] as usize;
     s.sheet_folded = v[1] > 0.5;
     s.has_cover = v[2] > 0.5;
-    Some(Box::new(Bed { s, fseed }))
+    Some(Box::new(Bed { s, fseed, frame_only: false }))
 }
 
 fn box_walls(lo: V3, hi: V3) -> Mesh {
     // four side walls (open top and bottom), outward normals
-    let mut m = Mesh::cuboid(lo, hi);
+    let mut m = Mesh::cuboid(lo, hi).welded(1e-9);
     m.faces.retain(|f| {
         let z0 = m.pos[f[0] as usize][2];
         !f.iter().all(|&i| (m.pos[i as usize][2] - z0).abs() < 1e-12)
     });
-    m
+    compact(&m)
+}
+
+/// drop unreferenced vertices
+fn compact(m: &Mesh) -> Mesh {
+    let mut map = vec![u32::MAX; m.pos.len()];
+    let mut o = Mesh::new();
+    for f in &m.faces {
+        let g: Vec<u32> = f.iter().map(|&v| {
+            if map[v as usize] == u32::MAX {
+                map[v as usize] = o.pos.len() as u32;
+                o.pos.push(m.pos[v as usize]);
+            }
+            map[v as usize]
+        }).collect();
+        o.faces.push(g);
+    }
+    o
 }
 
 fn clip_above(m: &Mesh, z: f64) -> Mesh {
@@ -257,6 +281,24 @@ fn clip_above(m: &Mesh, z: f64) -> Mesh {
     out
 }
 
+/// make_coiled with its two stream draws (dot radius factor, smooth factor)
+fn coil(g: &Mesh, s: &BedSpec, r: &mut Rng) -> Mesh {
+    if std::env::var("BEDDBG").is_ok() {
+        eprintln!("coil input {}v/{}f", g.pos.len(), g.faces.len());
+    }
+    let ru = r.uniform(0.06, 0.08);
+    let sf = r.uniform(0.5, 1.0);
+    super::coil::make_coiled(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf)
+}
+
+/// butil.modify_mesh(obj, "BEVEL", segments=4): width 0.1, angle limit 30 degrees
+fn pad_bevel(m: &Mesh) -> Mesh {
+    bevel_angle_ex(m, 0.1, 4, 30f64.to_radians(), false, None).unwrap_or_else(|e| {
+        eprintln!("pad bevel failed: {e}");
+        m.clone()
+    })
+}
+
 fn ceil_cuts(size: f64, dist: f64) -> usize {
     (size / dist).ceil() as usize
 }
@@ -266,6 +308,7 @@ fn divide(m: &Mesh, dist: f64, r: &mut Rng) -> Mesh {
     let mut out = m.clone();
     for i in 0..3 {
         let d = if i != 2 { dist } else { dist * r.uniform(0.5, 1.0) };
+        if std::env::var("BEDDBG").is_ok() { eprintln!("divide axis {i} size {} dist {} cuts {}", hi[i] - lo[i], d, ceil_cuts(hi[i] - lo[i], d)); }
         out = subdivide_edge_ring(&out, ceil_cuts(hi[i] - lo[i], d), i);
     }
     out
@@ -289,7 +332,12 @@ impl BedSpec {
         let zf = r.uniform(0.7, 0.9);
         let (mut x0, mut x1) = (-(c.width / 2.0 - c.leg_thickness / 2.0), c.width / 2.0 - c.leg_thickness / 2.0);
         let (mut y0, mut y1) = (-c.size + c.leg_thickness / 2.0, -c.leg_thickness / 2.0);
-        let _ = legs;
+        if std::env::var("BEDDBG").is_ok() {
+            let pts: Vec<V3> = legs.iter().flatten().cloned().collect();
+            let mn = |k: usize| pts.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min);
+            let mx = |k: usize| pts.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max);
+            eprintln!("legs bounds x {} {} y {} {} z {} {}", mn(0), mx(0), mn(1), mx(1), mn(2), mx(2));
+        }
         if self.leg_decor_wrapped {
             let d = c.leg_thickness / 2.0 + 1e-3;
             x0 -= d;
@@ -298,29 +346,38 @@ impl BedSpec {
             y1 += d;
         }
         let m = box_walls([x0, y0, -c.leg_height * zf], [x1, y1, 0.0]);
+        if std::env::var("BEDDBG").is_ok() {
+            eprintln!("leg decor box {:?} {:?} (leg_height {} zf {}) walls verts {}", [x0, y0, -c.leg_height * zf], [x1, y1, 0.0], c.leg_height, zf, m.pos.len());
+        }
         match self.leg_decor {
             0 => {
                 let g = divide(&m, self.dot_distance, r);
-                r.uniform(0.06, 0.08);
-                r.uniform(0.5, 1.0);
-                g
+                coil(&g, self, r)
             }
-            1 => divide(&m, self.panel_distance, r),
+            1 => {
+                let g = divide(&m, self.panel_distance, r);
+                let sel = vec![true; g.faces.len()];
+                pad_bevel(&inset_individual(&g, &sel, self.panel_margin, self.panel_margin))
+            }
             _ => m,
         }
     }
 
     /// (limb meshes, panel meshes, seat) before the final rotation
     pub fn frame_parts(&self, inst: u64) -> (Mesh, Vec<Mesh>, Vec<Mesh>) {
+        let mut r = inst_rng(self.c.fseed, inst);
+        self.frame_parts_with(&mut r)
+    }
+
+    pub fn frame_parts_with(&self, r: &mut Rng) -> (Mesh, Vec<Mesh>, Vec<Mesh>) {
         let c = &self.c;
-        let mut r = inst_rng(c.fseed, inst);
         let seat = self.make_seat();
         let legs = self.legs();
         let backs = c.make_backs();
         let mut panels = vec![];
         let mut limbs = vec![];
-        panels.push(self.leg_decor(&legs, &mut r));
-        let mut decors = c.make_back_decors(&backs, &mut r);
+        panels.push(self.leg_decor(&legs, r));
+        let mut decors = c.make_back_decors(&backs, r);
         if self.c.back_type == 3 && decors.len() > 1 {
             limbs.push(decors.remove(1));
         }
@@ -328,20 +385,27 @@ impl BedSpec {
             // coiled / pad: the hull slab of the back rails on top of the (bisected) bridge panel
             let t = c.thickness.min(c.leg_thickness);
             let (xh, yc) = (c.width / 2.0 - c.leg_thickness / 2.0, -c.leg_thickness / 2.0);
-            let slab = Mesh::cuboid([-xh, yc - t / 2.0, 0.0], [xh, yc + t / 2.0, c.back_height]);
+            let slab = Mesh::cuboid([-xh, yc - t / 2.0, 0.0], [xh, yc + t / 2.0, c.back_height]).welded(1e-9);
             let mut g = if self.c.bed_back == 0 {
-                let g = divide(&slab, self.dot_distance, &mut r);
-                r.uniform(0.06, 0.08);
-                r.uniform(0.5, 1.0);
-                g
+                let g = divide(&slab, self.dot_distance, r);
+                coil(&g, self, r)
             } else {
-                divide(&slab, self.panel_distance, &mut r)
+                let g = divide(&slab, self.panel_distance, r);
+                let sel: Vec<bool> = g.faces.iter().map(|f| face_normal(&g, f)[1].abs() > 0.5).collect();
+                let ins = inset_individual(&g, &sel, self.panel_margin, self.panel_margin);
+                if std::env::var("BEDDBG").is_ok() {
+                    eprintln!("backpad: slab {} verts divided {}v/{}f inset {}v/{}f", slab.pos.len(), g.pos.len(), g.faces.len(), ins.pos.len(), ins.faces.len());
+                }
+                pad_bevel(&ins)
             };
             for p in g.pos.iter_mut() {
                 *p = [p[0] * (1.0 - 1e-3), p[1] * (1.0 - 1e-3), p[2] * (1.0 - 1e-3)];
             }
             panels.push(g);
             decors = decors.iter().map(|m| clip_above(m, c.back_height)).collect();
+        }
+        if std::env::var("BEDDBG").is_ok() {
+            eprintln!("rust seat {} panels {:?} decors {:?}", seat.pos.len(), panels.iter().map(|m| m.pos.len()).collect::<Vec<_>>(), decors.iter().map(|m| m.pos.len()).collect::<Vec<_>>());
         }
         panels.extend(decors);
         for l in &legs {
@@ -425,7 +489,11 @@ impl Factory for Bed {
         let limb = m("bed_limb", s.frame_limb_cls, 2, [0.3, 0.3, 0.3]);
         let rot = Mat4::rot_z(std::f64::consts::FRAC_PI_2);
         let mut a = Asset::default();
-        let (seat, limbs, panels) = s.frame_parts(inst);
+        if std::env::var("BEDDBG").is_ok() {
+            eprintln!("leg_decor {} wrapped {} bed_back {} back_type {} all_legs {} sub {}x{} frame {} limb {}", s.leg_decor, s.leg_decor_wrapped, c.bed_back, c.back_type, s.has_all_legs, s.seat_sub_x, s.seat_sub_y, s.frame_cls, s.frame_limb_cls);
+        }
+        let mut r = inst_rng(c.fseed, inst);
+        let (seat, limbs, panels) = s.frame_parts_with(&mut r);
         let mut frame_all = Mesh::new();
         for (g, mt) in [(vec![seat], &surf), (limbs, &limb), (panels, &panel)] {
             let mut j = join(&g);
@@ -437,26 +505,10 @@ impl Factory for Bed {
             let b = j.bounds();
             a.parts.push(Part { mesh: j, mat: mt.clone(), col: Some((b.0, b.1)) });
         }
-        // ---- outer stream continues after the frame (BedFactory.create_asset)
-        let mut r = inst_rng(c.fseed, inst);
-        {
-            // replay the frame draws so the stream position matches (frame_parts consumed them from its own copy)
-            let mut r2 = inst_rng(c.fseed, inst);
-            std::mem::swap(&mut r, &mut r2);
-            let legs = s.legs();
-            let backs = c.make_backs();
-            let _ = s.leg_decor(&legs, &mut r);
-            let mut d = c.make_back_decors(&backs, &mut r);
-            let _ = &mut d;
-            if c.bed_back <= 1 {
-                let slab = Mesh::cuboid([-1.0, -0.1, 0.0], [1.0, 0.0, 1.0]);
-                let _ = divide(&slab, if c.bed_back == 0 { s.dot_distance } else { s.panel_distance }, &mut r);
-                if c.bed_back == 0 {
-                    r.uniform(0.06, 0.08);
-                    r.uniform(0.5, 1.0);
-                }
-            }
+        if self.frame_only {
+            return a;
         }
+        // ---- outer stream continues after the frame (BedFactory.create_asset)
         // mattress: MattressFactory(fseed) ctor (FixedSeed) then overrides
         let mut mr = Rng::seeded(c.fseed);
         let _w = mr.log_uniform(0.9, 2.0);
