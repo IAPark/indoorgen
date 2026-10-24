@@ -1173,6 +1173,8 @@ def mesh2_cases():
         case(f"MeshBoolean.FLOAT.{op}.cubes", lambda b, op=op: _boolean(b, op, cube_at(b, (1, 1, 1), (0, 0, 0)), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
         case(f"MeshBoolean.FLOAT.{op}.cylcube", lambda b, op=op: _boolean(b, op, cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.7, Depth=1.0)], "FLOAT"))
         case(f"MeshBoolean.FLOAT.{op}.sphere", lambda b, op=op: _boolean(b, op, b.n("GeometryNodeMeshUVSphere", Segments=12, Rings=8, Radius=1.0), [cube_at(b, (1.2, 1.2, 1.2), (0.5, 0.3, 0.2), (0.0, 0.0, 0.3))], "FLOAT"))
+    for nv_ in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16):
+        case(f"MeshBoolean.FLOATH.hole{nv_}", lambda b, nv_=nv_: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=nv_, Radius=0.4, Depth=4.0)], "FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.hole", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.holegrid", lambda b: _boolean(b, "DIFFERENCE", b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))], "FLOAT"))

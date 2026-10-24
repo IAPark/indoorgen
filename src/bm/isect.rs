@@ -20,14 +20,17 @@ struct Epsilon {
 }
 
 // ------------------------------------------------------------------ GHash emulation (iteration order only)
-const HASH_BUCKET_BIT_MIN: u32 = 2;
+// BLI_ghash.c is built with GHASH_USE_MODULO_BUCKETS: prime bucket counts, `hash % nbuckets`.
+const HASH_SIZES: [usize; 27] = [
+    5, 11, 17, 37, 67, 131, 257, 521, 1031, 2053, 4099, 8209, 16411, 32771, 65537, 131101, 262147, 524309, 1048583, 2097169, 4194319, 8388617, 16777259, 33554467, 67108879, 134217757, 268435459,
+];
 
 pub struct GHash<V> {
     buckets: Vec<Vec<usize>>, // entry indices, chain order (head first)
     keys: Vec<u64>,
     vals: Vec<V>,
     hashfp: fn(u64) -> u32,
-    bucket_bit: u32,
+    cursize: usize,
     limit_grow: usize,
     nentries: usize,
 }
@@ -43,41 +46,38 @@ pub fn inthash_p(key: u64) -> u32 {
     (key & 0xffff_ffff) as u32
 }
 pub fn ptrhash(key: u64) -> u32 {
-    ((key >> 4) | (key << 60)) as u32
+    ((key >> 4) as u32) | ((key as u32) << 28)
 }
 
 impl<V> GHash<V> {
     pub fn new(hashfp: fn(u64) -> u32) -> GHash<V> {
-        GHash { buckets: vec![vec![]; 1 << HASH_BUCKET_BIT_MIN], keys: vec![], vals: vec![], hashfp, bucket_bit: HASH_BUCKET_BIT_MIN, limit_grow: ((1usize << HASH_BUCKET_BIT_MIN) * 3) / 4, nentries: 0 }
+        GHash { buckets: vec![vec![]; HASH_SIZES[0]], keys: vec![], vals: vec![], hashfp, cursize: 0, limit_grow: (HASH_SIZES[0] * 3) / 4, nentries: 0 }
     }
     fn bucket_index(&self, key: u64) -> usize {
-        ((self.hashfp)(key) as usize) & (self.buckets.len() - 1)
+        ((self.hashfp)(key) as usize) % self.buckets.len()
     }
     pub fn find(&self, key: u64) -> Option<usize> {
         let b = self.bucket_index(key);
         self.buckets[b].iter().copied().find(|&i| self.keys[i] == key)
     }
     fn expand(&mut self) {
-        // ghash_buckets_expand(nentries)
         if self.nentries < self.limit_grow {
             return;
         }
         let mut new_nbuckets = self.buckets.len();
-        while self.nentries > self.limit_grow && self.bucket_bit < 28 {
-            self.bucket_bit += 1;
-            new_nbuckets = 1usize << self.bucket_bit;
+        while self.nentries > self.limit_grow && self.cursize < HASH_SIZES.len() - 1 {
+            self.cursize += 1;
+            new_nbuckets = HASH_SIZES[self.cursize];
             self.limit_grow = (new_nbuckets * 3) / 4;
         }
         if new_nbuckets == self.buckets.len() {
             return;
         }
         self.limit_grow = (new_nbuckets * 3) / 4;
-        // ghash_buckets_resize (growing): old buckets in order, entries in chain order, each prepended
         let old = std::mem::replace(&mut self.buckets, vec![vec![]; new_nbuckets]);
-        let mask = new_nbuckets - 1;
         for chain in old {
             for i in chain {
-                let b = ((self.hashfp)(self.keys[i]) as usize) & mask;
+                let b = ((self.hashfp)(self.keys[i]) as usize) % new_nbuckets;
                 self.buckets[b].insert(0, i);
             }
         }
@@ -896,7 +896,11 @@ pub fn mesh_intersect_boolean(bm: &mut BMesh, looptris: &[[usize; 3]], test_fn: 
         if let Some(new_net) = bm.face_split_edgenet_connect_islands(f, &edge_arr) {
             edge_arr = new_net;
         }
-        bm.face_split_edgenet(f, &edge_arr, None);
+        let mut rf = vec![];
+        bm.face_split_edgenet(f, &edge_arr, Some(&mut rf));
+        if std::env::var_os("GNBOOL_DUMP").is_some() {
+            eprintln!("net key {} f {} edges {} -> faces {:?}", f_index, f, edge_arr.len(), rf);
+        }
     }
     let _ = totface_orig;
 
