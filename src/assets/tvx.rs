@@ -62,7 +62,7 @@ pub fn build(t: &Tv, r: &mut Rng) -> TvBuilt {
     stage(&mut stages, "base", "base", &obj);
     // make_screen: cutter cube
     let cutter = cube([t.width / 2.0, 1.0, t.height / 2.0], [0.0, 1e-3, t.bottom], Some([0.0, -1.0, 1.0]));
-    obj = boolean("DIFFERENCE", &obj, &cutter);
+    obj = boolean_exact("DIFFERENCE", &obj, &cutter);
     stage(&mut stages, "screen", "screen", &obj);
     // legs
     let mut legs = vec![];
