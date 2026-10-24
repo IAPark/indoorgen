@@ -27,6 +27,7 @@ pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, c
         ce.push(fe);
     }
     let mut bm = BMesh::from_mesh(&pos, &edges, &m.faces, &ce);
+    set_mesh_vert_normals(&mut bm, &pos, &m.faces);
     for v in bm.vert_ids() {
         bm.verts[v].flag &= !ELEM_TAG;
     }
@@ -64,4 +65,61 @@ pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, c
     out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     out.faces = f;
     Ok(out)
+}
+
+fn safe_acos_approx(x: f32) -> f32 {
+    let f = x.abs();
+    let m = if f < 1.0 { 1.0 - (1.0 - f) } else { 1.0 };
+    let a = (1.0 - m).sqrt() * (1.570_796_3 + m * (-0.213_300_99 + m * (0.077_980_48 + m * -0.021_640_95)));
+    if x < 0.0 {
+        std::f32::consts::PI - a
+    } else {
+        a
+    }
+}
+
+/// `BKE_mesh_to_bmesh_ex(calc_vert_normal)`: BMVert.no = Mesh::vert_normals() (angle weighted (safe_acos_approx) sum of the Newell
+/// face normals), not BMesh's own vertex normals. Matters for the vertex-normal sign tests of the bevel (folded geometry).
+fn set_mesh_vert_normals(bm: &mut BMesh, pos: &[[f32; 3]], faces: &[Vec<u32>]) {
+    let norm = |v: [f32; 3]| -> [f32; 3] {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l > 0.0 {
+            [v[0] / l, v[1] / l, v[2] / l]
+        } else {
+            [0.0; 3]
+        }
+    };
+    let mut fnor: Vec<[f32; 3]> = vec![];
+    for f in faces {
+        let mut n = [0.0f32; 3];
+        let mut prev = pos[*f.last().unwrap() as usize];
+        for &v in f {
+            let cur = pos[v as usize];
+            n[0] += (prev[1] - cur[1]) * (prev[2] + cur[2]);
+            n[1] += (prev[2] - cur[2]) * (prev[0] + cur[0]);
+            n[2] += (prev[0] - cur[0]) * (prev[1] + cur[1]);
+            prev = cur;
+        }
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        fnor.push(if l == 0.0 { [0.0, 0.0, 1.0] } else { [n[0] / l, n[1] / l, n[2] / l] });
+    }
+    let mut acc = vec![[0.0f32; 3]; pos.len()];
+    let mut has = vec![false; pos.len()];
+    for (fi, f) in faces.iter().enumerate() {
+        let k = f.len();
+        for i in 0..k {
+            let v = f[i] as usize;
+            let p = pos[v];
+            let d = |q: [f32; 3]| norm([q[0] - p[0], q[1] - p[1], q[2] - p[2]]);
+            let (dp, dn) = (d(pos[f[(i + k - 1) % k] as usize]), d(pos[f[(i + 1) % k] as usize]));
+            let fac = safe_acos_approx(dp[0] * dn[0] + dp[1] * dn[1] + dp[2] * dn[2]);
+            for c in 0..3 {
+                acc[v][c] += fnor[fi][c] * fac;
+            }
+            has[v] = true;
+        }
+    }
+    for v in 0..pos.len() {
+        bm.verts[v].no = if has[v] { norm(acc[v]) } else { norm(pos[v]) };
+    }
 }

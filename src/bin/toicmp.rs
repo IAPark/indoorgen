@@ -75,5 +75,14 @@ fn main() {
     report("back", (&p.back.pos, &p.back.faces), &j, "back");
     report("tank", (&p.tank.pos, &p.tank.faces), &j, "tank");
     report("hw", (&p.hw.pos, &p.hw.faces), &j, "hw");
+    if std::env::var("PYTUBE").is_ok() {
+        let (pv, pf) = load(&j, "tube").unwrap();
+        let mut m = infinigen::mesh::Mesh::new();
+        m.pos = pv.iter().map(|p| [p[0] as f32 as f64, p[1] as f32 as f64, p[2] as f32 as f64]).collect();
+        m.faces = pf;
+        let b = infinigen::assets::bathkit::bevel_def(&m, 0.1, 2);
+        report("pytubebev", (&b.pos, &b.faces), &j, "m29_BEVEL");
+        if std::env::var("DUMP").is_ok() {}
+    }
     report("tubebev", (&p.tube.pos, &p.tube.faces), &j, "m29_BEVEL");
 }
