@@ -90,7 +90,7 @@ pub fn convex_hull(bm: &mut BMesh, p: &HullParams) -> bool {
         let mut e = e0;
         let mut fvi = vec![];
         loop {
-            fvi.push(h.edges[e].source_vertex as usize);
+            fvi.push(h.edges[e].target_vertex as usize);
             e = h.edges[e].next_edge_of_face as usize;
             if e == e0 {
                 break;
