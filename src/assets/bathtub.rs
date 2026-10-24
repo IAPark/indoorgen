@@ -86,7 +86,11 @@ pub fn make_legs(t: &Bathtub, obj: &Mesh, r: &mut Rng) -> Vec<Mesh> {
             let rr = [q[0], q[1], 0.0];
             let pts = subdivide_wire(&[pp, q, rr], t.leg_sub);
             let tube = super::gnhelpers::geo_radius_ex(&[pts], t.leg_radius, 32, 0.004, false);
-            let mut leg = bevel_def_seg(&tube, t.leg_radius * r.uniform(0.3, 0.7), 1);
+            let bw = t.leg_radius * r.uniform(0.3, 0.7);
+            if let Ok(d) = std::env::var("LEGDUMP") {
+                std::fs::write(format!("{d}/legpre{}.json", legs.len()), serde_json::json!({"v": tube.pos, "p": tube.faces, "w": bw}).to_string()).unwrap();
+            }
+            let mut leg = bevel_def_seg(&tube, bw, 1);
             for p in leg.pos.iter_mut() {
                 p[2] = (p[2] as f32 + t.leg_radius as f32) as f64;
             }
@@ -254,15 +258,21 @@ pub fn orient_outward(m: &mut Mesh) {
 
 pub fn find_hole(obj: &Mesh, x: f64, y: f64) -> V3 {
     let (co, nor) = centers_normals(obj);
-    let mut best = (f64::INFINITY, 0usize);
+    let score: Vec<f64> = (0..co.len())
+        .map(|i| {
+            let up = if nor[i][2] > 0.0 { 1.0 } else { 0.0 };
+            ((co[i][0] - x).abs() + (co[i][1] - y).abs()) - up
+        })
+        .collect();
+    let m = score.iter().cloned().fold(f64::INFINITY, f64::min);
+    // mirror-symmetric meshes tie in exact arithmetic and float noise decides in Blender; observed: the lower-y face wins
+    let mut best = usize::MAX;
     for i in 0..co.len() {
-        let up = if nor[i][2] > 0.0 { 1.0 } else { 0.0 };
-        let v = ((co[i][0] - x).abs() + (co[i][1] - y).abs()) - up;
-        if v < best.0 {
-            best = (v, i);
+        if score[i] <= m + 1e-6 && (best == usize::MAX || co[i][1] < co[best][1]) {
+            best = i;
         }
     }
-    co[best.1]
+    co[best]
 }
 
 pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool) -> Mesh {
