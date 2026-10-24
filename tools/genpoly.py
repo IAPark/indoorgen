@@ -8,7 +8,7 @@ random.seed(seed)
 rooms = {}
 k = 0
 while len(rooms) < n:
-    kind = random.choice(["hull", "rot", "lshape", "star"])
+    kind = random.choice(["hull", "rot", "lshape", "star", "hole"])
     if kind == "hull":
         pts = [(random.randint(0, 12) * 0.5, random.randint(0, 12) * 0.5) for _ in range(random.randint(4, 9))]
         p = MultiPoint(pts).convex_hull
@@ -21,6 +21,13 @@ while len(rooms) < n:
         p = shapely.box(0, 0, w, h).difference(shapely.box(w - cw, h - ch, w, h))
         if random.random() < 0.5:
             p = shapely.affinity.rotate(p, random.choice([30, 45, 60]), origin=(0, 0))
+    elif kind == "hole":
+        w, h = random.randint(8, 16) * 0.5, random.randint(8, 16) * 0.5
+        hw, hh = random.randint(1, int(w) - 1) * 0.5, random.randint(1, int(h) - 1) * 0.5
+        x0, y0 = random.randint(1, int(w * 2) - int(hw * 2) - 1) * 0.5, random.randint(1, int(h * 2) - int(hh * 2) - 1) * 0.5
+        p = shapely.box(0, 0, w, h).difference(shapely.box(x0, y0, x0 + hw, y0 + hh))
+        if random.random() < 0.5:
+            p = shapely.affinity.rotate(p, random.uniform(5, 85), origin=(0, 0))
     else:
         m = random.randint(5, 9)
         pts = [((2 + random.uniform(0, 2)) * math.cos(2 * math.pi * i / m), (2 + random.uniform(0, 2)) * math.sin(2 * math.pi * i / m)) for i in range(m)]

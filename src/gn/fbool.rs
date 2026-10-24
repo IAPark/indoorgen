@@ -107,6 +107,9 @@ fn pass(m0: &Mesh, src0: &[(u8, u32)], m1: &Mesh, src1: &[(u8, u32)], mode: i32)
     let (mut bm, looptris) = bm_concat(m0, m1);
     mesh_intersect_boolean(&mut bm, &looptris, &|b: &BMesh, f: usize| operand_of(b, f), mode, 1e-6f32);
     let (pos, edges, faces) = bm.to_mesh();
+    if std::env::var_os("GNBOOL_DUMP").is_some() {
+        eprintln!("SLOTS {:?}", bm.face_ids());
+    }
     let mut srcs = vec![];
     for f in bm.face_ids() {
         let u = bm.faces[f].user;

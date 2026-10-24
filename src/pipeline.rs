@@ -190,7 +190,12 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         let name = if *n == 0 { base.to_string() } else { format!("{base}.{:03}", n) };
         *n += 1;
         let h = [ct.dims[0] / 2., ct.dims[1] / 2., ct.dims[2] / 2.];
-        let g = ObjGeom::from_tris(box_tris([-h[0], -h[1], -h[2]], h, 0), vec![(Proxy::Box { center: [0.; 3], half: h }, u32::MAX)]);
+        let g = {
+            let r = |v: f64| v as f32 as f64;
+            let mut g = crate::furn::geom::cuboid_py([r(-h[0]), r(-h[1]), r(-h[2])], [r(h[0]), r(h[1]), r(h[2])], 0, 0);
+            for t in g.tris.iter_mut() { t.tags = 0; }
+            g
+        };
         let kind_tag = if ct.kind == CutKind::Window { Tag::sem("Window") } else { Tag::sem("Door") };
         let tags = TagSet::from([kind_tag, Tag::sem("Cutter"), Tag::obj(&name)]);
         let mut o = ObjState::new(Arc::new(g), Pose::from_euler(ct.loc, [0., 0., ct.rot_z]), tags);

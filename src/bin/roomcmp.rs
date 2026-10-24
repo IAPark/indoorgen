@@ -160,9 +160,11 @@ fn main() {
             for seed in a[2].parse::<u64>().unwrap()..a[3].parse::<u64>().unwrap() {
                 let c = consts(seed);
                 let cfg = infinigen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
-                let solver = infinigen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
-                let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "solve_rooms"]));
-                let st = solver.solve(&mut r);
+                let Ok(st) = std::panic::catch_unwind(|| {
+                    let solver = infinigen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
+                    let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "solve_rooms"]));
+                    solver.solve(&mut r)
+                }) else { eprintln!("seed {seed}: plan solver panicked, skipped"); continue };
                 let mut rooms = serde_json::Map::new();
                 for (name, obj) in st.valid_rooms() {
                     if let Some(rings) = infinigen::rooms::shell::room_rings(&c, obj.polygon.as_ref().unwrap()) {

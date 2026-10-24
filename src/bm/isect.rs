@@ -119,6 +119,24 @@ impl<V> GHash<V> {
 }
 
 // ------------------------------------------------------------------ math helpers
+fn fma_mode() -> u8 {
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| std::env::var("GNBOOL_FMA").ok().and_then(|s| s.parse().ok()).unwrap_or(0))
+}
+fn dot(a: V3, b: V3) -> f32 {
+    if fma_mode() == 0 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    } else {
+        a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0]))
+    }
+}
+fn cross(a: V3, b: V3) -> V3 {
+    match fma_mode() {
+        0 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+        1 => [a[1].mul_add(b[2], -(a[2] * b[1])), a[2].mul_add(b[0], -(a[0] * b[2])), a[0].mul_add(b[1], -(a[1] * b[0]))],
+        _ => [(-a[2]).mul_add(b[1], a[1] * b[2]), (-a[0]).mul_add(b[2], a[2] * b[0]), (-a[1]).mul_add(b[0], a[0] * b[1])],
+    }
+}
 fn line_point_factor_v3(p: V3, l1: V3, l2: V3) -> f32 {
     let u = sub(l2, l1);
     let h = sub(p, l1);
@@ -408,6 +426,9 @@ impl BMesh {
         let (side, ix) = intersect_line_tri(self.verts[e_v0].co, self.verts[e_v1].co, t_cos, t_nor, &s.eps);
         if side != IsectType::None {
             let iv = self.vert_create(ix, None);
+            if std::env::var_os("GNBOOL_DUMP").is_some() {
+                eprintln!("NEWV {} side {:?} tri {} edge ({},{}) at {:?}", iv, side, t_index, e_v0, e_v1, ix);
+            }
             let e = self.edge_exists(e_v0, e_v1);
             if e != NONE {
                 s.edge_verts_add(e, iv, false, model);
@@ -841,6 +862,9 @@ pub fn mesh_intersect_boolean(bm: &mut BMesh, looptris: &[[usize; 3]], test_fn: 
         for (ia, ib) in overlap {
             let a = looptris[ia as usize];
             let b = looptris[ib as usize];
+            if std::env::var_os("GNBOOL_DUMP").is_some() {
+                eprintln!("PAIR {} {}", ia, ib);
+            }
             bm.isect_tri_tri(&mut s, &model, ia, ib, a, b, isect_tri_tri_no_shared);
         }
     }
