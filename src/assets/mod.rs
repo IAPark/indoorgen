@@ -51,6 +51,7 @@ pub mod gweld;
 pub mod hwexact;
 pub mod bathfree;
 pub mod pangeom;
+pub mod prismcut;
 pub mod ksink;
 pub mod books;
 pub mod textdraw;
@@ -83,6 +84,8 @@ pub mod bevelgn;
 pub mod stagecmp;
 pub mod stagefile;
 pub mod dualcon;
+pub mod leafkit;
+pub mod monocot;
 pub mod bpymod;
 pub mod solidnm;
 pub mod bpyx;
@@ -105,14 +108,70 @@ pub struct Part {
     pub col: Option<(V3, V3)>,
 }
 
+/// A cloth simulation the Rust solver approximated: the exact pre-sim mesh, colliders (asset parts, read in their *current* state when
+/// the job runs) and the python `cloth_sim` keyword arguments, so a Blender run (render_rust.py / tools/cloth_jobs.py) can redo it exactly.
+#[derive(Clone, Debug)]
+pub struct ClothJob {
+    /// part receiving the simulated (and subsurfed) mesh
+    pub target: usize,
+    pub pre: Mesh,
+    pub collide: Vec<usize>,
+    /// bake_cloth kwargs as python passes them (mass, tension_stiffness, gravity, use_pressure, uniform_pressure_force, ...)
+    pub kwargs: serde_json::Value,
+    pub end_frame: u32,
+    pub subsurf: usize,
+    /// vertices of the "pin" vertex group (vertex_group_mass="pin")
+    pub pin: Vec<u32>,
+    /// pre mesh was placed at z = top of `.0` (max z) : `.1` is the value Rust used; Blender shifts by (new top - used)
+    pub z_from: Option<(usize, f64)>,
+    /// build the pre mesh in Blender with python's own factory code instead of importing `pre` (exact edge/loop order => reproducible sims)
+    pub build: Option<serde_json::Value>,
+}
+
+/// object resting on cloth/bed surfaces: Blender re-drops it by the change of the supporting surface height at (x, y)
+#[derive(Clone, Debug)]
+pub struct Follower {
+    pub part: usize,
+    pub xy: [f64; 2],
+    pub z_used: f64,
+    pub bases: Vec<usize>,
+}
+
 #[derive(Clone, Default)]
 pub struct Asset {
+    pub cloth: Vec<ClothJob>,
+    pub followers: Vec<Follower>,
     pub parts: Vec<Part>,
     /// top faces of these boxes carry the SupportSurface tag
     pub supports: Vec<(V3, V3)>,
 }
 
 impl Asset {
+    /// cloth jobs and followers as sidecar JSON; part `i` is named `{prefix}#{i}`; `m` places the asset in the world (z-rotation + translation)
+    pub fn cloth_json(&self, prefix: &str, m: &Mat4) -> Vec<serde_json::Value> {
+        use serde_json::json;
+        let nm = |i: usize| format!("{prefix}#{i}");
+        let zt = m.0[2][3];
+        let mut out = vec![];
+        for j in &self.cloth {
+            let mut pre = j.pre.clone();
+            pre.transform(m);
+            let verts: Vec<_> = pre.pos.iter().map(|p| json!([p[0], p[1], p[2]])).collect();
+            out.push(json!({
+                "kind": "cloth", "target": nm(j.target), "verts": verts, "faces": pre.faces,
+                "collide": j.collide.iter().map(|&i| nm(i)).collect::<Vec<_>>(), "kwargs": j.kwargs, "end_frame": j.end_frame,
+                "subsurf": j.subsurf, "pin": j.pin, "build": j.build, "pose": m.0,
+                "z_from": j.z_from.map(|(p, z)| json!({"part": nm(p), "z_used": z + zt})),
+            }));
+        }
+        for f in &self.followers {
+            let mut v = [f.xy[0], f.xy[1], 0.0];
+            let q = m.apply(v);
+            v = q;
+            out.push(json!({"kind": "follow", "part": nm(f.part), "xy": [v[0], v[1]], "z_used": f.z_used + zt, "bases": f.bases.iter().map(|&i| nm(i)).collect::<Vec<_>>()}));
+        }
+        out
+    }
     pub fn cuboid(&mut self, lo: V3, hi: V3, mat: &Material) {
         self.parts.push(Part { mesh: Mesh::cuboid(lo, hi), mat: mat.clone(), col: Some((lo, hi)) });
     }
@@ -193,7 +252,7 @@ impl Asset {
 
     pub fn bbox_geom(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
-        ObjGeom::cuboid(lo, hi, 0)
+        crate::furn::geom::cuboid_py(lo, hi, 0, 0)
     }
 }
 
@@ -275,6 +334,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if lamps::handles(c) => lamps::make(c, &mut rng, factory_seed),
         c if tables::handles(c) => tables::make(c, &mut rng),
         c if seating::handles(c) => seating::make(c, &mut rng, factory_seed),
+        c if monocot::handles(c) => monocot::make(c, &mut rng, factory_seed),
         c if plants::handles(c) => plants::make(c, &mut rng, factory_seed),
         _ => None,
     }
@@ -283,7 +343,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
 /// bounding box placeholder of the final asset (uses the float32 exact mesh when the class is ported at topology level)
 pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
     if let Some((lo, hi)) = f.bounds_hint(inst) {
-        return ObjGeom::cuboid(lo, hi, 0);
+        return crate::furn::geom::cuboid_py(lo, hi, 1, 0);
     }
     if let Some(e) = f.exact(inst) {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -293,9 +353,10 @@ pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
                 hi[k] = hi[k].max(v[k]);
             }
         }
-        return ObjGeom::cuboid(lo, hi, 0);
+        return crate::furn::geom::cuboid_py(lo, hi, 1, 0);
     }
-    f.asset(inst).bbox_geom()
+    let (lo, hi) = f.asset(inst).bounds();
+    crate::furn::geom::cuboid_py(lo, hi, 1, 0)
 }
 
 
@@ -336,7 +397,7 @@ pub fn scene_asset(f: &dyn Factory, inst: u64) -> Asset {
         })).collect();
         m.faces.push(face);
     }
-    let mut out = Asset { parts: vec![], supports: approx.supports.clone() };
+    let mut out = Asset { parts: vec![], supports: approx.supports.clone(), ..Default::default() };
     for (k, m) in meshes.into_iter().enumerate() {
         if !m.faces.is_empty() {
             out.parts.push(Part { mesh: m, mat: approx.parts[k].mat.clone(), col: approx.parts[k].col });
@@ -360,6 +421,15 @@ pub struct RealAssets {
 
 impl Assets for RealAssets {
     fn placeholder(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
+        self.placeholder_raw(class, factory_seed, inst_seed, kind).map(round_geom_f32)
+    }
+    fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
+        make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom())
+    }
+}
+
+impl RealAssets {
+    pub fn placeholder_raw(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
         if let Some(f) = make_factory(class, factory_seed) {
             return Some(match kind {
                 PlaceholderKind::Real => match f.placeholder(inst_seed) {
@@ -383,12 +453,6 @@ impl Assets for RealAssets {
         }
         self.fallback.placeholder(class, factory_seed, inst_seed, kind)
     }
-    fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
-        make_factory(class, factory_seed).map(|f| scene_asset(&*f, inst_seed).solver_geom())
-    }
-}
-
-impl RealAssets {
     /// final visual asset for a generated object (real port if available, otherwise a recipe in the sampled bbox)
     pub fn visual(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Asset {
         if let Some(f) = make_factory(class, factory_seed) {
@@ -401,4 +465,21 @@ impl RealAssets {
         let mut rng = inst_rng(factory_seed, inst_seed);
         proxy::proxy_asset(class, lo, hi, &mut rng)
     }
+}
+
+/// python meshes are float32: round every coordinate (and the bounds) to f32
+pub fn round_geom_f32(mut g: ObjGeom) -> ObjGeom {
+    let r = |v: &mut V3| {
+        for k in 0..3 {
+            v[k] = v[k] as f32 as f64;
+        }
+    };
+    for t in g.tris.iter_mut() {
+        for v in t.v.iter_mut() {
+            r(v);
+        }
+    }
+    r(&mut g.lo);
+    r(&mut g.hi);
+    g
 }

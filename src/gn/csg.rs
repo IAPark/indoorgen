@@ -525,37 +525,7 @@ pub fn mesh_boolean(op: &str, first: &Mesh, others: &[&Mesh]) -> Mesh {
     }
     let (pos, faces) = compact(pos, faces);
     let mut m = Mesh::from_faces(pos, &faces, &[]);
-    // face attribute propagation from the source faces
-    let metas: Vec<&Mesh> = std::iter::once(first).chain(others.iter().copied()).collect();
-    let mut names: Vec<String> = vec![];
-    for mm in &metas {
-        for n in mm.attrs.keys() {
-            if !names.contains(n) {
-                names.push(n.clone());
-            }
-        }
-    }
-    for n in names {
-        let mut ty = Ty::B;
-        let mut dom = Dom::Face;
-        for mm in &metas {
-            if let Some(a) = mm.attrs.get(&n) {
-                ty = a.ty;
-                dom = a.dom;
-            }
-        }
-        if dom != Dom::Face {
-            continue;
-        }
-        let data: Vec<Val> = src
-            .iter()
-            .map(|&(id, f)| match metas[id as usize].attrs.get(&n) {
-                Some(a) => a.data[f as usize].clone(),
-                None => Val::zero(ty),
-            })
-            .collect();
-        m.attrs.insert(n, Attr { dom: Dom::Face, ty, data });
-    }
+    propagate_face_attrs(&mut m, first, others, &src);
     m.mats = first.mats.clone();
     m
 }
@@ -868,4 +838,78 @@ pub fn resolve_tjunctions(pos: &[V3], faces: Vec<Vec<u32>>, scale: f64) -> Vec<V
         out.push(nf);
     }
     out
+}
+
+/// face attributes of the result copied from the source faces (operand, face)
+fn propagate_face_attrs(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
+    propagate_attrs_dom(m, first, others, src, Dom::Face)
+}
+
+/// attributes of domain `want` of the result copied from the source elements (operand, element)
+fn propagate_attrs_dom(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)], want: Dom) {
+    let metas: Vec<&Mesh> = std::iter::once(first).chain(others.iter().copied()).collect();
+    let mut names: Vec<String> = vec![];
+    for mm in &metas {
+        for n in mm.attrs.keys() {
+            if !names.contains(n) {
+                names.push(n.clone());
+            }
+        }
+    }
+    for n in names {
+        let mut ty = Ty::B;
+        let mut dom = Dom::Face;
+        for mm in &metas {
+            if let Some(a) = mm.attrs.get(&n) {
+                ty = a.ty;
+                dom = a.dom;
+            }
+        }
+        if dom != want {
+            continue;
+        }
+        let data: Vec<Val> = src
+            .iter()
+            .map(|&(id, f)| {
+                if id == u8::MAX {
+                    return Val::zero(ty);
+                }
+                match metas[id as usize].attrs.get(&n) {
+                    Some(a) => a.data[f as usize].convert(ty),
+                    None => Val::zero(ty),
+                }
+            })
+            .collect();
+        m.attrs.insert(n, Attr { dom: want, ty, data });
+    }
+}
+
+pub fn propagate_face_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
+    propagate_face_attrs(m, first, others, src)
+}
+pub fn propagate_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)], dom: Dom) {
+    propagate_attrs_dom(m, first, others, src, dom)
+}
+/// point attributes; sources with operand `u8::MAX` (new vertices) get the zero value
+pub fn propagate_point_attrs_pub(m: &mut Mesh, first: &Mesh, others: &[&Mesh], src: &[(u8, u32)]) {
+    propagate_attrs_dom(m, first, others, src, Dom::Point)
+}
+
+/// Blender's EXACT solver (exbool port: vertex, face and edge order identical to Blender 4.2)
+pub fn mesh_boolean_exact(op: &str, first: &Mesh, others: &[&Mesh], use_self: bool, hole_tolerant: bool) -> Mesh {
+    use crate::exbool::exact_boolean::{exact_boolean, BoolInput, BoolOp};
+    let conv = |m: &Mesh| BoolInput { verts: m.pos.clone(), faces: (0..m.nf()).map(|f| m.face(f).to_vec()).collect() };
+    let mut ins = vec![conv(first)];
+    ins.extend(others.iter().map(|m| conv(m)));
+    let bop = match op {
+        "DIFFERENCE" => BoolOp::Difference,
+        "INTERSECT" => BoolOp::Intersect,
+        _ => BoolOp::Union,
+    };
+    let out = exact_boolean(&ins, bop, use_self, hole_tolerant);
+    let mut m = Mesh::from_faces(out.verts, &out.faces, &out.edges);
+    let src: Vec<(u8, u32)> = out.face_orig.iter().map(|&(o, f)| (o as u8, f as u32)).collect();
+    propagate_face_attrs(&mut m, first, others, &src);
+    m.mats = first.mats.clone();
+    m
 }

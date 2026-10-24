@@ -1152,26 +1152,63 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         "GeometryNodeMeshBoolean" => {
             let op = node.ps("operation");
             let mut o = Geometry::default();
-            let mut first: Option<Rc<Geometry>> = None;
-            let mut others: Vec<Rc<Geometry>> = vec![];
+            let ident: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+            let mut geos: Vec<Rc<Geometry>> = vec![];
+            let mut first_geo: Option<Rc<Geometry>> = None;
             if op == "DIFFERENCE" {
-                first = Some(ev.geo(ni, "Mesh 1")?);
+                first_geo = Some(ev.geo(ni, "Mesh 1")?);
             }
             for v in ev.input_multi(ni, "Mesh 2")? {
                 if let Value::G(g) = v {
-                    others.push(g);
+                    geos.push(g);
                 }
             }
             // the multi-input is processed in reverse link order, like Join Geometry
-            others.reverse();
-            if first.is_none() && !others.is_empty() {
-                first = Some(others.remove(0));
-            }
-            if let Some(g1) = first {
-                if let Some(m1) = &g1.mesh {
-                    let ms: Vec<&Mesh> = others.iter().filter_map(|g| g.mesh.as_ref()).collect();
-                    o.mesh = Some(super::csg::mesh_boolean(op, m1, &ms));
+            geos.reverse();
+            // operands: Mesh 1 (mesh only), then for each Mesh 2 geometry its mesh followed by the meshes of its instances
+            let mut operands: Vec<(&Mesh, M4)> = vec![];
+            if let Some(g) = &first_geo {
+                if let Some(m) = &g.mesh {
+                    operands.push((m, ident));
                 }
+            }
+            for g in &geos {
+                if let Some(m) = &g.mesh {
+                    operands.push((m, ident));
+                }
+                if let Some(inst) = &g.inst {
+                    for i in 0..inst.n() {
+                        if let Some(Some(m)) = inst.refs.get(inst.idx[i] as usize).map(|r| r.mesh.as_ref()) {
+                            operands.push((m, inst.xf[i]));
+                        }
+                    }
+                }
+            }
+            if !operands.is_empty() {
+                let float = node.ps("solver") == "FLOAT" && std::env::var_os("GNBOOLEXACT").is_none();
+                let exact = node.ps("solver") != "FLOAT" || std::env::var_os("GNBOOLEXACT").is_some();
+                o.mesh = Some(if float && std::env::var_os("GNBOOLBSP").is_none() {
+                    // a degenerate input must never take the whole generator down: fall back to the BSP boolean
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::fbool::mesh_boolean_float(op, &operands))) {
+                        Ok(m) => m,
+                        Err(_) => {
+                            let owned: Vec<Option<Mesh>> = operands.iter().map(|(m, x)| if *x == ident { None } else { Some(super::fbool::transform_mesh(m, x)) }).collect();
+                            let refs: Vec<&Mesh> = operands.iter().zip(owned.iter()).map(|((m, _), ow)| ow.as_ref().unwrap_or(*m)).collect();
+                            super::csg::mesh_boolean(op, refs[0], &refs[1..])
+                        }
+                    }
+                } else {
+                    // the other solvers take the transformed operands
+                    let owned: Vec<Option<Mesh>> = operands.iter().map(|(m, x)| if *x == ident { None } else { Some(super::fbool::transform_mesh(m, x)) }).collect();
+                    let refs: Vec<&Mesh> = operands.iter().zip(owned.iter()).map(|((m, _), ow)| ow.as_ref().unwrap_or(*m)).collect();
+                    let (m1, ms) = (refs[0], &refs[1..]);
+                    if exact && std::env::var_os("GNBOOLBSP").is_none() {
+                        let (us, ht) = (ev.cb(ni, "Self Intersection").unwrap_or(false), ev.cb(ni, "Hole Tolerant").unwrap_or(false));
+                        super::csg::mesh_boolean_exact(op, m1, ms, us, ht)
+                    } else {
+                        super::csg::mesh_boolean(op, m1, ms)
+                    }
+                });
             }
             outs(node, vec![("Mesh", rcgeo(o))])
         }

@@ -346,7 +346,7 @@ pub fn beautify_loop(pos: &[V3], tris: Vec<[u32; 3]>, side: &HashMap<u32, u8>, e
                 return f32::MAX;
             }
             let p = |v: u32| f32v(pos[v as usize]);
-            super::polyfill::rotate_beauty_area(p(v1), p(v2), p(v3), p(v4), lock)
+            super::polyfill::bm_rotate_beauty_area(p(v1), p(v2), p(v3), p(v4), lock)
         } else {
             rot_cost(pos, side, v1, v2, v3, v4)
         }

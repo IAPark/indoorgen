@@ -33,7 +33,7 @@ fn poly_normal(co: &[V3]) -> V3 {
     normalize_v3(n)
 }
 
-fn ortho_basis(n: V3) -> (V3, V3) {
+pub(crate) fn ortho_basis(n: V3) -> (V3, V3) {
     let eps = f32::EPSILON;
     let f = n[0] * n[0] + n[1] * n[1];
     if f > eps {
@@ -521,13 +521,13 @@ pub fn triangulate_ngon_plain(co: &[V3]) -> Vec<[u32; 3]> {
     polyfill_calc(&proj)
 }
 
-fn cross_tri_v3(v1: V3, v2: V3, v3: V3) -> V3 {
+pub(crate) fn cross_tri_v3(v1: V3, v2: V3, v3: V3) -> V3 {
     let n1 = [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]];
     let n2 = [v2[0] - v3[0], v2[1] - v3[1], v2[2] - v3[2]];
     [n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]]
 }
 
-fn is_quad_flip_v3(v1: V3, v2: V3, v3: V3, v4: V3) -> i32 {
+pub(crate) fn is_quad_flip_v3(v1: V3, v2: V3, v3: V3, v4: V3) -> i32 {
     let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     let cross = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -588,10 +588,8 @@ pub fn quad_split_24_beauty(co: [V3; 4]) -> bool {
     cost > 0.0
 }
 
-
-/// bm_edge_calc_rotate_beauty__area (bmesh_beautify.cc): cost of rotating the edge (v2, v4) of the quad v1 v2 v3 v4 into (v1, v3);
-/// negative = the rotated state is better, FLT_MAX = not allowed
-pub fn rotate_beauty_area(v1: V3, v2: V3, v3: V3, v4: V3, lock_degenerate: bool) -> f32 {
+/// bm_edge_calc_rotate_beauty__area (BMesh beautify cost of rotating the edge between triangles (v2,v3,v4) / (v2,v4,v1))
+pub(crate) fn bm_rotate_beauty_area(v1: V3, v2: V3, v3: V3, v4: V3, lock_degenerate: bool) -> f32 {
     let no_a = cross_tri_v3(v2, v3, v4);
     let no_b = cross_tri_v3(v2, v4, v1);
     let mut no = [no_a[0] + no_b[0], no_a[1] + no_b[1], no_a[2] + no_b[2]];

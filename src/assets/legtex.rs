@@ -150,7 +150,7 @@ pub fn vert_normals(m: &Mesh) -> Vec<[f32; 3]> {
             }
         }
     }
-    acc.into_iter().map(normd).collect()
+    acc.into_iter().enumerate().map(|(i, a)| { let n = normd(a); if n == [0.0; 3] { normd(p32[i]) } else { n } }).collect()
 }
 
 /// DISPLACE modifier, direction NORMAL, texture coords = local vertex positions

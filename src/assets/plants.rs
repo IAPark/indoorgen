@@ -449,6 +449,16 @@ impl Factory for PlantContainer {
         let mut r = inst_rng(self.factory_seed, i);
         let mut plant = Mesh::new();
         let leaf_mat;
+        if self.large && super::monocot::supported(self.factory_seed) {
+            // exact monocot (assets::monocot) placed like PlantContainerFactory.create_asset: origin2lowest(approximate), fit into [side, side, top]
+            let m = super::monocot::MonocotFactory::new(self.factory_seed).mesh(i);
+            let (v, sc) = super::monocot::fit_in_container(&m, self.side_size, self.top_size, dirt_z);
+            let _ = sc;
+            let mesh = Mesh { pos: v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(), faces: m.f.clone(), uv: vec![] };
+            let b = mesh.bounds();
+            a.mesh(mesh, &Material::diffuse(&format!("leaf:{}:{i}", self.factory_seed), [0.1, 0.3, 0.1], 0.55), Some(b));
+            return a;
+        }
         match self.kind {
             Kind::Cactus => {
                 let h = r.uniform(0.6, 1.0);
