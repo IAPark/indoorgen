@@ -113,10 +113,13 @@ fn fill_normal(bm: &BMesh, pos: &[V3], edges: &[[usize; 2]]) -> V3 {
         }
         nors.push((value, no));
     }
+    if std::env::var_os("DBGN").is_some() {
+        eprintln!("raw {:?}", nors.iter().map(|n| (n.0.to_bits(), if n.1[2] > 0.0 { 1 } else if n.1[2] < 0.0 { -1 } else { 0 })).collect::<Vec<_>>());
+    }
     let mut normal = [0.0f32; 3];
     if !is_degenerate {
         // qsort descending by value
-        nors.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        crate::bm::qsort::qsort(&mut nors, &|a, b| if a.0 < b.0 { 1 } else if a.0 > b.0 { -1 } else { 0 });
         normal = nors[0].1;
         for n in nors.iter_mut() {
             if n.0 == -1.0 {
@@ -126,6 +129,15 @@ fn fill_normal(bm: &BMesh, pos: &[V3], edges: &[[usize; 2]]) -> V3 {
                 n.1 = [-n.1[0], -n.1[1], -n.1[2]];
             }
             normal = [normal[0] + n.1[0], normal[1] + n.1[1], normal[2] + n.1[2]];
+        }
+    }
+    if std::env::var_os("DBGN").is_some() {
+        eprintln!("normal {:?} nors {:?}", normal, nors.iter().map(|n| (n.0, n.1[2])).collect::<Vec<_>>());
+    }
+    if let Ok(sg) = std::env::var("FORCEN") {
+        let want: f32 = sg.parse().unwrap();
+        if normal[2] * want < 0.0 {
+            normal = [-normal[0], -normal[1], -normal[2]];
         }
     }
     let d = len_sq(normal);
