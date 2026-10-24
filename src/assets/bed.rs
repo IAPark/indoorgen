@@ -566,7 +566,9 @@ impl Factory for Bed {
         p.use_pressure = true;
         p.pressure = pressure;
         p.use_self_collision = s.sheet_folded;
-        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &Calib::default());
+        let mut cal = Calib::default();
+        cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
+        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
         let sheet = subsurf(&sheet, 2, false);

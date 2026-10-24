@@ -7,7 +7,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 ## Seating / bedroom (worker: seat)
 | id | item | status | notes |
 |---|---|---|---|
-| S1 | Bed: frame, mattress (coiled + wrapped), pillow base + Bed assembly using the Rust cloth (src/assets/cloth.rs, clothes.rs). Replace approximate seating.rs Bed | todo | furniture agent had started `bed.rs` (salvaged on master); Blanket/Comforter pre-sim exact; cloth sim approximate by design |
+| S1 | Bed: frame, mattress, pillow base + Bed assembly using the Rust cloth | partial (committed) | Vertex counts match python for frame (seeds 2,5 exact), mattress (coiled counts exact, wrapped), sheet, cover, pillows, towel. refcmp BedFrame: seed5 PASS, seed2 2e-4 (python TRIANGULATE-beauty diagonal rule unknown; coil smoothing sensitive). MattressFactory coiled mean 1e-3, wrapped 3e-3 (pressure x0.2 calib). Pillow mean 3e-3..9e-3. Bed whole: sheet/cover drape approximate (mean 0.07-0.2); comforter pressure x0.85 calib. Open: back panel (pad/coiled) uses a regular slab, python hull is garbled (fewer dots); beauty triangulation; fold bisect untested vs python. Tools: tools/pycoil.py pybedparts.py pybedfull.py cmpbed.py jcmp.py; REFSTUB=1 set by refcmp (python cache stubs material draws) |
 | S2 | Roll towels (TowelFactory roll type): bevel keeps fewer coincident duplicate vertices than Blender on zero-area strips (seed 4: 47390 vs 47770) | todo | pre-bevel mesh exact |
 | S3 | OfficeChair/BarChair: gn_check failures | todo | hand port exists |
 | S4 | Sofa/ArmChair exact vertex order (surface already exact) | todo | low priority |
