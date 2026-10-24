@@ -433,8 +433,15 @@ impl PlantContainer {
 
 impl Factory for PlantContainer {
     fn placeholder(&self, _i: u64) -> Option<Asset> {
+        // new_bbox: unit cube with object scale / location (float32 properties), applied as x * s + l in float32
+        let ax = |a: f64, b: f64| -> (f64, f64) {
+            let (l, s) = (((a + b) / 2.0) as f32, ((b - a) / 2.0) as f32);
+            (((-1.0f32) * s + l) as f64, (1.0f32 * s + l) as f64)
+        };
+        let (x0, x1) = ax(-self.side_size, self.side_size);
+        let (z0, z1) = ax(-0.02, self.pot.depth * self.pot.scale + self.top_size);
         let mut a = Asset::default();
-        a.cuboid([-self.side_size, -self.side_size, -0.02], [self.side_size, self.side_size, self.pot.depth * self.pot.scale + self.top_size], &mat("ph", [0.5; 3], 0.5));
+        a.cuboid([x0, x0, z0], [x1, x1, z1], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
 
