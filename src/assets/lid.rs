@@ -18,6 +18,8 @@ pub struct Lid {
     is_glass: bool,
     rim_height: f64,
     knob: bool,
+    handle_width: f64,
+    sub: i64,
     handle_height: f64,
     handle_radius: f64,
     mats: [&'static str; 3],
@@ -35,12 +37,12 @@ impl Lid {
         let knob = r.randint(0, 2) == 1;
         let handle_height = if knob { x_length * r.uniform(0.1, 0.15) } else { x_length * r.uniform(0.2, 0.25) };
         let handle_radius = x_length * r.uniform(0.15, 0.25);
-        let _handle_width = x_length * r.uniform(0.25, 0.3);
-        let _sub = r.randint(0, 3);
+        let handle_width = x_length * r.uniform(0.25, 0.3);
+        let sub = r.randint(0, 3);
         let m0 = if is_glass { matdraw::sample_init(&mut r, matdraw::FRONT_MAYBEGLASS) } else { matdraw::sample_init(&mut r, matdraw::DECORATIVE_HARD) };
         let m1 = matdraw::sample_init(&mut r, matdraw::METALS);
         let m2 = matdraw::sample_init(&mut r, matdraw::DECORATIVE_HARD);
-        Lid { x_length, z_height, thickness, is_glass, rim_height, knob, handle_height, handle_radius, mats: [m0, m1, m2], fs }
+        Lid { x_length, z_height, thickness, is_glass, rim_height, knob, handle_height, handle_radius, handle_width, sub, mats: [m0, m1, m2], fs }
     }
 
     fn cyl(&self, sx: f64, sz: f64, z0: f64) -> Mesh {
@@ -49,6 +51,63 @@ impl Lid {
             *p = [(p[0] as f32 * sx as f32) as f64, (p[1] as f32 * sx as f32) as f64, (p[2] as f32 * sz as f32 + z0 as f32) as f64];
         }
         bevel(&c, Offset::Width(self.thickness / 2.0), 4, 30f64.to_radians()).unwrap_or(c)
+    }
+}
+
+impl Lid {
+    /// add_handle: wire arch (linear subdivision of loose edges), edge extrude along y, SOLIDIFY(offset 0), BEVEL, moved onto the lid
+    fn handle(&self, body: &Mesh) -> Mesh {
+        let f32r = |x: f64| x as f32 as f64;
+        let (w, h, t) = (f32r(self.handle_width), f32r(self.handle_height), f32r(self.thickness));
+        // z_offset: z of the centre of the face whose centre is closest (L1 in xy) to (handle_width, 0)
+        let mut best = (f64::INFINITY, 0.0);
+        for f in &body.faces {
+            let mut c = [0.0f32; 3];
+            for &v in f {
+                for k in 0..3 {
+                    c[k] += body.pos[v as usize][k] as f32;
+                }
+            }
+            let n = f.len() as f32;
+            let c = [c[0] / n, c[1] / n, c[2] / n];
+            let d = (c[0] as f64 - w).abs() + (c[1] as f64).abs();
+            if d < best.0 {
+                best = (d, c[2] as f64);
+            }
+        }
+        let z_off = best.1;
+        let pts: Vec<[f64; 3]> = vec![[-w, 0.0, 0.0], [-w, 0.0, h], [w, 0.0, h], [w, 0.0, 0.0]];
+        let seg = 1usize << self.sub;
+        let mut line: Vec<[f64; 3]> = vec![];
+        for e in 0..3 {
+            for j in 0..seg {
+                let u = j as f32 / seg as f32;
+                let (a, b) = (pts[e], pts[e + 1]);
+                line.push([0, 1, 2].map(|k| (a[k] as f32 + (b[k] as f32 - a[k] as f32) * u) as f64));
+            }
+        }
+        line.push(pts[3]);
+        let n = line.len();
+        let mut m = Mesh::new();
+        m.pos = line.clone();
+        for p in &line {
+            m.pos.push([p[0], p[1] + 2.0 * t, p[2]]);
+        }
+        for i in 0..n - 1 {
+            m.faces.push(vec![i as u32, (i + 1) as u32, (n + i + 1) as u32, (n + i) as u32]);
+        }
+        let s = books::solidify_offset(&m, t, 0.0);
+        let mut b = match super::bevelfull::bevel_angle(&s, self.thickness / 2.0, 4, 30f64.to_radians(), true) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("lid handle bevel: {e}");
+                s
+            }
+        };
+        for p in b.pos.iter_mut() {
+            *p = [p[0], (p[1] as f32 - t as f32) as f64, (p[2] as f32 + z_off as f32) as f64];
+        }
+        b
     }
 }
 
@@ -65,6 +124,7 @@ impl Factory for Lid {
         let m = spin_anchors(&anchors, &[]);
         let s = books::solidify_offset(&m, self.thickness as f32 as f64, 0.0);
         let body = bevel(&s, Offset::Width(self.thickness / 2.0), 4, 30f64.to_radians()).unwrap_or(s);
+        dumpp("part0", &body);
         let mut all = Mesh::new();
         all.append(&body);
         if self.is_glass {
@@ -87,13 +147,20 @@ impl Factory for Lid {
                     t.faces.push(vec![(a * mnr + b) as u32, (a1 * mnr + b) as u32, (a1 * mnr + b1) as u32, (a * mnr + b1) as u32]);
                 }
             }
+            dumpp("part1", &t);
             all.append(&t);
+        }
+        if !self.knob {
+            let h = self.handle(&body);
+            dumpp("part2", &h);
+            all.append(&h);
         }
         if self.knob {
             let u1 = r.uniform(1.0, 2.0);
             let stem = self.cyl(self.thickness * u1, self.handle_height, self.z_height);
             let u2 = r.uniform(1.0, 2.0);
             let top = self.cyl(self.handle_radius, self.thickness * u2, self.z_height + self.handle_height);
+            { let mut k = Mesh::new(); k.append(&stem); k.append(&top); dumpp("part1", &k); }
             all.append(&stem);
             all.append(&top);
         }
@@ -102,6 +169,13 @@ impl Factory for Lid {
         let b = all.bounds();
         a.mesh(all, &mat, Some(b));
         a
+    }
+}
+
+fn dumpp(name: &str, m: &Mesh) {
+    if let Ok(dir) = std::env::var("PANDBG") {
+        let j = serde_json::json!({"v": m.pos, "p": m.faces});
+        let _ = std::fs::write(format!("{dir}/rs_{name}.json"), j.to_string());
     }
 }
 
