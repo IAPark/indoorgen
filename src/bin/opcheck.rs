@@ -329,6 +329,27 @@ fn r_triangulate_op(c: &Case, p: &Value) -> Res {
     Ok(from_gn(&r))
 }
 
+fn r_beautify_fill(c: &Case, p: &Value) -> Res {
+    if pf(p, "angle_limit", std::f64::consts::PI) < std::f64::consts::PI - 1e-6 {
+        return Err("beautify_fill: angle_limit < 180 not ported".into());
+    }
+    let n = c.mesh.faces.len();
+    let sel = sel_idx(c, "sel_faces", n);
+    let mut is_sel = vec![false; n];
+    for i in sel {
+        is_sel[i] = c.mesh.faces[i].len() == 3;
+    }
+    // only triangles whose faces are selected take part; others are copied
+    let tri_ids: Vec<usize> = (0..n).filter(|&i| is_sel[i]).collect();
+    let tris: Vec<[u32; 3]> = tri_ids.iter().map(|&i| [c.mesh.faces[i][0], c.mesh.faces[i][1], c.mesh.faces[i][2]]).collect();
+    let r = infinigen::assets::bridge::beautify_loop(&c.mesh.pos, tris, &HashMap::default(), c.edges.as_deref(), true);
+    let mut m = c.mesh.clone();
+    for (k, &i) in tri_ids.iter().enumerate() {
+        m.faces[i] = r[k].to_vec();
+    }
+    Ok(m)
+}
+
 fn r_remove_doubles(c: &Case, p: &Value) -> Res {
     if c.j.get("sel_verts").map_or(false, |s| s.as_str() != Some("all")) {
         return Err("remove_doubles: all verts only".into());
@@ -401,6 +422,7 @@ const OPS: &[(&str, &str, fn(&Case, &Value) -> Res)] = &[
     ("triangulate", "exact", r_triangulate),
     ("triangulate_op", "exact", r_triangulate_op),
     ("remove_doubles", "exact", r_remove_doubles),
+    ("beautify_fill", "exact", r_beautify_fill),
     ("displace", "exact", r_displace),
     ("convex_hull", "surface", r_convex_hull),
     ("remesh", "surface", r_remesh),

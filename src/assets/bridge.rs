@@ -327,6 +327,30 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
             }
         }
     }
+    beautify_loop(pos, tris, side, None, false)
+}
+
+/// generic BM_mesh_beautify_fill on triangles (edge rotation until no improvement): `side` restricts rotations to edges whose new diagonal joins the
+/// two sides (VERT_RESTRICT_TAG, angle method as the bridge uses it); with `area` = Some(lock_degenerate) the AREA metric (bpy beautify_fill) is used.
+/// `edge_order`: candidate edge order (Blender's mesh edge list), default first use order of the triangle corners.
+pub fn beautify_loop(pos: &[V3], tris: Vec<[u32; 3]>, side: &HashMap<u32, u8>, edge_order: Option<&[[u32; 2]]>, area: bool) -> Vec<[u32; 3]> {
+    let bl_order = area; // the bpy op path also reproduces Blender's face slot reuse
+    let lock = true;
+    let mut tris = tris;
+    let mut alive: Vec<bool> = vec![true; tris.len()];
+    let mut free: Vec<usize> = vec![];
+    let ord: Vec<i32> = std::env::var("BEAUTY_ORD").ok().map(|s| s.split(',').map(|x| x.parse().unwrap()).collect()).unwrap_or(vec![1, 1]);
+    let cost_of = |v1: u32, v2: u32, v3: u32, v4: u32| -> f32 {
+        if area {
+            if v1 == v3 {
+                return f32::MAX;
+            }
+            let p = |v: u32| f32v(pos[v as usize]);
+            super::polyfill::rotate_beauty_area(p(v1), p(v2), p(v3), p(v4), lock)
+        } else {
+            rot_cost(pos, side, v1, v2, v3, v4)
+        }
+    };
     // edge map
     let mut edges: Vec<(u32, u32)> = vec![];
     let mut emap: HashMap<(u32, u32), Vec<usize>> = HashMap::default();
@@ -341,6 +365,13 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
         }
     }
     // candidate slots: edges with exactly two triangle faces
+    if let Some(eo) = edge_order {
+        let have: std::collections::HashSet<(u32, u32)> = edges.iter().cloned().collect();
+        let mut ord: Vec<(u32, u32)> = eo.iter().map(|e| ekey(e[0], e[1])).filter(|k| have.contains(k)).collect();
+        let seen: std::collections::HashSet<(u32, u32)> = ord.iter().cloned().collect();
+        ord.extend(edges.iter().cloned().filter(|k| !seen.contains(k)));
+        edges = ord;
+    }
     let mut slots: Vec<(u32, u32)> = edges.iter().cloned().filter(|k| emap[k].len() == 2).collect();
     let mut slot_of: HashMap<(u32, u32), usize> = slots.iter().cloned().enumerate().map(|(i, k)| (k, i)).collect();
     let mut states: Vec<Vec<([u32; 2], [u32; 2])>> = vec![vec![]; slots.len()];
@@ -373,7 +404,7 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
     let mut heap = Heap::new();
     for (i, k) in slots.iter().enumerate() {
         if let Some(q) = quad_of(&tris, &emap, *k) {
-            let c = rot_cost(pos, side, q[0], q[1], q[2], q[3]);
+            let c = cost_of(q[0], q[1], q[2], q[3]);
             if c < 0.0 {
                 heap.insert(c, i);
             }
@@ -391,7 +422,36 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
             continue; // BM_EDGEROT_CHECK_EXISTS
         }
         // rotate
-        let fs = emap.remove(&key).unwrap();
+        let fs0 = emap.remove(&key).unwrap();
+        let mut fs = fs0.clone();
+        if bl_order {
+            // BM_edge_rotate = join the two triangles into a quad (new slot), kill them, split the quad (new slot from the free list)
+            let has_dir = |t: [u32; 3]| (0..3).any(|k| t[k] == key.0 && t[(k + 1) % 3] == key.1);
+            let (fa, fb) = if has_dir(tris[fs0[0]]) { (fs0[0], fs0[1]) } else { (fs0[1], fs0[0]) };
+            let qs = match free.pop() {
+                Some(x) => x,
+                None => {
+                    tris.push([0; 3]);
+                    alive.push(true);
+                    tris.len() - 1
+                }
+            };
+            alive[qs] = true;
+            let (k1, k2) = if ord[0] == 0 { (fa, fb) } else { (fb, fa) };
+            alive[fa] = false;
+            alive[fb] = false;
+            free.push(k1);
+            free.push(k2);
+            let ns = free.pop().unwrap();
+            alive[ns] = true;
+            fs = if ord[1] == 0 { vec![qs, ns] } else { vec![ns, qs] };
+            let _ = &fs0;
+            // outer edge face lists drop the old faces
+            for (a, b) in [(v1, v2), (v2, v3), (v3, v4), (v4, v1)] {
+                let l = emap.get_mut(&ekey(a, b)).unwrap();
+                l.retain(|f| *f != fa && *f != fb);
+            }
+        }
         tris[fs[0]] = [v1, v2, v3];
         tris[fs[1]] = [v1, v3, v4];
         // fix the four outer edges' face lists
@@ -422,13 +482,16 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
                     if states[s].contains(&alt) {
                         continue;
                     }
-                    let c = rot_cost(pos, side, q2[0], q2[1], q2[2], q2[3]);
+                    let c = cost_of(q2[0], q2[1], q2[2], q2[3]);
                     if c < 0.0 {
                         heap.insert(c, s);
                     }
                 }
             }
         }
+    }
+    if bl_order {
+        return tris.into_iter().zip(alive).filter(|x| x.1).map(|x| x.0).collect();
     }
     tris
 }

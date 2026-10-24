@@ -46,6 +46,13 @@ g = 8
 cases['grid'] = {"verts": [[(i/(g-1)-.5)*2, (j/(g-1)-.5)*2, 0.0] for j in range(g) for i in range(g)],
                  "polys": [[j*g+i, j*g+i+1, (j+1)*g+i+1, (j+1)*g+i] for j in range(g-1) for i in range(g-1)]}
 random.seed(3)
+gt = [[v[0], v[1], random.uniform(-0.15, 0.15)] for v in cases['grid']['verts']]
+tp = []
+for f in cases['grid']['polys']:
+    a, b, c, d = f
+    tp += [[a, b, c], [a, c, d]] if (a + b) % 2 == 0 else [[a, b, d], [b, c, d]]
+cases['grid_tri'] = {"verts": gt, "polys": tp}
+cases['fold_tri'] = {"verts": cases['fold']['verts'], "polys": [t for f in cases['fold']['polys'] for t in ([f[0], f[1], f[2]], [f[0], f[2], f[3]])]}
 cases['pts'] = {"verts": [[random.uniform(-1,1), random.uniform(-1,1), random.uniform(-1,1)] for _ in range(24)], "polys": []}
 for k, v in cases.items():
     v["name"] = k
