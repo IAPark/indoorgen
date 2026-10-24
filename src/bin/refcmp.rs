@@ -155,6 +155,10 @@ fn main() {
             }
         };
         let asset = if a.iter().any(|x| x == "--raw") { f.asset(*i) } else { scene_asset(&*f, *i) };
+        if let Some(cp) = opt("--cloth-json") {
+            let id = infinigen::mesh::Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+            std::fs::write(cp, serde_json::to_vec(&asset.cloth_json("bed", &id)).unwrap()).unwrap();
+        }
         if let Some(d) = opt("--dump") {
             std::fs::create_dir_all(&d).unwrap();
             for (k, p) in asset.parts.iter().enumerate() {

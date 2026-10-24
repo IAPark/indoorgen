@@ -102,14 +102,68 @@ pub struct Part {
     pub col: Option<(V3, V3)>,
 }
 
+/// A cloth simulation the Rust solver approximated: the exact pre-sim mesh, colliders (asset parts, read in their *current* state when
+/// the job runs) and the python `cloth_sim` keyword arguments, so a Blender run (render_rust.py / tools/cloth_jobs.py) can redo it exactly.
+#[derive(Clone, Debug)]
+pub struct ClothJob {
+    /// part receiving the simulated (and subsurfed) mesh
+    pub target: usize,
+    pub pre: Mesh,
+    pub collide: Vec<usize>,
+    /// bake_cloth kwargs as python passes them (mass, tension_stiffness, gravity, use_pressure, uniform_pressure_force, ...)
+    pub kwargs: serde_json::Value,
+    pub end_frame: u32,
+    pub subsurf: usize,
+    /// vertices of the "pin" vertex group (vertex_group_mass="pin")
+    pub pin: Vec<u32>,
+    /// pre mesh was placed at z = top of `.0` (max z) : `.1` is the value Rust used; Blender shifts by (new top - used)
+    pub z_from: Option<(usize, f64)>,
+}
+
+/// object resting on cloth/bed surfaces: Blender re-drops it by the change of the supporting surface height at (x, y)
+#[derive(Clone, Debug)]
+pub struct Follower {
+    pub part: usize,
+    pub xy: [f64; 2],
+    pub z_used: f64,
+    pub bases: Vec<usize>,
+}
+
 #[derive(Clone, Default)]
 pub struct Asset {
+    pub cloth: Vec<ClothJob>,
+    pub followers: Vec<Follower>,
     pub parts: Vec<Part>,
     /// top faces of these boxes carry the SupportSurface tag
     pub supports: Vec<(V3, V3)>,
 }
 
 impl Asset {
+    /// cloth jobs and followers as sidecar JSON; part `i` is named `{prefix}#{i}`; `m` places the asset in the world (z-rotation + translation)
+    pub fn cloth_json(&self, prefix: &str, m: &Mat4) -> Vec<serde_json::Value> {
+        use serde_json::json;
+        let nm = |i: usize| format!("{prefix}#{i}");
+        let zt = m.0[2][3];
+        let mut out = vec![];
+        for j in &self.cloth {
+            let mut pre = j.pre.clone();
+            pre.transform(m);
+            let verts: Vec<_> = pre.pos.iter().map(|p| json!([p[0], p[1], p[2]])).collect();
+            out.push(json!({
+                "kind": "cloth", "target": nm(j.target), "verts": verts, "faces": pre.faces,
+                "collide": j.collide.iter().map(|&i| nm(i)).collect::<Vec<_>>(), "kwargs": j.kwargs, "end_frame": j.end_frame,
+                "subsurf": j.subsurf, "pin": j.pin,
+                "z_from": j.z_from.map(|(p, z)| json!({"part": nm(p), "z_used": z + zt})),
+            }));
+        }
+        for f in &self.followers {
+            let mut v = [f.xy[0], f.xy[1], 0.0];
+            let q = m.apply(v);
+            v = q;
+            out.push(json!({"kind": "follow", "part": nm(f.part), "xy": [v[0], v[1]], "z_used": f.z_used + zt, "bases": f.bases.iter().map(|&i| nm(i)).collect::<Vec<_>>()}));
+        }
+        out
+    }
     pub fn cuboid(&mut self, lo: V3, hi: V3, mat: &Material) {
         self.parts.push(Part { mesh: Mesh::cuboid(lo, hi), mat: mat.clone(), col: Some((lo, hi)) });
     }
@@ -332,7 +386,7 @@ pub fn scene_asset(f: &dyn Factory, inst: u64) -> Asset {
         })).collect();
         m.faces.push(face);
     }
-    let mut out = Asset { parts: vec![], supports: approx.supports.clone() };
+    let mut out = Asset { parts: vec![], supports: approx.supports.clone(), ..Default::default() };
     for (k, m) in meshes.into_iter().enumerate() {
         if !m.faces.is_empty() {
             out.parts.push(Part { mesh: m, mat: approx.parts[k].mat.clone(), col: approx.parts[k].col });
