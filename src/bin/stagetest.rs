@@ -111,6 +111,19 @@ fn main() {
             let zs: std::collections::BTreeSet<i64> = s.v.iter().map(|p| (p[2] * 1000.0).round() as i64).collect();
             println!("solidify z levels (mm): {:?}", zs);
         }
+        "voxel" => {
+            let vs: f64 = a.get(4).map(|x| x.parse().unwrap()).unwrap_or(0.02);
+            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
+            let tris = infinigen::assets::dualcon::corner_tris(&m.v, &m.f);
+            let r = infinigen::assets::voxelremesh::voxel_remesh(&m.v, &tris, vs as f32);
+            compare(tag, &r.v, &r.f, &out, 1e-4);
+        }
+        "rwa" => {
+            let vs: f64 = a.get(4).map(|x| x.parse().unwrap()).unwrap_or(0.02);
+            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
+            let r = infinigen::assets::voxelremesh::remesh_with_attrs(&m, vs);
+            compare(tag, &r.v, &r.f, &out, 1e-4);
+        }
         "weld" => {
             let th = meta["kwargs"]["merge_threshold"].as_f64().unwrap() as f32;
             let m = infinigen::assets::cabnodes::GMesh { v: inp.v.clone(), p: inp.f.clone(), tag: vec![0; inp.f.len()], e: inp.e.clone() };
