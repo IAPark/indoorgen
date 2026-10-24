@@ -1092,6 +1092,10 @@ def field2_cases():
 
 
 def _boolean(b, op, m1, others, solver="EXACT"):
+    if solver == "FLOAT" and op != "DIFFERENCE" and m1 is not None:
+        # UNION / INTERSECT take all operands through the multi-input "Mesh 2" socket
+        others = [m1] + list(others)
+        m1 = None
     n = b.n("GeometryNodeMeshBoolean", {"operation": op, "solver": solver}, **({"Mesh 1": m1} if m1 is not None else {}))
     for o in others:
         b.ng.links.new(b.out_sock(o), n.inputs["Mesh 2"])
@@ -1179,6 +1183,23 @@ def mesh2_cases():
     case("MeshBoolean.FLOAT.DIFFERENCE.holegrid", lambda b: _boolean(b, "DIFFERENCE", b.n("GeometryNodeMeshCube", Size=(2, 2, 2), Vertices__X=4, Vertices__Y=4, Vertices__Z=4), [b.n("GeometryNodeMeshCylinder", Vertices=12, Radius=0.4, Depth=4.0)], "FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.multi", lambda b: _boolean(b, "DIFFERENCE", cube_at(b, (2, 2, 2), (0, 0, 0)), [cube_at(b, (0.5, 0.5, 4), (0.3, 0.3, 0)), cube_at(b, (0.5, 4, 0.5), (-0.3, 0, 0.2))], "FLOAT"))
     case("MeshBoolean.FLOAT.UNION.multi", lambda b: _boolean(b, "UNION", None, [cube_at(b, (1, 1, 1), (0, 0, 0)), cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4)), cube_at(b, (1, 1, 1), (-0.3, 0.1, 0.5), (0.4, 0.1, 0.2))], "FLOAT"))
+    def inst_cutters(b, nx=4, nz=3):
+        # Microwave-style button grid: a small cube -> instance -> DuplicateElements (INSTANCE) x2 -> SetPosition offsets
+        c = cube_at(b, (0.03, 0.03, 0.01), (0.1, 0.0, 0.05))
+        gi = b.n("GeometryNodeGeometryToInstance")
+        b.ng.links.new(b.out_sock((c, "Geometry")), gi.inputs["Geometry"])
+        d1 = b.n("GeometryNodeDuplicateElements", {"domain": "INSTANCE"}, Geometry=(gi, "Instances"), Amount=nx)
+        off1 = b.n("ShaderNodeCombineXYZ", X=b.math("MULTIPLY", (d1, "Duplicate Index"), 0.04))
+        sp1 = b.n("GeometryNodeSetPosition", Geometry=(d1, "Geometry"), Offset=off1)
+        d2 = b.n("GeometryNodeDuplicateElements", {"domain": "INSTANCE"}, Geometry=(sp1, "Geometry"), Amount=nz)
+        off2 = b.n("ShaderNodeCombineXYZ", Z=b.math("MULTIPLY", (d2, "Duplicate Index"), 0.02))
+        sp2 = b.n("GeometryNodeSetPosition", Geometry=(d2, "Geometry"), Offset=off2)
+        return d2, sp2
+    def mk_inst(b):
+        base = cube_at(b, (0.5, 0.2, 0.3), (0.2, 0.0, 0.1))
+        d2, sp2 = inst_cutters(b)
+        return _boolean(b, "DIFFERENCE", base, [(d2, "Geometry"), sp2], "FLOAT")
+    case("MeshBoolean.FLOAT.DIFFERENCE.instances", mk_inst)
     case("MeshBoolean.FLOAT.DIFFERENCE.thin", lambda b: thin(b, solver="FLOAT"))
     case("MeshBoolean.FLOAT.DIFFERENCE.thin2", lambda b: thin(b, (2, 2, 2), "FLOAT"))
     case("MeshBoolean.FLOAT.UNION.attr", lambda b: _boolean(b, "UNION", b.n("GeometryNodeSetMaterialIndex", Geometry=(cube_at(b, (1, 1, 1), (0, 0, 0)), "Geometry"), Material__Index=2), [cube_at(b, (1, 1, 1), (0.3, 0.2, 0.1), (0.2, 0.3, 0.4))], "FLOAT"))
