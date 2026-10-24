@@ -77,7 +77,7 @@ triop_lshape|triangulate_op|lshape|{}
 triop_fold|triangulate_op|fold|{"sel_faces":[0,4]}
 beautify_grid|beautify_fill|grid_tri|{}|exact
 beautify_fold|beautify_fill|fold_tri|{}|exact
-beautify_sub|beautify_fill|grid_tri|{"sel_faces":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35]}|verts
+beautify_sub|beautify_fill|grid_tri|{"sel_faces":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35]}|exact
 rmdoubles_cube|remove_doubles|dup_cube|{"threshold":0.0001}
 displace_grid_clouds|displace|grid|{"strength":0.2}
 displace_cube_clouds|displace|cube|{"strength":0.1,"texture":{"type":"CLOUDS","noise_scale":0.3,"noise_depth":3}}

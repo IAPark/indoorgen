@@ -339,14 +339,13 @@ fn r_beautify_fill(c: &Case, p: &Value) -> Res {
     for i in sel {
         is_sel[i] = c.mesh.faces[i].len() == 3;
     }
-    // only triangles whose faces are selected take part; others are copied
-    let tri_ids: Vec<usize> = (0..n).filter(|&i| is_sel[i]).collect();
-    let tris: Vec<[u32; 3]> = tri_ids.iter().map(|&i| [c.mesh.faces[i][0], c.mesh.faces[i][1], c.mesh.faces[i][2]]).collect();
-    let r = infinigen::assets::bridge::beautify_loop(&c.mesh.pos, tris, &HashMap::default(), c.edges.as_deref(), true);
-    let mut m = c.mesh.clone();
-    for (k, &i) in tri_ids.iter().enumerate() {
-        m.faces[i] = r[k].to_vec();
+    if c.mesh.faces.iter().any(|f| f.len() != 3) {
+        return Err("beautify_fill: triangle meshes only".into());
     }
+    let tris: Vec<[u32; 3]> = c.mesh.faces.iter().map(|f| [f[0], f[1], f[2]]).collect();
+    let r = infinigen::assets::bridge::beautify_loop(&c.mesh.pos, tris, &HashMap::default(), c.edges.as_deref(), true, Some(&is_sel));
+    let mut m = c.mesh.clone();
+    m.faces = r.iter().map(|t| t.to_vec()).collect();
     Ok(m)
 }
 

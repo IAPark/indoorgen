@@ -327,13 +327,13 @@ fn triangulate_beautify(pos: &[V3], quads: &[Vec<u32>], side: &HashMap<u32, u8>)
             }
         }
     }
-    beautify_loop(pos, tris, side, None, false)
+    beautify_loop(pos, tris, side, None, false, None)
 }
 
 /// generic BM_mesh_beautify_fill on triangles (edge rotation until no improvement): `side` restricts rotations to edges whose new diagonal joins the
 /// two sides (VERT_RESTRICT_TAG, angle method as the bridge uses it); with `area` = Some(lock_degenerate) the AREA metric (bpy beautify_fill) is used.
 /// `edge_order`: candidate edge order (Blender's mesh edge list), default first use order of the triangle corners.
-pub fn beautify_loop(pos: &[V3], tris: Vec<[u32; 3]>, side: &HashMap<u32, u8>, edge_order: Option<&[[u32; 2]]>, area: bool) -> Vec<[u32; 3]> {
+pub fn beautify_loop(pos: &[V3], tris: Vec<[u32; 3]>, side: &HashMap<u32, u8>, edge_order: Option<&[[u32; 2]]>, area: bool, movable: Option<&[bool]>) -> Vec<[u32; 3]> {
     let bl_order = area; // the bpy op path also reproduces Blender's face slot reuse
     let lock = true;
     let mut tris = tris;
@@ -372,7 +372,7 @@ pub fn beautify_loop(pos: &[V3], tris: Vec<[u32; 3]>, side: &HashMap<u32, u8>, e
         ord.extend(edges.iter().cloned().filter(|k| !seen.contains(k)));
         edges = ord;
     }
-    let mut slots: Vec<(u32, u32)> = edges.iter().cloned().filter(|k| emap[k].len() == 2).collect();
+    let mut slots: Vec<(u32, u32)> = edges.iter().cloned().filter(|k| emap[k].len() == 2 && movable.map_or(true, |m| emap[k].iter().all(|&f| m[f]))).collect();
     let mut slot_of: HashMap<(u32, u32), usize> = slots.iter().cloned().enumerate().map(|(i, k)| (k, i)).collect();
     let mut states: Vec<Vec<([u32; 2], [u32; 2])>> = vec![vec![]; slots.len()];
     let quad_of = |tris: &Vec<[u32; 3]>, emap: &HashMap<(u32, u32), Vec<usize>>, key: (u32, u32)| -> Option<[u32; 4]> {
