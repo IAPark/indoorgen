@@ -104,7 +104,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             geom.lo = [x0, y0, 0.0];
             geom.hi = [x1, y1, c.wall_height];
         }
-        if let Ok(path) = std::env::var("STATE0") {
+        if let (Ok(path), false) = (std::env::var("STATE0"), std::env::var("STATE0_NOROOM").is_ok()) {
             // exactness harness: take the room mesh (triangle order, vertex order, face tags) verbatim from a python dump
             let d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             if let Some(o) = d["objs"].get(&sh.name) {
@@ -118,7 +118,17 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
                     for part in names[pi].as_str().unwrap().split('.') {
                         bits |= match part { "interior" => crate::furn::geom::INTERIOR, "visible" => crate::furn::geom::VISIBLE, "support" => crate::furn::geom::SUPPORT, "ceiling" => crate::furn::geom::CEILING, "wall" => crate::furn::geom::WALL, _ => 0 };
                     }
+                    if std::env::var("S0_NOINT").is_ok() { bits &= !crate::furn::geom::INTERIOR; }
+                    if std::env::var("S0_NOVIS").is_ok() { bits &= !crate::furn::geom::VISIBLE; }
                     tris.push(crate::furn::geom::Tri { v: [verts[ix[0]], verts[ix[1]], verts[ix[2]]], tags: bits });
+                }
+                if std::env::var("S0_REV").is_ok() { tris.reverse(); }
+                if let Ok(m) = std::env::var("S0_MIX") {
+                    let w = crate::furn::geom::WALL;
+                    let keep_py_wall = m == "pywall";
+                    let mut o: Vec<crate::furn::geom::Tri> = tris.iter().filter(|t| (t.tags & w != 0) == keep_py_wall).cloned().collect();
+                    o.extend(geom.tris.iter().filter(|t| (t.tags & w != 0) != keep_py_wall).cloned());
+                    tris = o;
                 }
                 geom.tris = tris;
             }
@@ -137,6 +147,19 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
                 format!("int {:.2}/{} vis {:.2}/{} sup {:.2}/{} ceil {:.2}/{} wall {:.2}/{} all {:.2}/{}", a[0], n[0], a[1], n[1], a[2], n[2], a[3], n[3], a[4], n[4], a[5], n[5])
             };
             eprintln!("ROOMSTAT {} {}", sh.name, stat(&geom.tris));
+            if std::env::var("ROOMSTAT").unwrap() == "3" {
+                for t in &geom.tris { eprintln!("RT3 {} {:?} {}", sh.name, t.v, t.tags); }
+            }
+            if std::env::var("ROOMSTAT").unwrap() == "2" {
+                let mut m: std::collections::BTreeMap<(u32, bool), (usize, f64)> = Default::default();
+                for t in &geom.tris {
+                    let n = crate::furn::geom::tri_nz(&t.v);
+                    let e = m.entry((t.tags, n)).or_default();
+                    e.0 += 1;
+                    e.1 += crate::furn::geom::tri_area(&t.v);
+                }
+                for (k, v) in m { eprintln!("  RS tags {:#x} upish {} n {} area {:.3}", k.0, k.1, v.0, v.1); }
+            }
         }
         let rt = room_type(&sh.name);
         let tags = TagSet::from([Tag::sem("Room"), Tag::obj(&sh.name), sem_room_tag(rt)]);
@@ -167,12 +190,17 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         let name = if *n == 0 { base.to_string() } else { format!("{base}.{:03}", n) };
         *n += 1;
         let h = [ct.dims[0] / 2., ct.dims[1] / 2., ct.dims[2] / 2.];
-        let g = ObjGeom::from_tris(box_tris([-h[0], -h[1], -h[2]], h, 0), vec![(Proxy::Box { center: [0.; 3], half: h }, u32::MAX)]);
+        let g = {
+            let r = |v: f64| v as f32 as f64;
+            let mut g = crate::furn::geom::cuboid_py([r(-h[0]), r(-h[1]), r(-h[2])], [r(h[0]), r(h[1]), r(h[2])], 0, 0);
+            for t in g.tris.iter_mut() { t.tags = 0; }
+            g
+        };
         let kind_tag = if ct.kind == CutKind::Window { Tag::sem("Window") } else { Tag::sem("Door") };
         let tags = TagSet::from([kind_tag, Tag::sem("Cutter"), Tag::obj(&name)]);
         let mut o = ObjState::new(Arc::new(g), Pose::from_euler(ct.loc, [0., 0., ct.rot_z]), tags);
         o.relations = ct.rooms.iter().map(|r| RelState { relation: Relation::CutFrom, target: r.clone(), child_plane: 0, parent_plane: 0 }).collect();
-        if let Ok(path) = std::env::var("STATE0") {
+        if let (Ok(path), false) = (std::env::var("STATE0"), std::env::var("STATE0_NOCUT").is_ok()) {
             // exactness harness: cutter objects (doors / windows) verbatim from the python dump
             let d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             if let Some(po) = d["objs"].get(&name) {

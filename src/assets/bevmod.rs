@@ -8,10 +8,22 @@ use crate::dhash::HashMap;
 
 /// `angle`: Some(radians) for limit_method ANGLE (default 30 degrees), None for NONE (all manifold edges)
 pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32) -> Result<Mesh, String> {
+    bevel_modifier_ex(m, width, segments, angle, clamp, profile, None)
+}
+
+/// like `bevel_modifier`; `edge_order`: the Blender mesh's edge list (vertex pairs in edge index order, e.g. `mesh.edges`), used instead of the
+/// first-use order of the face corners (matters for the vertex/face order of the result)
+pub fn bevel_modifier_ex(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
     let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
     // edges in first-use order of the face corners (BKE mesh edge calculation order)
     let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
     let mut edges: Vec<[u32; 2]> = vec![];
+    if let Some(eo) = edge_order {
+        for e in eo {
+            emap.insert((e[0].min(e[1]), e[0].max(e[1])), edges.len() as u32);
+            edges.push(*e);
+        }
+    }
     let mut ce: Vec<Vec<u32>> = vec![];
     for f in &m.faces {
         let mut fe = vec![];

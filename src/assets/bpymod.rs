@@ -129,7 +129,7 @@ pub enum DispDir {
 }
 
 /// DISPLACE modifier with a legacy texture (local coordinates); `vg` = vertex group weights (None = no group), `faces` needed for NORMAL.
-pub fn displace(v: &mut [F3], faces: &[Vec<u32>], tex: &Tex, strength: f64, midlevel: f64, dir: DispDir, vg: Option<&[f32]>) {
+pub fn displace(v: &mut [F3], faces: &[Vec<u32>], tex: Option<&Tex>, strength: f64, midlevel: f64, dir: DispDir, vg: Option<&[f32]>) {
     if strength == 0.0 {
         return;
     }
@@ -150,8 +150,10 @@ pub fn displace(v: &mut [F3], faces: &[Vec<u32>], tex: &Tex, strength: f64, midl
             }
             s *= w[i];
         }
-        let t = tex.value(tex_co[i][0], tex_co[i][1], tex_co[i][2]);
-        let mut delta = (t - mid) * s;
+        let mut delta = match tex {
+            Some(t) => (t.value(tex_co[i][0], tex_co[i][1], tex_co[i][2]) - mid) * s,
+            None => (1.0 - mid) * s,
+        };
         delta = delta.max(-10000.0).min(10000.0);
         match dir {
             DispDir::X => p[0] += delta,

@@ -325,9 +325,9 @@ fn bezier_core(anchors: &[[f64; 3]], vector: &[usize], edit: Option<(&[Option<[f
             }
         }
     }
-    let lens: Vec<f32> = (0..a32.len() - 1).map(|i| v_len(v_sub(a32[i], a32[i + 1]))).collect();
+    let lens: Vec<f64> = (0..a32.len() - 1).map(|i| (0..3).map(|k| (a32[i][k] as f64 - a32[i + 1][k] as f64).powi(2)).sum::<f64>().sqrt()).collect();
     for i in (0..a32.len() - 1).rev() {
-        let k = ((lens[i] as f64 / 5e-3) as i64 - 1).min(64);
+        let k = ((lens[i] / 5e-3) as i64 - 1).min(64);
         if k < 0 {
             continue;
         }
