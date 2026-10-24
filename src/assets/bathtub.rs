@@ -49,17 +49,35 @@ fn centers_normals(m: &Mesh) -> (Vec<V3>, Vec<V3>) {
     (super::bpyx::face_centers(m), super::bpyx::face_normals(m))
 }
 
-/// linear subdivision of a polyline's loose edges (SUBSURF on a wire mesh interpolates new vertices linearly)
+/// SUBSURF (Catmull-Clark, limit surface) on a wire polyline: cubic B-spline refinement, then limit positions; ends fixed
 fn subdivide_wire(pts: &[V3], levels: i64) -> Vec<V3> {
     let mut cur = pts.to_vec();
     for _ in 0..levels {
-        let mut nx = vec![cur[0]];
-        for w in cur.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            nx.push([((a[0] as f32 + b[0] as f32) * 0.5) as f64, ((a[1] as f32 + b[1] as f32) * 0.5) as f64, ((a[2] as f32 + b[2] as f32) * 0.5) as f64]);
-            nx.push(b);
+        let n = cur.len();
+        let mut nx = vec![];
+        for i in 0..n {
+            let v = if i == 0 || i == n - 1 {
+                cur[i]
+            } else {
+                let (a, b) = (cur[i - 1], cur[i + 1]);
+                [(a[0] + 6.0 * cur[i][0] + b[0]) / 8.0, (a[1] + 6.0 * cur[i][1] + b[1]) / 8.0, (a[2] + 6.0 * cur[i][2] + b[2]) / 8.0]
+            };
+            nx.push(v);
+            if i + 1 < n {
+                let b = cur[i + 1];
+                nx.push([(cur[i][0] + b[0]) / 2.0, (cur[i][1] + b[1]) / 2.0, (cur[i][2] + b[2]) / 2.0]);
+            }
         }
         cur = nx;
+    }
+    if levels > 0 {
+        let n = cur.len();
+        let src = cur.clone();
+        for i in 1..n - 1 {
+            for k in 0..3 {
+                cur[i][k] = (src[i - 1][k] + 4.0 * src[i][k] + src[i + 1][k]) / 6.0;
+            }
+        }
     }
     cur
 }
