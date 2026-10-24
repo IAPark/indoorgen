@@ -118,6 +118,7 @@ fn main() {
         eprintln!("usage: refcmp CLASS [SEEDS] [--inst I] [--dir DIR] [--tol-mean X] [--tol-max X] [--quiet]");
         std::process::exit(2);
     }
+    std::env::set_var("REFSTUB", "1");
     let opt = |k: &str| a.iter().position(|x| x == k).map(|i| a[i + 1].clone());
     let cls = &a[1];
     let dir = opt("--dir").unwrap_or_else(|| format!("{}/work/refcache", std::env::var("HOME").unwrap()));
@@ -154,6 +155,14 @@ fn main() {
             }
         };
         let asset = f.asset(*i);
+        if let Some(d) = opt("--dump") {
+            std::fs::create_dir_all(&d).unwrap();
+            for (k, p) in asset.parts.iter().enumerate() {
+                let v: Vec<_> = p.mesh.pos.iter().map(|v| serde_json::json!(v)).collect();
+                let f: Vec<_> = p.mesh.faces.iter().map(|f| serde_json::json!(f)).collect();
+                std::fs::write(format!("{d}/{cls}_{s}.{k}.json"), serde_json::json!({"verts": v, "polys": f}).to_string()).unwrap();
+            }
+        }
         let secs = t0.elapsed().as_secs_f64();
         let mut rs = M { v: vec![], f: vec![] };
         for p in &asset.parts {

@@ -361,6 +361,9 @@ fn pick_and_generate(rng: &mut Rng, mats: &[(Mat, f64)]) {
 
 /// returns the index (in `mats`) of the sampled material
 fn pick_and_generate_idx(rng: &mut Rng, mats: &[(Mat, f64)]) -> usize {
+    if super::matdraw::ref_stub() {
+        return 0;
+    }
     let w: Vec<f64> = mats.iter().map(|m| m.1).collect();
     let mi = wsample(rng, &w);
     let m = mats[mi].0;
@@ -419,6 +422,7 @@ pub fn ctor_draws(class: &str, rng: &mut Rng) -> Option<Vec<f64>> {
             let cover = rng.f64() < 0.5;
             Some(vec![st as f64, folded as u8 as f64, cover as u8 as f64])
         }
+        "PillowFactory" => Some(pillow_ctor(rng).to_vec()),
         "TowelFactory" => {
             // width, length (= width * lu), thickness, fold_type (0 fold / 1 roll), folds, extra_thickness (= thickness * u), material index
             let w = rng.log_uniform(0.3, 0.6);
