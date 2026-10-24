@@ -618,3 +618,242 @@ pub fn bridge_edge_loops(bm: &mut BMesh, sel: &dyn Fn(usize) -> bool, cuts: usiz
 }
 
 pub fn unused(_: &HashMap<usize, usize>) {}
+
+// ------------------------------------------------------------------------------------------------ cut vertex positions (float32)
+fn falloff32(kind: &str, v: f32) -> f32 {
+    match kind {
+        "SPHERE" => (2.0f32 * v - v * v).max(0.0).sqrt(),
+        "ROOT" => v.max(0.0).sqrt(),
+        "SHARP" => v * v,
+        "LINEAR" => v,
+        "INVERSE_SQUARE" => v * (2.0f32 - v),
+        _ => 3.0f32 * v * v - 2.0f32 * v * v * v,
+    }
+}
+
+/// BKE_curve_forward_diff_bezier (float32)
+fn forward_diff32(q0: f32, q1: f32, q2: f32, q3: f32, it: usize) -> Vec<f32> {
+    let f = it as f32;
+    let rt0 = q0;
+    let rt1 = 3.0f32 * (q1 - q0) / f;
+    let f2 = f * f;
+    let rt2 = 3.0f32 * (q0 - 2.0f32 * q1 + q2) / f2;
+    let f3 = f2 * f;
+    let rt3 = (q3 - q0 + 3.0f32 * (q1 - q2)) / f3;
+    let (mut a0, mut a1, mut a2, a3) = (rt0, rt1 + rt2 + rt3, 2.0f32 * rt2 + 6.0f32 * rt3, 6.0f32 * rt3);
+    let mut out = vec![];
+    for _ in 0..=it {
+        out.push(a0);
+        a0 += a1;
+        a1 += a2;
+        a2 += a3;
+    }
+    out
+}
+
+fn bezier_handle_calc_length(co_a: V3, no_a: V3, co_b: V3, no_b: V3) -> f32 {
+    let d = dot(no_a, no_b);
+    let mut fac = 1.333333f32;
+    if d < 0.0 {
+        let t = 1.0f32 + d;
+        fac = (fac * t) + (0.75f32 * (1.0f32 - t));
+    }
+    let mut ofs = cross(no_a, no_b);
+    if len_sq(ofs) > f32::EPSILON {
+        ofs = add(ofs, co_a);
+        // closest_to_line_v3(r, p = co_b, l1 = co_a, l2 = ofs)
+        let h = sub(co_b, co_a);
+        let u = sub(ofs, co_a);
+        let lambda = dot(u, h) / dot(u, u);
+        ofs = [co_a[0] + u[0] * lambda, co_a[1] + u[1] * lambda, co_a[2] + u[2] * lambda];
+    } else {
+        ofs = co_a;
+    }
+    (len_v3v3(ofs, co_b) * 0.5f32) * fac
+}
+
+/// (center a, center b, normal a, normal b) as bm_edgering_pair_interpolate computes them (normals flipped to face each other)
+pub fn rim_frame(bm: &BMesh, rim_a: &[usize], rim_b: &[usize]) -> (V3, V3, V3, V3) {
+    let mut a = ELoop { v: rim_a.to_vec(), closed: true, co: [0.0; 3], no: [0.0; 3] };
+    let mut b = ELoop { v: rim_b.to_vec(), closed: true, co: [0.0; 3], no: [0.0; 3] };
+    a.calc_center(bm);
+    b.calc_center(bm);
+    let va = a.calc_normal(bm);
+    let vb = b.calc_normal(bm);
+    let el_dir = sub(a.co, b.co);
+    let no = normalize(el_dir);
+    if !va {
+        a.calc_normal_aligned(bm, no);
+    }
+    if !vb {
+        b.calc_normal_aligned(bm, no);
+    }
+    let (mut na, mut nb) = (a.no, b.no);
+    if dot(na, el_dir) > 0.0 {
+        na = neg(na);
+    }
+    if dot(nb, el_dir) < 0.0 {
+        nb = neg(nb);
+    }
+    (a.co, b.co, na, nb)
+}
+
+fn quat_mul(q1: [f32; 4], q2: [f32; 4]) -> [f32; 4] {
+    let t0 = q1[0] * q2[0] - q1[1] * q2[1] - q1[2] * q2[2] - q1[3] * q2[3];
+    let t1 = q1[0] * q2[1] + q1[1] * q2[0] + q1[2] * q2[3] - q1[3] * q2[2];
+    let t2 = q1[0] * q2[2] + q1[2] * q2[0] + q1[3] * q2[1] - q1[1] * q2[3];
+    let q3 = q1[0] * q2[3] + q1[3] * q2[0] + q1[1] * q2[2] - q1[2] * q2[1];
+    [t0, t1, t2, q3]
+}
+fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
+    let l = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if l != 0.0 {
+        let f = 1.0f32 / l;
+        [q[0] * f, q[1] * f, q[2] * f, q[3] * f]
+    } else {
+        [1.0, 0.0, 0.0, 0.0]
+    }
+}
+fn quat_mul_v3(q: [f32; 4], r: V3) -> V3 {
+    let mut r = r;
+    let t0 = -q[1] * r[0] - q[2] * r[1] - q[3] * r[2];
+    let mut t1 = q[0] * r[0] + q[2] * r[2] - q[3] * r[1];
+    let mut t2 = q[0] * r[1] + q[3] * r[0] - q[1] * r[2];
+    r[2] = q[0] * r[2] + q[1] * r[1] - q[2] * r[0];
+    r[0] = t1;
+    r[1] = t2;
+    t1 = t0 * -q[1] + r[0] * q[0] - r[1] * q[3] + r[2] * q[2];
+    t2 = t0 * -q[2] + r[1] * q[0] - r[2] * q[1] + r[0] * q[3];
+    r[2] = t0 * -q[3] + r[2] * q[0] - r[0] * q[2] + r[1] * q[1];
+    r[0] = t1;
+    r[1] = t2;
+    r
+}
+fn axis_angle_to_quat(axis: V3, angle: f32) -> [f32; 4] {
+    let (n, l) = normalize_len(axis);
+    if l != 0.0 {
+        let phi = 0.5f32 * angle;
+        let (si, co) = (phi.sin(), phi.cos());
+        [co, n[0] * si, n[1] * si, n[2] * si]
+    } else {
+        [1.0, 0.0, 0.0, 0.0]
+    }
+}
+fn cross_tri_v2(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
+    (a[0] - b[0]) * (b[1] - c[1]) + (a[1] - b[1]) * (c[0] - b[0])
+}
+/// transform_point_by_tri_v3 (math_geom.cc)
+fn transform_point_by_tri(pt: V3, tar: [V3; 3], src: [V3; 3]) -> V3 {
+    let nt = |t: &[V3; 3]| normalize(cross(sub(t[0], t[1]), sub(t[1], t[2])));
+    let no_tar = nt(&tar);
+    let no_src = nt(&src);
+    // axis_dominant_v3_to_m3: rows = (r0, r1, normal)
+    let (r0, r1) = crate::assets::polyfill::ortho_basis(no_src);
+    let m = [r0, r1, no_src];
+    let mulm = |a: V3| [dot(m[0], a), dot(m[1], a), dot(m[2], a)];
+    let pxy = mulm(pt);
+    let txy = [mulm(src[0]), mulm(src[1]), mulm(src[2])];
+    let (v1, v2, v3) = ([txy[0][0], txy[0][1]], [txy[1][0], txy[1][1]], [txy[2][0], txy[2][1]]);
+    let co = [pxy[0], pxy[1]];
+    let mut w = [cross_tri_v2(v2, v3, co), cross_tri_v2(v3, v1, co), cross_tri_v2(v1, v2, co)];
+    let wtot = w[0] + w[1] + w[2];
+    if wtot != 0.0 {
+        let f = 1.0f32 / wtot;
+        w = [w[0] * f, w[1] * f, w[2] * f];
+    } else {
+        w = [1.0 / 3.0; 3];
+    }
+    let mut out = [0.0f32; 3];
+    for k in 0..3 {
+        out[k] = tar[0][k] * w[0] + tar[1][k] * w[1] + tar[2][k] * w[2];
+    }
+    let area_tar = (len(cross(sub(tar[0], tar[1]), sub(tar[1], tar[2]))) * 0.5f32).sqrt();
+    let area_src = (cross_tri_v2(v1, v2, v3).abs() / 2.0f32).sqrt();
+    let z_ofs = pxy[2] - txy[0][2];
+    madd(out, no_tar, (z_ofs / area_src) * area_tar)
+}
+
+/// Assign the coordinates of the inner ring vertices for interpolation PATH or LINEAR (float32, as bm_edgering_pair_interpolate).
+/// Returns false for SURFACE (caller uses its own positions).
+pub fn assign_ring_positions(bm: &mut BMesh, topo: &BridgeTopo, cuts: usize, mode: &str, smooth: f32, shape: f32, profile_shape: &str) -> bool {
+    if mode == "SURFACE" {
+        return false;
+    }
+    let resolu = cuts + 2;
+    let falloff: Option<Vec<f32>> = if shape != 0.0 {
+        Some(
+            (0..resolu)
+                .map(|i| {
+                    let mut fac = i as f32 / (resolu - 1) as f32;
+                    fac = (1.0f32 - 2.0f32 * (0.5f32 - fac).abs()).abs();
+                    fac = falloff32(profile_shape, fac);
+                    1.0f32 + fac * shape
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let (ca, cb, na, nb) = rim_frame(bm, &topo.rim_a, &topo.rim_b);
+    let mut main: Vec<V3> = vec![];
+    if mode == "PATH" || falloff.is_some() {
+        let hl = bezier_handle_calc_length(ca, na, cb, nb) * smooth;
+        let ha = add(mul(na, hl), ca);
+        let hb = add(mul(nb, hl), cb);
+        let mut cols: Vec<Vec<f32>> = vec![];
+        for k in 0..3 {
+            cols.push(forward_diff32(ca[k], ha[k], hb[k], cb[k], resolu - 1));
+        }
+        main = (0..resolu).map(|i| [cols[0][i], cols[1][i], cols[2][i]]).collect();
+    }
+    if mode == "LINEAR" {
+        if let Some(fo) = &falloff {
+            let lin: Vec<V3> = (0..resolu).map(|i| interp(ca, cb, i as f32 / (resolu - 1) as f32)).collect();
+            for ring in &topo.rings {
+                for i in 1..=cuts {
+                    let co = bm.verts[ring[i]].co;
+                    let t = fo[i];
+                    let s = 1.0f32 - t;
+                    bm.verts[ring[i]].co = [s * lin[i][0] + t * co[0], s * lin[i][1] + t * co[1], s * lin[i][2] + t * co[2]];
+                }
+            }
+        }
+        return true;
+    }
+    // PATH
+    let bis = |a: V3, b: V3, c: V3| normalize(add(normalize(sub(b, a)), normalize(sub(c, b))));
+    let mut dirs = vec![[0.0f32; 3]; resolu];
+    dirs[0] = na;
+    dirs[resolu - 1] = neg(nb);
+    for i in 1..resolu - 1 {
+        dirs[i] = bis(main[i - 1], main[i], main[i + 1]);
+    }
+    let mut quats = vec![[1.0f32, 0.0, 0.0, 0.0]; resolu];
+    for i in 1..resolu {
+        let angle = angle_normalized_v3v3(dirs[i - 1], dirs[i]);
+        if angle > 0.0 {
+            let cr = cross(dirs[i - 1], dirs[i]);
+            let q = axis_angle_to_quat(cr, angle);
+            quats[i] = quat_normalize(quat_mul(q, quats[i - 1]));
+        } else {
+            quats[i] = quats[i - 1];
+        }
+    }
+    let tris: Vec<[V3; 3]> = (0..resolu)
+        .map(|i| {
+            let s = falloff.as_ref().map_or(1.0f32, |f| f[i]);
+            let base = [[0.0f32; 3], [s, 0.0, 0.0], [0.0, s, 0.0]];
+            [0, 1, 2].map(|j| add(quat_mul_v3(quats[i], base[j]), main[i]))
+        })
+        .collect();
+    let (sta, end) = (tris[0], tris[resolu - 1]);
+    for ring in &topo.rings {
+        let (va, vb) = (bm.verts[ring[0]].co, bm.verts[ring[cuts + 1]].co);
+        for i in 1..=cuts {
+            let co_a = transform_point_by_tri(va, tris[i], sta);
+            let co_b = transform_point_by_tri(vb, tris[i], end);
+            bm.verts[ring[i]].co = interp(co_a, co_b, i as f32 / (resolu - 1) as f32);
+        }
+    }
+    true
+}

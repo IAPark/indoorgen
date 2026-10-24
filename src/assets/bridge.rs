@@ -1106,23 +1106,30 @@ pub fn bridge_bm(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode
     // BMesh edge slots == creation order == `edges` order
     let sel = |e: usize| sel_set.contains(&(e as u32)) && eids.contains(&e);
     let topo = bb::bridge_edge_loops(&mut bm, &sel, cuts)?;
-    // positions oracle (the older f64 implementation), asked for exactly the rungs of the BMesh topology
-    let (olda, _oldb) = if la.len() < lb.len() { (lb, la) } else { (la, lb) };
-    let on_a: std::collections::HashSet<u32> = olda.iter().copied().collect();
-    let norm = |p: u32, q: u32| if on_a.contains(&p) { (p, q) } else { (q, p) };
-    let extra: Vec<(u32, u32)> = topo.rings.iter().map(|r| norm(r[0] as u32, r[cuts + 1] as u32)).collect();
-    EXTRA_RUNGS.with(|e| *e.borrow_mut() = extra);
-    let mut mo = m.clone();
-    bridge_pair_opts(&mut mo, la.to_vec(), lb.to_vec(), cuts, shape, &mut None, mode, smooth, profile_shape);
-    EXTRA_RUNGS.with(|e| e.borrow_mut().clear());
-    let cutpos: HashMap<(u32, u32), Vec<V3>> = CUTPOS.with(|c| c.borrow().clone());
-    for ring in &topo.rings {
-        let (p, q) = norm(ring[0] as u32, ring[cuts + 1] as u32);
-        let flipped = p != ring[0] as u32;
-        let (list, rev) = if let Some(l) = cutpos.get(&(p, q)) { (l, flipped) } else if let Some(l) = cutpos.get(&(q, p)) { (l, !flipped) } else { return Err("bridge: no oracle positions for a rung".into()) };
-        for i in 1..=cuts {
-            let c = if rev { list[cuts - i] } else { list[i - 1] };
-            bm.verts[ring[i]].co = [c[0] as f32, c[1] as f32, c[2] as f32];
+    let mode_s = match mode {
+        Interp::Linear => "LINEAR",
+        Interp::Path => "PATH",
+        Interp::Surface => "SURFACE",
+    };
+    if cuts > 0 && !bb::assign_ring_positions(&mut bm, &topo, cuts, mode_s, smooth as f32, shape as f32, profile_shape) {
+        // SURFACE: positions from the f64 implementation, asked for exactly the rungs of the BMesh topology
+        let (olda, _oldb) = if la.len() < lb.len() { (lb, la) } else { (la, lb) };
+        let on_a: std::collections::HashSet<u32> = olda.iter().copied().collect();
+        let norm = |p: u32, q: u32| if on_a.contains(&p) { (p, q) } else { (q, p) };
+        let extra: Vec<(u32, u32)> = topo.rings.iter().map(|r| norm(r[0] as u32, r[cuts + 1] as u32)).collect();
+        EXTRA_RUNGS.with(|e| *e.borrow_mut() = extra);
+        let mut mo = m.clone();
+        bridge_pair_opts(&mut mo, la.to_vec(), lb.to_vec(), cuts, shape, &mut None, mode, smooth, profile_shape);
+        EXTRA_RUNGS.with(|e| e.borrow_mut().clear());
+        let cutpos: HashMap<(u32, u32), Vec<V3>> = CUTPOS.with(|c| c.borrow().clone());
+        for ring in &topo.rings {
+            let (p, q) = norm(ring[0] as u32, ring[cuts + 1] as u32);
+            let flipped = p != ring[0] as u32;
+            let list = cutpos.get(&(p, q)).ok_or("bridge: no oracle positions for a rung")?;
+            for i in 1..=cuts {
+                let c = if flipped { list[cuts - i] } else { list[i - 1] };
+                bm.verts[ring[i]].co = [c[0] as f32, c[1] as f32, c[2] as f32];
+            }
         }
     }
     let (p, _e, f) = bm.to_mesh();
@@ -1130,4 +1137,11 @@ pub fn bridge_bm(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode
     out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     out.faces = f;
     Ok(out)
+}
+
+/// `bridge_two_loops` with Blender's vertex / face order (see `bridge_bm`): replaces `m` by the bridged mesh. Loops are closed vertex lists;
+/// edges of `m` are taken in first-use order of its faces (pass the real Blender edge list through `bridge_bm` when order matters).
+pub fn bridge_two_loops_bl(m: &mut Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64) -> Result<(), String> {
+    *m = bridge_bm(m, la, lb, cuts, shape, Interp::Path, 1.0, "SMOOTH", None)?;
+    Ok(())
 }

@@ -55,7 +55,7 @@ bridge_tubes_0|bridge|bridge_tubes|{"number_cuts":0}|exact
 bridge_tubes_4|bridge|bridge_tubes|{"number_cuts":4,"profile_shape_factor":0.3,"interpolation":"SURFACE"}|exact
 bridge_open_0|bridge|bridge_open|{"number_cuts":0}|exact
 bridge_open_2|bridge|bridge_open|{"number_cuts":2}|exact
-bridge_ring_open|bridge|ring_open|{"number_cuts":4,"profile_shape_factor":0.2}|none
+bridge_ring_open|bridge|ring_open|{"number_cuts":4,"profile_shape_factor":0.2}|exact
 bridge_sq_linear|bridge|bridge_sq|{"number_cuts":2,"interpolation":"LINEAR"}|exact
 bridge_oct_linear_shape|bridge|bridge_oct|{"number_cuts":3,"interpolation":"LINEAR","profile_shape_factor":0.3,"profile_shape":"ROOT"}|exact
 bridge_oct_surface|bridge|bridge_oct|{"number_cuts":2,"interpolation":"SURFACE"}|exact
