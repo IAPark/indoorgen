@@ -333,6 +333,9 @@ fn divide_dims(m: &Mesh, dims: [f64; 3], dist: f64, r: &mut Rng) -> Mesh {
 }
 
 impl BedSpec {
+    pub fn legs_pub(&self) -> Vec<Vec<V3>> {
+        self.legs()
+    }
     fn legs(&self) -> Vec<Vec<V3>> {
         let mut legs = self.c.make_legs();
         if self.has_all_legs {
