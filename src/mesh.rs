@@ -319,6 +319,8 @@ pub struct Scene {
     pub materials: Vec<Material>,
     pub nodes: Vec<Node>,
     pub lights: Vec<Light>,
+    /// cloth jobs for a Blender re-simulation (sidecar `cloth`)
+    pub cloth: Vec<serde_json::Value>,
 }
 
 impl Scene {
@@ -466,7 +468,7 @@ impl Scene {
         }
         let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
-        let sidecar = json!({"nodes": nodes_json, "lights": lights_json});
+        let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth});
         if let Some(sp) = path.parent() {
             let _ = std::fs::write(sp.join(format!("{}.json", path.file_stem().unwrap().to_string_lossy())), serde_json::to_vec_pretty(&sidecar).unwrap());
         }

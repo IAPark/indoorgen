@@ -42,6 +42,11 @@ impl MattressSpec {
 
     /// create_asset: box centred at the origin, `r` = the spawn_asset stream
     pub fn build(&self, r: &mut Rng) -> Mesh {
+        self.build_job(r).0
+    }
+
+    /// like `build`, plus the cloth job inputs of the wrapped type: (pre mesh, pressure, pin vertices)
+    pub fn build_job(&self, r: &mut Rng) -> (Mesh, Option<(Mesh, f64, Vec<u32>)>) {
         let (w, s, t) = (self.width, self.size, self.thickness);
         let mut m = Mesh::cuboid([-w / 2.0, -s / 2.0, -t / 2.0], [w / 2.0, s / 2.0, t / 2.0]).welded(1e-9);
         if self.coiled {
@@ -50,7 +55,7 @@ impl MattressSpec {
             }
             let ru = r.uniform(0.06, 0.08);
             let sf = r.uniform(0.5, 1.0);
-            make_coiled(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf)
+            (make_coiled(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf), None)
         } else {
             let wd = 0.05;
             for (i, d) in [w, s, t].iter().enumerate() {
@@ -62,14 +67,16 @@ impl MattressSpec {
             p.gravity = 0.0;
             p.use_pressure = true;
             p.pressure = pressure;
+            let pin: Vec<u32> = (0..m.pos.len() as u32).filter(|&i| m.pos[i as usize][2] < 0.1 - t / 2.0).collect();
             p.pin = m.pos.iter().map(|q| if q[2] < 0.1 - t / 2.0 { 1.0 } else { 0.0 }).collect();
             // pressure calibrated against the python mattress bake (seeds 4, 5): the generic scale over-inflates the sealed box
             let mut cal = Calib::default();
             cal.press_scale *= 0.2;
             let out = simulate(&m.pos, &m.faces, &p, &[], &cal);
+            let pre = m.clone();
             let mut o = m;
             o.pos = out;
-            o
+            (o, Some((pre, pressure, pin)))
         }
     }
 }

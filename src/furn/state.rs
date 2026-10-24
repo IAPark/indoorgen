@@ -23,6 +23,8 @@ pub struct GenRef {
     pub class: String,
     pub factory_seed: u64,
     pub inst_seed: u64,
+    /// constructor draws some factories need for the final asset (BedFactory sheet type / fold / cover)
+    pub unseeded: Option<Vec<f64>>,
 }
 
 #[derive(Clone)]

@@ -31,6 +31,29 @@ cases['bridge_sq'] = {"verts": sq(.5, 0) + sq(.8, 1, 0.3), "polys": [], "edges":
 o8 = lambda r, z, a: [[r*math.cos(a+2*math.pi*k/8), r*math.sin(a+2*math.pi*k/8), z] for k in range(8)]
 cases['bridge_oct'] = {"verts": o8(.6, 0, 0) + o8(1.0, .8, 0.2), "polys": [], "edges": [[i,(i+1)%8] for i in range(8)] + [[8+i,8+(i+1)%8] for i in range(8)],
                        "loops": [list(range(8)), list(range(8, 16))]}
+cases['bridge_cone'] = {"verts": o8(1.0, 0.3, 0) + o8(0.6, 0, 0), "polys": [], "edges": [[i,(i+1)%8] for i in range(8)] + [[8+i,8+(i+1)%8] for i in range(8)], "loops": [list(range(8)), list(range(8, 16))]}
+def ng(n, r, z, a, sx=1.0):
+    return [[sx*r*math.cos(a+2*math.pi*k/n), r*math.sin(a+2*math.pi*k/n), z] for k in range(n)]
+def loops_case(counts, rs, zs, angs, faces=False):
+    V = []; L = []
+    for n, r, z, a in zip(counts, rs, zs, angs):
+        L.append(list(range(len(V), len(V)+n))); V += ng(n, r, z, a)
+    E = [[l[i], l[(i+1) % len(l)]] for l in L for i in range(len(l))]
+    return {"verts": V, "polys": [], "edges": E, "loops": L}
+cases['bridge_uneq48'] = loops_case([4, 8], [0.5, 1.0], [0, 0.7], [0.2, 0.0])
+cases['bridge_uneq610'] = loops_case([6, 10], [0.6, 1.0], [0, 0.9], [0.0, 0.3])
+cases['bridge_uneq58'] = loops_case([5, 8], [0.7, 0.9], [0, 0.4], [0.5, 0.1])
+cases['bridge_uneq3_7'] = loops_case([3, 7], [0.6, 1.0], [0.1, 0.8], [0.0, 0.0])
+# two open-ended square tubes facing each other (faces exist on the tube walls)
+def tube(z0, z1, a):
+    V = [[0.5*math.cos(a+k*math.pi/2)*1.414, 0.5*math.sin(a+k*math.pi/2)*1.414, z] for z in (z0, z1) for k in range(4)]
+    P = [[k, (k+1) % 4, 4+(k+1) % 4, 4+k] for k in range(4)]
+    return V, P
+V1, P1 = tube(0.0, 0.5, 0.0); V2, P2 = tube(1.2, 1.7, 0.4)
+cases['bridge_tubes'] = {"verts": V1 + V2, "polys": P1 + [[v+8 for v in f] for f in P2], "loops": [[4,5,6,7], [8,9,10,11]]}
+# open polylines (ladder)
+cases['bridge_open'] = {"verts": [[x*0.5, 0, 0] for x in range(5)] + [[x*0.5, 1.0, 0.3*x] for x in range(5)], "polys": [],
+                        "edges": [[i, i+1] for i in range(4)] + [[5+i, 6+i] for i in range(4)], "loops": [[0,1,2,3,4], [5,6,7,8,9]]}
 rect = [[x,0,0] for x in range(4)] + [[4,y,0] for y in range(0,2)] + [[x,2,0] for x in range(4,0,-1)] + [[0,y,0] for y in range(2,0,-1)]
 cases['rect12'] = {"verts": rect, "polys": [], "edges": [[i,(i+1)%12] for i in range(12)], "loops": [list(range(12))]}
 cases['oct8'] = {"verts": o8(1.0, 0, 0.1), "polys": [], "edges": [[i,(i+1)%8] for i in range(8)], "loops": [list(range(8))]}
@@ -45,6 +68,13 @@ g = 8
 cases['grid'] = {"verts": [[(i/(g-1)-.5)*2, (j/(g-1)-.5)*2, 0.0] for j in range(g) for i in range(g)],
                  "polys": [[j*g+i, j*g+i+1, (j+1)*g+i+1, (j+1)*g+i] for j in range(g-1) for i in range(g-1)]}
 random.seed(3)
+gt = [[v[0], v[1], random.uniform(-0.15, 0.15)] for v in cases['grid']['verts']]
+tp = []
+for f in cases['grid']['polys']:
+    a, b, c, d = f
+    tp += [[a, b, c], [a, c, d]] if (a + b) % 2 == 0 else [[a, b, d], [b, c, d]]
+cases['grid_tri'] = {"verts": gt, "polys": tp}
+cases['fold_tri'] = {"verts": cases['fold']['verts'], "polys": [t for f in cases['fold']['polys'] for t in ([f[0], f[1], f[2]], [f[0], f[2], f[3]])]}
 cases['pts'] = {"verts": [[random.uniform(-1,1), random.uniform(-1,1), random.uniform(-1,1)] for _ in range(24)], "polys": []}
 for k, v in cases.items():
     v["name"] = k

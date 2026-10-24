@@ -161,7 +161,7 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
     let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
     infinigen::assets::bevmod::set_mesh_vert_normals(&mut bm, &pos, &c.mesh.faces);
     let o = BevelOpts {
-        offset: pf(p, "offset", 0.1) as f32,
+        offset: if ps(p, "offset_type", "OFFSET") == "PERCENT" { pf(p, "offset_pct", 0.0) } else { pf(p, "offset", 0.1) } as f32,
         offset_type: bevel_otype(ps(p, "offset_type", "OFFSET"))?,
         segments: pi(p, "segments", 1) as i32,
         profile: pf(p, "profile", 0.5) as f32,
@@ -170,9 +170,6 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
         mat_nr: -1,
     };
     if ps(p, "affect", "EDGES") == "VERTICES" {
-        return Err("bevel: affect=VERTICES (vertex-only bevel) not ported: bm_mesh_bevel has no vertex_only mode".into());
-    }
-    if false {
         for v in bm.vert_ids() {
             bm.verts[v].flag &= !ELEM_TAG;
         }
@@ -182,7 +179,7 @@ fn r_bevel(c: &Case, p: &Value) -> Res {
         for v in sel_idx(c, "sel_verts", pos.len()) {
             bm.verts[v].flag |= ELEM_TAG;
         }
-        bm_mesh_bevel(&mut bm, &o)?;
+        bm_mesh_bevel_ex(&mut bm, &o, true)?;
     } else {
         let sel = sel_edges(c, &edges, &ef)?;
         bevel_edges(&mut bm, &sel, &o)?;
@@ -236,33 +233,14 @@ fn r_bridge(c: &Case, p: &Value) -> Res {
     if l.len() != 2 {
         return Err("bridge: exactly two loops supported".into());
     }
-    if ps(p, "interpolation", "PATH") == "LINEAR" || pf(p, "smoothness", 0.0) != 0.0 {
-        return Err("bridge: only PATH interpolation, smoothness 0 supported".into());
-    }
-    let mut l = l;
-    if let Ok(r) = std::env::var("LOOPB_ROT") {
-        let k: usize = r.parse().unwrap();
-        l[1].rotate_left(k);
-    }
-    if std::env::var("LOOPB_REV").is_ok() {
-        l[1].reverse();
-    }
-    if std::env::var("LOOPA_REV").is_ok() {
-        l[0].reverse();
-    }
-    if let Ok(r) = std::env::var("LOOPA_ROT") {
-        let k: usize = r.parse().unwrap();
-        l[0].rotate_left(k);
-    }
-    let mut m = c.mesh.clone();
     let cuts = pi(p, "number_cuts", 0) as usize;
     let shape = pf(p, "profile_shape_factor", 0.0);
-    if ps(p, "interpolation", "PATH") == "SURFACE" {
-        infinigen::assets::bridge::bridge_two_loops_surface(&mut m, l[0].clone(), l[1].clone(), cuts, shape);
-    } else {
-        infinigen::assets::bridge::bridge_two_loops(&mut m, l[0].clone(), l[1].clone(), cuts, shape);
-    }
-    Ok(m)
+    let mode = match ps(p, "interpolation", "PATH") {
+        "LINEAR" => infinigen::assets::bridge::Interp::Linear,
+        "SURFACE" => infinigen::assets::bridge::Interp::Surface,
+        _ => infinigen::assets::bridge::Interp::Path,
+    };
+    infinigen::assets::bridge::bridge_bm(&c.mesh, &l[0], &l[1], cuts, shape, mode, pf(p, "smoothness", 1.0), ps(p, "profile_shape", "SMOOTH"), c.edges.as_deref())
 }
 
 fn r_fill_grid(c: &Case, p: &Value) -> Res {
@@ -279,8 +257,9 @@ fn r_fill_grid(c: &Case, p: &Value) -> Res {
 
 fn r_subsurf(c: &Case, p: &Value) -> Res {
     let lv = pi(p, "levels", 1) as usize;
+    let keep = ps(p, "boundary_smooth", "ALL") == "PRESERVE_CORNERS";
     match ps(p, "subdivision_type", "CATMULL_CLARK") {
-        "CATMULL_CLARK" => Ok(infinigen::assets::subsurf::subsurf(&c.mesh, lv, false)),
+        "CATMULL_CLARK" => Ok(infinigen::assets::subsurf::subsurf_bs(&c.mesh, lv, false, keep)),
         "SIMPLE" => Ok(infinigen::assets::subsurf::subsurf(&c.mesh, lv, true)),
         t => Err(format!("subdivision_type {t}")),
     }
@@ -307,9 +286,7 @@ fn from_gn(r: &infinigen::gn::geom::Mesh) -> Mesh {
 }
 
 fn r_boolean(c: &Case, p: &Value) -> Res {
-    if ps(p, "solver", "EXACT") != "EXACT" {
-        return Err("boolean: only solver EXACT (BSP csg, surface-equal); FAST not ported".into());
-    }
+    use infinigen::exbool::exact_boolean::*;
     let o = c.j.get("other").ok_or("case needs \"other\"")?;
     let mut om = mesh_of(&o["verts"], &o["polys"], true);
     if let Some(l) = o.get("loc") {
@@ -321,16 +298,27 @@ fn r_boolean(c: &Case, p: &Value) -> Res {
         }
     }
     let op = ps(p, "operation", "DIFFERENCE");
-    if std::env::var("BOOL_BSP").is_err() {
-        let mut a = infinigen::mesh::Mesh::new();
-        a.pos = c.mesh.pos.clone();
-        a.faces = c.mesh.faces.clone();
-        let mut b = infinigen::mesh::Mesh::new();
-        b.pos = om.pos.clone();
-        b.faces = om.faces.clone();
-        return Ok(infinigen::assets::bathkit::boolean_exact(op, &a, &b));
+    match ps(p, "solver", "EXACT") {
+        "EXACT" => {
+            let bop = match op {
+                "UNION" => BoolOp::Union,
+                "INTERSECT" => BoolOp::Intersect,
+                _ => BoolOp::Difference,
+            };
+            let inp = |m: &Mesh| BoolInput { verts: m.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect(), faces: m.faces.clone() };
+            let r = exact_boolean(&[inp(&c.mesh), inp(&om)], bop, pb(p, "use_self", false), pb(p, "use_hole_tolerant", false));
+            let mut m = Mesh::new();
+            m.pos = r.verts.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+            m.faces = r.faces;
+            Ok(m)
+        }
+        "FAST" => {
+            let id = infinigen::gn::geom::M4_ID;
+            let (a, b) = (gn_of(&c.mesh), gn_of(&om));
+            Ok(from_gn(&infinigen::gn::fbool::mesh_boolean_float(op, &[(&a, id), (&b, id)])))
+        }
+        s => Err(format!("solver {s}")),
     }
-    Ok(from_gn(&infinigen::gn::csg::mesh_boolean(op, &gn_of(&c.mesh), &[&gn_of(&om)])))
 }
 
 fn r_triangulate(c: &Case, p: &Value) -> Res {
@@ -355,6 +343,26 @@ fn r_triangulate_op(c: &Case, p: &Value) -> Res {
     }
     let r = infinigen::gn::nodes_mesh::triangulate(&gn_of(&c.mesh), &sel, 4, qm);
     Ok(from_gn(&r))
+}
+
+fn r_beautify_fill(c: &Case, p: &Value) -> Res {
+    if pf(p, "angle_limit", std::f64::consts::PI) < std::f64::consts::PI - 1e-6 {
+        return Err("beautify_fill: angle_limit < 180 not ported".into());
+    }
+    let n = c.mesh.faces.len();
+    let sel = sel_idx(c, "sel_faces", n);
+    let mut is_sel = vec![false; n];
+    for i in sel {
+        is_sel[i] = c.mesh.faces[i].len() == 3;
+    }
+    if c.mesh.faces.iter().any(|f| f.len() != 3) {
+        return Err("beautify_fill: triangle meshes only".into());
+    }
+    let tris: Vec<[u32; 3]> = c.mesh.faces.iter().map(|f| [f[0], f[1], f[2]]).collect();
+    let r = infinigen::assets::bridge::beautify_loop(&c.mesh.pos, tris, &HashMap::default(), c.edges.as_deref(), true, Some(&is_sel));
+    let mut m = c.mesh.clone();
+    m.faces = r.iter().map(|t| t.to_vec()).collect();
+    Ok(m)
 }
 
 fn r_remove_doubles(c: &Case, p: &Value) -> Res {
@@ -405,8 +413,23 @@ fn r_convex_hull(c: &Case, _p: &Value) -> Res {
 
 fn r_remesh(c: &Case, p: &Value) -> Res {
     let mode = ps(p, "mode", "VOXEL");
+    if mode == "VOXEL" {
+        // decor worker's surface-nets approximation of OpenVDB (vertex/face order is not OpenVDB's)
+        let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+        let mut tris: Vec<[u32; 3]> = vec![];
+        for f in &c.mesh.faces {
+            for k in 1..f.len() - 1 {
+                tris.push([f[0], f[k], f[k + 1]]);
+            }
+        }
+        let r = infinigen::assets::voxelremesh::voxel_remesh(&pos, &tris, pf(p, "voxel_size", 0.1) as f32);
+        let mut m = Mesh::new();
+        m.pos = r.v.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+        m.faces = r.f;
+        return Ok(m);
+    }
     if mode != "SHARP" {
-        return Err(format!("remesh: mode {mode} not ported (only SHARP via dualcon)"));
+        return Err(format!("remesh: mode {mode} not ported"));
     }
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
     let (v, q) = infinigen::assets::dualcon::dualcon(&pos, &c.mesh.faces, 2, pi(p, "octree_depth", 4) as i32, pf(p, "scale", 0.9) as f32, pf(p, "sharpness", 1.0) as f32);
@@ -429,6 +452,7 @@ const OPS: &[(&str, &str, fn(&Case, &Value) -> Res)] = &[
     ("triangulate", "exact", r_triangulate),
     ("triangulate_op", "exact", r_triangulate_op),
     ("remove_doubles", "exact", r_remove_doubles),
+    ("beautify_fill", "exact", r_beautify_fill),
     ("displace", "exact", r_displace),
     ("convex_hull", "surface", r_convex_hull),
     ("remesh", "surface", r_remesh),

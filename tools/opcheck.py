@@ -128,7 +128,10 @@ def select_loops(bpy, ob, c):
     edges = []
     for lp in c["loops"]:
         n = len(lp)
-        edges += [[lp[i], lp[(i + 1) % n]] for i in range(n)]
+        have = {tuple(sorted(e)) for e in c.get("edges", [])} | {tuple(sorted((p[i], p[(i + 1) % len(p)]))) for p in c["polys"] for i in range(len(p))}
+        # a loop is closed when its closing edge exists in the mesh (open polylines are bridged as open loops)
+        closed = tuple(sorted((lp[0], lp[-1]))) in have or not c.get("edges")
+        edges += [[lp[i], lp[(i + 1) % n]] for i in range(n if closed else n - 1)]
     c = dict(c, sel_edges=edges)
     select(bpy, ob, c, "EDGE", "sel_edges")
 
@@ -196,7 +199,7 @@ def op_bevel(c, p):
 
 def op_bridge(c, p):
     bpy = setup(); ob = load_case(bpy, c)
-    d = dict(number_cuts=0, interpolation="PATH", smoothness=0.0, profile_shape_factor=0.0)
+    d = dict(number_cuts=0, interpolation="PATH", smoothness=1.0, profile_shape_factor=0.0)
     d.update(p)
     with edit_mode(bpy, ob):
         select_loops(bpy, ob, c)
