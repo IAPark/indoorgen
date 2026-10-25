@@ -340,6 +340,9 @@ fn back_hull_slab(backs: &[Vec<V3>], t: f64) -> Mesh {
     let mut bm = BMesh::from_mesh(&pos, &edges, &[], &[]);
     crate::bm::hull::convex_hull(&mut bm, &crate::bm::hull::HullParams::default());
     let (hp, he, hf) = bm.to_mesh();
+    if let Ok(p) = std::env::var("BEDDUMP4") {
+        std::fs::write(p, serde_json::json!({"verts": hp.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect::<Vec<_>>(), "polys": hf}).to_string()).ok();
+    }
     let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
     for (i, e) in he.iter().enumerate() {
         emap.insert((e[0].min(e[1]), e[0].max(e[1])), i as u32);
@@ -474,6 +477,9 @@ impl BedSpec {
                 back_hull_slab(&backs, t)
             };
             let garbled = false;
+            if let Ok(p) = std::env::var("BEDDUMP3") {
+                std::fs::write(p, serde_json::json!({"verts": slab.pos, "polys": slab.faces}).to_string()).ok();
+            }
             let mut g = if self.c.bed_back == 0 {
                 let g = back_divide(&slab, self.dot_distance, garbled, r);
                 if let Ok(p) = std::env::var("BEDDUMP2") {
