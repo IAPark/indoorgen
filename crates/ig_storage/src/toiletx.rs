@@ -77,6 +77,10 @@ pub fn tube_bridge(t: &Toilet, r: &mut Rng) -> Stages {
         }
         edges.push([o + n - 1, o + half as u32 - 1]);
     }
+    if let Ok(d) = std::env::var("TOIDUMP") {
+        let v: Vec<Vec<f32>> = m.pos.iter().map(|p| vec![p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        let _ = std::fs::write(format!("{d}/prebridge.json"), serde_json::json!({"verts": v}).to_string());
+    }
     let (bridged, bridged_edges) = match bridge_bm_ex(&m, &la, &lb, 64, shape, Interp::Surface, 1.0, "SMOOTH", Some(&edges)) {
         Ok(r) => r,
         Err(_) => {
