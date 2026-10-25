@@ -95,6 +95,13 @@ pub enum ShellKind {
     Mussel,
 }
 
+fn tr(kind: &str, m: &Mesh) {
+    if std::env::var("MONOTRACE").is_ok() {
+        let v: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        super::stagefile::trace(kind, &v, &m.faces, &[]);
+    }
+}
+
 fn r32(x: f64) -> f64 {
     x as f32 as f64
 }
@@ -110,6 +117,7 @@ fn build_ellipse(softness: f64) -> Mesh {
         phi += phid;
     }
     let mut m = super::bpyops::fill_grid_loop(&lp);
+    tr("geo_geo_shader_vector", &m);
     // displace: viewpoint (0, 0, 1)
     let vp = [0.0, 0.0, 1.0];
     let co: Vec<[f64; 3]> = m.pos.clone();
@@ -121,6 +129,7 @@ fn build_ellipse(softness: f64) -> Mesh {
             p[k] = r32(c[k] + (1.0 - t) * (vp[k] - c[k]));
         }
     }
+    tr("A_ellipse", &m);
     m
 }
 
@@ -133,6 +142,10 @@ fn scale_apply(m: &mut Mesh, s: [f32; 3]) {
 }
 
 fn shape_by_angles(m: &mut Mesh, angles: &[f64], scales: &[f64]) {
+    if std::env::var("SHELLDBG").is_ok() {
+        eprintln!("angles {:?} scales {:?}", angles, scales);
+    }
+    tr("B_before", m);
     let f = QuadSpline::new(angles, scales);
     for p in m.pos.iter_mut() {
         let a = p[1].atan2(p[0]);
@@ -141,6 +154,7 @@ fn shape_by_angles(m: &mut Mesh, angles: &[f64], scales: &[f64]) {
             p[k] = r32(s * p[k]);
         }
     }
+    tr("C_after", m);
 }
 
 fn add_radial_groove(m: &mut Mesh) {
@@ -172,7 +186,9 @@ fn add_hinge(obj: Mesh, r: &mut Rng) -> Mesh {
     o.pos = verts.iter().map(|v| [r32(v[0]), r32(v[1]), r32(v[2])]).collect();
     o.faces.push(vec![0, 1, 2, 3]);
     let mut o = super::subsurf::subsurf(&o, 2, true);
+    tr("SUBSURF", &o);
     displace(&mut o, &Tex::new(TexKind::Stucci(0), 0.25), 0.2, 0.5);
+    tr("DISPLACE", &o);
     let mut out = obj;
     out.append(&o);
     out
@@ -189,7 +205,7 @@ fn dims(m: &Mesh) -> [f32; 3] {
     [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
 }
 
-fn maker(kind: ShellKind, r: &mut Rng) -> Mesh {
+fn maker(kind: ShellKind, r: &mut Rng) -> (Mesh, Option<[f32; 3]>) {
     match kind {
         ShellKind::Scallop => {
             let mut obj = build_ellipse(0.3);
@@ -201,35 +217,38 @@ fn maker(kind: ShellKind, r: &mut Rng) -> Mesh {
             let angles: Vec<f64> = [-boundary, -outer, -inner, inner, outer, boundary].iter().map(|a| a * PI).collect();
             shape_by_angles(&mut obj, &angles, &[0.0, s, 1.0, 1.0, s, 0.0]);
             add_radial_groove(&mut obj);
-            add_hinge(obj, r)
+            (add_hinge(obj, r), None)
         }
         ShellKind::Clam => {
             let mut obj = build_ellipse(0.5);
             scale_apply(&mut obj, [1.0, 1.2, 1.0]);
+            let stale = dims(&obj);
             let s = r.uniform(0.6, 0.7);
             let angles = [-r.uniform(0.4, 0.5), -r.uniform(0.3, 0.35), r.uniform(-0.25, 0.25), r.uniform(0.3, 0.35), r.uniform(0.4, 0.5)];
             let angles: Vec<f64> = angles.iter().map(|a| a * PI).collect();
             shape_by_angles(&mut obj, &angles, &[0.0, s, 1.0, s, 0.0]);
-            obj
+            (obj, Some(stale))
         }
         ShellKind::Mussel => {
             let mut obj = build_ellipse(0.5);
             scale_apply(&mut obj, [1.0, 3.0, 1.0]);
+            let stale = dims(&obj);
             let s = r.uniform(0.6, 0.8);
             let a1 = -r.uniform(0.1, 0.15);
             let a2 = r.uniform(0.0, 0.25);
             let angles: Vec<f64> = [-0.5, a1, a2, 0.5].iter().map(|a| a * PI).collect();
             let s3 = r.uniform(0.6, 0.8);
             shape_by_angles(&mut obj, &angles, &[0.0, s, 1.0, s3]);
-            obj
+            (obj, Some(stale))
         }
     }
 }
 
 /// ShellBaseFactory.create_asset + MolluskFactory.decorate_mollusk
 pub fn shell_asset(kind: ShellKind, r: &mut Rng, face_size: f64) -> Mesh {
-    let mut upper = maker(kind, r);
-    let d = dims(&upper);
+    let (mut upper, stale) = maker(kind, r);
+    // obj.dimensions is read from the bounding box cached before shape_by_angles rewrote the coordinates (foreach_set does not refresh it)
+    let d = stale.unwrap_or_else(|| dims(&upper));
     let dim = ((d[0] as f64) * (d[1] as f64) + 0.01).sqrt();
     let sc = (1.0 / dim) as f32;
     scale_apply(&mut upper, [sc, sc, sc]);
@@ -261,14 +280,22 @@ pub fn shell_asset(kind: ShellKind, r: &mut Rng, face_size: f64) -> Mesh {
     if areas >= 1e-6 {
         let levels = (areas / face_size).log2().ceil() as i64;
         if levels > 0 {
+            tr("PRE", &obj);
             obj = super::subsurf::subsurf(&obj, levels as usize, false);
+            tr("SUBSURF", &obj);
         }
     }
+    if let Ok(f) = std::env::var("PRESOL") {
+        let v: Vec<[f32; 3]> = obj.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        super::stagefile::write(&f, &v, &obj.faces, &[]);
+    }
     obj = books::solidify_simple(&obj, 0.005, None);
+    tr("SOLIDIFY", &obj);
     let marble = r.choice_idx(2) == 1;
     let scale = r.log_uniform(0.1, 0.2);
     let kind = if marble { TexKind::Marble(0, 0) } else { TexKind::Stucci(0) };
     displace(&mut obj, &Tex::new(kind, scale), 0.02, 0.0);
+    tr("DISPLACE", &obj);
     obj
 }
 
