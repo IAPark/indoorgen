@@ -349,22 +349,14 @@ fn back_hull_slab(backs: &[Vec<V3>], t: f64) -> Mesh {
     }
     let ce: Vec<Vec<u32>> = hf.iter().map(|f| (0..f.len()).map(|k| emap[&(f[k].min(f[(k + 1) % f.len()]), f[k].max(f[(k + 1) % f.len()]))]).collect()).collect();
     let s = super::solidx::solidify_extrude(&hp, &he, &hf, &ce, t as f32, 0.0, true);
+    // normals_make_consistent (Blender's outer-most-loop criterion) on a BMesh of the solid
+    let mut sbm = crate::bm::BMesh::from_mesh(&s.pos, &s.edges, &s.faces, &s.corner_edges);
+    super::coilx::recalc_face_normals_bm(&mut sbm);
+    let (sp, se, sf) = sbm.to_mesh();
     let mut m = Mesh::new();
-    m.pos = s.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
-    m.faces = s.faces;
-    // normals_make_consistent(inside=False): flip everything if the signed volume is negative
-    let mut vol = 0.0;
-    for f in &m.faces {
-        for k in 1..f.len() - 1 {
-            let (a, b, c) = (m.pos[f[0] as usize], m.pos[f[k] as usize], m.pos[f[k + 1] as usize]);
-            vol += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
-        }
-    }
-    if vol < 0.0 {
-        for f in m.faces.iter_mut() {
-            f.reverse();
-        }
-    }
+    m.pos = sp.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    m.faces = sf;
+    let _ = se;
     m
 }
 

@@ -25,6 +25,17 @@ pub fn face_normal_v(pos: &[V3], f: &[u32]) -> V3 {
     }
 }
 
+/// blender::math::normalize (true division, zero below 1e-35)
+fn normalize_div(a: V3) -> V3 {
+    let d = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+    if d > 1.0e-35f32 {
+        let l = d.sqrt();
+        [a[0] / l, a[1] / l, a[2] / l]
+    } else {
+        [0.0; 3]
+    }
+}
+
 /// Mesh::vert_normals(): angle weighted (safe_acos_approx) face normals; loose vertices get the normalized position
 pub fn mesh_vert_normals(pos: &[V3], faces: &[Vec<u32>]) -> Vec<V3> {
     let fnor: Vec<V3> = faces.iter().map(|f| face_normal_v(pos, f)).collect();
@@ -34,7 +45,7 @@ pub fn mesh_vert_normals(pos: &[V3], faces: &[Vec<u32>]) -> Vec<V3> {
         for i in 0..k {
             let v = f[i] as usize;
             let p = pos[v];
-            let d = |o: V3| q::normalize(q::sub(o, p));
+            let d = |o: V3| normalize_div(q::sub(o, p));
             let (dp, dn) = (d(pos[f[(i + k - 1) % k] as usize]), d(pos[f[(i + 1) % k] as usize]));
             let fac = super::bevmod::safe_acos_approx(q::dot(dp, dn));
             for c in 0..3 {
@@ -42,7 +53,7 @@ pub fn mesh_vert_normals(pos: &[V3], faces: &[Vec<u32>]) -> Vec<V3> {
             }
         }
     }
-    (0..pos.len()).map(|v| if q::is_zero(acc[v]) { q::normalize(pos[v]) } else { q::normalize(acc[v]) }).collect()
+    (0..pos.len()).map(|v| if q::is_zero(acc[v]) { normalize_div(pos[v]) } else { normalize_div(acc[v]) }).collect()
 }
 
 pub struct Solid {

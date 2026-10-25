@@ -505,3 +505,145 @@ pub fn bevel_extrude_bm(m: &Mesh, radius: f32, depth: f32) -> Result<Stage, Stri
     tip.sort();
     Ok(Stage { pos, faces, tip, edges })
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+/// bpy.ops.mesh.normals_make_consistent(inside=False) (bmo_recalc_face_normals) on a BMesh: face groups over manifold edges, outer-most
+/// loop of every group decides whether the group is flipped, flipping keeps the first loop (BM_face_normal_flip).
+pub fn recalc_face_normals_bm(bm: &mut BMesh) {
+    use crate::bm::NONE;
+    bm.normals_update();
+    let fids = bm.face_ids();
+    let mut group_of: HashMap<usize, usize> = HashMap::default();
+    let mut groups: Vec<Vec<usize>> = vec![];
+    for &f0 in &fids {
+        if group_of.contains_key(&f0) {
+            continue;
+        }
+        let gi = groups.len();
+        let mut grp = vec![];
+        let mut stack = vec![f0];
+        group_of.insert(f0, gi);
+        while let Some(f) = stack.pop() {
+            grp.push(f);
+            for l in bm.loops_of_face(f) {
+                let e = bm.loops[l].e;
+                if bm.edge_is_manifold(e) {
+                    let lo = bm.loops[l].rn;
+                    let fo = bm.loops[lo].f;
+                    if fo != f && !group_of.contains_key(&fo) {
+                        group_of.insert(fo, gi);
+                        stack.push(fo);
+                    }
+                }
+            }
+        }
+        grp.sort();
+        groups.push(grp);
+    }
+    for grp in groups {
+        // area-weighted median-weighted centre
+        let mut cent = [0.0f32; 3];
+        let mut area_acc = 0.0f32;
+        let cent_fac = 1.0f32 / grp.len() as f32;
+        for &f in &grp {
+            let vs = bm.verts_of_face(f);
+            let co: Vec<V3> = vs.iter().map(|&v| bm.verts[v].co).collect();
+            // area via fan cross products
+            let mut a = [0.0f32; 3];
+            for i in 1..co.len() - 1 {
+                let c = q::cross(q::sub(co[i], co[0]), q::sub(co[i + 1], co[0]));
+                a = [a[0] + c[0], a[1] + c[1], a[2] + c[2]];
+            }
+            let area = 0.5 * q::len(a);
+            // BM_face_calc_center_median_weighted
+            let ls = bm.loops_of_face(f);
+            let k = ls.len();
+            let mut fc = [0.0f32; 3];
+            let mut totw = 0.0f32;
+            let mut w_prev = bm.edge_calc_length(bm.loops[ls[k - 1]].e);
+            for &l in &ls {
+                let w_curr = bm.edge_calc_length(bm.loops[l].e);
+                let w = w_curr + w_prev;
+                fc = q::madd(fc, bm.verts[bm.loops[l].v].co, w);
+                totw += w;
+                w_prev = w_curr;
+            }
+            if totw != 0.0 {
+                fc = q::mul(fc, 1.0 / totw);
+            }
+            cent = q::madd(cent, fc, cent_fac * area);
+            area_acc += area;
+        }
+        if area_acc != 0.0 {
+            cent = q::mul(cent, 1.0 / area_acc);
+        }
+        let eps = f32::EPSILON;
+        let (mut best_d, mut best_e, mut best_l) = (eps, -f32::MAX, -f32::MAX);
+        let (mut start, mut is_flip) = (0usize, false);
+        for (i, &f) in grp.iter().enumerate() {
+            for l in bm.loops_of_face(f) {
+                let co = bm.verts[bm.loops[l].v].co;
+                let mut dir = q::sub(co, cent);
+                let dist_sq = q::dot(dir, dir);
+                let is_best_d = dist_sq > best_d;
+                if is_best_d || dist_sq == best_d {
+                    dir = q::mul(dir, 1.0 / dist_sq.sqrt());
+                    let nx = bm.verts[bm.loops[bm.loops[l].n].v].co;
+                    let pv = bm.verts[bm.loops[bm.loops[l].p].v].co;
+                    let (e0, l0) = q::normalize_len(q::sub(nx, co));
+                    let (e1, l1) = q::normalize_len(q::sub(pv, co));
+                    if l0 > eps && l1 > eps {
+                        let edge_dot = q::dot(dir, e0).max(q::dot(dir, e1));
+                        let is_best_e = edge_dot > best_e;
+                        if is_best_d || is_best_e || edge_dot == best_e {
+                            let (mut loop_dir, ll) = q::normalize_len(q::cross(e0, e1));
+                            if ll > eps {
+                                if q::dot(loop_dir, bm.faces[f].no) < 0.0 {
+                                    loop_dir = [-loop_dir[0], -loop_dir[1], -loop_dir[2]];
+                                }
+                                let ld = q::dot(dir, loop_dir);
+                                let loop_dot = ld.abs();
+                                if is_best_d || is_best_e || loop_dot > best_l {
+                                    best_d = dist_sq;
+                                    best_e = edge_dot;
+                                    best_l = loop_dot;
+                                    start = i;
+                                    is_flip = ld < 0.0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // propagate the flip state
+        let mut flip: HashMap<usize, bool> = HashMap::default();
+        let mut seen: crate::dhash::HashSet<usize> = crate::dhash::HashSet::default();
+        let fs = grp[start];
+        if is_flip {
+            flip.insert(fs, true);
+        }
+        let mut stack = vec![fs];
+        seen.insert(fs);
+        while let Some(f) = stack.pop() {
+            let state = *flip.get(&f).unwrap_or(&false);
+            for l in bm.loops_of_face(f) {
+                let lo = bm.loops[l].rn;
+                if lo != l && bm.edge_is_manifold(bm.loops[l].e) {
+                    let fo = bm.loops[lo].f;
+                    if !seen.contains(&fo) {
+                        seen.insert(fo);
+                        flip.insert(fo, (bm.loops[lo].v == bm.loops[l].v) != state);
+                        stack.push(fo);
+                    }
+                }
+            }
+        }
+        for &f in &grp {
+            if *flip.get(&f).unwrap_or(&false) {
+                bm.face_normal_flip(f);
+            }
+        }
+        let _ = NONE;
+    }
+}
