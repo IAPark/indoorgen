@@ -28,5 +28,6 @@ pub mod nature;
 pub mod plants;
 pub mod shell;
 pub mod snakeplant;
+pub mod trinkets;
 pub mod spiderplant;
 pub mod succulent;
