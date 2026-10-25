@@ -153,7 +153,7 @@ fn main() {
         let (h, py) = read_ref(path).expect("bad cache file");
         // caches made with the old no-draw weighted_sample stub need Rust's material draws skipped too (REFSTUB);
         // new caches (header ws_draws=true) consume the draws exactly like a real python run, so Rust must as well
-        if h["ws_draws"].as_bool().unwrap_or(false) { std::env::remove_var("REFSTUB") } else { std::env::set_var("REFSTUB", "1") }
+        if h["ws_draws"].as_bool().unwrap_or(false) { std::env::set_var("REFSTUB", "2") } else { std::env::set_var("REFSTUB", "1") }
         let t0 = std::time::Instant::now();
         let mut rng = Rng::seeded(*s);
         set_unseeded(ctor_draws::ctor_draws(cls, &mut rng));

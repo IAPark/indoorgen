@@ -217,7 +217,9 @@ impl ChairSpec {
             let sx = if s[0] < 0.0 { 1.0 } else { -1.0 };
             let sy = if s[1] < -self.size / 2.0 { 1.0 } else { -1.0 };
             let loc = [sx * self.leg_thickness / 2.0, sy * self.leg_thickness / 2.0, 0.0];
-            out.push(pts.iter().map(|p| [p[0] + loc[0], p[1] + loc[1], p[2] + loc[2]]).collect());
+            // apply_transform in float32: the location is stored as float32 and added to the float32 vertices
+            let l32 = [loc[0] as f32, loc[1] as f32, loc[2] as f32];
+            out.push(pts.iter().map(|p| [(p[0] as f32 + l32[0]) as f64, (p[1] as f32 + l32[1]) as f64, (p[2] as f32 + l32[2]) as f64]).collect());
         }
         out
     }

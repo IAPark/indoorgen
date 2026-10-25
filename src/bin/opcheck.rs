@@ -204,7 +204,18 @@ fn r_solidify(c: &Case, p: &Value) -> Res {
     let th = pf(p, "thickness", 0.1);
     let off = pf(p, "offset", -1.0);
     match ps(p, "solidify_mode", "EXTRUDE") {
-        "EXTRUDE" => Ok(infinigen::assets::bpyops::solidify(&c.mesh, th, off)),
+        "EXTRUDE" => {
+            if pb(p, "use_even_offset", false) || pf(p, "thickness_clamp", 0.0) != 0.0 || pb(p, "use_flip_normals", false) {
+                return Ok(infinigen::assets::bpyops::solidify(&c.mesh, th, off));
+            }
+            let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+            let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
+            let s = infinigen::assets::solidx::solidify_extrude(&pos, &edges, &c.mesh.faces, &ce, th as f32, off as f32, pb(p, "use_rim", true));
+            let mut m = Mesh::new();
+            m.pos = s.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+            m.faces = s.faces;
+            Ok(m)
+        }
         "NON_MANIFOLD" => {
             use infinigen::assets::solidnm::*;
             let b = match ps(p, "nonmanifold_boundary_mode", "NONE") {
@@ -406,9 +417,51 @@ fn r_displace(c: &Case, p: &Value) -> Res {
     Ok(m)
 }
 
-fn r_convex_hull(c: &Case, _p: &Value) -> Res {
-    let pts: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    Ok(from_gn(&infinigen::gn::nodes_mesh::hull_mesh(&pts)))
+fn r_convex_hull(c: &Case, p: &Value) -> Res {
+    use infinigen::bm::*;
+    let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+    let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
+    let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
+    let mut hp = infinigen::bm::hull::HullParams::default();
+    hp.use_existing_faces = pb(p, "use_existing_faces", true);
+    hp.delete_unused = pb(p, "delete_unused", true);
+    hp.make_holes = pb(p, "make_holes", false);
+    hp.join_triangles = pb(p, "join_triangles", true);
+    if !infinigen::bm::hull::convex_hull(&mut bm, &hp) {
+        return Err("convex_hull: cancelled".into());
+    }
+    Ok(bm_out(&bm))
+}
+
+fn r_bm_op(c: &Case, which: u8) -> Res {
+    use infinigen::bm::*;
+    let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+    let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
+    let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
+    if which == 2 {
+        // make_coiled's first four ops in ONE edit session (the mempool free lists carry over)
+        use infinigen::bm::hull::*;
+        poke_all(&mut bm);
+        tris_to_quads_all(&mut bm);
+        if std::env::var("COIL2").is_err() {
+            poke_all(&mut bm);
+            poke_all(&mut bm);
+        }
+    } else if which == 0 {
+        infinigen::bm::hull::poke_all(&mut bm);
+    } else {
+        infinigen::bm::hull::tris_to_quads_all(&mut bm);
+    }
+    Ok(bm_out(&bm))
+}
+fn r_coil4(c: &Case, _p: &Value) -> Res {
+    r_bm_op(c, 2)
+}
+fn r_poke(c: &Case, _p: &Value) -> Res {
+    r_bm_op(c, 0)
+}
+fn r_tris_to_quads(c: &Case, _p: &Value) -> Res {
+    r_bm_op(c, 1)
 }
 
 fn r_remesh(c: &Case, p: &Value) -> Res {
@@ -454,7 +507,10 @@ const OPS: &[(&str, &str, fn(&Case, &Value) -> Res)] = &[
     ("remove_doubles", "exact", r_remove_doubles),
     ("beautify_fill", "exact", r_beautify_fill),
     ("displace", "exact", r_displace),
-    ("convex_hull", "surface", r_convex_hull),
+    ("convex_hull", "exact", r_convex_hull),
+    ("poke", "exact", r_poke),
+    ("coil4", "exact", r_coil4),
+    ("tris_to_quads", "exact", r_tris_to_quads),
     ("remesh", "surface", r_remesh),
 ];
 

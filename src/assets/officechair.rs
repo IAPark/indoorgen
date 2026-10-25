@@ -261,7 +261,7 @@ fn wheeled_leg(joint_h: f64, leg_d: f64, top_h: f64, arc: f64, wheel_w: f64, whe
     let offset = -minz;
     for m in legs.iter_mut() {
         for q in m.pos.iter_mut() {
-            q[2] += offset;
+            q[2] = (q[2] as f32 + offset as f32) as f64; // float32 add: the lowest vertex lands exactly on z = 0
         }
     }
     let depth1 = joint_h - offset;

@@ -54,7 +54,15 @@ def main():
     import infinigen.core.util.random as R
     import infinigen.core.surface as S
     import infinigen.core.util.blender as butil
-    R.weighted_sample = lambda *a, **k: _D
+    _orig_ws = R.weighted_sample
+    def _ws(*a, **k):
+        # same as tools/refcache.py: consume the real weighted_sample's draws (Rust/refcache convention), return a stub class
+        try:
+            _orig_ws(*a, **k)
+        except Exception:
+            pass
+        return _D
+    R.weighted_sample = _ws
     S.assign_material = lambda *a, **k: None
 
     VIA = []

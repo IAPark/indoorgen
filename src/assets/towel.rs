@@ -174,7 +174,50 @@ fn dir_n(m: &Mesh, e: Edge) -> V3 {
 
 /// decorate.subdivide_edge_ring(obj, cuts, axis): edges parallel to `axis`
 pub fn subdivide_edge_ring(m: &Mesh, cuts: usize, axis: usize) -> Mesh {
-    let (o, _) = subdivide_edgering(m, &|mm, e| dir_n(mm, e)[axis].abs() > 1.0 - 1e-3, cuts);
+    if std::env::var("SDR_OLD").is_ok() {
+        let (o, _) = subdivide_edgering(m, &|mm, e| dir_n(mm, e)[axis].abs() > 1.0 - 1e-3, cuts);
+        return o;
+    }
+    subdivide_edge_ring_bm(m, cuts, axis)
+}
+
+/// decorate.subdivide_edge_ring on the exact bmesh operator port (float32 vertex positions, Blender's element order)
+pub fn subdivide_edge_ring_bm(m: &Mesh, cuts: usize, axis: usize) -> Mesh {
+    use crate::bm::BMesh;
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    // mesh edges in first-use order of the face corners
+    let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut ce: Vec<Vec<u32>> = vec![];
+    for f in &m.faces {
+        let mut fe = vec![];
+        for c in 0..f.len() {
+            let (a, b) = (f[c], f[(c + 1) % f.len()]);
+            let k = (a.min(b), a.max(b));
+            let id = *emap.entry(k).or_insert_with(|| {
+                edges.push([a, b]);
+                (edges.len() - 1) as u32
+            });
+            fe.push(id);
+        }
+        ce.push(fe);
+    }
+    let mut bm = BMesh::from_mesh(&pos, &edges, &m.faces, &ce);
+    // selected = |normalize(co[v2] - co[v1]) . axis| > 1 - 1e-3 (float64 on the float32 coordinates)
+    let mut sel = vec![];
+    for (i, e) in edges.iter().enumerate() {
+        let (a, b) = (pos[e[0] as usize], pos[e[1] as usize]);
+        let d = [b[0] as f64 - a[0] as f64, b[1] as f64 - a[1] as f64, b[2] as f64 - a[2] as f64];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if l > 0.0 && (d[axis] / l).abs() > 1.0 - 1e-3 {
+            sel.push(i);
+        }
+    }
+    crate::bm::edgering::subdivide_edgering(&mut bm, &sel, cuts);
+    let (p, _e, f) = bm.to_mesh();
+    let mut o = Mesh::new();
+    o.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    o.faces = f;
     o
 }
 
@@ -283,7 +326,7 @@ impl TowelSpec {
             eprintln!("BW {}", bw);
             return m;
         }
-        m = match bevel_angle(&m, bw, 2, 30f64.to_radians(), false) {
+        m = match super::bevmod::bevel_modifier_ex(&m, bw, 2, Some(0.5235987901687622f32), true, 0.5, None) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("towel bevel failed: {e}");
