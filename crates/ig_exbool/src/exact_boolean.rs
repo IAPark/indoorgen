@@ -75,7 +75,10 @@ fn calc_edges(faces: &[Vec<u32>]) -> Vec<[u32; 2]> {
     out
 }
 
+pub use crate::boolean::{set_patch_vote, set_slow_paths};
+
 pub fn exact_boolean(meshes: &[BoolInput], op: BoolOp, use_self: bool, hole_tolerant: bool) -> BoolOutput {
+    let tsetup = std::time::Instant::now();
     let mut arena = Arena::new();
     let nmeshes = meshes.len();
     let mut face_offset = vec![0usize; nmeshes];
@@ -105,6 +108,9 @@ pub fn exact_boolean(meshes: &[BoolInput], op: BoolOp, use_self: bool, hole_tole
             f += 1;
         }
     }
+    if std::env::var_os("EXBOOL_PROF").is_some() {
+        eprintln!("exbool: setup {:?} ({} verts {} faces)", tsetup.elapsed(), arena.verts.len(), arena.faces.len());
+    }
     let offsets = face_offset.clone();
     let shape_fn = move |fidx: i32| -> i32 {
         for mi in 0..offsets.len().saturating_sub(1) {
@@ -119,7 +125,9 @@ pub fn exact_boolean(meshes: &[BoolInput], op: BoolOp, use_self: bool, hole_tole
         BoolOp::Union => BoolOpType::Union,
         BoolOp::Difference => BoolOpType::Difference,
     };
+    let tprof = std::time::Instant::now();
     let out_faces = boolean_mesh(&mut arena, &imesh, bop, nmeshes, &shape_fn, use_self, hole_tolerant);
+    let t_after = tprof.elapsed();
 
     // imesh_to_mesh
     let (order, idx) = populate_vert(&arena, &out_faces);
@@ -152,5 +160,78 @@ pub fn exact_boolean(meshes: &[BoolInput], op: BoolOp, use_self: bool, hole_tole
         }
     }
     let edges = calc_edges(&faces);
+    if std::env::var_os("EXBOOL_PROF").is_some() {
+        eprintln!("exbool: boolean_mesh {:?}, tail (to mesh + edges) {:?}", t_after, tprof.elapsed() - t_after);
+    }
     BoolOutput { verts, faces, edges, face_orig, vert_orig }
+}
+
+#[cfg(test)]
+mod fastpath_tests {
+    use super::*;
+
+    fn cube(c: [f32; 3], h: [f32; 3], open: bool) -> BoolInput {
+        let mut verts = vec![];
+        for x in [-1.0f32, 1.0] {
+            for y in [-1.0f32, 1.0] {
+                for z in [-1.0f32, 1.0] {
+                    verts.push([c[0] + x * h[0], c[1] + y * h[1], c[2] + z * h[2]]);
+                }
+            }
+        }
+        let mut faces = vec![vec![0, 1, 3, 2], vec![2, 3, 7, 6], vec![6, 7, 5, 4], vec![4, 5, 1, 0], vec![2, 6, 4, 0], vec![7, 3, 1, 5]];
+        if open {
+            faces.pop();
+        }
+        BoolInput { verts, faces }
+    }
+
+    fn join(parts: Vec<BoolInput>) -> BoolInput {
+        let mut o = BoolInput { verts: vec![], faces: vec![] };
+        for p in parts {
+            let base = o.verts.len() as u32;
+            o.verts.extend(p.verts);
+            o.faces.extend(p.faces.into_iter().map(|f| f.into_iter().map(|v| v + base).collect::<Vec<_>>()));
+        }
+        o
+    }
+
+    fn run(a: &BoolInput, b: &BoolInput, op: BoolOp, hole_tolerant: bool, slow: bool) -> BoolOutput {
+        set_slow_paths(slow);
+        let r = exact_boolean(&[BoolInput { verts: a.verts.clone(), faces: a.faces.clone() }, BoolInput { verts: b.verts.clone(), faces: b.faces.clone() }], op, false, hole_tolerant);
+        set_slow_paths(false);
+        r
+    }
+
+    fn same(x: &BoolOutput, y: &BoolOutput) {
+        assert_eq!(x.verts, y.verts);
+        assert_eq!(x.faces, y.faces);
+        assert_eq!(x.face_orig, y.face_orig);
+    }
+
+    /// the BVH ray scan and the pruned component-container search give exactly the output of the brute-force paths
+    #[test]
+    fn pruned_paths_match_brute_force() {
+        // many disjoint components (cubes on a grid) + a box swallowing some of them + a nested one
+        let mut parts = vec![];
+        for i in 0..5 {
+            for j in 0..5 {
+                parts.push(cube([i as f32 * 0.5, j as f32 * 0.5, 0.0], [0.1, 0.1, 0.1], false));
+            }
+        }
+        parts.push(cube([1.0, 1.0, 0.0], [0.02, 0.02, 0.02], false)); // inside nothing of A's solids
+        let a = join(parts);
+        let b = join(vec![cube([0.5, 0.5, 0.0], [0.45, 0.45, 0.3], false), cube([1.6, 1.6, 0.0], [0.2, 0.2, 0.05], false)]);
+        for op in [BoolOp::Union, BoolOp::Difference, BoolOp::Intersect] {
+            same(&run(&a, &b, op, false, false), &run(&a, &b, op, false, true));
+        }
+        // non-closed operand: raycast classification (hole tolerant and per patch)
+        let open = join(vec![cube([0.5, 0.5, 0.0], [0.3, 0.3, 0.3], true), cube([2.0, 0.0, 0.0], [0.1, 0.1, 0.1], false)]);
+        for op in [BoolOp::Union, BoolOp::Difference] {
+            for ht in [false, true] {
+                same(&run(&open, &b, op, ht, false), &run(&open, &b, op, ht, true));
+                same(&run(&a, &open, op, ht, false), &run(&a, &open, op, ht, true));
+            }
+        }
+    }
 }

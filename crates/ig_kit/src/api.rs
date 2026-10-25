@@ -33,6 +33,8 @@ pub struct ClothJob {
     pub z_from: Option<(usize, f64)>,
     /// build the pre mesh in Blender with python's own factory code instead of importing `pre` (exact edge/loop order => reproducible sims)
     pub build: Option<serde_json::Value>,
+    /// steps after the sim + subsurf, run in the asset-local frame before the pose is re-applied: {"scale": s, "rot": [rx, ry, rz], "displace": strength, "smooth": iterations}
+    pub post: Option<serde_json::Value>,
 }
 
 /// object resting on cloth/bed surfaces: Blender re-drops it by the change of the supporting surface height at (x, y)
@@ -68,6 +70,7 @@ impl Asset {
                 "kind": "cloth", "target": nm(j.target), "verts": verts, "faces": pre.faces,
                 "collide": j.collide.iter().map(|&i| nm(i)).collect::<Vec<_>>(), "kwargs": j.kwargs, "end_frame": j.end_frame,
                 "subsurf": j.subsurf, "pin": j.pin, "build": j.build, "pose": m.0,
+                "post": j.post.clone(),
                 "z_from": j.z_from.map(|(p, z)| json!({"part": nm(p), "z_used": z + zt})),
             }));
         }
