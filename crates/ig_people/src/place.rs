@@ -539,7 +539,7 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
                     }
                 }
                 if s.group == ps.group && s.group != usize::MAX {
-                    wgt *= 1.6;
+                    wgt *= if matches!(s.kind, PoseKind::StandAtDesk | PoseKind::StandAtSink | PoseKind::LeanCounter | PoseKind::Reach | PoseKind::Crouch) { 0.15 } else { 1.6 };
                 }
             }
             ws.push(wgt * rng.uniform(0.6, 1.0));
@@ -604,8 +604,10 @@ fn report(placed: &[Placement], w: &World, n: usize, dt: std::time::Duration) {
         mfe = mfe.max(p.info.feet_err.abs());
         mh = mh.max(p.info.hand_err.abs());
         eprintln!(
-            "PEOPLE  {:?} room={} support={} pen_furn={:.3} pen_wall={:.3} pen_people={:.3} feet_err={:+.3} seat_gap={:+.3} hand_err={:+.3}",
+            "PEOPLE  {:?} at=({:.2},{:.2}) room={} support={} pen_furn={:.3} pen_wall={:.3} pen_people={:.3} feet_err={:+.3} seat_gap={:+.3} hand_err={:+.3}",
             p.kind,
+            p.pose.0[0][3],
+            p.pose.0[1][3],
             p.info.room,
             p.info.support.as_deref().unwrap_or("-"),
             pf,
