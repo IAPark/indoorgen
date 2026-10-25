@@ -10,6 +10,38 @@ pub fn handles(c: &str) -> bool {
     c == "NatureShelfTrinketsFactory"
 }
 
+pub fn mollusk_handles(c: &str) -> bool {
+    c == "MolluskFactory"
+}
+
+/// MolluskFactory itself: create_asset(face_size 0.003 + decorate_mollusk) of the randomly chosen base factory
+pub struct Mollusk {
+    fs: u64,
+    base: Base,
+}
+
+impl Factory for Mollusk {
+    fn asset(&self, inst: u64) -> Asset {
+        let t = Trinkets { fs: self.fs, base: self.base, fallback: Box::new(NoFallback) };
+        let m = t.base_mesh(inst).unwrap();
+        let b = m.bounds();
+        let mut a = Asset::default();
+        a.mesh(m, &mat("mollusk", [0.8, 0.7, 0.6], 0.5), Some(b));
+        a
+    }
+}
+
+struct NoFallback;
+impl Factory for NoFallback {
+    fn asset(&self, _: u64) -> Asset {
+        Asset::default()
+    }
+}
+
+pub fn make_mollusk(fs: u64) -> Box<dyn Factory> {
+    Box::new(Mollusk { fs, base: mollusk_base(fs) })
+}
+
 #[derive(Clone, Copy)]
 enum Base {
     Shell(ShellKind),
