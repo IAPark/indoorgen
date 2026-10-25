@@ -24,6 +24,8 @@ pub enum Kind {
     Grasses,
     Maize,
     Wheat,
+    WheatEar,
+    VeratrumEar,
 }
 
 impl Kind {
@@ -57,6 +59,8 @@ pub struct Growth {
     pub freq: f64,
     pub n_cuts: i64,
     pub use_distance: bool,
+    pub primary_stem_offset: f64,
+    pub ears: Vec<Growth>,
 }
 
 fn log_uniform(r: &mut Rng, lo: f64, hi: f64) -> f64 {
@@ -64,6 +68,10 @@ fn log_uniform(r: &mut Rng, lo: f64, hi: f64) -> f64 {
 }
 
 impl Growth {
+    /// MonocotGrowthFactory.__init__ only (the factory's own FixedSeed block); the caller fills the remaining attributes
+    pub fn new_isolated(kind: Kind, fs: u64) -> Growth {
+        Growth::new(kind, fs)
+    }
     fn banana_block(&mut self, r: &mut Rng) {
         self.stem_offset = r.uniform(0.6, 1.0);
         self.angle = r.uniform(PI / 4.0, PI / 3.0);
@@ -114,6 +122,8 @@ impl Growth {
             }
             Kind::Wheat => r.uniform(0.08, 0.12),
             Kind::Banana | Kind::Taro => r.uniform(0.15, 0.35),
+            Kind::WheatEar => r.uniform(0.12, 0.28),
+            Kind::VeratrumEar => r.uniform(0.15, 0.35),
         };
         r.uniform(0.6, 0.8);
         log_uniform(&mut r, 0.05, 0.1);
@@ -152,6 +162,8 @@ impl Growth {
             freq: 0.0,
             n_cuts: 0,
             use_distance,
+            primary_stem_offset: 0.0,
+            ears: vec![],
         };
         let mut r = Rng::seeded(fs);
         match kind {
@@ -185,13 +197,53 @@ impl Growth {
                         g.leaf_range = (0.1, 0.7);
                     }
                     Kind::Wheat => {
-                        let mut r = Rng::seeded(fs);
                         g.scale_curve = vec![(0.0, 1.0), (1.0, 0.6)];
                         g.leaf_range = (0.1, 0.7);
-                        let _ = &mut r;
                     }
                     _ => {}
                 }
+            }
+            Kind::Veratrum => {
+                g.stem_offset = r.uniform(1.0, 1.5);
+                g.angle = r.uniform(PI / 4.0, PI / 3.0);
+                g.z_drag = r.uniform(0.4, 0.5);
+                g.bend_angle = PI / 2.0;
+                g.min_y = r.uniform(PI * 0.25, PI * 0.35);
+                g.max_y = r.uniform(PI * 0.6, PI * 0.7);
+                g.count = log_uniform(&mut r, 32.0, 64.0) as i64;
+                g.scale_curve = vec![(0.0, r.uniform(0.8, 1.0)), (0.4, 0.6), (0.8, r.uniform(0.0, 0.1)), (1.0, 0.0)];
+                g.leaf_range = (0.0, r.uniform(0.7, 0.8));
+                g.bud_angle = r.uniform(PI / 15.0, PI / 12.0);
+                g.freq = r.uniform(25.0, 50.0);
+                // VeratrumBranchMonocotFactory (continues this stream)
+                let nb = (r.randint(3, 6) + 1) as usize;
+                let mut ears: Vec<Growth> = vec![];
+                for i in 0..nb {
+                    let mut e = Growth::new_isolated(Kind::VeratrumEar, g.fs * 6 + i as u64);
+                    e.angle = r.uniform(PI / 4.0, PI / 3.0);
+                    e.min_y = r.uniform(PI * 0.25, PI * 0.3);
+                    e.max_y = r.uniform(PI * 0.3, PI * 0.35);
+                    e.count = r.randint(64, 128);
+                    e.leaf_prob = r.uniform(0.6, 0.8);
+                    e.leaf_range = (0.0, 0.98);
+                    ears.push(e);
+                }
+                g.primary_stem_offset = r.uniform(0.4, 0.8);
+                for (i, e) in ears.iter_mut().enumerate() {
+                    let scale = if i > 0 { log_uniform(&mut r, 0.3, 0.6) } else { 1.0 };
+                    e.stem_offset = scale * g.primary_stem_offset;
+                    e.count = (log_uniform(&mut r, 64.0, 238.0) * scale) as i64;
+                }
+                g.ears = ears;
+            }
+            Kind::WheatEar => {
+                g.stem_offset = r.uniform(0.4, 0.5);
+                g.angle = r.uniform(PI / 6.0, PI / 4.0);
+                g.min_y = r.uniform(PI / 4.0, PI / 3.0);
+                g.max_y = PI / 2.0;
+                g.leaf_prob = r.uniform(0.9, 1.0);
+                g.count = log_uniform(&mut r, 96.0, 128.0) as i64;
+                g.bend_angle = PI;
             }
             Kind::Banana | Kind::Taro => {
                 g.banana_block(&mut r);
@@ -208,6 +260,7 @@ impl Growth {
                     g.max_y = r.uniform(-PI * 0.05, 0.0);
                 }
             }
+            Kind::VeratrumEar => {}
             _ => unimplemented!("monocot kind {:?}", kind),
         }
         g
@@ -315,7 +368,12 @@ impl Growth {
                 obj = obj.weld(2e-4);
                 obj.trace("WELD");
                 if r.uniform(0.0, 1.0) < self.cut_prob {
-                    unimplemented!("agave cut_plane");
+                    // cut_plane: bisect_plane(clear_outer) -- approximated by dropping the vertices (and faces) beyond the plane; the sealing sheet of the python cut is not built
+                    let angle = r.uniform(-PI / 3.0, PI / 3.0);
+                    let cx = r.uniform(1.0, 1.4);
+                    let (nx, ny) = (angle.cos() as f32, angle.sin() as f32);
+                    let del: Vec<bool> = obj.v.iter().map(|p| (p[0] - cx as f32) * nx + p[1] * ny > 0.0).collect();
+                    obj = obj.delete_verts(&del);
                 }
                 decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
                 obj
@@ -327,14 +385,14 @@ impl Growth {
                 decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
                 obj
             }
-            Kind::Grasses | Kind::Maize => {
+            Kind::Grasses | Kind::Maize | Kind::Wheat => {
                 let (x1, x2) = (r.uniform(0.1, 0.2), r.uniform(0.5, 0.7));
                 let x = [0.0, x1, x2, 1.0];
                 let (lo, hi) = if self.kind == Kind::Maize { (0.03, 0.06) } else { (0.02, 0.03) };
                 let (y1, y2) = (r.uniform(lo, hi), r.uniform(lo, hi));
                 let y = [0.0, y1, y2, 0.0];
                 let mut obj = leaf(&x, &y, Some(face_size));
-                if self.kind == Kind::Grasses && r.uniform(0.0, 1.0) < 0.4 {
+                if self.kind != Kind::Maize && r.uniform(0.0, 1.0) < 0.4 {
                     let x_cut = r.uniform(0.5, 1.0);
                     let ang = r.uniform(-PI / 3.0, PI / 3.0);
                     let (ca, sa) = (ang.cos() as f32, ang.sin() as f32);
@@ -344,6 +402,91 @@ impl Growth {
                 }
                 decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
                 obj
+            }
+            Kind::Veratrum => {
+                let b = self.bud_angle;
+                let x = [0.0, 0.2 * b.cos(), r.uniform(0.6, 0.7), 0.8];
+                let y = [0.0, 0.2 * b.sin(), r.uniform(0.06, 0.1), 0.0];
+                let mut obj = leaf(&x, &y, Some(face_size));
+                let distance = obj.distance2boundary();
+                let weights: Vec<f32> = distance.iter().map(|&d| (self.freq * d).cos().powi(4) as f32).collect();
+                let strength = -r.uniform(5e-3, 8e-3);
+                displace(&mut obj.v, &obj.f, None, strength, 0.0, DispDir::Normal, Some(&weights));
+                obj.trace("DISPLACE");
+                decorate_leaf(&mut obj, r, 8.0, PI / 2.0, PI / 6.0, 0.1, 0.02, true);
+                obj
+            }
+            Kind::VeratrumEar => {
+                let x = [0.0, 0.04, 0.06, 0.04, 0.0];
+                let y = [0.0, 0.01, 0.0, -0.01, 0.0];
+                let z = [0.0, -0.01, -0.01, -0.006, 0.0];
+                let anchors: Vec<[f64; 3]> = (0..5).map(|i| [x[i], y[i], z[i]]).collect();
+                let steps = r.randint(3, 5) as usize;
+                let mut prof = bezier_mesh(&anchors, &[0, 2, 4]);
+                prof.trace("WELD");
+                prof.trace("WELD");
+                // the outline closes on itself (first and last anchor coincide)
+                let n = prof.v.len() as u32;
+                prof.e.push([n - 1, 0]);
+                let filled = fill_outline(&prof);
+                filled.trace("fill");
+                let plate = remesh_fill(&filled, 0.005);
+                // spin(dupli) about the x axis: `steps` copies
+                let mut copies: Vec<LMesh> = vec![];
+                for k in 0..steps {
+                    let ang = (2.0 * PI * k as f64 / steps as f64) as f32;
+                    let (c, s) = (ang.cos(), ang.sin());
+                    let mut m = plate.clone();
+                    for p in m.v.iter_mut() {
+                        let (yy, zz) = (p[1], p[2]);
+                        p[1] = yy * c - zz * s;
+                        p[2] = yy * s + zz * c;
+                    }
+                    copies.push(m);
+                }
+                let refs: Vec<&LMesh> = copies.iter().collect();
+                let mut o = LMesh::join(&refs).weld(1e-3);
+                o.trace("WELD");
+                o = o.weld(face_size / 2.0);
+                o.trace("WELD");
+                o
+            }
+            Kind::WheatEar => {
+                let x = [0.0, 0.05, 0.1];
+                let y = [0.0, r.uniform(0.01, 0.015), 0.0];
+                let n = r.randint(4, 6) as usize;
+                let angles = polygon_angles(r, n, PI / 6.0, PI * 2.0 / 3.0);
+                let mut pts: Vec<[f64; 3]> = vec![];
+                let mut curves: Vec<LMesh> = vec![];
+                for a in angles {
+                    let anchors: Vec<[f64; 3]> = (0..3).map(|i| [x[i], a.cos() * y[i], a.sin() * y[i]]).collect();
+                    let c = bezier_mesh(&anchors, &[]);
+                    c.trace("WELD");
+                    curves.push(c);
+                }
+                let refs: Vec<&LMesh> = curves.iter().collect();
+                let j = LMesh::join(&refs);
+                for p in &j.v {
+                    pts.push([p[0] as f64, p[1] as f64, p[2] as f64]);
+                }
+                let tris = super::nature::hull_tris(&pts);
+                let used: Vec<u32> = {
+                    let mut u: Vec<u32> = tris.iter().flat_map(|t| t.iter().map(|&i| i as u32)).collect();
+                    u.sort();
+                    u.dedup();
+                    u
+                };
+                let mut map = vec![u32::MAX; j.v.len()];
+                let mut hull = LMesh::default();
+                for (k, &i) in used.iter().enumerate() {
+                    map[i as usize] = k as u32;
+                    hull.v.push(j.v[i as usize]);
+                }
+                for t in &tris {
+                    hull.f.push(vec![map[t[0]], map[t[1]], map[t[2]]]);
+                }
+                hull.ensure_face_edges();
+                super::voxelremesh::remesh_with_attrs(&hull, face_size / 2.0)
             }
             Kind::Banana => {
                 let b = self.bud_angle;
@@ -403,6 +546,13 @@ impl Growth {
 
     /// banana / taro cut_leaf
     fn cut_leaf(&self, mut obj: LMesh, r: &mut Rng) -> LMesh {
+        if let Ok(f) = std::env::var("CUTIN") {
+            if let Some(st) = super::stagefile::read(&f) {
+                if st.v.len() == obj.v.len() {
+                    obj.v = st.v;
+                }
+            }
+        }
         let n = self.n_cuts as usize;
         let sel: Vec<usize> = (0..obj.v.len()).filter(|&i| obj.v[i][1].abs() < 0.08 && obj.v[i][1].abs() > 0.01).collect();
         let mut pos: Vec<usize> = sel.iter().copied().filter(|&i| obj.v[i][1] > 0.0).collect();
@@ -430,24 +580,27 @@ impl Growth {
             pairs.push((nc[k], nc[k + 1]));
         }
         let (sa, ca) = (self.cut_angle.sin(), self.cut_angle.cos());
+        let (sa32, ca32) = (sa as f32, ca as f32);
         for (i1, i2) in pairs {
-            let (x1, y1) = (pts[i1][0] as f64, pts[i1][1] as f64);
-            let (x2, y2) = (pts[i2][0] as f64, pts[i2][1] as f64);
-            let coeff = if y1 > 0.0 { 1.0f64 } else { -1.0 };
+            let (x1, y1) = (pts[i1][0], pts[i1][1]);
+            let (x2, y2) = (pts[i2][0], pts[i2][1]);
+            let coeff32 = if y1 > 0.0 { 1.0f32 } else { -1.0 };
             let ratio = r.uniform(-2.0, 0.4);
             let exponent = r.uniform(1.2, 1.6);
-            if std::env::var("LEAFDBG").is_ok() {
-                eprintln!("  cut ratio {ratio} exp {exponent} x1 {x1} y1 {y1}");
-            }
-            let m1 = x1 * sa - y1 * ca * coeff;
-            let m2 = x2 * sa - y2 * ca * coeff;
-            let den = ((x1 - x2).powi(2) + (y1 - y2).powi(2) + 0.1).sqrt();
+            // numpy 1.26 promotion: float32 arrays with python / float64 scalars stay float32; scalar-only expressions are float64
+            let m1 = ((x1 as f64 * sa - y1 as f64 * ca * coeff32 as f64) as f32) as f32;
+            let m2 = ((x2 as f64 * sa - y2 as f64 * ca * coeff32 as f64) as f32) as f32;
+            let dx = x1 - x2;
+            let dy = y1 - y2;
+            let den = (((dx * dx + dy * dy) as f64 + 0.1).sqrt()) as f32;
+            let ratio32 = ratio as f32;
+            let exp32 = exponent as f32;
             for p in obj.v.iter_mut() {
-                let (x, y) = (p[0] as f64, p[1] as f64);
-                let m = x * sa - y * ca * coeff;
-                let dist = ((x - x1) * (y1 - y2) + (y - y1) * (x1 - x2)) / den;
-                if m1 < m && m < m2 && dist * coeff < 0.0 {
-                    p[2] = (p[2] as f64 + ratio * dist.abs().powf(exponent)) as f32;
+                let (x, y) = (p[0], p[1]);
+                let m = x * sa32 - y * ca32 * coeff32;
+                let dist = ((x - x1) * dy + (y - y1) * dx) / den;
+                if m1 < m && m < m2 && dist * coeff32 < 0.0 {
+                    p[2] += ratio32 * dist.abs().powf(exp32);
                 }
             }
         }
@@ -699,6 +852,42 @@ impl Growth {
             let husk = self.build_husk(r);
             m = LMesh::join(&[&m, &husk]);
         }
+        if self.kind == Kind::Veratrum {
+            let mut branches: Vec<LMesh> = self.ears.iter().map(|e| e.create_asset(r, face_size)).collect();
+            for i in 1..branches.len() {
+                let lz = (self.primary_stem_offset * r.uniform(0.0, 0.6)) as f32;
+                let rx = r.uniform(PI * 0.25, PI * 0.4) as f32 as f64;
+                let rz = r.uniform(0.0, PI * 2.0) as f32 as f64;
+                // matrix = loc * Rz * Rx
+                let (cx, sx, cz, sz) = (rx.cos() as f32, rx.sin() as f32, rz.cos() as f32, rz.sin() as f32);
+                for p in branches[i].v.iter_mut() {
+                    let (x, y, z) = (p[0], p[1], p[2]);
+                    let (y1, z1) = (y * cx - z * sx, y * sx + z * cx);
+                    p[0] = x * cz - y1 * sz;
+                    p[1] = x * sz + y1 * cz;
+                    p[2] = z1 + lz;
+                }
+            }
+            let refs: Vec<&LMesh> = branches.iter().collect();
+            let mut b = LMesh::join(&refs);
+            let lz = (self.stem_offset - 0.02) as f32;
+            for p in b.v.iter_mut() {
+                p[2] += lz;
+            }
+            m = LMesh::join(&[&m, &b]);
+        }
+        if self.kind == Kind::Wheat {
+            let ear_g = Growth::new(Kind::WheatEar, self.fs);
+            let mut ear = ear_g.create_asset(r, face_size);
+            let a = r.uniform(0.0, ear_g.bend_angle);
+            simple_deform(&mut ear.v, Deform::Bend, a, 0);
+            ear.trace("SIMPLE_DEFORM");
+            let lz = (self.stem_offset - 0.02) as f32;
+            for p in ear.v.iter_mut() {
+                p[2] += lz;
+            }
+            m = LMesh::join(&[&m, &ear]);
+        }
         self.decorate_monocot(&mut m, r);
         m
     }
@@ -819,7 +1008,7 @@ pub fn polygon_angles(r: &mut Rng, n: usize, min_angle: f64, max_angle: f64) -> 
 
 /// kinds that have an exact port so far
 pub fn supported(fs: u64) -> bool {
-    matches!(kind_for_seed(fs), Kind::Agave | Kind::Maize | Kind::Grasses | Kind::Tussock | Kind::Banana | Kind::Taro)
+    matches!(kind_for_seed(fs), Kind::Agave | Kind::Maize | Kind::Grasses | Kind::Tussock | Kind::Banana | Kind::Taro | Kind::Wheat | Kind::Veratrum)
 }
 
 /// PlantContainerFactory.create_asset: origin2lowest(plant, approximate=True), then scale = min([side, side, top] / max|bound_box|), location z = dirt_z.

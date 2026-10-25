@@ -433,8 +433,15 @@ impl PlantContainer {
 
 impl Factory for PlantContainer {
     fn placeholder(&self, _i: u64) -> Option<Asset> {
+        // new_bbox: unit cube with object scale / location (float32 properties), applied as x * s + l in float32
+        let ax = |a: f64, b: f64| -> (f64, f64) {
+            let (l, s) = (((a + b) / 2.0) as f32, ((b - a) / 2.0) as f32);
+            (((-1.0f32) * s + l) as f64, (1.0f32 * s + l) as f64)
+        };
+        let (x0, x1) = ax(-self.side_size, self.side_size);
+        let (z0, z1) = ax(-0.02, self.pot.depth * self.pot.scale + self.top_size);
         let mut a = Asset::default();
-        a.cuboid([-self.side_size, -self.side_size, -0.02], [self.side_size, self.side_size, self.pot.depth * self.pot.scale + self.top_size], &mat("ph", [0.5; 3], 0.5));
+        a.cuboid([x0, x0, z0], [x1, x1, z1], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
 
@@ -461,21 +468,12 @@ impl Factory for PlantContainer {
         }
         match self.kind {
             Kind::Cactus => {
-                let h = r.uniform(0.6, 1.0);
-                let w = r.uniform(0.15, 0.3);
-                plant.append(&Mesh::ellipsoid([0.0, 0.0, h / 2.0], [w, w, h / 2.0], 18, 10));
-                for k in 0..r.randint(0, 3) {
-                    let a = k as f64 * 2.1 + r.uniform(0.0, 1.0);
-                    plant.append(&Mesh::ellipsoid([a.cos() * w * 1.2, a.sin() * w * 1.2, h * 0.55], [w * 0.4, w * 0.4, h * 0.25], 12, 8));
-                }
-                leaf_mat = Material::diffuse(&format!("cactus:{i}"), [0.15, 0.4 + 0.1 * r.f64() as f32, 0.15], 0.5);
+                plant = super::cactus::CactusFactory::new(self.factory_seed).mesh(i, 0.003);
+                leaf_mat = Material::diffuse(&format!("cactus:{i}"), [0.1, 0.3, 0.12], 0.5);
             }
             Kind::Mushroom => {
-                let h = r.uniform(0.5, 0.9);
-                let cr = r.uniform(0.2, 0.4);
-                plant.append(&Mesh::frustum(0.0, 0.0, 0.0, h, 0.06, 0.04, 12));
-                plant.append(&Mesh::ellipsoid([0.0, 0.0, h], [cr, cr, cr * 0.6], 18, 8));
-                leaf_mat = Material::diffuse(&format!("mushroom:{i}"), [0.75, 0.55 + 0.2 * r.f64() as f32, 0.4], 0.6);
+                plant = super::mushroom::MushroomFactory::new(self.factory_seed).mesh(i);
+                leaf_mat = Material::diffuse(&format!("mushroom:{i}"), [0.5, 0.35, 0.25], 0.6);
             }
             Kind::Snake | Kind::Spider | Kind::Succulent => {
                 // exact node-graph ports (snakeplant.rs, spiderplant.rs, succulent.rs): the plant factory is built with the container's seed
@@ -487,6 +485,10 @@ impl Factory for PlantContainer {
                 let pa = f.asset(i);
                 plant = pa.parts[0].mesh.clone();
                 leaf_mat = pa.parts[0].mat.clone();
+            }
+            Kind::Fern => {
+                plant = super::fern::FernFactory::new(self.factory_seed).mesh(i);
+                leaf_mat = Material::diffuse(&format!("fern:{i}"), [0.1, 0.35, 0.1], 0.6);
             }
             k => {
                 let g = Growth::new(k, &mut r);

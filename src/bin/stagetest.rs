@@ -25,6 +25,7 @@ fn main() {
         let v: Vec<f32> = raw.chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
         let idx = infinigen::assets::leafkit::np_argsort_f32(&v);
         println!("{:?}", &idx[..12.min(idx.len())]);
+        if let Ok(o) = std::env::var("ARGOUT") { std::fs::write(o, idx.iter().flat_map(|&i| (i as i64).to_le_bytes()).collect::<Vec<u8>>()).unwrap(); }
         return;
     }
     if a[1] == "transfer" {
@@ -37,11 +38,26 @@ fn main() {
         let n = lm.v.len() / 2;
         let top: Vec<f32> = (0..lm.v.len()).map(|i| if i >= n { 1.0 } else { 0.0 }).collect();
         let r = infinigen::assets::leafkit::sample_nearest_surface(&lm, &top, &at.v);
+        let bad: Vec<usize> = (0..r.len()).filter(|&i| r[i].1 != ex.v[i]).take(6).collect();
+        let tris0 = infinigen::assets::dualcon::corner_tris(&lm.v, &lm.f);
+        for &bi in &bad {
+            let q = at.v[bi];
+            let mut cands: Vec<(f32, usize)> = vec![];
+            for (ti, t) in tris0.iter().enumerate() {
+                let cp = infinigen::assets::leafkit::closest_on_tri_f32(q, lm.v[t[0] as usize], lm.v[t[1] as usize], lm.v[t[2] as usize]);
+                let d = (cp[0]-q[0]).powi(2)+(cp[1]-q[1]).powi(2)+(cp[2]-q[2]).powi(2);
+                cands.push((d, ti));
+            }
+            cands.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!("BAD {bi}: q {:?} mine {:?} blender {:?}; best tris {:?}", q, r[bi].1, ex.v[bi], &cands[..3.min(cands.len())]);
+        }
         let mut worst = (0.0f32, 0usize);
         for i in 0..r.len() {
             let e = (0..3).map(|k| (r[i].1[k] - ex.v[i][k]).abs()).fold(0.0, f32::max);
             if e > worst.0 { worst = (e, i); }
         }
+        let nex = (0..r.len()).filter(|&i| r[i].1 == ex.v[i]).count();
+        println!("exact {} of {}", nex, r.len());
         println!("worst {} at {} p {:?} mine {:?} blender {:?}", worst.0, worst.1, at.v[worst.1], r[worst.1].1, ex.v[worst.1]);
         let tris = infinigen::assets::dualcon::corner_tris(&lm.v, &lm.f);
         let q = at.v[worst.1];
@@ -67,6 +83,25 @@ fn main() {
         }
         return;
     }
+    if a[1] == "bbox" {
+        // bbox CLASS SEEDS
+        for sd in a[3].split(',') {
+            let fs: u64 = sd.parse().unwrap();
+            let t0 = std::time::Instant::now();
+            let f = infinigen::assets::make_factory(&a[2], fs).unwrap();
+            let asset = f.asset(0);
+            let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+            let mut nv = 0;
+            for p in &asset.parts {
+                nv += p.mesh.pos.len();
+                for q in &p.mesh.pos {
+                    for k in 0..3 { lo[k] = lo[k].min(q[k]); hi[k] = hi[k].max(q[k]); }
+                }
+            }
+            println!("BBOX {} {} {} {:.3?} {:.3?} {:.1}s", a[2], fs, nv, lo, hi, t0.elapsed().as_secs_f64());
+        }
+        return;
+    }
     if a[1] == "leaf" {
         let xs: Vec<f64> = a[2].split(',').map(|x| x.parse().unwrap()).collect();
         let ys: Vec<f64> = a[3].split(',').map(|x| x.parse().unwrap()).collect();
@@ -83,7 +118,31 @@ fn main() {
             let depth = meta["kwargs"]["octree_depth"].as_i64().unwrap() as i32;
             let (v, q) = infinigen::assets::dualcon::dualcon(&inp.v, &inp.f, 2, depth, 0.9, 1.0);
             let f: Vec<Vec<u32>> = q.iter().map(|x| x.iter().map(|&i| i as u32).collect()).collect();
+            if let Ok(d) = std::env::var("DUMPOUT") { write(&d, &v, &f, &[]); }
             compare(tag, &v, &f, &out, 1e-6);
+        }
+        "fillcmp" => {
+            // fillcmp DIR 002_WELD(out=welded outline) : compare fill_outline(outline) with the python SOLIDIFY input
+            let outline = read(&format!("{dir}/002_WELD_out.bin")).unwrap();
+            let want = read(&format!("{dir}/003_SOLIDIFY_in.bin")).unwrap();
+            let m = infinigen::assets::leafkit::LMesh { v: outline.v.clone(), f: vec![], e: outline.e.clone() };
+            let f = infinigen::assets::leafkit::fill_outline(&m);
+            println!("faces {} vs {}; identical lists {}", f.f.len(), want.f.len(), f.f == want.f);
+            let first = f.f.iter().zip(&want.f).position(|(a, b)| a != b);
+            println!("first diff {:?} {:?}", first, first.map(|i| (&f.f[i], &want.f[i])));
+        }
+        "solidcmp" => {
+            let outline = read(&format!("{dir}/003_SOLIDIFY_in.bin")).unwrap();
+            let want = read(&format!("{dir}/003_SOLIDIFY_out.bin")).unwrap();
+            let m = infinigen::assets::leafkit::LMesh { v: outline.v.clone(), f: outline.f.clone(), e: outline.e.clone() };
+            let s = infinigen::assets::leafkit::solidify(&m, 0.1);
+            println!("verts {} vs {} exact {}", s.v.len(), want.v.len(), s.v == want.v);
+            println!("faces {} vs {} identical {}", s.f.len(), want.f.len(), s.f == want.f);
+            let first = s.f.iter().zip(&want.f).position(|(a, b)| a != b);
+            println!("first diff {:?} {:?}", first, first.map(|i| (&s.f[i], &want.f[i])));
+            let mut a: Vec<Vec<u32>> = s.f.clone(); let mut b: Vec<Vec<u32>> = want.f.clone();
+            a.sort(); b.sort();
+            println!("same sets (as stored) {}", a == b);
         }
         "fill" => {
             let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: inp.e.clone() };
@@ -110,6 +169,19 @@ fn main() {
             let s = infinigen::assets::leafkit::solidify(&f, 0.1);
             let zs: std::collections::BTreeSet<i64> = s.v.iter().map(|p| (p[2] * 1000.0).round() as i64).collect();
             println!("solidify z levels (mm): {:?}", zs);
+        }
+        "voxel" => {
+            let vs: f64 = a.get(4).map(|x| x.parse().unwrap()).unwrap_or(0.02);
+            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
+            let tris = infinigen::assets::dualcon::corner_tris(&m.v, &m.f);
+            let r = infinigen::assets::voxelremesh::voxel_remesh(&m.v, &tris, vs as f32);
+            compare(tag, &r.v, &r.f, &out, 1e-4);
+        }
+        "rwa" => {
+            let vs: f64 = a.get(4).map(|x| x.parse().unwrap()).unwrap_or(0.02);
+            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
+            let r = infinigen::assets::voxelremesh::remesh_with_attrs(&m, vs);
+            compare(tag, &r.v, &r.f, &out, 1e-4);
         }
         "weld" => {
             let th = meta["kwargs"]["merge_threshold"].as_f64().unwrap() as f32;

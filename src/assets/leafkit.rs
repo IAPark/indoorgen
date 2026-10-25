@@ -279,129 +279,12 @@ fn signed_area_xy(p: &[F3], lp: &[u32]) -> f32 {
     a * 0.5
 }
 
-/// bpy.ops.mesh.fill() for a single closed planar outline (z constant): triangles facing +z, new diagonals appended as edges
+/// bpy.ops.mesh.fill() over all edges of the mesh (bmesh triangle_fill = BLI_scanfill + beautify, ported in bm/scanfill.rs and rooms/pyroom.rs):
+/// triangle set, order and winding as Blender's
 pub fn fill_outline(m: &LMesh) -> LMesh {
-    let n = m.v.len();
-    let mut adj: Vec<Vec<u32>> = vec![vec![]; n];
-    for e in &m.e {
-        adj[e[0] as usize].push(e[1]);
-        adj[e[1] as usize].push(e[0]);
-    }
-    // prune dangling wire chains (welded curve stems): the fill covers the 2-core loop only
-    let mut deg: Vec<usize> = adj.iter().map(|a| a.len()).collect();
-    let mut removed = vec![false; n];
-    let mut stack: Vec<usize> = (0..n).filter(|&i| deg[i] == 1).collect();
-    while let Some(v) = stack.pop() {
-        if removed[v] {
-            continue;
-        }
-        removed[v] = true;
-        for &u in &adj[v] {
-            let u = u as usize;
-            if !removed[u] {
-                deg[u] -= 1;
-                if deg[u] == 1 {
-                    stack.push(u);
-                }
-            }
-        }
-    }
-    let start = (0..n).find(|&i| !removed[i] && !adj[i].is_empty()).unwrap_or(0) as u32;
-    let mut lp = vec![start];
-    let mut prev = u32::MAX;
-    let mut cur = start;
-    loop {
-        let nxt = adj[cur as usize].iter().copied().find(|&x| x != prev && x != cur && !removed[x as usize]);
-        let Some(nx) = nxt else { break };
-        if nx == start || lp.contains(&nx) {
-            break;
-        }
-        lp.push(nx);
-        prev = cur;
-        cur = nx;
-    }
-    if signed_area_xy(&m.v, &lp) < 0.0 {
-        lp.reverse();
-    }
-    // bmo_triangle_fill: the fill normal is that of the vertex with the largest edge-pair cross product (edge pair = its first two edges in
-    // mesh edge order, sign negated when the first leg is the longer one); the triangles wind counter-clockwise about it
-    let mut inc: Vec<Vec<u32>> = vec![vec![]; n];
-    for (ei, e) in m.e.iter().enumerate() {
-        inc[e[0] as usize].push(ei as u32);
-        inc[e[1] as usize].push(ei as u32);
-    }
-    // scanfill vertex order = first appearance in the edge list; qsort (BSD / macOS) over (value, normal.z), descending by value
-    let mut order: Vec<u32> = vec![];
-    {
-        let mut seen = vec![false; n];
-        for e in &m.e {
-            for &v in e {
-                if !seen[v as usize] {
-                    seen[v as usize] = true;
-                    order.push(v);
-                }
-            }
-        }
-    }
-    let mut nors: Vec<(f32, f32)> = vec![];
-    for &vv in &order {
-        let v = vv as usize;
-        if inc[v].len() != 2 {
-            nors.push((-1.0, 0.0));
-            continue;
-        }
-        let other = |ei: u32| {
-            let e = m.e[ei as usize];
-            if e[0] as usize == v { e[1] } else { e[0] }
-        };
-        let pv = m.v[v];
-        let (pa, pb) = (m.v[other(inc[v][0]) as usize], m.v[other(inc[v][1]) as usize]);
-        let da = [pv[0] - pa[0], pv[1] - pa[1], pv[2] - pa[2]];
-        let db = [pv[0] - pb[0], pv[1] - pb[1], pv[2] - pb[2]];
-        // arm64 clang contracts a*b - c*d into fma(a, b, -(c*d)); the mirrored vertex of a symmetric leaf then rounds differently, which decides the sort
-        let fm = |a: f32, b: f32, c: f32, d: f32| a.mul_add(b, -(c * d));
-        let cr = [fm(da[1], db[2], da[2], db[1]), fm(da[2], db[0], da[0], db[2]), fm(da[0], db[1], da[1], db[0])];
-        let value = cr[2].mul_add(cr[2], cr[1].mul_add(cr[1], cr[0] * cr[0]));
-        let sq = |d: [f32; 3]| d[2].mul_add(d[2], d[1].mul_add(d[1], d[0] * d[0]));
-        let (la, lb) = (sq(da), sq(db));
-        let nz = if la > lb { -cr[2] } else { cr[2] };
-        nors.push((value, nz));
-    }
-    let pre = nors.clone();
-    bsd_qsort(&mut nors, &|a: &(f32, f32), b: &(f32, f32)| if a.0 < b.0 { 1 } else if a.0 > b.0 { -1 } else { 0 });
-    let best = nors[0];
-    if std::env::var("LEAFDBG").is_ok() {
-        let mx = pre.iter().map(|x| x.0).fold(-1.0f32, f32::max);
-        let ties: Vec<(usize, f32)> = pre.iter().enumerate().filter(|(_, x)| x.0 == mx).map(|(i, x)| (i, x.1)).collect();
-        eprintln!("fill normal: max {mx} ties {:?} chosen nz {}", ties, best.1);
-    }
-    let want_ccw = best.1 >= 0.0;
-    // polyfill_calc(coords_sign = 1) expects the winding that axis_dominant_v3_to_m3_negate yields for a CCW face: clockwise in x/y
-    let lpr: Vec<u32> = lp.iter().rev().copied().collect();
-    let proj: Vec<[f32; 2]> = lpr.iter().map(|&i| [m.v[i as usize][0], m.v[i as usize][1]]).collect();
-    let tris = super::polyfill::polyfill_calc(&proj);
-    let lp = lpr;
-    let mut o = m.clone();
-    for t in tris {
-        let (a, b, c) = (lp[t[0] as usize], lp[t[1] as usize], lp[t[2] as usize]);
-        let (pa, pb, pc) = (m.v[a as usize], m.v[b as usize], m.v[c as usize]);
-        let area = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0]);
-        if (area < 0.0) == want_ccw {
-            o.f.push(vec![a, c, b]);
-        } else {
-            o.f.push(vec![a, b, c]);
-        }
-    }
-    if std::env::var("LEAFDBG").is_ok() {
-        let pa = signed_area_xy(&m.v, &lp).abs();
-        let ta: f32 = o.f.iter().map(|t| {
-            let (a, b, c) = (o.v[t[0] as usize], o.v[t[1] as usize], o.v[t[2] as usize]);
-            ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
-        }).sum();
-        eprintln!("fill_outline: loop {} of {} verts, polygon area {pa} tri area {ta}", lp.len(), n);
-    }
-    o.ensure_face_edges();
-    o
+    let edges: Vec<[usize; 2]> = m.e.iter().map(|e| [e[0] as usize, e[1] as usize]).collect();
+    let r = crate::rooms::pyroom::fill_edges(&m.v, &edges);
+    LMesh { v: r.pos, f: r.faces, e: r.edges }
 }
 
 /// SOLIDIFY modifier (simple mode, offset -1, rim on): originals stay, the copy moves by -thickness along the vertex normal
@@ -466,18 +349,28 @@ pub fn solidify(m: &LMesh, thickness: f32) -> LMesh {
         }
         o.f.push(r);
     }
-    // rim quads over boundary edges, in edge order
-    let mut cnt: HashMap<(u32, u32), u32> = HashMap::default();
+    // rim quads over boundary edges, in edge order; the winding follows the single adjacent face
+    let mut cnt: HashMap<(u32, u32), (u32, bool)> = HashMap::default(); // count, stored direction (min->max) used by the face
+    let mut dirmap: HashMap<(u32, u32), (u32, u32)> = HashMap::default();
     for fc in &m.f {
         let k = fc.len();
         for i in 0..k {
             let (a, b) = (fc[i], fc[(i + 1) % k]);
-            *cnt.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            let e = cnt.entry((a.min(b), a.max(b))).or_insert((0, false));
+            e.0 += 1;
+            dirmap.insert((a.min(b), a.max(b)), (a, b));
         }
     }
     for e in &m.e {
-        if cnt.get(&(e[0].min(e[1]), e[0].max(e[1]))).copied().unwrap_or(0) == 1 {
-            o.f.push(vec![e[1], e[0], e[0] + n as u32, e[1] + n as u32]);
+        let key = (e[0].min(e[1]), e[0].max(e[1]));
+        if cnt.get(&key).map_or(0, |c| c.0) == 1 {
+            let (fa, _fb) = dirmap[&key];
+            let nn = n as u32;
+            if fa == e[0] {
+                o.f.push(vec![e[1], e[0], e[0] + nn, e[1] + nn]);
+            } else {
+                o.f.push(vec![e[0], e[1], e[1] + nn, e[0] + nn]);
+            }
         }
     }
     o.e = m.e.clone();
@@ -487,7 +380,13 @@ pub fn solidify(m: &LMesh, thickness: f32) -> LMesh {
 
 /// geo node SampleNearestSurface of a point attribute (barycentric interpolation at the closest point of the corner triangles)
 pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, F3)> {
+    sample_nearest_surface_ex(src, val, at, false)
+}
+
+/// `walls`: exact distance ties are won by the rim-wall triangles (solidify output: triangles first, quads after), otherwise by the first triangle
+pub fn sample_nearest_surface_ex(src: &LMesh, val: &[f32], at: &[F3], walls: bool) -> Vec<(f32, F3)> {
     let tris = super::dualcon::corner_tris(&src.v, &src.f);
+    let first_wall = src.f.iter().take_while(|f| f.len() == 3).count();
     // uniform grid over triangle bounding boxes
     let (lo, hi) = src.bounds();
     let ext = (0..3).map(|k| hi[k] - lo[k]).fold(0.0f32, f32::max).max(1e-6);
@@ -538,8 +437,9 @@ pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, 
                                         dot3(cr, cr)
                                     };
                                     // equal distance (point on a shared edge / in a coplanar region): prefer the larger triangle, slivers give noisy weights
-                                    let tie = best.1 != usize::MAX && (d2 - best.0).abs() <= 1e-13;
-                                    if (!tie && d2 < best.0) || (tie && area(t) > area(tris[best.1])) {
+                                    let tie = best.1 != usize::MAX && d2 == best.0;
+                                    let tm = if fmamode() >> 8 == 0 { if walls { 3 } else { 1 } } else { fmamode() >> 8 };
+                                    if (!tie && d2 < best.0) || (tie && match tm { 1 => false, 2 => true, 3 => tris[ti as usize] != tris[best.1] && src.f.iter().take(0).count() == 0 && (ti as usize) >= first_wall, _ => area(t) > area(tris[best.1]) }) {
                                         best = (d2, ti as usize, r);
                                     }
                                 }
@@ -558,18 +458,28 @@ pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, 
             let t = tris[best.1];
             let (v1, v2, v3) = (src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]);
             let w = interp_weights_tri_f32(v1, v2, v3, best.2);
-            let pos = [0, 1, 2].map(|k| v1[k] * w[0] + v2[k] * w[1] + v3[k] * w[2]);
+            let pos = [0, 1, 2].map(|k| if fmamode() & 4 != 0 { v3[k].mul_add(w[2], v2[k].mul_add(w[1], v1[k] * w[0])) } else { v1[k] * w[0] + v2[k] * w[1] + v3[k] * w[2] });
             let v = val[t[0] as usize] * w[0] + val[t[1] as usize] * w[1] + val[t[2] as usize] * w[2];
             (v, pos)
         })
         .collect()
 }
 
+fn fmamode() -> u32 {
+    use std::sync::OnceLock;
+    static M: OnceLock<u32> = OnceLock::new();
+    *M.get_or_init(|| std::env::var("FMAMODE").ok().and_then(|s| s.parse().ok()).unwrap_or(0))
+}
+
 fn sub3(a: F3, b: F3) -> F3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 fn dot3(a: F3, b: F3) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    if fmamode() & 1 != 0 {
+        a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0]))
+    } else {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
 }
 
 /// BLI closest_on_tri_to_point_v3 (float32)
@@ -639,7 +549,7 @@ pub fn interp_weights_tri_f32(v1: F3, v2: F3, v3: F3, co: F3) -> [f32; 3] {
     }
     let (xn, yn, zn) = (n[0].abs(), n[1].abs(), n[2].abs());
     let (i, j) = if zn >= xn && zn >= yn { (0, 1) } else if yn >= xn && yn >= zn { (0, 2) } else { (1, 2) };
-    let area = |a: F3, b: F3, c: F3| 0.5 * ((a[i] - b[i]) * (b[j] - c[j]) + (a[j] - b[j]) * (c[i] - b[i]));
+    let area = |a: F3, b: F3, c: F3| if fmamode() & 2 != 0 { 0.5 * (a[i] - b[i]).mul_add(b[j] - c[j], (a[j] - b[j]) * (c[i] - b[i])) } else { 0.5 * ((a[i] - b[i]) * (b[j] - c[j]) + (a[j] - b[j]) * (c[i] - b[i])) };
     let mut w = [area(v2, v3, co), area(v3, v1, co), area(v1, v2, co)];
     let wtot = w[0] + w[1] + w[2];
     if wtot != 0.0 {
@@ -671,7 +581,7 @@ pub fn remesh_fill(m: &LMesh, resolution: f64) -> LMesh {
     r.ensure_face_edges();
     r.trace("REMESH");
     // transfer_all copies every non-internal attribute -- `top` and the vertex `position` itself: each vertex snaps onto the nearest point of the solid
-    let samp = sample_nearest_surface(&s, &top, &r.v);
+    let samp = sample_nearest_surface_ex(&s, &top, &r.v, true);
     let tv: Vec<f32> = samp.iter().map(|x| x.0).collect();
     for (i, x) in samp.iter().enumerate() {
         r.v[i] = x.1;
@@ -829,7 +739,7 @@ pub fn np_argsort_f32(v: &[f32]) -> Vec<usize> {
     let mut stack: Vec<(usize, usize)> = vec![];
     let (mut pl, mut pr) = (0usize, num - 1);
     loop {
-        while pr as i64 - pl as i64 > 16 {
+        while pr as i64 - pl as i64 > 15 {
             let pm = pl + ((pr - pl) >> 1);
             if less(v[idx[pm]], v[idx[pl]]) {
                 idx.swap(pm, pl);

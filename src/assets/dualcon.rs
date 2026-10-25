@@ -656,10 +656,17 @@ impl Octree {
                         ata[3] += n[1] * n[1];
                         ata[4] += n[1] * n[2];
                         ata[5] += n[2] * n[2];
-                        let pn = p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
-                        atb[0] += n[0] * pn;
-                        atb[1] += n[1] * pn;
-                        atb[2] += n[2] * pn;
+                        let fq: u32 = std::env::var("FMAQ").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let pn = if fq & 1 != 0 { p[2].mul_add(n[2], p[1].mul_add(n[1], p[0] * n[0])) } else { p[0] * n[0] + p[1] * n[1] + p[2] * n[2] };
+                        if fq & 2 != 0 {
+                            atb[0] = n[0].mul_add(pn, atb[0]);
+                            atb[1] = n[1].mul_add(pn, atb[1]);
+                            atb[2] = n[2].mul_add(pn, atb[2]);
+                        } else {
+                            atb[0] += n[0] * pn;
+                            atb[1] += n[1] * pn;
+                            atb[2] += n[2] * pn;
+                        }
                         mp[0] += p[0];
                         mp[1] += p[1];
                         mp[2] += p[2];
@@ -735,72 +742,171 @@ impl Octree {
     }
 }
 
-/// result = pinv(A, tol 0.1) * (b - A mp) + mp
-fn solve_least_squares(half_a: &[f32; 6], b: &[f32; 3], mp: &[f32; 3]) -> [f32; 3] {
-    let a = [[half_a[0], half_a[1], half_a[2]], [half_a[1], half_a[3], half_a[4]], [half_a[2], half_a[4], half_a[5]]];
-    // symmetric Jacobi eigen decomposition in f64
-    let mut m = [[0f64; 3]; 3];
+type M3 = [[f32; 3]; 3];
+
+/// Eigen 3.4 JacobiSVD<Matrix3f> (no preconditioner for square matrices, full U and V), float32 throughout
+fn jacobi_svd3(a: &M3) -> (M3, [f32; 3], M3) {
+    let eps = f32::EPSILON;
+    let precision = 2.0 * eps;
+    let min_pos = f32::MIN_POSITIVE;
+    let mut scale = 0.0f32;
+    for r in a {
+        for &x in r {
+            scale = scale.max(x.abs());
+        }
+    }
+    if scale == 0.0 {
+        scale = 1.0;
+    }
+    let mut w: M3 = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
-            m[i][j] = a[i][j] as f64;
+            w[i][j] = a[i][j] / scale;
         }
     }
-    let mut v = [[1f64, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    for _ in 0..60 {
-        let off = m[0][1].abs() + m[0][2].abs() + m[1][2].abs();
-        if off < 1e-300 {
-            break;
+    let mut u: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let mut v = u;
+    let mut max_diag = w[0][0].abs().max(w[1][1].abs()).max(w[2][2].abs());
+    // rotation (c, s)
+    let apply_left = |m: &mut M3, p: usize, q: usize, c: f32, s: f32| {
+        for i in 0..3 {
+            let (xi, yi) = (m[p][i], m[q][i]);
+            m[p][i] = c * xi + s * yi;
+            m[q][i] = -s * xi + c * yi;
         }
-        for &(p, q) in &[(0usize, 1usize), (0, 2), (1, 2)] {
-            if m[p][q].abs() < 1e-300 {
-                continue;
-            }
-            let theta = (m[q][q] - m[p][p]) / (2.0 * m[p][q]);
-            let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
-            let t = if theta == 0.0 { 1.0 } else { t };
-            let c = 1.0 / (t * t + 1.0).sqrt();
-            let s = t * c;
-            for k in 0..3 {
-                let (mkp, mkq) = (m[k][p], m[k][q]);
-                m[k][p] = c * mkp - s * mkq;
-                m[k][q] = s * mkp + c * mkq;
-            }
-            for k in 0..3 {
-                let (mpk, mqk) = (m[p][k], m[q][k]);
-                m[p][k] = c * mpk - s * mqk;
-                m[q][k] = s * mpk + c * mqk;
-            }
-            for k in 0..3 {
-                let (vkp, vkq) = (v[k][p], v[k][q]);
-                v[k][p] = c * vkp - s * vkq;
-                v[k][q] = s * vkp + c * vkq;
-            }
+    };
+    // applyOnTheRight(p, q, j) == columns rotated with j.transpose(): x = c xi - s yi, y = s xi + c yi
+    let apply_right = |m: &mut M3, p: usize, q: usize, c: f32, s: f32| {
+        for i in 0..3 {
+            let (xi, yi) = (m[i][p], m[i][q]);
+            m[i][p] = c * xi - s * yi;
+            m[i][q] = s * xi + c * yi;
         }
-    }
-    let mut pinv = [[0f64; 3]; 3];
-    for e in 0..3 {
-        let lam = m[e][e];
-        if lam.abs() > 0.1 {
-            for i in 0..3 {
-                for j in 0..3 {
-                    pinv[i][j] += v[i][e] * v[j][e] / lam;
+    };
+    let mut finished = false;
+    let mut guard = 0;
+    while !finished && guard < 100 {
+        guard += 1;
+        finished = true;
+        for p in 1..3 {
+            for q in 0..p {
+                let threshold = min_pos.max(precision * max_diag);
+                if w[p][q].abs() > threshold || w[q][p].abs() > threshold {
+                    finished = false;
+                    // real_2x2_jacobi_svd
+                    let mut m2 = [[w[p][p], w[p][q]], [w[q][p], w[q][q]]];
+                    let t = m2[0][0] + m2[1][1];
+                    let d = m2[1][0] - m2[0][1];
+                    let (rs, rc) = if d.abs() < min_pos {
+                        (0.0f32, 1.0f32)
+                    } else {
+                        let uu = t / d;
+                        let tmp = (1.0 + uu * uu).sqrt();
+                        (1.0 / tmp, uu / tmp)
+                    };
+                    // m.applyOnTheLeft(0, 1, rot1)
+                    for i in 0..2 {
+                        let (xi, yi) = (m2[0][i], m2[1][i]);
+                        m2[0][i] = rc * xi + rs * yi;
+                        m2[1][i] = -rs * xi + rc * yi;
+                    }
+                    // j_right.makeJacobi(m, 0, 1)
+                    let (x, y, z) = (m2[0][0], m2[0][1], m2[1][1]);
+                    let deno = 2.0 * y.abs();
+                    let (jrc, jrs) = if deno < min_pos {
+                        (1.0f32, 0.0f32)
+                    } else {
+                        let tau = (x - z) / deno;
+                        let ww = (tau * tau + 1.0).sqrt();
+                        let t = if tau > 0.0 { 1.0 / (tau + ww) } else { 1.0 / (tau - ww) };
+                        let sign_t = if t > 0.0 { 1.0f32 } else { -1.0 };
+                        let n = 1.0 / (t * t + 1.0).sqrt();
+                        (n, -sign_t * (y / y.abs()) * t.abs() * n)
+                    };
+                    // j_left = rot1 * j_right.transpose()   (transpose: s -> -s)
+                    let (ots_c, ots_s) = (jrc, -jrs);
+                    let jlc = rc * ots_c - rs * ots_s;
+                    let jls = rc * ots_s + rs * ots_c;
+                    apply_left(&mut w, p, q, jlc, jls);
+                    // U.applyOnTheRight(p, q, j_left.transpose())  == apply_right with the transposed rotation of the transpose = j_left itself
+                    apply_right(&mut u, p, q, jlc, -jls);
+                    apply_right(&mut w, p, q, jrc, jrs);
+                    apply_right(&mut v, p, q, jrc, jrs);
+                    max_diag = max_diag.max(w[p][p].abs().max(w[q][q].abs()));
                 }
             }
         }
     }
-    let pinv: [[f32; 3]; 3] = [
-        [pinv[0][0] as f32, pinv[0][1] as f32, pinv[0][2] as f32],
-        [pinv[1][0] as f32, pinv[1][1] as f32, pinv[1][2] as f32],
-        [pinv[2][0] as f32, pinv[2][1] as f32, pinv[2][2] as f32],
-    ];
+    let mut sv = [0f32; 3];
+    for i in 0..3 {
+        let a = w[i][i].abs();
+        sv[i] = a;
+        if a != 0.0 {
+            let f = w[i][i] / a;
+            for r in 0..3 {
+                u[r][i] *= f;
+            }
+        }
+    }
+    for i in 0..3 {
+        let mut pos = i;
+        let mut mx = sv[i];
+        for k in i + 1..3 {
+            if sv[k] > mx {
+                mx = sv[k];
+                pos = k;
+            }
+        }
+        if mx == 0.0 {
+            break;
+        }
+        if pos != i {
+            sv.swap(i, pos);
+            for r in 0..3 {
+                let t = u[r][i];
+                u[r][i] = u[r][pos];
+                u[r][pos] = t;
+                let t = v[r][i];
+                v[r][i] = v[r][pos];
+                v[r][pos] = t;
+            }
+        }
+    }
+    for x in sv.iter_mut() {
+        *x *= scale;
+    }
+    (u, sv, v)
+}
+
+/// result = pinv(A, tol 0.1) * (b - A mp) + mp
+fn solve_least_squares(half_a: &[f32; 6], b: &[f32; 3], mp: &[f32; 3]) -> [f32; 3] {
+    let a: M3 = [[half_a[0], half_a[1], half_a[2]], [half_a[1], half_a[3], half_a[4]], [half_a[2], half_a[4], half_a[5]]];
+    let fs: u32 = std::env::var("FMAS").ok().and_then(|s| s.parse().ok()).unwrap_or(7);
+    let (u, sv, v) = jacobi_svd3(&a);
+    // V * diag(select(|s| > 0.1, 1/s, 0)) * U^T
+    let d: [f32; 3] = [0, 1, 2].map(|i| if sv[i].abs() > 0.1 { 1.0 / sv[i] } else { 0.0 });
+    let mut vd = v;
+    for r in 0..3 {
+        for c in 0..3 {
+            vd[r][c] = v[r][c] * d[c];
+        }
+    }
+    let mut pinv: M3 = [[0.0; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            // (VD) * U^T : sum_k VD[r][k] * U[c][k]
+            pinv[r][c] = if fs & 1 != 0 { vd[r][2].mul_add(u[c][2], vd[r][1].mul_add(u[c][1], vd[r][0] * u[c][0])) } else { vd[r][0] * u[c][0] + vd[r][1] * u[c][1] + vd[r][2] * u[c][2] };
+        }
+    }
+    // b2 = b + A * (-mp)
     let mut b2 = [0f32; 3];
     for i in 0..3 {
-        let amp = a[i][0] * -mp[0] + a[i][1] * -mp[1] + a[i][2] * -mp[2];
+        let amp = if fs & 2 != 0 { a[i][2].mul_add(-mp[2], a[i][1].mul_add(-mp[1], a[i][0] * -mp[0])) } else { a[i][0] * -mp[0] + a[i][1] * -mp[1] + a[i][2] * -mp[2] };
         b2[i] = b[i] + amp;
     }
     let mut r = [0f32; 3];
     for i in 0..3 {
-        r[i] = pinv[i][0] * b2[0] + pinv[i][1] * b2[1] + pinv[i][2] * b2[2] + mp[i];
+        r[i] = if fs & 4 != 0 { pinv[i][2].mul_add(b2[2], pinv[i][1].mul_add(b2[1], pinv[i][0] * b2[0])) + mp[i] } else { pinv[i][0] * b2[0] + pinv[i][1] * b2[1] + pinv[i][2] * b2[2] + mp[i] };
     }
     r
 }

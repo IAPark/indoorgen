@@ -78,6 +78,28 @@ pub fn polygon2obj(rings: &[Vec<[f64; 2]>]) -> RawMesh {
     RawMesh { pos: pos2, edges: edges2, faces }
 }
 
+/// `bpy.ops.mesh.fill()` over a mesh whose selected edges are `edges` (bmesh triangle_fill + beautify, no winding fix-up): returns the BMesh-ordered mesh
+pub fn fill_edges(pos: &[V3], edges: &[[usize; 2]]) -> RawMesh {
+    let mut bm = BMesh::new();
+    for (i, p) in pos.iter().enumerate() {
+        let v = bm.vert_create(*p, None);
+        bm.verts[v].idx = i as i32;
+    }
+    for e in edges {
+        bm.edge_create(e[0], e[1], None, false);
+    }
+    let normal = fill_normal(&bm, pos, edges);
+    let tris = scanfill::triangle_fill(pos, edges, normal);
+    let marked: Vec<usize> = bm.edge_ids();
+    for t in &tris {
+        bm.face_create_verts(&[t[0], t[1], t[2]], None, true);
+    }
+    let cand: Vec<usize> = bm.edge_ids().into_iter().filter(|e| !marked.contains(e)).collect();
+    bm.beautify_fill(&cand);
+    let (pos2, edges2, faces) = bm.to_mesh();
+    RawMesh { pos: pos2, edges: edges2, faces }
+}
+
 fn fill_normal(bm: &BMesh, pos: &[V3], edges: &[[usize; 2]]) -> V3 {
     // vertices in order of first use
     let mut order: Vec<usize> = vec![];
