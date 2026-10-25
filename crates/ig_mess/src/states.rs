@@ -191,10 +191,15 @@ pub fn apply(state: &mut State, cfg: &MessCfg) {
             let dir = if n < 1e-6 || dist < 1e-6 { let r = mv.state.objs[k].pose.r; [r[0][0], r[1][0], 0.0] } else { [dir[0] / n, dir[1] / n, 0.0] };
             let pull = lvl * (0.2 + 0.8 * u_pull) * 0.5;
             let yaw = lvl * (0.17 + 0.83 * u_yaw) * 30f64.to_radians() * if u_sign < 0.5 { -1.0 } else { 1.0 };
-            for (f, yf) in [(1.0, 1.0), (0.7, 1.0), (0.7, -1.0), (0.45, 0.6), (0.3, -0.6), (0.2, 0.3)] {
-                if mv.try_move(k, cc, yaw * yf, [dir[0] * pull * f, dir[1] * pull * f, 0.0], &[], &|_, _| true) {
-                    done = true;
-                    break;
+            'tries: for (f, yf) in [(1.0, 1.0), (0.7, 1.0), (0.7, -1.0), (0.45, 0.6), (0.3, -0.6), (0.2, 0.3), (0.0, 1.0), (0.0, -0.5)] {
+                // also try sliding the chair slightly sideways when straight back is blocked
+                for side in [0.0, 0.5, -0.5] {
+                    let (sx, sy) = (dir[0] - side * dir[1], dir[1] + side * dir[0]);
+                    let sn = (sx * sx + sy * sy).sqrt();
+                    if mv.try_move(k, cc, yaw * yf, [sx / sn * pull * f, sy / sn * pull * f, 0.0], &[], &|_, _| true) {
+                        done = true;
+                        break 'tries;
+                    }
                 }
             }
         }
