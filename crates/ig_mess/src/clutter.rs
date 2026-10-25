@@ -49,12 +49,12 @@ const FLOOR: &[Spec] = &[
     Spec { class: "BottleFactory", w: [0.3, 0.7, 1.0, 0.3, 0.3, 0.3], max_xy: 0.15, max_z: 0.4 },
     Spec { class: "CupFactory", w: [0.5, 0.5, 0.3, 0.0, 0.0, 0.3], max_xy: 0.2, max_z: 0.25 },
     // dropped clothes: cloth jobs (re-simulated in Blender at render time), height-field drape as the default mesh
-    Spec { class: "ShirtFactory", w: [3.0, 1.0, 0.0, 1.5, 0.0, 1.0], max_xy: 1.4, max_z: 0.3 },
-    Spec { class: "PantsFactory", w: [2.0, 0.7, 0.0, 1.0, 0.0, 0.7], max_xy: 1.4, max_z: 0.3 },
+    Spec { class: "ShirtFactory", w: [4.0, 1.5, 0.0, 2.0, 0.0, 1.0], max_xy: 1.4, max_z: 0.3 },
+    Spec { class: "PantsFactory", w: [3.0, 1.0, 0.0, 1.5, 0.0, 0.7], max_xy: 1.4, max_z: 0.3 },
 ];
 
 /// floor clutter per m^2 of room floor at level 1, per room type [bedroom, living, kitchen, bath, dining, other]
-const FLOOR_DENSITY: W = [0.55, 0.4, 0.15, 0.5, 0.2, 0.25];
+const FLOOR_DENSITY: W = [0.9, 0.6, 0.2, 0.7, 0.3, 0.4];
 /// surface items per m^2 of surface at level 1
 const SURFACE_DENSITY: W = [7.0, 6.0, 6.0, 7.0, 5.0, 6.0];
 
@@ -591,7 +591,7 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
     let world = RoomWorld::new(&statics);
     let area_total = ig_core::shp::signed_area(poly).abs();
     let surf_area: f64 = surf_tris.iter().map(|t| t.1).sum();
-    let n_floor_target = ((cfg.level * FLOOR_DENSITY[slot] * area_total).round() as usize).min(30);
+    let n_floor_target = ((cfg.level * FLOOR_DENSITY[slot] * area_total).round() as usize).min(45);
     let n_surf_target = ((cfg.level * SURFACE_DENSITY[slot] * surf_area).round() as usize).min(40);
     if dbg {
         eprintln!("MESSDBG {rname} area {area_total:.1} surf_area {surf_area:.2} tris {} statics {} targets floor {n_floor_target} surf {n_surf_target} floor_z {floor_z:.3} doors {}", surf_tris.len(), world.n_static(), doors.len());
