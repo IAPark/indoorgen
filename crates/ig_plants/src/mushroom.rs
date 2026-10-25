@@ -6,6 +6,7 @@ use super::legtex::{displace, Tex, TexKind};
 use super::*;
 use crate::mesh::{Mat4, Mesh};
 use crate::rng::Rng;
+use super::leafkit::LMesh;
 use std::f64::consts::PI;
 
 pub fn handles(c: &str) -> bool {
@@ -40,6 +41,7 @@ pub struct MushroomFactory {
     gill: Option<GillCfg>,
     web: u8, // 0 hollow, 1 solid, 2 none
     has_band: bool,
+    is_morel: bool,
 }
 
 fn cap_configs(r: &mut Rng) -> Vec<CapCfg> {
@@ -115,16 +117,25 @@ impl MushroomFactory {
         };
         let gi = rc.choice_p(&[1.0, 1.0, 1.0]);
         let gill = if !cap.has_gill { None } else { [Some(adn), Some(dec), None][gi].clone() };
+        let shader = rc.choice_p(&[2.0, 1.0, 1.0, 1.0]);
+        let is_morel = rc.uniform(0.0, 1.0) < 0.5 && shader == 0;
         let mut rs = Rng::seeded(fs);
         let web = rs.choice_p(&[1.0, 1.0, 2.0]) as u8;
         let has_band = rs.uniform(0.0, 1.0) < 0.75;
         let tolerant = r.uniform(0.0, 0.2);
-        MushroomFactory { fs, directional, lowered, tolerant, cap, radius, inner_radius, gill, web, has_band }
+        if std::env::var("MUCTOR").is_ok() { eprintln!("CTOR {} band {} web {} morel {} gill {} directional {} r {:.3}", fs, has_band, web, is_morel, gill.is_some(), directional, radius); }
+        MushroomFactory { fs, directional, lowered, tolerant, cap, radius, inner_radius, gill, web, has_band, is_morel }
     }
 
     fn spin(&self, x: &[f64], z: &[f64], vec: &[usize]) -> Mesh {
         let anchors: Vec<[f64; 3]> = (0..x.len()).map(|i| [x[i], 0.0, z[i]]).collect();
-        super::blops::spin_anchors(&anchors, vec)
+        // draw.spin: bezier mesh (already welded by curve2mesh) -> mean radius -> WELD again -> spin -> remove_doubles
+        let prof = super::blops::bezier_curve_points(&anchors, vec);
+        let mean_r: f64 = prof.iter().map(|p| ((p[0] * p[0] + p[1] * p[1]) as f64).sqrt()).sum::<f64>() / prof.len() as f64;
+        let steps = ((2.0 * PI * mean_r / 5e-3) as usize).min(128);
+        let w = super::blops::weld_polyline(&prof, 1e-3);
+        let m = super::blops::spin_profile(&w, steps);
+        super::blops::remove_doubles(&m, 1e-3)
     }
 
     fn deform(m: &mut Mesh, method: Deform, angle: f64, axis: usize) {
@@ -135,9 +146,68 @@ impl MushroomFactory {
         }
     }
 
-    fn cap_mesh(&self, i: u64) -> Mesh {
+    fn lm(m: &Mesh) -> LMesh {
+        LMesh { v: m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), f: m.faces.clone(), e: vec![] }
+    }
+    fn from_lm(l: &LMesh) -> Mesh {
+        let mut o = Mesh::new();
+        o.pos = l.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+        o.faces = l.f.clone();
+        o
+    }
+    fn dump(name: &str, m: &Mesh) {
+        if let Ok(d) = std::env::var("MUDUMP") {
+            let v: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+            let _ = std::fs::write(format!("{d}/{name}.json"), serde_json::json!({"verts": v, "polys": m.faces}).to_string());
+        }
+    }
+    fn disp(m: &mut Mesh, tex: Option<&Tex>, strength: f64, mid: f64, vg: Option<&[f32]>) {
+        let mut v: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        super::bpymod::displace(&mut v, &m.faces, tex, strength, mid, super::bpymod::DispDir::Normal, vg);
+        for (p, q) in m.pos.iter_mut().zip(&v) {
+            *p = [q[0] as f64, q[1] as f64, q[2] as f64];
+        }
+    }
+
+    fn cap_mesh(&self, i: u64, face_size: f64) -> Mesh {
         let mut r = inst_rng(self.fs, i);
         let mut obj = self.spin(&self.cap.x, &self.cap.z, &self.cap.vec);
+        Self::dump("c004", &obj);
+        let src = Self::lm(&obj);
+        let tris = super::dualcon::corner_tris(&src.v, &src.f);
+        let nets = super::voxelremesh::voxel_remesh(&src.v, &tris, face_size as f32);
+        obj = Self::from_lm(&LMesh { v: nets.v, f: nets.f, e: vec![] });
+        Self::dump("c005", &obj);
+        {
+            // transfer_all: every vertex moves onto the nearest point of the pre-remesh surface
+            let mut l = Self::lm(&obj);
+            let snapped = super::leafkit::sample_nearest_surface(&src, &vec![0f32; src.v.len()], &l.v);
+            for (i, sp) in snapped.iter().enumerate() {
+                l.v[i] = sp.1;
+            }
+            obj = Self::from_lm(&l);
+        }
+        Self::dump("c009", &obj);
+        // geo_morel draws (always evaluated)
+        let vscale = r.uniform(15.0, 20.0);
+        let vrand = r.uniform(0.5, 1.0);
+        if self.is_morel {
+            let w: Vec<f32> = obj
+                .pos
+                .iter()
+                .enumerate()
+                .map(|(vi, p)| {
+                    let prm = crate::gn::noise::VorP { feature: 3, metric: 0, dim: 3, scale: vscale as f32, detail: 0.0, roughness: 0.5, lacunarity: 2.0, smoothness: 0.0, exponent: 0.0, randomness: (vrand as f32).clamp(0.0, 1.0), normalize: false, max_distance: 0.5 + 0.5 * (vrand as f32).clamp(0.0, 1.0) };
+                    let sc = vscale as f32;
+                    let d = crate::gn::noise::vor_fractal_dist_to_edge(&prm, [p[0] as f32 * sc, p[1] as f32 * sc, p[2] as f32 * sc, 0.0]);
+                    if std::env::var("MUDBG").is_ok() && (d - 0.05).abs() < 2e-5 { eprintln!("BORDER {:?} d {:e} scale {} rand {}", p, d - 0.05, vscale, vrand); }
+                    if std::env::var("MUDBG2").is_ok() && [4179, 29865, 29866, 59744, 64495].contains(&vi) { eprintln!("IDX {} {:?} d {:e}", vi, p, d - 0.05); }
+                    if d < 0.05 { 1.0 } else { 0.0 }
+                })
+                .collect();
+            Self::disp(&mut obj, None, 0.04, 0.7, Some(&w));
+            Self::dump("c010", &obj);
+        }
         if let Some(g) = &self.gill {
             let steps = r.randint(8, 20) as usize;
             // closed outline in the xz plane -> flat sheet, repeated around z
@@ -167,19 +237,24 @@ impl MushroomFactory {
         let marble = r.choice_idx(2) == 1;
         let scale = r.log_uniform(0.01, 0.05);
         let kind = if marble { TexKind::Marble(0, 0) } else { TexKind::Stucci(0) };
-        displace(&mut obj, &Tex::new(kind, scale), 0.008, 0.0);
+        Self::disp(&mut obj, Some(&Tex::new(kind, scale)), 0.008, 0.0, None);
+        Self::dump("c011", &obj);
         // geo_extension(0.1)
         let ns = r.uniform(0.05, 0.1);
         let sc = r.uniform(1.4, 2.8);
         let off = [r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0)];
         obj = super::gnhelpers::geo_extension(&obj, off, sc, ns);
+        Self::dump("c012", &obj);
         let a = r.uniform(-PI / 4.0, PI / 4.0);
         Self::deform(&mut obj, Deform::Twist, a, 0);
+        Self::dump("c013", &obj);
         let rr = [r.uniform(-0.25, 0.25), r.uniform(-0.25, 0.25), r.uniform(-0.25, 0.25), r.uniform(-0.25, 0.25)];
         for p in obj.pos.iter_mut() {
-            p[0] += if p[0] > 0.0 { rr[0] } else { rr[1] } * p[0];
-            p[1] += if p[1] > 0.0 { rr[2] } else { rr[3] } * p[1];
+            let (x, y) = (p[0] as f32, p[1] as f32);
+            p[0] = (x + (if x > 0.0 { rr[0] } else { rr[1] } * x as f64) as f32) as f64;
+            p[1] = (y + (if y > 0.0 { rr[2] } else { rr[3] } * y as f64) as f32) as f64;
         }
+        Self::dump("c014", &obj);
         obj
     }
 
@@ -212,7 +287,7 @@ impl MushroomFactory {
 
     /// MushroomGrowthFactory.create_asset: cap + stem joined, lowered to z = 0 at the lowest vertex
     fn growth(&self, i: u64) -> Mesh {
-        let mut cap = self.cap_mesh(i);
+        let mut cap = self.cap_mesh(i, 0.0015);
         let stem = self.stem_mesh(i);
         cap.append(&stem);
         let mut lo = 0;
