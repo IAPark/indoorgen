@@ -259,27 +259,59 @@ fn compact(m: &Mesh) -> Mesh {
     o
 }
 
-fn clip_above(m: &Mesh, z: f64) -> Mesh {
+/// bpy.ops.mesh.bisect(plane_co=(0,0,z), plane_no=(0,0,1), clear_inner=True) (threshold 1e-4): vertices within the threshold are "on the plane"
+/// and kept; only edges with endpoints strictly on opposite sides are cut (factor d_a / (d_a - d_b) in f32); faces entirely on the inner side go.
+pub fn clip_above(m: &Mesh, z: f64) -> Mesh {
+    let zf = z as f32;
+    let eps = 1e-4f32;
+    let side = |p: V3| -> i32 {
+        let d = p[2] as f32 - zf;
+        if d.abs() < eps { 0 } else if d > 0.0 { 1 } else { -1 }
+    };
     let mut out = Mesh::new();
+    let mut vmap: crate::dhash::HashMap<u32, u32> = crate::dhash::HashMap::default();
+    let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
     for f in &m.faces {
-        let pts: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
-        let mut poly: Vec<V3> = vec![];
-        for k in 0..pts.len() {
-            let (a, b) = (pts[k], pts[(k + 1) % pts.len()]);
-            let (ina, inb) = (a[2] >= z, b[2] >= z);
-            if ina {
-                poly.push(a);
+        let k = f.len();
+        let sd: Vec<i32> = f.iter().map(|&i| side(m.pos[i as usize])).collect();
+        if sd.iter().all(|&x| x == 0) {
+            // flat on the plane: kept untouched
+        } else if sd.iter().all(|&x| x <= 0) {
+            continue;
+        }
+        let mut poly: Vec<u32> = vec![];
+        for i in 0..k {
+            let (a, b) = (f[i], f[(i + 1) % k]);
+            let (sa, sb) = (sd[i], sd[(i + 1) % k]);
+            if sa >= 0 {
+                let id = *vmap.entry(a).or_insert_with(|| {
+                    out.pos.push(m.pos[a as usize]);
+                    (out.pos.len() - 1) as u32
+                });
+                poly.push(id);
             }
-            if ina != inb {
-                let t = (z - a[2]) / (b[2] - a[2]);
-                poly.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, z]);
+            if sa * sb < 0 {
+                let key = (a.min(b), a.max(b));
+                let id = *emap.entry(key).or_insert_with(|| {
+                    // interpolate from the lower index endpoint (edge v1 -> v2 order of a Blender mesh is not known here)
+                    let (v1, v2) = (m.pos[key.0 as usize], m.pos[key.1 as usize]);
+                    let (da, db) = (v1[2] as f32 - zf, v2[2] as f32 - zf);
+                    let fac = da / (da - db);
+                    let c = |q: usize| (v1[q] as f32 + (v2[q] as f32 - v1[q] as f32) * fac) as f64;
+                    out.pos.push([c(0), c(1), c(2)]);
+                    (out.pos.len() - 1) as u32
+                });
+                poly.push(id);
             }
+        }
+        poly.dedup();
+        if poly.len() >= 2 && poly.first() == poly.last() {
+            poly.pop();
         }
         if poly.len() >= 3 {
-            out.add_face(&poly);
+            out.faces.push(poly);
         }
     }
-    out.weld(1e-9);
     out
 }
 
