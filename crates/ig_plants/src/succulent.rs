@@ -77,7 +77,7 @@ impl Factory for Succulent {
             base_z.push(0.0 + fi * if self.thin { r.uniform(0.005, 0.008) } else { r.uniform(0.005, 0.006) });
         }
         let contour_bit = if self.thin { r.randint(0, 3) } else { r.randint(0, 2) } as usize;
-        let _material_bit = if self.thin { r.randint(0, 3) } else { r.randint(0, 2) };
+        let material_bit = if self.thin { r.randint(0, 3) } else { r.randint(0, 2) };
         let cp: [f64; 6] = if self.thin {
             [[0.08, 0.4, 0.46, 0.36, 0.17, 0.05], [0.22, 0.37, 0.50, 0.49, 0.30, 0.08], [0.21, 0.26, 0.31, 0.36, 0.29, 0.16]][contour_bit]
         } else {
@@ -137,7 +137,7 @@ impl Factory for Succulent {
             }
             m.faces = gm.faces_vec();
         }
-        let mat = spec_material("succulent", json!({"cls": "plant.Succulent", "kwargs": {}, "seed": self.fs}), [0.3, 0.5, 0.3]);
+        let mat = spec_material("succulent", json!({"cls": format!("shader.plant.succulent.{}", if self.thin { ["shader_green_transition_succulent", "shader_pink_transition_succulent", "shader_green_succulent"][material_bit as usize] } else { ["shader_yellow_succulent", "shader_whitish_green_succulent"][material_bit as usize] }), "kwargs": {}, "seed": self.fs}), [0.3, 0.5, 0.3]);
         let mut a = Asset::default();
         let b = m.bounds();
         a.mesh(m, &mat, Some(b));

@@ -10,6 +10,11 @@ pub fn handles(c: &str) -> bool {
     c == "NatureShelfTrinketsFactory"
 }
 
+/// python-replayed material of a mollusk factory: `<module under infinigen.assets.objects>.<Class>(fs).<attr>`
+pub fn mollusk_mat(cls: &str, attr: &str, fs: u64) -> Material {
+    ig_core::materials::spec_material("mollusk", serde_json::json!({"cls": format!("factory.{cls}"), "kwargs": {"attr": attr}, "seed": fs}), [0.8, 0.7, 0.6])
+}
+
 pub fn mollusk_handles(c: &str) -> bool {
     c == "MolluskFactory"
 }
@@ -26,7 +31,7 @@ impl Factory for Mollusk {
         let m = t.base_mesh(inst).unwrap();
         let b = m.bounds();
         let mut a = Asset::default();
-        a.mesh(m, &mat("mollusk", [0.8, 0.7, 0.6], 0.5), Some(b));
+        a.mesh(m, &mollusk_mat("mollusk.generate.MolluskFactory", "material", self.fs), Some(b));
         a
     }
 }
@@ -137,7 +142,7 @@ impl Factory for Trinkets {
         o.faces = tris.iter().map(|t| t.to_vec()).collect();
         let b = o.bounds();
         let mut a = Asset::default();
-        a.mesh(o, &mat("mollusk", [0.8, 0.7, 0.6], 0.5), Some(b));
+        a.mesh(o, &mollusk_mat("elements.nature_shelf_trinkets.generate.NatureShelfTrinketsFactory", "base_factory.material", self.fs), Some(b));
         a
     }
 }

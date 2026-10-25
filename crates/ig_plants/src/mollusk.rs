@@ -308,7 +308,8 @@ impl Factory for Snail {
     fn asset(&self, inst: u64) -> Asset {
         let mut r = inst_rng(self.fs, inst);
         let m = snail_final(self.maker, &mut r);
-        let mat = mat("mollusk", [0.8, 0.7, 0.6], 0.5);
+        let cn = match self.maker { Maker::Volute => "VoluteFactory", Maker::Nautilus => "NautilusFactory", Maker::Conch => "ConchFactory", Maker::Auger => "AugerFactory", Maker::Snail => "MolluskFactory" };
+        let mat = crate::trinkets::mollusk_mat(&format!("mollusk.generate.{cn}"), "material", self.fs);
         let mut a = Asset::default();
         let b = m.bounds();
         a.mesh(m, &mat, Some(b));

@@ -219,7 +219,7 @@ impl Factory for FoodBag {
         let m = geo_extension_2d(&m, off, scale, strength);
         let b = m.bounds();
         let mut a = Asset::default();
-        a.mesh(m, &mat("foodbag", [0.7, 0.7, 0.7], 0.5), Some(b));
+        a.mesh(m, &ig_core::materials::spec_material("foodbag", serde_json::json!({"cls": "factory.tableware.food_bag.FoodBagFactory", "kwargs": {"attr": "surface"}, "seed": self.fs}), [0.7, 0.7, 0.7]), Some(b));
         a
     }
 }

@@ -11,6 +11,13 @@ pub fn handles(c: &str) -> bool {
 
 const VASE: Weighted = &[("ceramic.Marble", 1.0), ("ceramic.MarbleRegular", 0.2), ("ceramic.MarbleVoronoi", 0.2), ("ceramic.Ceramic", 1.0), ("ceramic.Glass", 1.0), ("plastic.Plastic", 1.0), ("metal.MetalBasic", 1.0), ("wood.Wood", 1.0)];
 
+/// material of the python base factory of NatureShelfTrinketsFactory(fs).base_factory (exact RNG replay in render_rust.py)
+fn base_spec(name: &str, attr: &str, kwargs: serde_json::Value, fs: u64) -> Material {
+    let mut k = kwargs;
+    k["attr"] = json!(attr);
+    spec_material(name, json!({"cls": "factory.elements.nature_shelf_trinkets.generate.NatureShelfTrinketsFactory", "kwargs": k, "seed": fs}), [0.7, 0.65, 0.6])
+}
+
 fn spec(name: &str, cls: &str, seed: u64) -> Material {
     spec_material(&format!("{name}:{seed}"), json!({"cls": cls, "kwargs": {}, "seed": seed}), [0.7, 0.65, 0.6])
 }
@@ -153,7 +160,7 @@ impl Decor {
                         p[2] += size * 0.4;
                     }
                     let b = m.bounds();
-                    a.mesh(m, &mat("pinecone", "wood.Wood", self.seed), Some(b));
+                    a.mesh(m, &base_spec("pinecone", "base_factory.material", json!({}), self.fs), Some(b));
                 }
                 11 | 12 => {
                     // small animal: body, head, four legs
@@ -181,7 +188,7 @@ impl Decor {
                 }
                 0 => {
                     // coral: branching twigs
-                    let m = &mat("coral", "ceramic.Ceramic", self.seed);
+                    let m = &base_spec("coral", "base_factory.material", json!({}), self.fs);
                     for k in 0..5 {
                         let ang = 2.0 * PI * k as f64 / 5.0;
                         let tip = [size * 0.25 * ang.cos(), size * 0.25 * ang.sin(), size * (0.7 + 0.3 * r.f64())];
@@ -197,7 +204,8 @@ impl Decor {
                         p[2] += size * 0.3;
                     }
                     let b = m.bounds();
-                    a.mesh(m, &mat("rock", "ceramic.Plaster", self.seed), Some(b));
+                    let rm = if kind == 2 { base_spec("rock", "base_factory.rock_surface", json!({"is_rock": true}), self.fs) } else { mat("rock", "ceramic.Plaster", self.seed) };
+                    a.mesh(m, &rm, Some(b));
                 }
             }
         }

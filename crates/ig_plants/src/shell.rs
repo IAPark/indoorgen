@@ -490,7 +490,8 @@ impl Factory for Shell {
         let m = shell_asset(self.kind, &mut r, 0.003);
         let b = m.bounds();
         let mut a = Asset::default();
-        a.mesh(m, &mat("mollusk", [0.8, 0.7, 0.6], 0.5), Some(b));
+        let cn = match self.kind { ShellKind::Scallop => "ScallopFactory", ShellKind::Clam => "ClamFactory", ShellKind::Mussel => "MusselFactory" };
+        a.mesh(m, &crate::trinkets::mollusk_mat(&format!("mollusk.generate.{cn}"), "material", self.fs), Some(b));
         a
     }
 }

@@ -451,8 +451,14 @@ impl Factory for PlantContainer {
         a.mesh(pot_mesh, &self.pot.mat, Some(([-self.pot.scale * self.pot.r_expand, -self.pot.scale * self.pot.r_expand, 0.0], [self.pot.scale * self.pot.r_expand, self.pot.scale * self.pot.r_expand, self.pot.depth * self.pot.scale])));
         let dirt_z = self.dirt_ratio * self.pot.depth * self.pot.scale;
         let soil = weighted(&mut inst_rng(self.factory_seed, 99), SOIL);
+        let cname = if self.large { "LargePlantContainerFactory" } else { "PlantContainerFactory" };
+        // material of the plant, replayed by python: PlantContainerFactory(fs).<attr>
+        let pm = |name: &str, attr: &str, rgb: [f32; 3]| ig_core::materials::spec_material(name, json!({"cls": format!("factory.tableware.plant_container.{}", cname), "kwargs": {"attr": attr}, "seed": self.factory_seed}), rgb);
         let dirt_r = self.pot.scale * (1.0 + (self.pot.r_mid - 1.0) * 0.8) * 0.92;
-        a.mesh(Mesh::cylinder(0.0, 0.0, dirt_z - 0.02, dirt_z, dirt_r, 20), &Material::diffuse(&format!("soil:{soil}"), [0.18, 0.12, 0.08], 0.95), None);
+        a.mesh(Mesh::cylinder(0.0, 0.0, dirt_z - 0.02, dirt_z, dirt_r, 20), &{
+            let _ = soil;
+            ig_core::materials::spec_material(&format!("soil:{soil}"), json!({"cls": format!("factory.tableware.plant_container.{}", cname), "kwargs": {"attr": "dirt_surface"}, "seed": self.factory_seed}), [0.18, 0.12, 0.08])
+        }, None);
         let mut r = inst_rng(self.factory_seed, i);
         let mut plant = Mesh::new();
         let leaf_mat;
@@ -463,17 +469,17 @@ impl Factory for PlantContainer {
             let _ = sc;
             let mesh = Mesh { pos: v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(), faces: m.f.clone(), uv: vec![] };
             let b = mesh.bounds();
-            a.mesh(mesh, &Material::diffuse(&format!("leaf:{}:{i}", self.factory_seed), [0.1, 0.3, 0.1], 0.55), Some(b));
+            a.mesh(mesh, &pm("leaf", "plant_factory.factory.material", [0.1, 0.3, 0.1]), Some(b));
             return a;
         }
         match self.kind {
             Kind::Cactus => {
                 plant = super::cactus::CactusFactory::new(self.factory_seed).mesh(i, 0.003);
-                leaf_mat = Material::diffuse(&format!("cactus:{i}"), [0.1, 0.3, 0.12], 0.5);
+                leaf_mat = pm("cactus", "plant_factory.material", [0.1, 0.3, 0.12]);
             }
             Kind::Mushroom => {
                 plant = super::mushroom::MushroomFactory::new(self.factory_seed).mesh(i);
-                leaf_mat = Material::diffuse(&format!("mushroom:{i}"), [0.5, 0.35, 0.25], 0.6);
+                leaf_mat = pm("mushroom", "plant_factory.factory.cap_factory.material_cap", [0.5, 0.35, 0.25]);
             }
             Kind::Snake | Kind::Spider | Kind::Succulent => {
                 // exact node-graph ports (snakeplant.rs, spiderplant.rs, succulent.rs): the plant factory is built with the container's seed
@@ -488,12 +494,12 @@ impl Factory for PlantContainer {
             }
             Kind::Fern => {
                 plant = super::fern::FernFactory::new(self.factory_seed).mesh(i);
-                leaf_mat = Material::diffuse(&format!("fern:{i}"), [0.1, 0.35, 0.1], 0.6);
+                leaf_mat = ig_core::materials::spec_material("fern", json!({"cls": "plant.SimpleGreenery", "kwargs": {}, "seed": self.factory_seed}), [0.1, 0.35, 0.1]);
             }
             k => {
                 let g = Growth::new(k, &mut r);
                 plant = g.build(&mut r);
-                leaf_mat = Material::diffuse(&format!("leaf:{}:{i}", self.factory_seed), g.dark, 0.55);
+                leaf_mat = pm("leaf", "plant_factory.factory.material", g.dark);
                 let _ = g.bright;
             }
         }
