@@ -33,4 +33,5 @@ pub mod potbars;
 pub mod shelves;
 pub mod taps;
 pub mod toiletx;
+pub mod uvlab;
 pub mod tvx;

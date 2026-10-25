@@ -52,6 +52,12 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
 - Keep a pure-Rust path only if a port already exists and is exact.
 - Blender itself (bpy or its internals) is ONLY the reference/test oracle (refcache, opcheck, gn_check, the bed cloth sim at render time). Never call or link Blender from generation code (user decision 2026-10-24).
 
+## Crate ownership (user decision 2026-10-24)
+- You own only the crate(s) named in your assignment. Before changing ANY file in another crate (shared crates ig_core, ig_bm, ig_exbool,
+  ig_geom, ig_kit, ig_gn, ig_shared, ig_furn, ig_rooms, ig_assets, or another worker's family crate) or Cargo.toml / build.rs / tools used by
+  others: message the orchestrator first (Claude Code Remote send_message, session_id "@parent") with the file, the change and why, and wait
+  for an OK before committing it. Adding a dispatch arm for your class in crates/ig_assets/src/lib.rs is pre-approved.
+
 ## Rules that bit us before
 - Placeholder / bounding-box geometry must be float32-bit-exact vs python (`PHTOL=1e-12 target/fast/phcheck <oracle>`):
   the solver's lockstep depends on it (1e-7 differences still change placement). Treat it as part of "done" for any asset.

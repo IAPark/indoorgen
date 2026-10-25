@@ -232,7 +232,7 @@ impl GMesh {
                 let d1 = ls(a, c);
                 let d2 = ls(b, d);
                 let split_ac = if beauty { super::polyfill::quad_split_24_beauty([self.v[a as usize], self.v[b as usize], self.v[c as usize], self.v[d as usize]]) } else { d1 < d2 };
-                if std::env::var("TRIDBG").is_ok() && fi == 228 { eprintln!("quad {:?} d1 {:e} d2 {:e} verts {:?}", f, d1, d2, f.iter().map(|&i| self.v[i as usize]).collect::<Vec<_>>()); }
+                if fi == 228 && { static T: std::sync::OnceLock<bool> = std::sync::OnceLock::new(); *T.get_or_init(|| std::env::var("TRIDBG").is_ok()) } { eprintln!("quad {:?} d1 {:e} d2 {:e} verts {:?}", f, d1, d2, f.iter().map(|&i| self.v[i as usize]).collect::<Vec<_>>()); }
                 if split_ac {
                     // diagonal a-c
                     o.p.push(vec![a, c, d]);

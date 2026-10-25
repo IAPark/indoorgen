@@ -597,6 +597,47 @@ pub fn limit_surface(m: &Mesh) -> Mesh {
     o
 }
 
+// ------------------------------------------------------------------------------------------ geometry-nodes route (exact order)
+/// nodegroup_sofa_geometry evaluated by the node interpreter (data/gn/sofa_group.json, exported with tools/gn_export.py group):
+/// Blender's vertex / face / edge order. Returns the mesh and its edge list.
+pub fn sofa_geometry_gn(p: &SofaParams) -> Option<(Mesh, Vec<[u32; 2]>)> {
+    use crate::gnasset::GnTemplate;
+    use serde_json::Value as J;
+    static TPL: std::sync::OnceLock<GnTemplate> = std::sync::OnceLock::new();
+    let tpl = TPL.get_or_init(|| GnTemplate::parse(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/gn/sofa_group.json"))));
+    let mut t = tpl.clone_template();
+    let g = "nodegroup_sofa_geometry";
+    let v3 = |v: V3| json!([v[0], v[1], v[2]]);
+    t.set_group_default(g, "Socket_1", v3(p.dims));
+    t.set_group_default(g, "Socket_2", v3(p.arm));
+    t.set_group_default(g, "Socket_3", v3(p.back));
+    t.set_group_default(g, "Socket_4", v3(p.seat));
+    t.set_group_default(g, "Socket_5", v3(p.foot));
+    t.set_group_default(g, "Socket_6", json!(p.baseboard_h));
+    t.set_group_default(g, "Socket_7", json!(p.backrest_w));
+    t.set_group_default(g, "Socket_8", json!(p.seat_margin));
+    t.set_group_default(g, "Socket_9", json!(p.backrest_angle));
+    t.set_group_default(g, "Socket_10", json!(p.arm_width));
+    t.set_group_default(g, "Socket_11", J::from(p.arm_type as i64));
+    t.set_group_default(g, "Socket_12", json!(p.arm_height));
+    t.set_group_default(g, "Socket_13", json!(p.arms_angle));
+    t.set_group_default(g, "Socket_14", json!(p.footrest));
+    t.set_group_default(g, "Socket_15", J::from(p.count));
+    t.set_group_default(g, "Socket_16", json!(p.scaling_footrest));
+    t.set_group_default(g, "Socket_17", J::from(p.reflection as i64));
+    t.set_group_default(g, "Socket_18", json!(p.leg_type));
+    t.set_group_default(g, "Socket_19", json!(p.leg_dimensions));
+    t.set_group_default(g, "Socket_20", json!(p.leg_z));
+    t.set_group_default(g, "Socket_21", J::from(p.leg_faces as i64));
+    let outs = t.run_group(g).ok()?;
+    let geo = &outs.iter().find(|(n, _)| n == "Geometry")?.1;
+    let m = geo.mesh.as_ref()?;
+    let mut o = Mesh::new();
+    o.pos = m.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    o.faces = m.faces_vec();
+    Some((o, m.edges.clone()))
+}
+
 // ------------------------------------------------------------------------------------------ factory
 pub struct Sofa {
     params: SofaParams,
@@ -621,7 +662,10 @@ impl Factory for Sofa {
         // create_placeholder(): the node group output (PlaceholderBBox uses its bounding box)
         let mut r = Rng::seeded(self.seed);
         let fab = spec_material("sofa_fabric", json!({"cls": weighted(&mut r, FAB), "kwargs": {}, "seed": self.seed}), [0.4, 0.4, 0.45]);
-        let place = sofa_geometry(&self.params);
+        let place = match sofa_geometry_gn(&self.params) {
+            Some((m, _)) if std::env::var("SOFA_OLD").is_err() => m,
+            _ => sofa_geometry(&self.params),
+        };
         let mut a = Asset::default();
         let b = place.bounds();
         a.mesh(place, &fab, Some(b));
@@ -630,8 +674,11 @@ impl Factory for Sofa {
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let fab = spec_material("sofa_fabric", json!({"cls": weighted(&mut r, FAB), "kwargs": {}, "seed": self.seed}), [0.4, 0.4, 0.45]);
-        let place = sofa_geometry(&self.params);
-        let hipoly = limit_surface(&subsurf(&place, 1));
+        let gn = if std::env::var("SOFA_OLD").is_err() { sofa_geometry_gn(&self.params) } else { None };
+        let hipoly = match gn {
+            Some((place, edges)) => crate::subsurf::subsurf_osd(&place, 1, false, Some(&edges)).unwrap_or_else(|| limit_surface(&subsurf(&place, 1))),
+            None => limit_surface(&subsurf(&sofa_geometry(&self.params), 1)),
+        };
         let mut a = Asset::default();
         let b = hipoly.bounds();
         a.mesh(hipoly, &fab, Some(b));

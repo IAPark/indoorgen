@@ -49,6 +49,30 @@ pub fn cylinder_topology(n: usize) -> Vec<Vec<u32>> {
     f
 }
 
+/// `make_bowl` with the UV topology of the bpy cylinder it starts from (see uvlab.rs): same mesh as `make_bowl`, but the vertex positions are those of
+/// Blender's face-varying refinement, plus the corner labels for the next UV-aware subdivision.
+pub fn make_bowl_uv(p: &BowlParams) -> (Mesh, super::uvlab::Labels) {
+    let (lower, upper) = if p.has_curve { (contour(p, 0.0, 1.0), contour(p, 0.0, -1.0)) } else { (contour(p, 0.0, 0.0), contour(p, 0.0, 0.0)) };
+    let n = lower.len();
+    let mut m = Mesh::new();
+    for k in 0..n {
+        let (a, b) = (lower[n - 1 - k], upper[n - 1 - k]);
+        m.pos.push([a[0], a[1], 0.0]);
+        m.pos.push([b[0], b[1], p.depth * 2.0]);
+    }
+    let (faces, lab) = super::uvlab::cylinder_bpy(n);
+    m.faces = faces;
+    let (m, lab) = super::uvlab::subsurf_uv(&m, &lab, p.alcove_levels, true, None).expect("osd");
+    let lv = p.levels - p.alcove_levels - p.side_levels;
+    super::uvlab::subsurf_uv(&m, &lab, lv, false, None).expect("osd")
+}
+
+/// `remove_top` keeping the UV labels
+pub fn remove_top_uv(m: &Mesh, lab: &super::uvlab::Labels, depth: f64) -> (Mesh, super::uvlab::Labels) {
+    let keep: Vec<bool> = m.faces.iter().map(|f| f.iter().map(|&v| m.pos[v as usize][2]).sum::<f64>() / f.len() as f64 <= depth).collect();
+    (remove_top(m, depth), super::uvlab::keep_faces(lab, &keep))
+}
+
 pub fn make_bowl(p: &BowlParams) -> Mesh {
     let (lower, upper) = if p.has_curve { (contour(p, 0.0, 1.0), contour(p, 0.0, -1.0)) } else { (contour(p, 0.0, 0.0), contour(p, 0.0, 0.0)) };
     let n = lower.len();
@@ -190,6 +214,45 @@ pub fn vertex_normals(m: &Mesh) -> Vec<V3> {
 }
 
 /// SOLIDIFY modifier (EXTRUDE mode, default flags: rim on, no even offset, no clamp) with `offset` in [-1, 1]
+/// SOLIDIFY (simple mode) with Blender's float32 arithmetic and layout (ig_kit::solidx, vertex normals with safe_acos_approx weights), carrying the UV labels
+/// (uvlab.rs): the copies keep the UV values of the originals, the rim quads take the UV of the face next to their boundary edge.
+pub fn solidify_exact(m: &Mesh, lab: &super::uvlab::Labels, thickness: f64, offset: f64) -> (Mesh, super::uvlab::Labels) {
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    let el = super::bathkit::edge_list(&m.faces);
+    let edges: Vec<[u32; 2]> = el.iter().map(|&(a, b)| [a, b]).collect();
+    let emap: HashMap<(u32, u32), u32> = el.iter().enumerate().map(|(i, &e)| (e, i as u32)).collect();
+    let ce: Vec<Vec<u32>> = m.faces.iter().map(|f| (0..f.len()).map(|c| emap[&{ let (a, b) = (f[c], f[(c + 1) % f.len()]); (a.min(b), a.max(b)) }]).collect()).collect();
+    let s = super::solidx::solidify_extrude(&pos, &edges, &m.faces, &ce, thickness as f32, offset as f32, true);
+    let nv = m.pos.len() as u32;
+    let nf = m.faces.len();
+    // boundary edge -> (face, corner of its start vertex)
+    let mut owner: HashMap<(u32, u32), (usize, usize)> = HashMap::default();
+    for (fi, f) in m.faces.iter().enumerate() {
+        for c in 0..f.len() {
+            let (a, b) = (f[c], f[(c + 1) % f.len()]);
+            owner.insert((a.min(b), a.max(b)), (fi, c));
+        }
+    }
+    let corner_label = |fi: usize, v: u32| -> i32 { lab[fi][m.faces[fi].iter().position(|&x| x == v).unwrap()] };
+    let mut out_lab: super::uvlab::Labels = vec![];
+    for (gi, g) in s.faces.iter().enumerate() {
+        if gi < nf {
+            out_lab.push(lab[gi].clone());
+        } else if gi < 2 * nf {
+            out_lab.push(g.iter().map(|&w| corner_label(gi - nf, w - nv)).collect());
+        } else {
+            // rim quad (a, b, b', a') or (b, a, a', b')
+            let (a, b) = (g[0].min(g[1]), g[0].max(g[1]));
+            let (fi, _) = owner[&(a, b)];
+            out_lab.push(g.iter().map(|&w| corner_label(fi, w % nv)).collect());
+        }
+    }
+    let mut o = Mesh::new();
+    o.pos = s.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+    o.faces = s.faces;
+    (o, out_lab)
+}
+
 pub fn solidify(m: &Mesh, thickness: f64, offset: f64) -> Mesh {
     let nrm = vertex_normals(m);
     let ofs_orig = -(((-offset + 1.0) * 0.5) * thickness);

@@ -232,6 +232,12 @@ pub fn subsurf_osd(m: &Mesh, levels: usize, simple: bool, edges: Option<&[[u32; 
 
 /// `limit_surface` = the modifier's use_limit_surface (adaptive refinement to `quality`, evaluator level = quality; SIMPLE always uses level 1)
 pub fn subsurf_osd_ex(m: &Mesh, levels: usize, simple: bool, limit_surface: bool, quality: usize, edges: Option<&[[u32; 2]]>) -> Option<Mesh> {
+    subsurf_osd_uv(m, levels, simple, limit_surface, quality, edges, None)
+}
+
+/// As `subsurf_osd_ex` for a mesh that carries a UV map: `uv_corner_ids` = one id per face corner (face order); corners share an id iff same vertex and
+/// same UV value (`Osd::new_uv`). Blender refines such meshes with a face-varying channel, which changes the last float32 bits (BACKLOG K2).
+pub fn subsurf_osd_uv(m: &Mesh, levels: usize, simple: bool, limit_surface: bool, quality: usize, edges: Option<&[[u32; 2]]>, uv_corner_ids: Option<&[i32]>) -> Option<Mesh> {
     use super::cabnodes::GMesh;
     if levels == 0 {
         return Some(m.clone());
@@ -245,7 +251,7 @@ pub fn subsurf_osd_ex(m: &Mesh, levels: usize, simple: bool, limit_surface: bool
         None => super::bathkit::edge_list(&m.faces).into_iter().map(|(a, b)| [a, b]).collect(),
     };
     let eval_level = if simple { 1 } else if limit_surface { quality } else { levels };
-    let osd = crate::osd::Osd::new(&g.v, &g.p, eval_level, limit_surface, simple)?;
+    let osd = crate::osd::Osd::new_uv(&g.v, &g.p, eval_level, limit_surface, simple, uv_corner_ids)?;
     let off = osd.face_ptex_offset.clone();
     let ev = |fi: usize, ptex: usize, u: f32, v: f32| -> [f32; 3] { osd.eval(&[(off[fi] + ptex as i32, u, v)])[0] };
     if let Ok(d) = std::env::var("OSD_CLAIMDUMP") {

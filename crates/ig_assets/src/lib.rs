@@ -143,7 +143,10 @@ impl RealAssets {
     pub fn placeholder_raw(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
         if let Some(f) = make_factory(class, factory_seed) {
             return Some(match kind {
+                PlaceholderKind::Real if f.placeholder_exact(inst_seed).is_some() => exact_geom(&f.placeholder_exact(inst_seed).unwrap()),
                 PlaceholderKind::Real => match f.placeholder(inst_seed) {
+                    // Mirror / WallArt / PlantContainer placeholders are not new_bbox boxes (plain float32 bounds)
+                    Some(p) if matches!(class, "MirrorFactory" | "WallArtFactory" | "PlantContainerFactory" | "LargePlantContainerFactory") => p.bbox_geom_plain(),
                     Some(p) => p.bbox_geom(),
                     // python overrides create_placeholder for these classes (a custom bbox); until the formula is ported use the sampled box
                     None => match self.fallback.placeholder(class, factory_seed, inst_seed, kind) {

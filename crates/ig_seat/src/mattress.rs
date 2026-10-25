@@ -1,7 +1,7 @@
 //! seating/mattress.py: MattressFactory. Coiled = poke/quads/dots (coil.rs, exact stages); wrapped = bevelled box inflated by the
 //! native cloth solver (approximate by design).
 use super::bevelfull::bevel_angle_ex;
-use super::cloth::{simulate, Calib, ClothParams};
+use super::cloth::{simulate_job, Calib, ClothParams};
 use super::coil::make_coiled;
 use super::matdraw::*;
 use super::towel::subdivide_edge_ring;
@@ -55,7 +55,12 @@ impl MattressSpec {
             }
             let ru = r.uniform(0.06, 0.08);
             let sf = r.uniform(0.5, 1.0);
-            (make_coiled(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf), None)
+            let out = if std::env::var("COIL_F64").is_err() {
+                super::coilx::make_coiled_f32(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf, None)
+            } else {
+                None
+            };
+            (out.unwrap_or_else(|| make_coiled(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf)), None)
         } else {
             let wd = 0.05;
             for (i, d) in [w, s, t].iter().enumerate() {
@@ -72,7 +77,7 @@ impl MattressSpec {
             // pressure calibrated against the python mattress bake (seeds 4, 5): the generic scale over-inflates the sealed box
             let mut cal = Calib::default();
             cal.press_scale *= 0.2;
-            let out = simulate(&m.pos, &m.faces, &p, &[], &cal);
+            let out = simulate_job(&m.pos, &m.faces, &p, &[], &cal);
             let pre = m.clone();
             let mut o = m;
             o.pos = out;
