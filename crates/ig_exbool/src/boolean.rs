@@ -801,6 +801,182 @@ struct ComponentContainer {
     dist_to_cell: Q,
 }
 
+/// squared distance of `p` to triangle `abc` in double precision (same case analysis as `closest_on_tri_to_point`); only used to prune candidates
+fn closest_dist2_f64(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+    let sub = |x: [f64; 3], y: [f64; 3]| [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+    let dot = |x: [f64; 3], y: [f64; 3]| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let d2 = |x: [f64; 3], y: [f64; 3]| {
+        let d = sub(x, y);
+        dot(d, d)
+    };
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d1, d2_) = (dot(ab, ap), dot(ac, ap));
+    if d1 <= 0.0 && d2_ <= 0.0 {
+        return d2(p, a);
+    }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return d2(p, b);
+    }
+    let vc = d1 * d4 - d3 * d2_;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return d2(p, [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v]);
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return d2(p, c);
+    }
+    let vb = d5 * d2_ - d1 * d6;
+    if vb <= 0.0 && d2_ >= 0.0 && d6 <= 0.0 {
+        let w = d2_ / (d2_ - d6);
+        return d2(p, [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w]);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        let cb = sub(c, b);
+        return d2(p, [b[0] + cb[0] * w, b[1] + cb[1] * w, b[2] + cb[2] * w]);
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * denom, vc * denom);
+    let r = [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w];
+    d2(p, r)
+}
+
+/// BVH over the triangles of one component (double precision boxes of the vertex approximations), for nearest-triangle candidate search
+struct CompBvh {
+    /// triangles in the original iteration order: (triangle index in `tm`, corner coordinates)
+    tris: Vec<(i32, [[f64; 3]; 3])>,
+    nodes: Vec<(([f64; 3], [f64; 3]), u32, u32, u32, u32)>, // (box, start, count, left, right)
+    order: Vec<u32>,
+}
+
+fn comp_bvh_build(comp: &[i32], pinfo: &PatchesInfo, arena: &Arena, tm: &[usize]) -> CompBvh {
+    let mut tris = vec![];
+    for &p in comp {
+        for &t in &pinfo.patch[p as usize].tri {
+            let tri = &arena.faces[tm[t as usize]].vert;
+            let g = |v: u32| {
+                let d = arena.verts[v as usize].d;
+                [d[0] as f64, d[1] as f64, d[2] as f64]
+            };
+            tris.push((t, [g(tri[0]), g(tri[1]), g(tri[2])]));
+        }
+    }
+    let boxes: Vec<([f64; 3], [f64; 3])> = tris
+        .iter()
+        .map(|(_, v)| {
+            let mut l = [f64::INFINITY; 3];
+            let mut h = [f64::NEG_INFINITY; 3];
+            for c in v {
+                for k in 0..3 {
+                    l[k] = l[k].min(c[k]);
+                    h[k] = h[k].max(c[k]);
+                }
+            }
+            (l, h)
+        })
+        .collect();
+    let mut order: Vec<u32> = (0..tris.len() as u32).collect();
+    let mut nodes = vec![];
+    fn rec(boxes: &[([f64; 3], [f64; 3])], order: &mut [u32], base: usize, nodes: &mut Vec<(([f64; 3], [f64; 3]), u32, u32, u32, u32)>) -> u32 {
+        let mut l = [f64::INFINITY; 3];
+        let mut h = [f64::NEG_INFINITY; 3];
+        for &i in order.iter() {
+            for k in 0..3 {
+                l[k] = l[k].min(boxes[i as usize].0[k]);
+                h[k] = h[k].max(boxes[i as usize].1[k]);
+            }
+        }
+        let id = nodes.len() as u32;
+        nodes.push(((l, h), base as u32, order.len() as u32, u32::MAX, u32::MAX));
+        if order.len() > 8 {
+            let ext = [h[0] - l[0], h[1] - l[1], h[2] - l[2]];
+            let ax = if ext[0] >= ext[1] && ext[0] >= ext[2] { 0 } else if ext[1] >= ext[2] { 1 } else { 2 };
+            order.sort_by(|&a, &b| (boxes[a as usize].0[ax] + boxes[a as usize].1[ax]).partial_cmp(&(boxes[b as usize].0[ax] + boxes[b as usize].1[ax])).unwrap_or(std::cmp::Ordering::Equal));
+            let mid = order.len() / 2;
+            let (a, b) = order.split_at_mut(mid);
+            let left = rec(boxes, a, base, nodes);
+            let right = rec(boxes, b, base + mid, nodes);
+            nodes[id as usize].3 = left;
+            nodes[id as usize].4 = right;
+            nodes[id as usize].2 = 0;
+        }
+        id
+    }
+    if !tris.is_empty() {
+        rec(&boxes, &mut order, 0, &mut nodes);
+    }
+    CompBvh { tris, nodes, order }
+}
+
+fn box_dist2(p: [f64; 3], b: &([f64; 3], [f64; 3])) -> f64 {
+    let mut d = 0.0;
+    for k in 0..3 {
+        let x = (b.0[k] - p[k]).max(0.0).max(p[k] - b.1[k]);
+        d += x * x;
+    }
+    d
+}
+
+impl CompBvh {
+    /// indices (into `tris`, ascending) of all triangles whose double distance is within a relative 1e-9 of the minimum
+    fn candidates(&self, p: [f64; 3]) -> Vec<usize> {
+        if self.nodes.is_empty() {
+            return vec![];
+        }
+        let mut best = f64::INFINITY;
+        let mut stack = vec![0u32];
+        while let Some(ni) = stack.pop() {
+            let nd = &self.nodes[ni as usize];
+            if box_dist2(p, &nd.0) > best * (1.0 + 1e-9) + 1e-24 {
+                continue;
+            }
+            if nd.3 != u32::MAX {
+                // visit the nearer child last (popped first)
+                let (dl, dr) = (box_dist2(p, &self.nodes[nd.3 as usize].0), box_dist2(p, &self.nodes[nd.4 as usize].0));
+                if dl <= dr {
+                    stack.push(nd.4);
+                    stack.push(nd.3);
+                } else {
+                    stack.push(nd.3);
+                    stack.push(nd.4);
+                }
+                continue;
+            }
+            for &i in &self.order[nd.1 as usize..(nd.1 + nd.2) as usize] {
+                let v = &self.tris[i as usize].1;
+                best = best.min(closest_dist2_f64(p, v[0], v[1], v[2]));
+            }
+        }
+        let thr = best * (1.0 + 1e-9) + 1e-24;
+        let mut out = vec![];
+        let mut stack = vec![0u32];
+        while let Some(ni) = stack.pop() {
+            let nd = &self.nodes[ni as usize];
+            if box_dist2(p, &nd.0) > thr {
+                continue;
+            }
+            if nd.3 != u32::MAX {
+                stack.push(nd.3);
+                stack.push(nd.4);
+                continue;
+            }
+            for &i in &self.order[nd.1 as usize..(nd.1 + nd.2) as usize] {
+                let v = &self.tris[i as usize].1;
+                if closest_dist2_f64(p, v[0], v[1], v[2]) <= thr {
+                    out.push(i as usize);
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+}
+
 fn find_component_containers(
     comp: usize,
     components: &[Vec<i32>],
@@ -810,6 +986,7 @@ fn find_component_containers(
     topo: &TriMeshTopology,
     comp_bb: &[BoundingBox],
     arena: &mut Arena,
+    bvhs: &mut Vec<Option<CompBvh>>,
 ) -> Vec<ComponentContainer> {
     let mut ans = vec![];
     let test_p = components[comp][0];
@@ -822,13 +999,45 @@ fn find_component_containers(
         if !bbs_might_intersect(&comp_bb[comp], &comp_bb[comp_other]) {
             continue;
         }
+        // a point outside the (padded) box of `comp_other` lies in the unbounded cell of that component, i.e. its ambient cell, which is never recorded
+        // as a container: skip the nearest-triangle search (exact result unchanged)
+        if !slow_paths() {
+            let d = arena.verts[test_v as usize].d;
+            let bb = &comp_bb[comp_other];
+            if (0..3).any(|k| (d[k] as f32) < bb.min[k] || (d[k] as f32) > bb.max[k]) {
+                continue;
+            }
+        }
         let mut nearest_tri = NO_INDEX;
         let mut nearest_tri_close_vert = -1;
         let mut nearest_tri_close_edge = -1;
         let mut nearest_tri_dist_squared = q_zero();
         let test_co = arena.verts[test_v as usize].co.clone();
-        for &p in &components[comp_other] {
-            for &t in &pinfo.patch[p as usize].tri {
+        // pruning: the exact distance is only evaluated for the triangles whose double-precision distance is within a relative 1e-9 of the best
+        // double distance (the exact arithmetic is ~1000x slower); candidates are visited in the original order, so ties resolve exactly as before
+        let tp = arena.verts[test_v as usize].d;
+        let tp = [tp[0] as f64, tp[1] as f64, tp[2] as f64];
+        if slow_paths() {
+            for &p in &components[comp_other] {
+                for &t in &pinfo.patch[p as usize].tri {
+                    let tri = &arena.faces[tm[t as usize]].vert;
+                    let (mut close_vert, mut close_edge) = (0, 0);
+                    let d2 = closest_on_tri_to_point(&test_co, &arena.verts[tri[0] as usize].co, &arena.verts[tri[1] as usize].co, &arena.verts[tri[2] as usize].co, &mut close_edge, &mut close_vert);
+                    if nearest_tri == NO_INDEX || d2 < nearest_tri_dist_squared {
+                        nearest_tri = t;
+                        nearest_tri_close_edge = close_edge;
+                        nearest_tri_close_vert = close_vert;
+                        nearest_tri_dist_squared = d2;
+                    }
+                }
+            }
+        } else {
+            if bvhs[comp_other].is_none() {
+                bvhs[comp_other] = Some(comp_bvh_build(&components[comp_other], pinfo, arena, tm));
+            }
+            let bvh = bvhs[comp_other].as_ref().unwrap();
+            for ci in bvh.candidates(tp) {
+                let t = bvh.tris[ci].0;
                 let tri = &arena.faces[tm[t as usize]].vert;
                 let (mut close_vert, mut close_edge) = (0, 0);
                 let d2 = closest_on_tri_to_point(&test_co, &arena.verts[tri[0] as usize].co, &arena.verts[tri[1] as usize].co, &arena.verts[tri[2] as usize].co, &mut close_edge, &mut close_vert);
@@ -882,16 +1091,25 @@ fn finish_patch_cell_graph(arena: &mut Arena, tm: &[usize], cells: &mut Vec<Cell
     if components.len() <= 1 {
         return;
     }
+    let prof = std::env::var_os("EXBOOL_PROF").is_some();
+    let t0 = std::time::Instant::now();
     let mut ambient_cell = vec![0i32; components.len()];
     for comp in 0..components.len() {
         ambient_cell[comp] = find_ambient_cell(arena, tm, Some(&components[comp]), topo, pinfo);
+    }
+    if prof {
+        eprintln!("exbool:   {} components, ambient cells {:?}", components.len(), t0.elapsed());
     }
     let tot_components = components.len();
     let mut comp_cont: Vec<Vec<ComponentContainer>> = (0..tot_components).map(|_| vec![]).collect();
     if tot_components > 1 {
         let comp_bb = populate_comp_bbs(&components, pinfo, arena, tm);
+        let mut bvhs: Vec<Option<CompBvh>> = (0..tot_components).map(|_| None).collect();
         for comp in 0..tot_components {
-            comp_cont[comp] = find_component_containers(comp, &components, &ambient_cell, tm, pinfo, topo, &comp_bb, arena);
+            comp_cont[comp] = find_component_containers(comp, &components, &ambient_cell, tm, pinfo, topo, &comp_bb, arena, &mut bvhs);
+            if prof {
+                eprintln!("exbool:   containers of comp {} -> {} {:?}", comp, comp_cont[comp].len(), t0.elapsed());
+            }
         }
     }
     let mut outer_components = vec![];
@@ -1099,9 +1317,61 @@ struct RayTree {
     lo: Vec<[f32; 3]>,
     hi: Vec<[f32; 3]>,
     tris: Vec<[[f32; 3]; 3]>,
+    /// BVH over the triangle boxes (speed only: the per-triangle predicates are unchanged, their order does not matter: the hits are summed)
+    /// one BVH per operand shape (a triangle's own shape never counts as 'inside', so rays only traverse the other shapes' trees)
+    shape_bvh: Vec<(Vec<BvhNode>, Vec<u32>)>,
 }
 
-fn raycast_tree(arena: &Arena, tm: &[usize]) -> RayTree {
+struct BvhNode {
+    lo: [f32; 3],
+    hi: [f32; 3],
+    /// leaf: range in `order`; inner: children indices
+    start: u32,
+    count: u32,
+    left: u32,
+    right: u32,
+}
+
+fn bvh_build(lo: &[[f32; 3]], hi: &[[f32; 3]], ids: Vec<u32>) -> (Vec<BvhNode>, Vec<u32>) {
+    let n = ids.len();
+    let mut order: Vec<u32> = ids;
+    let mut nodes: Vec<BvhNode> = vec![];
+    if n == 0 {
+        return (nodes, order);
+    }
+    fn rec(lo: &[[f32; 3]], hi: &[[f32; 3]], order: &mut [u32], base: usize, nodes: &mut Vec<BvhNode>) -> u32 {
+        let (mut l, mut h) = ([FLT_MAX; 3], [-FLT_MAX; 3]);
+        for &i in order.iter() {
+            for k in 0..3 {
+                l[k] = l[k].min(lo[i as usize][k]);
+                h[k] = h[k].max(hi[i as usize][k]);
+            }
+        }
+        let id = nodes.len() as u32;
+        nodes.push(BvhNode { lo: l, hi: h, start: base as u32, count: order.len() as u32, left: u32::MAX, right: u32::MAX });
+        if order.len() > 8 {
+            let ext = [h[0] - l[0], h[1] - l[1], h[2] - l[2]];
+            let ax = if ext[0] >= ext[1] && ext[0] >= ext[2] { 0 } else if ext[1] >= ext[2] { 1 } else { 2 };
+            order.sort_by(|&a, &b| {
+                let ca = lo[a as usize][ax] + hi[a as usize][ax];
+                let cb = lo[b as usize][ax] + hi[b as usize][ax];
+                ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mid = order.len() / 2;
+            let (a, b) = order.split_at_mut(mid);
+            let left = rec(lo, hi, a, base, nodes);
+            let right = rec(lo, hi, b, base + mid, nodes);
+            nodes[id as usize].left = left;
+            nodes[id as usize].right = right;
+            nodes[id as usize].count = 0;
+        }
+        id
+    }
+    rec(lo, hi, &mut order, 0, &mut nodes);
+    (nodes, order)
+}
+
+fn raycast_tree(arena: &Arena, tm: &[usize], nshapes: usize, shape_fn: &dyn Fn(i32) -> i32) -> RayTree {
     let mut lo = vec![];
     let mut hi = vec![];
     let mut tris = vec![];
@@ -1130,7 +1400,15 @@ fn raycast_tree(arena: &Arena, tm: &[usize]) -> RayTree {
         hi.push(h);
         tris.push(t);
     }
-    RayTree { lo, hi, tris }
+    let mut ids: Vec<Vec<u32>> = vec![vec![]; nshapes];
+    for (i, &fi) in tm.iter().enumerate() {
+        let sh = shape_fn(arena.faces[fi].orig);
+        if sh >= 0 {
+            ids[sh as usize].push(i as u32);
+        }
+    }
+    let shape_bvh = ids.into_iter().map(|v| bvh_build(&lo, &hi, v)).collect();
+    RayTree { lo, hi, tris, shape_bvh }
 }
 
 fn ray_nearest_hit(origin: &[f32; 3], dir: &[f32; 3], lo: &[f32; 3], hi: &[f32; 3]) -> f32 {
@@ -1217,6 +1495,8 @@ fn orient3d_d(a: &[f64; 3], b: &[f64; 3], c: &[f64; 3], d: &[f64; 3]) -> i32 {
     }
 }
 
+static PLANE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn test_tri_inside_shapes(arena: &mut Arena, tm: &[usize], shape_fn: &dyn Fn(i32) -> i32, nshapes: usize, test_t_index: usize, tree: &RayTree, in_shape: &mut Vec<f32>) {
     let tri_test = tm[test_t_index];
     let shape = shape_fn(arena.faces[tri_test].orig);
@@ -1232,7 +1512,9 @@ fn test_tri_inside_shapes(arena: &mut Arena, tm: &[usize], shape_fn: &dyn Fn(i32
     };
     let (d0, d1, d2) = (arena.verts[v0 as usize].d, arena.verts[v1 as usize].d, arena.verts[v2 as usize].d);
     let test_point = [d0[0] / 3.0 + d1[0] / 3.0 + d2[0] / 3.0, d0[1] / 3.0 + d1[1] / 3.0 + d2[1] / 3.0, d0[2] / 3.0 + d1[2] / 3.0 + d2[2] / 3.0];
+    let tp0 = std::time::Instant::now();
     arena.populate_plane(tri_test, false);
+    PLANE_NS.fetch_add(tp0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
     let pn = arena.faces[tri_test].plane.as_ref().unwrap().norm;
     let len2 = dot3d(&pn, &pn);
     let norm = if len2 > 1.0e-70 {
@@ -1251,21 +1533,57 @@ fn test_tri_inside_shapes(arena: &mut Arena, tm: &[usize], shape_fn: &dyn Fn(i32
     let co = [offset_test_point[0] as f32, offset_test_point[1] as f32, offset_test_point[2] as f32];
     for ray in test_rays.iter() {
         let mut hit_parity = vec![0i32; nshapes];
-        for (i, &fi) in tm.iter().enumerate() {
-            if ray_nearest_hit(&co, ray, &tree.lo[i], &tree.hi[i]) >= FLT_MAX {
+        if slow_paths() {
+            for (i, &fi) in tm.iter().enumerate() {
+                if ray_nearest_hit(&co, ray, &tree.lo[i], &tree.hi[i]) >= FLT_MAX {
+                    continue;
+                }
+                let tri = &arena.faces[fi];
+                let sh = shape_fn(tri.orig);
+                if sh == -1 {
+                    continue;
+                }
+                let t = &tree.tris[i];
+                if isect_ray_tri_epsilon_v3(&co, ray, &t[0], &t[1], &t[2], FLT_EPSILON) {
+                    let o_db = [co[0] as f64, co[1] as f64, co[2] as f64];
+                    let parity = orient3d_d(&arena.verts[tri.vert[0] as usize].d, &arena.verts[tri.vert[1] as usize].d, &arena.verts[tri.vert[2] as usize].d, &o_db);
+                    hit_parity[sh as usize] += parity;
+                }
+            }
+        } else {
+        for (sh_idx, (nodes, order)) in tree.shape_bvh.iter().enumerate() {
+            if sh_idx as i32 == shape {
                 continue;
             }
-            let tri = &arena.faces[fi];
-            let sh = shape_fn(tri.orig);
-            if sh == -1 {
-                continue;
+            let mut stack: Vec<u32> = vec![];
+            if !nodes.is_empty() {
+                stack.push(0);
             }
-            let t = &tree.tris[i];
-            if isect_ray_tri_epsilon_v3(&co, ray, &t[0], &t[1], &t[2], FLT_EPSILON) {
-                let o_db = [co[0] as f64, co[1] as f64, co[2] as f64];
-                let parity = orient3d_d(&arena.verts[tri.vert[0] as usize].d, &arena.verts[tri.vert[1] as usize].d, &arena.verts[tri.vert[2] as usize].d, &o_db);
-                hit_parity[sh as usize] += parity;
+            while let Some(ni) = stack.pop() {
+                let node = &nodes[ni as usize];
+                if ray_nearest_hit(&co, ray, &node.lo, &node.hi) >= FLT_MAX {
+                    continue;
+                }
+                if node.left != u32::MAX {
+                    stack.push(node.left);
+                    stack.push(node.right);
+                    continue;
+                }
+                for &iu in &order[node.start as usize..(node.start + node.count) as usize] {
+                    let i = iu as usize;
+                    if ray_nearest_hit(&co, ray, &tree.lo[i], &tree.hi[i]) >= FLT_MAX {
+                        continue;
+                    }
+                    let tri = &arena.faces[tm[i]];
+                    let t = &tree.tris[i];
+                    if isect_ray_tri_epsilon_v3(&co, ray, &t[0], &t[1], &t[2], FLT_EPSILON) {
+                        let o_db = [co[0] as f64, co[1] as f64, co[2] as f64];
+                        let parity = orient3d_d(&arena.verts[tri.vert[0] as usize].d, &arena.verts[tri.vert[1] as usize].d, &arena.verts[tri.vert[2] as usize].d, &o_db);
+                        hit_parity[sh_idx] += parity;
+                    }
+                }
             }
+        }
         }
         for j in 0..nshapes {
             if j as i32 != shape && hit_parity[j] > 0 {
@@ -1293,7 +1611,7 @@ fn raycast_test_remove(op: BoolOpType, winding: &mut Vec<i32>, shape: usize) -> 
 }
 
 fn raycast_tris_boolean(arena: &mut Arena, tm: &[usize], op: BoolOpType, nshapes: usize, shape_fn: &dyn Fn(i32) -> i32) -> Vec<usize> {
-    let tree = raycast_tree(arena, tm);
+    let tree = raycast_tree(arena, tm, nshapes, shape_fn);
     let mut out_faces = vec![];
     let mut in_shape = vec![0f32; nshapes];
     let mut winding = vec![0i32; nshapes];
@@ -1318,11 +1636,37 @@ fn raycast_tris_boolean(arena: &mut Arena, tm: &[usize], op: BoolOpType, nshapes
             }
         }
     }
+    if std::env::var_os("EXBOOL_PROF").is_some() {
+        eprintln!("exbool: raycast_tris plane ns {}", PLANE_NS.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000);
+    }
     out_faces
 }
 
+static SLOW_PATHS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Use the original brute-force code paths (exact nearest-triangle search over every triangle, linear ray scans) instead of the pruned / BVH ones.
+/// Both give identical output (checked by the tests); the slow paths exist for those tests and as a reference.
+pub fn set_slow_paths(on: bool) {
+    SLOW_PATHS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn slow_paths() -> bool {
+    SLOW_PATHS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+thread_local! {
+    static PATCH_VOTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Opt-in robustness for NON-closed inputs (not Blender's behaviour): classify a patch by the majority vote of several of its triangles instead of the
+/// single middle one. Blender's choice is unstable when the middle triangle's test point lies on a (nearly) coincident face of another shape
+/// (1-ulp slivers); the vote only differs from Blender's result in such cases.
+pub fn set_patch_vote(on: bool) {
+    PATCH_VOTE.with(|c| c.set(on));
+}
+
 fn raycast_patches_boolean(arena: &mut Arena, tm: &[usize], op: BoolOpType, nshapes: usize, shape_fn: &dyn Fn(i32) -> i32, pinfo: &PatchesInfo) -> Vec<usize> {
-    let tree = raycast_tree(arena, tm);
+    let tree = raycast_tree(arena, tm, nshapes, shape_fn);
     let mut out_faces = vec![];
     let mut in_shape = vec![0f32; nshapes];
     let mut winding = vec![0i32; nshapes];
@@ -1334,6 +1678,28 @@ fn raycast_patches_boolean(arena: &mut Arena, tm: &[usize], op: BoolOpType, nsha
             continue;
         }
         test_tri_inside_shapes(arena, tm, shape_fn, nshapes, test_t_index, &tree, &mut in_shape);
+        if PATCH_VOTE.with(|c| c.get()) && patch.tri.len() > 2 {
+            // majority vote over up to 15 evenly spaced triangles of the patch (the middle one included)
+            let k = patch.tri.len().min(15);
+            let mut yes = vec![0usize; nshapes];
+            let mut tmp = vec![0f32; nshapes];
+            for q in 0..k {
+                let ti = patch.tri[q * (patch.tri.len() - 1) / (k - 1).max(1)] as usize;
+                test_tri_inside_shapes(arena, tm, shape_fn, nshapes, ti, &tree, &mut tmp);
+                for o in 0..nshapes {
+                    let need_high = (op == BoolOpType::Difference && shape != 0) || op == BoolOpType::Intersect;
+                    if tmp[o] >= if need_high { 0.5f32 } else { 0.1f32 } {
+                        yes[o] += 1;
+                    }
+                }
+            }
+            for o in 0..nshapes {
+                if o as i32 != shape {
+                    // encode the vote as a confidence that passes / fails the thresholds above
+                    in_shape[o] = if yes[o] * 2 > k { 1.0 } else { 0.0 };
+                }
+            }
+        }
         for other_shape in 0..nshapes {
             if other_shape as i32 == shape {
                 continue;
@@ -1721,7 +2087,12 @@ pub fn boolean_trimesh(arena: &mut Arena, tm_in: &[usize], op: BoolOpType, nshap
     if tm_in.is_empty() {
         return vec![];
     }
+    let prof = std::env::var_os("EXBOOL_PROF").is_some();
+    let t0 = std::time::Instant::now();
     let tm_si = trimesh_nary_intersect(arena, tm_in, nshapes, shape_fn, use_self);
+    if prof {
+        eprintln!("exbool: intersect {} -> {} tris {:?}", tm_in.len(), tm_si.len(), t0.elapsed());
+    }
     if tm_si.is_empty() || op == BoolOpType::None {
         return tm_si;
     }
@@ -1730,6 +2101,9 @@ pub fn boolean_trimesh(arena: &mut Arena, tm_in: &[usize], op: BoolOpType, nshap
     let si_shape_fn = |t: i32| shape_fn(orig_of[t as usize]);
     let topo = TriMeshTopology::new(arena, &tm);
     let pwn = is_pwn(arena, &tm, &topo);
+    if prof {
+        eprintln!("exbool: topo+pwn={} {:?}", pwn, t0.elapsed());
+    }
     let tm_out: Vec<usize>;
     if !pwn {
         if hole_tolerant {
@@ -1740,12 +2114,24 @@ pub fn boolean_trimesh(arena: &mut Arena, tm_in: &[usize], op: BoolOpType, nshap
         }
     } else {
         let mut pinfo = find_patches(arena, &tm, &topo);
+        if prof {
+            eprintln!("exbool: patches {:?}", t0.elapsed());
+        }
         let mut cells = find_cells(arena, &tm, &topo, &mut pinfo);
+        if prof {
+            eprintln!("exbool: cells {:?}", t0.elapsed());
+        }
         finish_patch_cell_graph(arena, &tm, &mut cells, &mut pinfo, &topo);
+        if prof {
+            eprintln!("exbool: graph {:?}", t0.elapsed());
+        }
         if !patch_cell_graph_ok(&cells, &pinfo) {
             return tm_in.to_vec();
         }
         let c_ambient = find_ambient_cell(arena, &tm, None, &topo, &pinfo);
+        if prof {
+            eprintln!("exbool: ambient {:?}", t0.elapsed());
+        }
         if c_ambient == NO_INDEX {
             return tm;
         }
@@ -1757,9 +2143,15 @@ pub fn boolean_trimesh(arena: &mut Arena, tm_in: &[usize], op: BoolOpType, nshap
 
 /// `boolean_mesh`: returns the output polygon mesh faces (arena face indices).
 pub fn boolean_mesh(arena: &mut Arena, imesh: &[usize], op: BoolOpType, nshapes: usize, shape_fn: &dyn Fn(i32) -> i32, use_self: bool, hole_tolerant: bool) -> Vec<usize> {
+    let prof = std::env::var_os("EXBOOL_PROF").is_some();
+    let t0 = std::time::Instant::now();
     let tm_in = triangulate_polymesh(arena, imesh);
     let tm_out = boolean_trimesh(arena, &tm_in, op, nshapes, shape_fn, use_self, hole_tolerant);
-    polymesh_from_trimesh_with_dissolve(arena, &tm_out, imesh)
+    let r = polymesh_from_trimesh_with_dissolve(arena, &tm_out, imesh);
+    if prof {
+        eprintln!("exbool: total {:?} (dissolve incl.)", t0.elapsed());
+    }
+    r
 }
 
 #[allow(dead_code)]

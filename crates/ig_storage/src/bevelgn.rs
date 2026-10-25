@@ -170,11 +170,24 @@ pub struct BevFactory {
     pub inner: Box<dyn Factory>,
     /// false: template variants != 0 are not finished (gas oven grates), fall back to `inner`
     pub supports_variants: bool,
+    /// oven: add the gas grates (gasgrate.rs) for variant 1
+    pub gas: bool,
+    /// last built geometry (asset() and exact() of one scene asset both need it; a gas oven takes seconds)
+    pub cache: std::sync::Mutex<Option<GGeom>>,
 }
 
 impl BevFactory {
     pub fn geometry(&self, inst: u64) -> GGeom {
         self.try_geometry(inst).unwrap_or_else(|e| panic!("bevel asset failed: {}", e))
+    }
+
+    fn cached_geometry(&self, inst: u64) -> Result<GGeom, String> {
+        if let Some(g) = self.cache.lock().unwrap().as_ref() {
+            return Ok(g.clone());
+        }
+        let g = self.try_geometry(inst)?;
+        *self.cache.lock().unwrap() = Some(g.clone());
+        Ok(g)
     }
 
     pub fn try_geometry(&self, _inst: u64) -> Result<GGeom, String> {
@@ -189,7 +202,10 @@ impl BevFactory {
             { use std::io::Write; let mut f = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/bevdbg.txt").unwrap(); let _ = writeln!(f, "bevel: pre nv {} ne {} nf {}; fin nv {} ne {} nf {}; sel {}", pm.nv(), pm.ne(), pm.nf(), fm.nv(), fm.ne(), fm.nf(), sel.len()); }
         }
         let sel: Vec<usize> = if pm.edges.len() == fm.edges.len() { sel } else { vec![] };
-        let bm = add_bevel(fm, &sel, self.offset, self.segments)?;
+        let mut bm = add_bevel(fm, &sel, self.offset, self.segments)?;
+        if s.variant == 1 && self.gas {
+            bm = add_gas_grates(&bm, &s)?;
+        }
         Ok(GGeom::from_mesh(bm))
     }
 }
@@ -199,7 +215,7 @@ impl Factory for BevFactory {
         if (self.sample)(&self.rng).variant != 0 && !self.supports_variants {
             return self.inner.asset(inst);
         }
-        let Ok(g) = self.try_geometry(inst) else { return self.inner.asset(inst) };
+        let Ok(g) = self.cached_geometry(inst) else { return self.inner.asset(inst) };
         let mut a = Asset::default();
         a.parts = parts_of(&g, &|n| mat(if n.is_empty() { "gn" } else { n }, [0.6, 0.6, 0.62], 0.4));
         a
@@ -250,8 +266,8 @@ pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
         }
         _ => return None,
     };
-    let supports_variants = c != "OvenFactory";
-    Some(Box::new(BevFactory { tpls, sample, rng: rng.clone(), offset: if c == "MicrowaveFactory" { 0.03 } else { 0.01 }, segments: 8, inner, supports_variants }))
+    let supports_variants = c != "OvenFactory" || std::env::var("OVEN_GAS").map_or(false, |v| v == "1");
+    Some(Box::new(BevFactory { tpls, sample, rng: rng.clone(), offset: if c == "MicrowaveFactory" { 0.03 } else { 0.01 }, segments: 8, inner, supports_variants, gas: c == "OvenFactory", cache: std::sync::Mutex::new(None) }))
 }
 
 fn num(s: &mut Sampled, k: &str, v: f64) {
@@ -302,7 +318,7 @@ fn fridge_params(rng: &Rng) -> Sampled {
     s
 }
 
-/// appliances/oven.py sample_parameters (geometry-node parameters; the gas-grate parameters are drawn but unused here)
+/// appliances/oven.py sample_parameters (geometry-node parameters + the gas-grate parameters Grids .. MiddleRatio, which only gas_grates reads)
 fn oven_params(rng: &Rng) -> Sampled {
     let mut r = rng.clone();
     let mut s = Sampled::default();
@@ -321,6 +337,14 @@ fn oven_params(rng: &Rng) -> Sampled {
     let heat = r.uniform(0.1, 0.2);
     let brand = appliances::generate_text(&mut r);
     let use_gas = r.randint(0, 2);
+    let n_grids = r.randint(2, 5);
+    let grids: Vec<f64> = (0..n_grids).map(|_| r.randint(1, 4) as f64).collect();
+    let branches = 2 * r.randint(2, 9);
+    s.nums.insert("Grids".into(), grids);
+    num(&mut s, "Branches", branches as f64);
+    num(&mut s, "GrateThickness", r.uniform(0.01, 0.03));
+    num(&mut s, "CenterRatio", r.uniform(0.05, 0.15));
+    num(&mut s, "MiddleRatio", r.uniform(0.5, 0.7));
     num(&mut s, "Depth", depth);
     num(&mut s, "Width", width);
     num(&mut s, "Height", height);
@@ -354,4 +378,61 @@ fn microwave_params(rng: &Rng) -> Sampled {
     num(&mut s, "DoorRotation", 0.0);
     s.strs.insert("BrandName".into(), appliances::generate_text(&mut r));
     s
+}
+
+/// OvenFactory.create_asset tail for use_gas: grates + hollow cut of the body + join (see gasgrate.rs)
+fn add_gas_grates(body: &GMesh, s: &Sampled) -> Result<GMesh, String> {
+    use super::gasgrate::*;
+    let n = |k: &str| s.nums.get(k).map(|v| v[0]).ok_or_else(|| format!("missing {k}"));
+    let (width, depth0, height0, door) = (n("Width")?, n("Depth")?, n("Height")?, n("DoorThickness")?);
+    let t = n("GrateThickness")?;
+    let depth = depth0 + 2.0 * door;
+    let p = GrateParams {
+        width,
+        depth,
+        grate_width: width * 0.8,
+        grate_depth: depth * 0.6,
+        height: height0 + door - t,
+        thickness: t,
+        grids: s.nums.get("Grids").ok_or("missing Grids")?.iter().map(|&g| g as usize).collect(),
+        branches: n("Branches")? as usize,
+        center_ratio: n("CenterRatio")?,
+        middle_ratio: n("MiddleRatio")?,
+    };
+    let tg = std::time::Instant::now();
+    let grates = gas_grates(&p).ok_or("gas grates failed (voxel remesh unavailable?)")?;
+    if std::env::var("GASDBG").is_ok() {
+        eprintln!("gas_grates built in {:?}", tg.elapsed());
+    }
+    let hollow = hollow(&p, height0 + door).ok_or("hollow cutter failed")?;
+    // body - hollow (BOOLEAN EXACT, use_hole_tolerant), then join the grates
+    use crate::exbool::exact_boolean::*;
+    let to_in = |pos: &[[f32; 3]], faces: Vec<Vec<u32>>| BoolInput { verts: pos.to_vec(), faces };
+    let hollow_in = BoolInput { verts: hollow.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect(), faces: hollow.faces.clone() };
+    let r = exact_boolean(&[to_in(&body.pos, body.faces_vec()), hollow_in], BoolOp::Difference, false, true);
+    if std::env::var("GASDBG").is_ok() {
+        eprintln!("gas oven add_gas_grates total {:?}", tg.elapsed());
+    }
+    let mut mats = body.mats.clone();
+    let white = match mats.iter().position(|m| m == "WhiteMetal") {
+        Some(i) => i,
+        None => {
+            mats.push("WhiteMetal".to_string());
+            mats.len() - 1
+        }
+    };
+    let body_mi: Vec<i32> = (0..body.nf()).map(|f| body.attrs.get("material_index").map(|a| a.data[f].i()).unwrap_or(0)).collect();
+    let mut mi: Vec<Val> = r.face_orig.iter().map(|&(_, f)| Val::I(body_mi[f])).collect();
+    let mut pos = r.verts.clone();
+    let mut faces = r.faces.clone();
+    let base = pos.len() as u32;
+    pos.extend(grates.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]));
+    for f in &grates.faces {
+        faces.push(f.iter().map(|&v| v + base).collect());
+        mi.push(Val::I(white as i32));
+    }
+    let mut out = GMesh::from_faces(pos, &faces, &[]);
+    out.mats = mats;
+    out.attrs.insert("material_index".to_string(), Attr { dom: Dom::Face, ty: Ty::I, data: mi });
+    Ok(out)
 }

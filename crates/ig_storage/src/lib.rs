@@ -26,6 +26,7 @@ pub mod bathtub;
 pub mod bevelgn;
 pub mod cabdoor;
 pub mod cookware;
+pub mod gasgrate;
 pub mod gnports;
 pub mod ksink;
 pub mod pangeom;
