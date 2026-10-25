@@ -465,6 +465,7 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
     let mut pdir = vec![[0.0f64; 3]; n];
     let mut ap = vec![[0.0f64; 3]; n];
     let mut diag = vec![0.0f64; n];
+    let mut act: Vec<(u32, u32, f64, f64, V3)> = Vec::with_capacity(ns);
     for _step in 0..(frames * steps_per_frame) {
         for fo in forces.iter_mut() {
             *fo = [0.0; 3];
@@ -531,17 +532,21 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
             }
         }
         // PCG for A dv = b, A = M + sum (alpha I + beta dd^T) [[1,-1],[-1,1]]
+        // active springs of this step, compacted once (same order => bit-identical sums)
+        act.clear();
+        for (si, s) in springs.iter().enumerate() {
+            if alpha[si] != 0.0 || beta[si] != 0.0 {
+                act.push((s.i, s.j, alpha[si], beta[si], dirs[si]));
+            }
+        }
         let matvec = |xv: &[V3], out: &mut [V3]| {
             for i in 0..n {
                 out[i] = if pinned[i] { [0.0; 3] } else { mul(xv[i], m) };
             }
-            for (si, s) in springs.iter().enumerate() {
-                if alpha[si] == 0.0 && beta[si] == 0.0 {
-                    continue;
-                }
-                let (i, j) = (s.i as usize, s.j as usize);
+            for &(i, j, al, be, dr) in act.iter() {
+                let (i, j) = (i as usize, j as usize);
                 let u = sub(xv[i], xv[j]);
-                let w = add(mul(u, alpha[si]), mul(dirs[si], beta[si] * dot(dirs[si], u)));
+                let w = add(mul(u, al), mul(dr, be * dot(dr, u)));
                 if !pinned[i] {
                     out[i] = add(out[i], w);
                 }
