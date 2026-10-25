@@ -500,6 +500,19 @@ pub fn curve_to_mesh(c: &Curves, prof: Option<&Curves>, caps: bool) -> Mesh {
                     }
                 }
             }
+            // point attributes of the profile curve repeat on every ring (Blender curve_to_mesh: profile point data)
+            if let Some(pc) = profs.iter().position(|(q, _)| std::ptr::eq(q, pe)) {
+                for (name, ty, vals) in super::nodes_curves::eval_point_attrs(prof, pc, pe) {
+                    if name == "radius" || name == "tilt" || name.starts_with("__normal") || name.starts_with("__nurbs") {
+                        continue;
+                    }
+                    let a = m.attrs.entry(name).or_insert_with(|| Attr { dom: Dom::Point, ty, data: vec![] });
+                    a.data.resize(base as usize, Val::zero(ty));
+                    for _ in 0..n {
+                        a.data.extend(vals.iter().cloned());
+                    }
+                }
+            }
             for i in 0..n {
                 let t = tan[i];
                 let nn = nrm[i];
@@ -605,4 +618,26 @@ pub fn curve_to_mesh(c: &Curves, prof: Option<&Curves>, caps: bool) -> Mesh {
     }
     // wire edges for profiles / curves without faces are implied by faces; add ring/longitudinal edges for faceless output
     m
+}
+
+#[cfg(test)]
+mod curve_to_mesh_tests {
+    use super::*;
+
+    /// profile-curve point attributes repeat on every ring (ring-major vertex order); geometry is unchanged
+    #[test]
+    fn profile_attributes_propagate() {
+        let mut c = Curves::new();
+        c.push_poly(&[[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]], false);
+        let mut p = Curves::new();
+        p.push_poly(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]], true);
+        p.attrs.insert("tag".into(), Attr { dom: Dom::Point, ty: Ty::F, data: vec![Val::F(0.0), Val::F(1.0), Val::F(2.0), Val::F(3.0)] });
+        let m = curve_to_mesh(&c, Some(&p), true);
+        assert_eq!(m.nv(), 12);
+        let a = m.attrs.get("tag").expect("profile attribute propagated");
+        assert_eq!(a.data.len(), 12);
+        for i in 0..12 {
+            assert_eq!(a.data[i].f(), (i % 4) as f32);
+        }
+    }
 }
