@@ -200,6 +200,7 @@ enum Ht {
     Auto,
     Vector,
     Align,
+    Free,
 }
 
 #[derive(Clone)]
@@ -243,6 +244,9 @@ fn calc_handles(pts: &mut [Bz]) {
             lb = 1.0;
         }
         let b = &mut pts[i];
+        if b.t1 == Ht::Free && b.t2 == Ht::Free {
+            continue;
+        }
         if b.t1 == Ht::Auto || b.t2 == Ht::Auto {
             let tv = [db[0] / lb + da[0] / la, db[1] / lb + da[1] / la, db[2] / lb + da[2] / la];
             let len = v_len(tv) * 2.5614f32;
@@ -267,15 +271,25 @@ fn calc_handles(pts: &mut [Bz]) {
         if b.t2 == Ht::Vector {
             b.h2 = v_madd(p2, db, 1.0 / 3.0);
         }
-        if b.t1 == Ht::Align && b.t2 == Ht::Align {
-            let l1 = v_len(v_sub(b.h1, p2));
-            let l2 = v_len(v_sub(b.h2, p2));
-            let d = v_sub(b.h1, b.h2);
-            let nd = v_len(d);
-            if nd > 0.0 {
-                let d = [d[0] / nd, d[1] / nd, d[2] / nd];
-                b.h1 = v_madd(p2, d, l1);
-                b.h2 = v_madd(p2, d, -l2);
+        // calchandleNurb_intern, HD_ALIGN part (handle_sel_flag = 0: h1 is re-aligned from h2 first, then h2 from the new h1)
+        if (b.t1 == Ht::Align || b.t2 == Ht::Align) && b.t1 != Ht::Free && b.t2 != Ht::Free {
+            let mut len_a = v_len(v_sub(p2, b.h1));
+            let mut len_b = v_len(v_sub(p2, b.h2));
+            if len_a == 0.0 {
+                len_a = 1.0;
+            }
+            if len_b == 0.0 {
+                len_b = 1.0;
+            }
+            let ratio = len_a / len_b;
+            let eps = 1e-5f32;
+            if b.t1 == Ht::Align && len_b > eps {
+                let l = ratio;
+                b.h1 = [p2[0] + l * (p2[0] - b.h2[0]), p2[1] + l * (p2[1] - b.h2[1]), p2[2] + l * (p2[2] - b.h2[2])];
+            }
+            if b.t2 == Ht::Align && len_a > eps {
+                let l = 1.0f32 / ratio;
+                b.h2 = [p2[0] + l * (p2[0] - b.h1[0]), p2[1] + l * (p2[1] - b.h1[1]), p2[2] + l * (p2[2] - b.h1[2])];
             }
         }
     }
@@ -307,21 +321,24 @@ fn bezier_core(anchors: &[[f64; 3]], vector: &[usize], edit: Option<(&[Option<[f
         sc.push(1.0);
         for (i, p) in pts.iter_mut().enumerate() {
             if let Some(a) = axes[i] {
-                let a = [a[0] as f32, a[1] as f32, a[2] as f32];
-                let proj = |h: F3, co: F3| -> F3 {
-                    let d = v_sub(h, co);
-                    let dl = v_len(d);
+                // numpy float64 arithmetic on the float32 handle / anchor values, one rounding to float32 when the handle is stored
+                let hnew = |h: F3, co: F3, s: f64| -> F3 {
+                    // `p.handle_left - p.co` is a mathutils Vector subtraction: float32
+                    let d = [(h[0] - co[0]) as f64, (h[1] - co[1]) as f64, (h[2] - co[2]) as f64];
                     let k = d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
                     let pv = [k * a[0], k * a[1], k * a[2]];
-                    let pl = v_len(pv);
-                    v_madd(co, pv, dl / pl)
+                    let pl = (pv[0] * pv[0] + pv[1] * pv[1] + pv[2] * pv[2]).sqrt();
+                    let dl = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    let r = |i: usize| (co[i] as f64 + pv[i] / pl * dl * s) as f32;
+                    [r(0), r(1), r(2)]
                 };
-                let (hl, hr) = (proj(p.h1, p.co), proj(p.h2, p.co));
-                let scl = |h: F3, co: F3, s: f64| -> F3 { v_madd(co, v_sub(h, co), s as f32) };
-                p.h1 = scl(hl, p.co, sc[2 * i]);
-                p.h2 = scl(hr, p.co, sc[2 * i + 1]);
-                p.t1 = Ht::Align;
-                p.t2 = Ht::Align;
+                let (h1, h2) = (hnew(p.h1, p.co, sc[2 * i]), hnew(p.h2, p.co, sc[2 * i + 1]));
+                p.h1 = h1;
+                p.h2 = h2;
+                // draw.align_bezier leaves the edited handles FREE; curve2mesh's retyping to ALIGNED goes through point references taken before
+                // entering edit mode and has no effect, so the handles are never re-aligned (BKE_nurb_handles_calc returns early for FREE / FREE)
+                p.t1 = Ht::Free;
+                p.t2 = Ht::Free;
             }
         }
     }
@@ -349,7 +366,7 @@ fn bezier_core(anchors: &[[f64; 3]], vector: &[usize], edit: Option<(&[Option<[f
                 let last = new.len() - 1;
                 new[last].h2 = a;
             }
-            new.push(Bz { co: nn, h1: ab, h2: bc, t1: Ht::Align, t2: Ht::Align });
+            new.push(Bz { co: nn, h1: ab, h2: bc, t1: pts[i + 1].t1, t2: pts[i + 1].t2 });
             c0 = nn;
             h0 = bc;
             h1 = c;

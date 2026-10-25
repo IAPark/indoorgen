@@ -203,6 +203,87 @@ fn is_boundary_edge(bm: &BMesh, e: usize) -> bool {
     l != NONE && l == bm.loops[l].rn
 }
 
+/// BM_face_calc_normal as BM_face_normal_update stores it in `f->no`
+fn bm_face_normal(bm: &BMesh, f: usize) -> V3 {
+    let vs: Vec<V3> = bm.loops_of_face(f).iter().map(|&l| bm.verts[bm.loops[l].v].co).collect();
+    match vs.len() {
+        3 => normalize(cross(sub(vs[0], vs[1]), sub(vs[1], vs[2]))),
+        4 => normalize(cross(sub(vs[0], vs[2]), sub(vs[1], vs[3]))),
+        n => {
+            // newell (bm_face_calc_poly_normal)
+            let mut no = [0.0f32; 3];
+            let mut prev = vs[n - 1];
+            for &cur in &vs {
+                no[0] += (prev[1] - cur[1]) * (prev[2] + cur[2]);
+                no[1] += (prev[2] - cur[2]) * (prev[0] + cur[0]);
+                no[2] += (prev[0] - cur[0]) * (prev[1] + cur[1]);
+                prev = cur;
+            }
+            normalize(no)
+        }
+    }
+}
+
+/// `bm_vert_calc_surface_tangent` for every vertex of both rim loops (bm_edgering_pair_store_create)
+fn surface_tangents(bm: &BMesh, la: &ELoop, lb: &ELoop, rim: &HashSet<usize>, face_out: &HashSet<usize>) -> HashMap<usize, V3> {
+    let shared: HashSet<usize> = la.v.iter().chain(lb.v.iter()).copied().collect();
+    let mut face_shared: HashSet<usize> = HashSet::default();
+    for l in [la, lb] {
+        let n = l.v.len();
+        let m = if l.closed { n } else { n - 1 };
+        for i in 0..m {
+            let e = bm.edge_exists(l.v[i], l.v[(i + 1) % n]);
+            if e == NONE {
+                continue;
+            }
+            for f in bm.faces_of_edge(e) {
+                if bm.loops_of_face(f).iter().all(|&lp| shared.contains(&bm.loops[lp].v)) {
+                    face_shared.insert(f);
+                }
+            }
+        }
+    }
+    let mut out: HashMap<usize, V3> = HashMap::default();
+    for l in [la, lb] {
+        for &v in &l.v {
+            let (mut no_outer, mut no_inner) = ([0.0f32; 3], [0.0f32; 3]);
+            let (mut found_outer, mut found_inner, mut found_outer_tag) = (false, false, false);
+            for e in bm.edges_of_vert(v) {
+                if bm.edges[e].l == NONE {
+                    continue; // wire
+                }
+                if rim.contains(&e) {
+                    for lp in bm.loops_of_edge(e) {
+                        let f = bm.loops[lp].f;
+                        // BM_edge_calc_face_tangent: cross(l->v - l->next->v, f->no), normalized
+                        let (v1, v2) = (bm.verts[bm.loops[lp].v].co, bm.verts[bm.loops[bm.loops[lp].n].v].co);
+                        let t = normalize(cross(sub(v1, v2), bm_face_normal(bm, f)));
+                        if face_shared.contains(&f) {
+                            no_inner = add(no_inner, t);
+                            found_inner = true;
+                        } else {
+                            no_outer = add(no_outer, t);
+                            found_outer = true;
+                            if face_out.contains(&f) {
+                                found_outer_tag = true;
+                            }
+                        }
+                    }
+                }
+            }
+            let r = if found_inner && found_outer_tag {
+                normalize(add(normalize(neg(no_outer)), normalize(no_inner)))
+            } else if found_outer {
+                normalize(neg(no_outer))
+            } else {
+                normalize(no_inner)
+            };
+            out.insert(v, r);
+        }
+    }
+    out
+}
+
 /// result of the topology pass
 pub struct BridgeTopo {
     /// first / second rim loop of the subdivision step (`a` ring vertices come first in every ring)
@@ -210,6 +291,8 @@ pub struct BridgeTopo {
     pub rim_b: Vec<usize>,
     /// one entry per cross edge in creation order: [a, cut1 .. cutN, b]
     pub rings: Vec<Vec<usize>>,
+    /// surface tangents (`bm_vert_calc_surface_tangent`) of the vertices of both rim loops, taken before the faces are sliced (SURFACE interpolation)
+    pub tangents: HashMap<usize, V3>,
 }
 
 /// `loops`: found loops (first, second) of the selected edges. Creates the bridge faces (+ triangulate / beautify for unequal loops) and
@@ -521,6 +604,7 @@ fn subdivide_edgering(bm: &mut BMesh, ring_edges: &[usize], cuts: usize) -> Resu
             lb.rotate_first(v_other);
         }
     }
+    let tangents = surface_tangents(bm, &la, &lb, &rim, &face_out);
     // bm_edgering_pair_subdiv
     let mut in_stack_e: HashSet<usize> = HashSet::default();
     let mut in_stack_f: HashSet<usize> = HashSet::default();
@@ -595,7 +679,7 @@ fn subdivide_edgering(bm: &mut BMesh, ring_edges: &[usize], cuts: usize) -> Resu
             }
         }
     }
-    Ok(BridgeTopo { rim_a: la.v, rim_b: lb.v, rings })
+    Ok(BridgeTopo { rim_a: la.v, rim_b: lb.v, rings, tangents })
 }
 
 /// Full operator on selected edges `sel` (bridge_loops + optional subdivide_edgering). `assign(bm, ring)` sets the coordinates of the
@@ -612,7 +696,7 @@ pub fn bridge_edge_loops(bm: &mut BMesh, sel: &dyn Fn(usize) -> bool, cuts: usiz
     let (b, a_loop) = (loops.pop().unwrap(), loops.pop().unwrap());
     let (edge_out, _a, _b) = bridge_loop_pair(bm, a_loop, b, &orig)?;
     if cuts == 0 {
-        return Ok(BridgeTopo { rim_a: vec![], rim_b: vec![], rings: vec![] });
+        return Ok(BridgeTopo { rim_a: vec![], rim_b: vec![], rings: vec![], tangents: HashMap::default() });
     }
     subdivide_edgering(bm, &edge_out, cuts)
 }
@@ -776,9 +860,6 @@ fn transform_point_by_tri(pt: V3, tar: [V3; 3], src: [V3; 3]) -> V3 {
 /// Assign the coordinates of the inner ring vertices for interpolation PATH or LINEAR (float32, as bm_edgering_pair_interpolate).
 /// Returns false for SURFACE (caller uses its own positions).
 pub fn assign_ring_positions(bm: &mut BMesh, topo: &BridgeTopo, cuts: usize, mode: &str, smooth: f32, shape: f32, profile_shape: &str) -> bool {
-    if mode == "SURFACE" {
-        return false;
-    }
     let resolu = cuts + 2;
     let falloff: Option<Vec<f32>> = if shape != 0.0 {
         Some(
@@ -805,6 +886,31 @@ pub fn assign_ring_positions(bm: &mut BMesh, topo: &BridgeTopo, cuts: usize, mod
             cols.push(forward_diff32(ca[k], ha[k], hb[k], cb[k], resolu - 1));
         }
         main = (0..resolu).map(|i| [cols[0][i], cols[1][i], cols[2][i]]).collect();
+    }
+    if mode == "SURFACE" {
+        for ring in &topo.rings {
+            let (va, vb) = (ring[0], ring[cuts + 1]);
+            let (co_a, co_b) = (bm.verts[va].co, bm.verts[vb].co);
+            let (no_a, no_b) = (topo.tangents[&va], topo.tangents[&vb]);
+            let hl = bezier_handle_calc_length(co_a, no_a, co_b, no_b) * smooth;
+            let ha = add(mul(no_a, hl), co_a);
+            let hb = add(mul(no_b, hl), co_b);
+            let mut cols: Vec<Vec<f32>> = vec![];
+            for k in 0..3 {
+                cols.push(forward_diff32(co_a[k], ha[k], hb[k], co_b[k], resolu - 1));
+            }
+            for i in 1..=cuts {
+                let co = [cols[0][i], cols[1][i], cols[2][i]];
+                bm.verts[ring[i]].co = match &falloff {
+                    Some(fo) => {
+                        let (t, s) = (fo[i], 1.0f32 - fo[i]);
+                        [s * main[i][0] + t * co[0], s * main[i][1] + t * co[1], s * main[i][2] + t * co[2]]
+                    }
+                    None => co,
+                };
+            }
+        }
+        return true;
     }
     if mode == "LINEAR" {
         if let Some(fo) = &falloff {
