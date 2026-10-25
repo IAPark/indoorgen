@@ -34,11 +34,23 @@ fn main() {
     let t_scene = std::time::Instant::now();
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
-    let mut mrng = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "room_materials"]));
-    for s in &g.shells {
-        let rm = infinigen::materials::room_materials(&mut mrng, &s.name, infinigen::rooms::state::room_type(&s.name));
+    let decos = infinigen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), infinigen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
+    for (s, rm) in g.shells.iter().zip(decos) {
+        use infinigen::materials::WallAlt;
         let (w, f, c) = (scene.material(rm.wall), scene.material(rm.floor), scene.material(rm.ceiling));
-        scene.add(&format!("{}.wall", s.name), "room", s.wall.clone(), w);
+        let split = match rm.alt {
+            WallAlt::None => None,
+            WallAlt::Half { frac } => Some(infinigen::rooms::walldeco::apply_half(&s.wall, g.c.wall_height, frac)),
+            WallAlt::Aligned => Some(infinigen::rooms::walldeco::apply_aligned(&s.wall)),
+        };
+        match (split, rm.alt_wall) {
+            (Some((base, alt)), Some(am)) => {
+                let ai = scene.material(am);
+                scene.add(&format!("{}.wall", s.name), "room", base, w);
+                scene.add(&format!("{}.wall.alt", s.name), "room", alt, ai);
+            }
+            _ => scene.add(&format!("{}.wall", s.name), "room", s.wall.clone(), w),
+        }
         scene.add(&format!("{}.floor", s.name), "room", s.floor.clone(), f);
         scene.add(&format!("{}.ceiling", s.name), "room", s.ceiling.clone(), c);
     }
