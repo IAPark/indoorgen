@@ -1,4 +1,5 @@
 // usage: gen2 <seed> [room] [out.glb] [--rust-cloth] [--mess LEVEL]
+//   --people N: up to N posed photoreal avatars placed after the solve (crates/ig_people); 0 (default) = unchanged output
 //   --mess LEVEL: lived-in disorder 0..1 added after the solve (crates/ig_mess); 0 (default) = unchanged output
 //   --rust-cloth: also run the native cloth sim for bed cloth that is exported as a sidecar job (default: skip, Blender re-simulates it)
 use infinigen::furn::assets::TableAssets;
@@ -20,6 +21,14 @@ fn main() {
             v
         }
         None => 0.0,
+    };
+    let people_n: usize = match args.iter().position(|a| a == "--people") {
+        Some(i) => {
+            let v = args[i + 1].parse().expect("--people N");
+            args.drain(i..i + 2);
+            v
+        }
+        None => 0,
     };
     let seed: u64 = args[1].parse().unwrap();
     let mess = infinigen::mess::MessCfg { level: mess_level, seed };
@@ -232,6 +241,16 @@ fn main() {
     }
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = std::time::Instant::now();
+    // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
+    for (pi, pl) in infinigen::people::place::place(&g.state, &g.room_polys, people_n, seed).iter().enumerate() {
+        let a = infinigen::people::build_person(pl.avatar, pl.kind, pl.seed);
+        for (k, part) in a.parts.iter().enumerate() {
+            let mut m = part.mesh.clone();
+            m.transform(&pl.pose);
+            let mi = scene.material(part.mat.clone());
+            scene.add_posed(&format!("person{pi}_{:?}#{k}", pl.kind), "Person", m, mi, pl.pose.0);
+        }
+    }
     // mess pass, part 2: clutter (no-op at --mess 0)
     infinigen::mess::clutter::apply(&mut scene, &g.state, &visuals, &g.room_polys, &mess);
     scene.write_glb(&out).unwrap();

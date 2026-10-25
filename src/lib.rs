@@ -10,5 +10,6 @@ pub use ig_furn as furn;
 pub use ig_rooms as rooms;
 pub use ig_assets as assets;
 pub use ig_mess as mess;
+pub use ig_people as people;
 pub mod openings;
 pub mod pipeline;

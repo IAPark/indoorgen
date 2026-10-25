@@ -524,6 +524,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ig_people"
+version = "0.1.0"
+dependencies = [
+ "ig_core",
+ "ig_furn",
+ "ig_kit",
+ "ig_rooms",
+ "parry3d-f64 0.18.0",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ig_plants"
 version = "0.1.0"
 dependencies = [
@@ -691,6 +705,7 @@ dependencies = [
  "ig_gn",
  "ig_kit",
  "ig_mess",
+ "ig_people",
  "ig_rooms",
  "indexmap",
  "md5",
