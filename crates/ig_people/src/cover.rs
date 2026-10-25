@@ -260,9 +260,11 @@ fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
         let x_old = build["x"].as_f64().unwrap_or(1.0);
         let x_new = xe + size * 0.5;
         let dx = x_new - x_old;
-        let body_top = btris.iter().filter(|t| (t[0][0] - bm[0][3]) * ax[0] + (t[0][1] - bm[1][3]) * ax[1] > xe).flat_map(|t| t.iter().map(|q| q[2])).fold(f64::MIN, f64::max);
+        let mut zs: Vec<f64> = btris.iter().filter(|t| (t[0][0] - bm[0][3]) * ax[0] + (t[0][1] - bm[1][3]) * ax[1] > xe + 0.1).flat_map(|t| t.iter().map(|q| q[2])).collect();
+        zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let body_top = zs.get(zs.len() * 97 / 100).copied().unwrap_or(0.0);
         let mattress_top = pl.support_top;
-        let dz = (body_top - mattress_top).max(0.0) + 0.05;
+        let dz = (body_top - mattress_top).max(0.0) + 0.03;
         if std::env::var_os("COVER_DBG").is_some() {
             eprintln!("COVER under: edge local x {xe:.2} (x_old {x_old:.2} -> {x_new:.2}) body_top {body_top:.3} support_top {mattress_top:.3} lm.top {:.3} dz {dz:.3}", lm.top_z);
         }

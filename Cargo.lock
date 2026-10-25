@@ -1091,6 +1091,7 @@ dependencies = [
  "ig_kit",
  "ig_rooms",
  "parry3d-f64 0.18.0",
+ "rapier3d-f64",
  "rayon",
  "russimp",
  "serde",

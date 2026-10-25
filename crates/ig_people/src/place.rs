@@ -749,7 +749,7 @@ fn pillow_plan(o: &Obj, bb: [V3; 2], head: V3, hd: [f64; 2]) -> Vec<(usize, V3)>
         let c = [(plo[0] + phi[0]) / 2.0, (plo[1] + phi[1]) / 2.0];
         if i == 0 && *d < 0.6 {
             // under the head (a little towards the headboard)
-            out.push((*pi, [head[0] + hd[0] * 0.03 - c[0], head[1] + hd[1] * 0.03 - c[1], 0.0]));
+            out.push((*pi, [head[0] + hd[0] * 0.30 - c[0], head[1] + hd[1] * 0.30 - c[1], -0.05]));
             continue;
         }
         let half = [(phi[0] - plo[0]) / 2.0, (phi[1] - plo[1]) / 2.0];
