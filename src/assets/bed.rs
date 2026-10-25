@@ -311,6 +311,48 @@ fn back_divide(m: &Mesh, dist: f64, garbled: bool, r: &mut Rng) -> Mesh {
     }
 }
 
+/// make_back: convex hull (exact bmesh port) of the joined back posts, SOLIDIFY (thickness t, offset 0), normals made outward
+fn back_hull_slab(backs: &[Vec<V3>], t: f64) -> Mesh {
+    use crate::bm::BMesh;
+    let mut pos: Vec<[f32; 3]> = vec![];
+    let mut edges: Vec<[u32; 2]> = vec![];
+    for b in backs {
+        let base = pos.len() as u32;
+        for (i, p) in b.iter().enumerate() {
+            pos.push([p[0] as f32, p[1] as f32, p[2] as f32]);
+            if i > 0 {
+                edges.push([base + i as u32 - 1, base + i as u32]);
+            }
+        }
+    }
+    let mut bm = BMesh::from_mesh(&pos, &edges, &[], &[]);
+    crate::bm::hull::convex_hull(&mut bm, &crate::bm::hull::HullParams::default());
+    let (hp, he, hf) = bm.to_mesh();
+    let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
+    for (i, e) in he.iter().enumerate() {
+        emap.insert((e[0].min(e[1]), e[0].max(e[1])), i as u32);
+    }
+    let ce: Vec<Vec<u32>> = hf.iter().map(|f| (0..f.len()).map(|k| emap[&(f[k].min(f[(k + 1) % f.len()]), f[k].max(f[(k + 1) % f.len()]))]).collect()).collect();
+    let s = super::solidx::solidify_extrude(&hp, &he, &hf, &ce, t as f32, 0.0, true);
+    let mut m = Mesh::new();
+    m.pos = s.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    m.faces = s.faces;
+    // normals_make_consistent(inside=False): flip everything if the signed volume is negative
+    let mut vol = 0.0;
+    for f in &m.faces {
+        for k in 1..f.len() - 1 {
+            let (a, b, c) = (m.pos[f[0] as usize], m.pos[f[k] as usize], m.pos[f[k + 1] as usize]);
+            vol += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+        }
+    }
+    if vol < 0.0 {
+        for f in m.faces.iter_mut() {
+            f.reverse();
+        }
+    }
+    m
+}
+
 fn ceil_cuts(size: f64, dist: f64) -> usize {
     (size / dist).ceil() as usize
 }
@@ -409,12 +451,17 @@ impl BedSpec {
         // posts with many (float-noisy, collinear) points make python's convex hull degenerate: its edge rings are not axis parallel,
         // so divide() subdivides (almost) nothing there; model that as an undivided slab
         if std::env::var("BEDDBG").is_ok() { eprintln!("backs n {:?} xspread {:?}", backs.iter().map(|b| b.len()).collect::<Vec<_>>(), backs.iter().map(|b| b.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max) - b.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min)).collect::<Vec<_>>()); }
-        let garbled = backs.iter().any(|b| b.len() > 2 && b.iter().any(|p| (p[0] as f32) != (b[0][0] as f32) || (p[1] as f32) != (b[0][1] as f32)));
+        let _garbled0 = 0;
         if self.c.bed_back <= 1 {
             // coiled / pad: the hull slab of the back rails on top of the (bisected) bridge panel
             let t = c.thickness.min(c.leg_thickness);
             let (xh, yc) = (c.width / 2.0 - c.leg_thickness / 2.0, -c.leg_thickness / 2.0);
-            let slab = Mesh::cuboid([-xh, yc - t / 2.0, 0.0], [xh, yc + t / 2.0, c.back_height]).welded(1e-9);
+            let slab = if std::env::var("BED_OLD_SLAB").is_ok() {
+                Mesh::cuboid([-xh, yc - t / 2.0, 0.0], [xh, yc + t / 2.0, c.back_height]).welded(1e-9)
+            } else {
+                back_hull_slab(&backs, t)
+            };
+            let garbled = false;
             let mut g = if self.c.bed_back == 0 {
                 let g = back_divide(&slab, self.dot_distance, garbled, r);
                 coil(&g, self, r)
