@@ -290,6 +290,7 @@ fn coil(g: &Mesh, s: &BedSpec, r: &mut Rng) -> Mesh {
     }
     let ru = r.uniform(0.06, 0.08);
     let sf = r.uniform(0.5, 1.0);
+    if std::env::var("COILPARAMS").is_ok() { eprintln!("COILPARAMS dd {} dep {} ds {} ru {} sf {}", s.dot_distance, s.dot_depth, s.dot_size, ru, sf); }
     if std::env::var("COIL_F64").is_err() {
         if let Some(m) = super::coilx::make_coiled_f32(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf, None) {
             return m;

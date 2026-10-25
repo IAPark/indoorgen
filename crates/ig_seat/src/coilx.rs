@@ -82,14 +82,16 @@ pub fn bevel_stage(m: &Mesh, radius: f32) -> Result<Stage, String> {
     Ok(Stage { pos, faces, tip: vec![], edges })
 }
 
+/// blender::math::safe_acos_approx (used by BM vertex normals since 4.1)
 fn saacos(x: f32) -> f32 {
-    if x <= -1.0 {
-        std::f32::consts::PI
-    } else if x >= 1.0 {
-        0.0
-    } else {
-        x.acos()
+    if !var("CX_ACPLAIN") {
+        let f = x.abs();
+        let m = if f < 1.0 { 1.0 - (1.0 - f) } else { 1.0 };
+        let p = m.mul_add(m.mul_add(m.mul_add(-0.02164095f32, 0.077980478f32), -0.213300989f32), 1.5707963267f32);
+        let a = (1.0 - m).sqrt() * p;
+        return if x < 0.0 { std::f32::consts::PI - a } else { a };
     }
+    crate::bevmod::safe_acos_approx(x)
 }
 
 fn var(name: &str) -> bool {
@@ -122,21 +124,55 @@ fn cap_vertex_normals(pos: &[V3], cap: &[u32]) -> Vec<V3> {
             }
             prev = cur;
         }
-        q::normalize(nrm)
+        normalize_rec(nrm)
     };
     (0..k)
         .map(|i| {
             let (p, c, n) = (co((i + k - 1) % k), co(i), co((i + 1) % k));
-            let e1 = q::normalize(q::sub(c, p));
-            let e2 = q::normalize(q::sub(n, c));
-            let fac = saacos(-q::dot(e1, e2));
+            let e1 = normalize_rec(q::sub(c, p));
+            let e2 = normalize_rec(q::sub(n, c));
+            let fac = saacos(-dotv(e1, e2));
             if var("CX_RAWN") {
                 fno
+            } else if var("CX_VDIV") {
+                normalize_div(q::mul(fno, fac))
             } else {
-                q::normalize(q::mul(fno, fac))
+                normalize_rec(q::mul(fno, fac))
             }
         })
         .collect()
+}
+
+/// normalize_v3 with a true division (the variant that reproduces Blender's vertex normals)
+fn dotv(a: V3, b: V3) -> f32 {
+    match std::env::var("CX_DOT").ok().as_deref() {
+        Some("1") => a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0])),
+        Some("2") => a[0].mul_add(b[0], a[1].mul_add(b[1], a[2] * b[2])),
+        Some("3") => a[2].mul_add(b[2], a[0].mul_add(b[0], a[1] * b[1])),
+        Some("4") => a[1].mul_add(b[1], a[0].mul_add(b[0], a[2] * b[2])),
+        _ => q::dot(a, b),
+    }
+}
+
+fn normalize_rec(a: V3) -> V3 {
+    let d = dotv(a, a);
+    if d > 1.0e-35f32 {
+        let l = d.sqrt();
+        let f = 1.0f32 / l;
+        [a[0] * f, a[1] * f, a[2] * f]
+    } else {
+        [0.0; 3]
+    }
+}
+
+fn normalize_div(a: V3) -> V3 {
+    let d = dotv(a, a);
+    if d > 1.0e-35f32 {
+        let l = d.sqrt();
+        [a[0] / l, a[1] / l, a[2] / l]
+    } else {
+        [0.0; 3]
+    }
 }
 
 fn madd_v(a: V3, b: V3, f: f32) -> V3 {
@@ -163,6 +199,7 @@ pub fn extrude_stage(st: &Stage, depth: f32) -> Stage {
     for cap in &caps {
         let k = cap.len();
         let n1 = cap_vertex_normals(&pos, cap);
+        if var("CX_DUMPVN") { for (i, n) in n1.iter().enumerate() { eprintln!("VN {} {:?} -> {:?}", i, pos[cap[i] as usize], n); } }
         let sg = if var("CX_SIGN") { 1.0f32 } else { -1.0f32 };
         let l1: Vec<u32> = (0..k)
             .map(|i| {
@@ -183,11 +220,14 @@ pub fn extrude_stage(st: &Stage, depth: f32) -> Stage {
             let j = (i + 1) % k;
             tip.push(faces.len());
             faces.push(vec![cap[i], cap[j], l1[j], l1[i]]);
+        }
+        tip.push(faces.len());
+        faces.push(l2.clone());
+        for i in 0..k {
+            let j = (i + 1) % k;
             tip.push(faces.len());
             faces.push(vec![l1[i], l1[j], l2[j], l2[i]]);
         }
-        tip.push(faces.len());
-        faces.push(l2);
     }
     Stage { pos, faces, tip, edges: vec![] }
 }
@@ -242,7 +282,7 @@ pub fn scale_stage(st: &Stage, s: f32) -> Stage {
         let r = find(&mut parent, v);
         let (c, k, ssum) = acc[&r];
         let kf = k as f32;
-        let s = if var("CX_NOSS") { s } else { ssum / kf };
+        let s = if var("CX_SSUM") { ssum / kf } else { s };
         let c = if var("CX_IC") { q::mul(c, 1.0 / kf) } else { [c[0] / kf, c[1] / kf, c[2] / kf] };
         let p = st.pos[v];
         pos[v] = if var("CX_SMAT") {
@@ -265,12 +305,203 @@ pub fn make_coiled_f32(m: &Mesh, dot_distance: f64, dot_depth: f64, dot_size: f6
             ie.extend_from_slice(e);
         }
     }
-    let b = bevel_stage(m, radius as f32).ok()?;
-    let e = extrude_stage(&b, dot_depth as f32);
+    let dump = |name: &str, pos: &[V3], faces: &[Vec<u32>]| {
+        if let Ok(d) = std::env::var("COILX_DUMP") {
+            let v: Vec<_> = pos.iter().map(|p| serde_json::json!([p[0] as f64, p[1] as f64, p[2] as f64])).collect();
+            std::fs::write(format!("{d}/{name}.json"), serde_json::json!({"verts": v, "polys": faces}).to_string()).ok();
+        }
+    };
+    let e = if var("CX_OLDEXTR") {
+        let b = bevel_stage(m, radius as f32).ok()?;
+        dump("bevel", &b.pos, &b.faces);
+        extrude_stage(&b, dot_depth as f32)
+    } else {
+        bevel_extrude_bm(m, radius as f32, dot_depth as f32).ok()?
+    };
+    dump("extr", &e.pos, &e.faces);
     let s = scale_stage(&e, (dot_size / radius) as f32);
+    dump("scale", &s.pos, &s.faces);
     let mut o = Mesh::new();
     o.pos = s.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
     o.faces = s.faces;
-    let t = crate::coil::triangulate(&o);
-    Some(crate::coil::smooth(&t, smooth_f, 5))
+    let t = triangulate_shortest(&o);
+    let tp: Vec<V3> = t.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    dump("tri", &tp, &t.faces);
+    let f = crate::coil::smooth(&t, smooth_f, 5);
+    let fp: Vec<V3> = f.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    dump("final", &fp, &f.faces);
+    Some(f)
+}
+
+/// TRIANGULATE modifier (min_vertices 4, quad_method SHORTEST_DIAGONAL (the modifier default), ngon_method BEAUTY), float32
+pub fn triangulate_shortest(m: &Mesh) -> Mesh {
+    let mut o = Mesh::new();
+    o.pos = m.pos.clone();
+    let c3 = |v: u32| {
+        let p = m.pos[v as usize];
+        [p[0] as f32, p[1] as f32, p[2] as f32]
+    };
+    for f in &m.faces {
+        if f.len() <= 3 {
+            o.faces.push(f.clone());
+        } else if f.len() == 4 {
+            // l_v1 = corner 1, l_v2 = corner 2, l_v3 = corner 3, l_v4 = corner 0
+            let (v1, v2, v3, v4) = (c3(f[1]), c3(f[2]), c3(f[3]), c3(f[0]));
+            let d1 = q::len_squared_v3v3(v4, v2);
+            let d2 = q::len_squared_v3v3(v1, v3);
+            if (d2 - d1) > 0.0 {
+                o.faces.push(vec![f[0], f[1], f[2]]);
+                o.faces.push(vec![f[0], f[2], f[3]]);
+            } else {
+                o.faces.push(vec![f[0], f[1], f[3]]);
+                o.faces.push(vec![f[1], f[2], f[3]]);
+            }
+        } else {
+            let co: Vec<[f32; 3]> = f.iter().map(|&v| c3(v)).collect();
+            for t in crate::polyfill::triangulate_ngon(&co) {
+                o.faces.push(vec![f[t[0] as usize], f[t[1] as usize], f[t[2] as usize]]);
+            }
+        }
+    }
+    o
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// BMesh version of the two region extrusions: Blender's element order (pool slots), vertex normals of BM_vert_calc_normal_ex
+
+/// bmo_extrude_face_region for the faces `sel` (all selected faces at once): duplicate (verts, edges, faces in pool order), delete the
+/// originals, side faces over the boundary edges. Returns (new faces in pool order, side faces in creation order).
+fn extrude_region_bm(bm: &mut BMesh, sel: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    use crate::bm::NONE;
+    let mut in_f: crate::dhash::HashSet<usize> = crate::dhash::HashSet::default();
+    let mut in_v: crate::dhash::HashSet<usize> = crate::dhash::HashSet::default();
+    let mut in_e: crate::dhash::HashSet<usize> = crate::dhash::HashSet::default();
+    for &f in sel {
+        in_f.insert(f);
+        for v in bm.verts_of_face(f) {
+            in_v.insert(v);
+        }
+        for e in bm.edges_of_face(f) {
+            in_e.insert(e);
+        }
+    }
+    let mut vmap: HashMap<usize, usize> = HashMap::default();
+    let mut emap: HashMap<usize, usize> = HashMap::default();
+    // duplicate: verts, edges, faces in pool order
+    for v in bm.vert_ids() {
+        if in_v.contains(&v) {
+            let nv = bm.vert_create(bm.verts[v].co, None);
+            bm.elem_attrs_copy_vert(v, nv);
+            vmap.insert(v, nv);
+        }
+    }
+    let mut boundary: Vec<(usize, usize)> = vec![];
+    for e in bm.edge_ids() {
+        if in_e.contains(&e) {
+            let (a, b) = (vmap[&bm.edges[e].v1], vmap[&bm.edges[e].v2]);
+            let ne = bm.edge_create(a, b, None, false);
+            bm.elem_attrs_copy_edge(e, ne);
+            // radial faces that are inputs
+            let mut rlen = 0;
+            for f in bm.faces_of_edge(e) {
+                if in_f.contains(&f) {
+                    rlen += 1;
+                }
+            }
+            if rlen < 2 {
+                boundary.push((e, ne));
+            }
+            emap.insert(e, ne);
+        }
+    }
+    let mut new_faces = vec![];
+    for f in bm.face_ids() {
+        if in_f.contains(&f) {
+            let ls = bm.loops_of_face(f);
+            let vt: Vec<usize> = ls.iter().map(|&l| vmap[&bm.loops[l].v]).collect();
+            let et: Vec<usize> = ls.iter().map(|&l| emap[&bm.loops[l].e]).collect();
+            let nf = bm.face_create(&vt, &et, None, false);
+            bm.elem_attrs_copy_face(f, nf);
+            new_faces.push(nf);
+        }
+    }
+    // delete the original faces (the original verts / edges stay: they border non-input faces)
+    for &f in sel {
+        bm.face_kill(f);
+    }
+    let mut walls = vec![];
+    for (e, ne) in boundary {
+        let l = bm.edges[ne].l;
+        let fwd = if l != NONE { bm.loops[l].v == bm.edges[ne].v1 } else { true };
+        let flip = !fwd;
+        let (e1, e2) = (bm.edges[e].v1, bm.edges[e].v2);
+        let (n1, n2) = (bm.edges[ne].v1, bm.edges[ne].v2);
+        let fv = if !flip { [e1, e2, n2, n1] } else { [e2, e1, n1, n2] };
+        let f = bm.face_create_verts(&fv, None, true);
+        walls.push(f);
+    }
+    (new_faces, walls)
+}
+
+/// BM_vert_calc_normal_ex(v, SELECT) for a vertex of the selected face `f` (only `f` is selected around the new vertices)
+fn bm_vert_normal_sel(bm: &BMesh, f: usize, v: usize) -> V3 {
+    let l = bm.face_vert_share_loop(f, v);
+    let co = bm.verts[bm.loops[l].v].co;
+    let prev = bm.verts[bm.loops[bm.loops[l].p].v].co;
+    let next = bm.verts[bm.loops[bm.loops[l].n].v].co;
+    let v1 = normalize_rec(q::sub(co, prev));
+    let v2 = normalize_rec(q::sub(next, co));
+    let fac = saacos(-dotv(v1, v2));
+    let mut no = [0.0f32; 3];
+    let fno = bm.faces[f].no;
+    no = [no[0] + fno[0] * fac, no[1] + fno[1] * fac, no[2] + fno[2] * fac];
+    normalize_rec(no)
+}
+
+/// transform shrink/fatten of the verts of the selected caps: co = co + n * distance
+fn shrink_fatten_bm(bm: &mut BMesh, caps: &[usize], distance: f32) {
+    let mut moves: Vec<(usize, V3)> = vec![];
+    for &f in caps {
+        for v in bm.verts_of_face(f) {
+            let n = bm_vert_normal_sel(bm, f, v);
+            moves.push((v, madd_v(bm.verts[v].co, n, distance)));
+        }
+    }
+    for (v, c) in moves {
+        bm.verts[v].co = c;
+    }
+}
+
+/// bevel -> extrude_region_shrink_fatten(-depth) -> extrude_region_shrink_fatten(+depth) -> select_more x2, all on one BMesh
+pub fn bevel_extrude_bm(m: &Mesh, radius: f32, depth: f32) -> Result<Stage, String> {
+    let mut bm = mesh_to_bm_poked(m);
+    for v in bm.vert_ids() {
+        if bm.edges_of_vert(v).len() == 16 {
+            bm.verts[v].flag |= ELEM_TAG;
+        }
+    }
+    let o = BevelOpts { offset: radius, offset_type: OffsetType::Offset, segments: 1, profile: 0.5, limit_offset: false, loop_slide: true, mat_nr: -1 };
+    bm_mesh_bevel_ex(&mut bm, &o, true)?;
+    bm.normals_update();
+    let caps: Vec<usize> = bm.face_ids().into_iter().filter(|&f| bm.faces[f].len == 16).collect();
+    let (caps1, walls1) = extrude_region_bm(&mut bm, &caps);
+    shrink_fatten_bm(&mut bm, &caps1, -depth);
+    bm.normals_update();
+    let (caps2, walls2) = extrude_region_bm(&mut bm, &caps1);
+    shrink_fatten_bm(&mut bm, &caps2, depth);
+    bm.normals_update();
+    // select_more x2 from the new caps: caps2 + walls2, then walls1 (faces touching their vertices)
+    let mut tip_ids: Vec<usize> = vec![];
+    tip_ids.extend(&caps2);
+    tip_ids.extend(&walls2);
+    tip_ids.extend(&walls1);
+    let (pos, edges, faces) = bm.to_mesh();
+    let fids = bm.face_ids();
+    let mut rank: HashMap<usize, usize> = HashMap::default();
+    for (i, &f) in fids.iter().enumerate() {
+        rank.insert(f, i);
+    }
+    let mut tip: Vec<usize> = tip_ids.iter().map(|f| rank[f]).collect();
+    tip.sort();
+    Ok(Stage { pos, faces, tip, edges })
 }
