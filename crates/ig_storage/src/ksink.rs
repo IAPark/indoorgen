@@ -17,6 +17,8 @@ pub struct KSink {
     protrude: f64,
     curvature: f64,
     fseed: u64,
+    sink_cls: &'static str,
+    tap_cls: &'static str,
 }
 
 impl KSink {
@@ -31,7 +33,10 @@ impl KSink {
         let margin = r.uniform(0.02, 0.05);
         let tap_margin = r.uniform(0.1, 0.12);
         let protrude = r.uniform(0.01, 0.025);
-        KSink { width, depth, upper, lower, hole_radius, margin, tap_margin, protrude, curvature, fseed: 0 }
+        // get_material_params(): Sink then Tap = weighted_sample(metals), continuing the FixedSeed stream
+        let sink_cls = crate::materials::weighted(&mut r, super::matpick::METALS);
+        let tap_cls = crate::materials::weighted(&mut r, super::matpick::METALS);
+        KSink { sink_cls, tap_cls, width, depth, upper, lower, hole_radius, margin, tap_margin, protrude, curvature, fseed: 0 }
     }
     /// bounds of the "Geometry" output of nodegroup_sink_geometry (float32 like Blender)
     fn geo_bounds(&self) -> (V3, V3) {
@@ -75,7 +80,8 @@ impl Factory for KSink {
             t.set_group_default("nodegroup_sink_geometry", &format!("Socket_{k}"), json!(*v));
         }
         let outs = t.run_group("nodegroup_sink_geometry").expect("sink gn");
-        let m = mat("sink", [0.75, 0.75, 0.77], 0.3);
+        let m = super::matpick::spec_of("sink", self.sink_cls, self.fseed);
+        let tap_m = super::matpick::spec_of("sink_tap", self.tap_cls, self.fseed + 1);
         let mut a = Asset::default();
         for (_, g) in &outs {
             a.mesh(super::gnhelpers::to_mesh(g), &m, None);
@@ -86,7 +92,7 @@ impl Factory for KSink {
         for p in tm.pos.iter_mut() {
             *p = [(p[0] as f32 + loc[0]) as f64, (p[1] as f32 + loc[1]) as f64, (p[2] as f32 + loc[2]) as f64];
         }
-        a.mesh(tm, &m, None);
+        a.mesh(tm, &tap_m, None);
         a
     }
 }

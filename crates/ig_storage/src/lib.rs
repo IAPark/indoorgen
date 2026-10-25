@@ -27,6 +27,7 @@ pub mod bevelgn;
 pub mod cabdoor;
 pub mod cookware;
 pub mod gnports;
+pub mod matpick;
 pub mod ksink;
 pub mod pangeom;
 pub mod potbars;

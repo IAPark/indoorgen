@@ -491,7 +491,7 @@ impl Factory for Hardware {
         Some(e)
     }
     fn asset(&self, i: u64) -> Asset {
-        let m = mat("hardware_metal", [0.75, 0.75, 0.77], 0.25);
+        let m = super::matpick::spec_of("hardware_metal", "metal.MetalBasic", self.fseed); // metal_neutral = MetalBasic only
         let mut a = Asset::default();
         let mut r = inst_rng(self.fseed, i);
         // built in the python frame (wall normal = -y), then rotated by pi/2 about z
