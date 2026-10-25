@@ -1,4 +1,5 @@
-// usage: gen2 <seed> [room] [out.glb] [--rust-cloth]
+// usage: gen2 <seed> [room] [out.glb] [--rust-cloth] [--mess LEVEL]
+//   --mess LEVEL: lived-in disorder 0..1 added after the solve (crates/ig_mess); 0 (default) = unchanged output
 //   --rust-cloth: also run the native cloth sim for bed cloth that is exported as a sidecar job (default: skip, Blender re-simulates it)
 use infinigen::furn::assets::TableAssets;
 use infinigen::mesh::*;
@@ -12,7 +13,16 @@ fn main() {
     } else {
         infinigen::assets::cloth::SKIP_JOB_SIM.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    let mess_level: f64 = match args.iter().position(|a| a == "--mess") {
+        Some(i) => {
+            let v = args[i + 1].parse().expect("--mess LEVEL");
+            args.drain(i..i + 2);
+            v
+        }
+        None => 0.0,
+    };
     let seed: u64 = args[1].parse().unwrap();
+    let mess = infinigen::mess::MessCfg { level: mess_level, seed };
     let room = args.get(2).cloned();
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
@@ -20,7 +30,7 @@ fn main() {
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
     let assets = infinigen::assets::RealAssets { fallback };
     let t = std::time::Instant::now();
-    let g = generate(&Options { seed, restrict_room: room, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
+    let mut g = generate(&Options { seed, restrict_room: room, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, infinigen::assets::thread_cpu());
     if std::env::var("EVAL").is_ok() {
         let (prog, _) = infinigen::pipeline::load_program(seed, &prog);
@@ -104,6 +114,8 @@ fn main() {
             }
         }
     }
+    // mess pass, part 1: furniture states on the solved layout (no-op at --mess 0)
+    infinigen::mess::states::apply(&mut g.state, &mess);
     // build the final assets of all generated objects in parallel (each build is independent and deterministic; results are consumed in
     // the original order below)
     let visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
@@ -176,6 +188,8 @@ fn main() {
     }
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = std::time::Instant::now();
+    // mess pass, part 2: clutter (no-op at --mess 0)
+    infinigen::mess::clutter::apply(&mut scene, &g.state, &visuals, &mess);
     scene.write_glb(&out).unwrap();
     if infinigen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());

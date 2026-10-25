@@ -46,6 +46,7 @@ ig_gn = { path = "crates/ig_gn" }
 ig_furn = { path = "crates/ig_furn" }
 ig_rooms = { path = "crates/ig_rooms" }
 ig_assets = { path = "crates/ig_assets" }
+ig_mess = { path = "crates/ig_mess" }
 
 [profile.release]
 opt-level = 3
