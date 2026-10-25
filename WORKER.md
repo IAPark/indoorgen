@@ -1,7 +1,8 @@
 # Worker guide (read first, it is short)
 
 Project: Rust port of Infinigen Indoors scene generation (`~/work/infinigen-rs`, python reference `~/work/infinigen-ref`,
-venv python `~/work/infinigen-ref/.venv/bin/python`, bpy 4.2). Goal: Rust scenes as good as the reference; assets should
+venv python `~/work/infinigen-ref/.venv/bin/python`, bpy 4.2: the reference/oracle for geometry checks).
+Rust renders (`~/work/ref/scripts/render_rust.py`) use Blender 5.2: `~/work/infinigen-ref/.venv52/bin/python` (bpy 5.2.3, Python 3.13; Infinigen installed --no-deps; render_rust.py patches the renamed sky model at runtime). Copies of the render scripts: tools/render_scripts/. Goal: Rust scenes as good as the reference; assets should
 reproduce the python meshes (surface-equal is the bar, exact vertex order is a bonus) and placeholders/bboxes exactly.
 Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work items), `DONE-*.md` in git history.
 
