@@ -3,7 +3,10 @@
 //! - `body`  (owner: people-body worker): avatar library loading (FBX via assimp), skinning, pose library, materials.
 //! - `place` (owner: people-place worker): choosing spots + poses from the solved State, collision checks.
 //! The contract between them is `PoseKind`, `PoseInfo`, `pose_info` and `build_person` below.
+pub mod avatar;
 pub mod body;
+pub mod poses;
+pub mod rig;
 pub mod place;
 
 pub use ig_core::*;
