@@ -40,6 +40,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | D6 | FoodBag (WELD + bmesh extrude + musgrave geo_extension) | todo | not started |
 | D7 | Cup / Lid handles (exact BOOLEAN) | todo | unblocked (src/exbool on master), not started |
 | D8 | Lid knob bevel degenerate quads | todo | |
+| D9 | Balloon (BalloonFactory) | surface-near (balloon) | Bfont glyph table (crates/ig_decor/data/bfont_caps.json, dumped from bpy) -> forward-diff bezier res 12 -> earcut fill: text stage surface-exact (431 verts, max 5e-7); remesh_fill (solidify + dualcon SHARP + nearest-surface top drop) vs stage 006: 3435/3439 verts, mean 8e-6 (4 verts ~0.017); ring subdivide linear; cloth = fitted Rust stand-in `inflate` (Blender barely inflates: shells +-0.022*(1-exp(-d/0.03)), the 20 s XPBD overinflates); subsurf/scale/rot/displace/smooth exact vs Blender given Blender cloth (mean 1e-7). refcmp 0-5: surf mean 2.9e-3..1.0e-2 (was 0.2-0.26), nv within 1%. Next: sidecar cloth job (needs ClothJob.post + cloth_jobs.py change, orchestrator OK), xy rim shrink of the cloth |
 
 ## Framework / pipeline (worker: frame)
 | id | item | status | notes |
