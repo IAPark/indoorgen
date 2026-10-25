@@ -52,8 +52,9 @@ impl Factory for CeilingLight {
         let (r, t, h) = (self.radius, self.thickness, self.height);
         let mut a = Asset::default();
         // housing: ring wall (outer R+t / inner R), flat top disc
-        let mut wall = Mesh::frustum(0.0, 0.0, -h, 0.0, r + t, r + t, 48);
-        wall.append(&Mesh::cylinder(0.0, 0.0, -h, 0.0, r, 48).flipped());
+        // open tubes: Mesh::cylinder/frustum add end caps, which closed the housing and trapped the point light inside
+        let mut wall = open_tube(r + t, -h, 0.0, 48);
+        wall.append(&open_tube(r, -h, 0.0, 48).flipped());
         let rim = ring_flat(r, r + t, -h, 48);
         wall.append(&rim);
         let disc = Mesh::cylinder(0.0, 0.0, -0.0005, 0.0, r, 48);
@@ -62,7 +63,7 @@ impl Factory for CeilingLight {
         a.mesh(wall, &black, Some(wb));
         // bulb cover: cylinder + curved cap (translucent to light, transparent to the camera)
         let ih = self.inner_height;
-        let mut cover = Mesh::cylinder(0.0, 0.0, -ih, -0.001, self.inner_radius, 32);
+        let mut cover = Mesh::cylinder(0.0, 0.0, -ih, -0.001, self.inner_radius, 32); // python: CurveToMesh with Fill Caps
         let mut cap = Mesh::ellipsoid([0.0, 0.0, -ih], [self.inner_radius, self.inner_radius, self.inner_radius * self.curvature], 32, 8);
         // keep the lower hemisphere only
         let mut keep = Mesh::new();
@@ -78,6 +79,16 @@ impl Factory for CeilingLight {
         a.mesh(cover, &white, Some(cb));
         a
     }
+}
+
+/// side wall of a cylinder (no end caps), outward normals
+fn open_tube(r: f64, z0: f64, z1: f64, n: usize) -> Mesh {
+    let mut m = Mesh::new();
+    for i in 0..n {
+        let (a0, a1) = (std::f64::consts::TAU * i as f64 / n as f64, std::f64::consts::TAU * (i + 1) as f64 / n as f64);
+        m.add_quad([r * a0.cos(), r * a0.sin(), z0], [r * a1.cos(), r * a1.sin(), z0], [r * a1.cos(), r * a1.sin(), z1], [r * a0.cos(), r * a0.sin(), z1]);
+    }
+    m
 }
 
 fn ring_flat(r0: f64, r1: f64, z: f64, n: usize) -> Mesh {
