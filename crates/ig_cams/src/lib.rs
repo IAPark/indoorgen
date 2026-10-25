@@ -184,7 +184,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             tries += 1;
             cam_tries += 1;
             // subject: people first, weights decay with use
-            let ws: Vec<f64> = cand.iter().enumerate().map(|(i, s)| if has_people && got.is_empty() && !s.person { 0.0 } else { s.w / (1.0 + 3.0 * used[i]) }).collect();
+            let ws: Vec<f64> = cand.iter().enumerate().map(|(i, s)| if has_people && got.is_empty() && !s.person { 0.0 } else { s.w / (1.0 + 6.0 * used[i]) }).collect();
             let si = rng.choice_p(&ws);
             let s = &cand[si];
             let sc = [(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0];
@@ -257,7 +257,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                 Some((px, py)) if px.abs() < 0.75 && py.abs() < 0.75 => {}
                 _ => continue,
             }
-            // coarse ray grid
+            // coarse ray grid (stricter near-occluder test first, the spec's 0.6 m / 15% after 350 failed tries)
+            let (near_d, near_f) = if cam_tries < 350 { (0.9, 0.08) } else { (0.6, 0.15) };
             let (gw, gh) = (16, 9);
             let (mut near, mut close, mut tot, mut dsum) = (0, 0, 0, 0.0f64);
             for iy in 0..gh {
@@ -269,13 +270,13 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     if let Some((t, _)) = w.cast(o, d, 6.0) {
                         dsum += t;
                         if t < 1.2 { close += 1 }
-                        if t < 0.7 { near += 1 }
+                        if t < near_d { near += 1 }
                     } else {
                         dsum += 6.0;
                     }
                 }
             }
-            if near as f64 > 0.10 * tot as f64 || close as f64 > 0.6 * tot as f64 { continue }
+            if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { continue }
             // subject visibility: 3x3x3 sample points
             let (mut vis, mut n) = (0, 0);
             for ix in 0..3 {
