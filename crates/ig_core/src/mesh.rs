@@ -173,23 +173,23 @@ impl Mesh {
     /// Export form: (positions, uv, triangles) where quads/n-gons are fan-triangulated with the fan's shared
     /// vertices duplicated for k >= 2 (matching the old triangle-soup layout, so per-triangle normals/uvs are identical).
     fn export_tris(&self) -> (Vec<V3>, Vec<[f64; 2]>, Vec<[u32; 3]>) {
+        // Full triangle soup: every triangle owns its 3 vertices. The exporter computes smooth-by-angle normals per vertex
+        // (welding by position), so a vertex index shared by faces at a sharp corner would get the normal of whichever triangle was
+        // processed last (dark / flipped-looking triangles on flat panels of indexed meshes such as the exact KitchenSpace slab).
         let has_uv = self.uv.len() == self.pos.len();
-        let mut pos = self.pos.clone();
-        let mut uv = if has_uv { self.uv.clone() } else { vec![] };
+        let mut pos: Vec<V3> = Vec::with_capacity(self.faces.len() * 6);
+        let mut uv: Vec<[f64; 2]> = vec![];
         let mut tris = Vec::with_capacity(self.faces.len() * 2);
         for f in &self.faces {
             for k in 1..f.len() - 1 {
-                if k == 1 {
-                    tris.push([f[0], f[1], f[2]]);
-                } else {
-                    let (a, b) = (f[0] as usize, f[k] as usize);
-                    let n = pos.len() as u32;
-                    pos.extend([self.pos[a], self.pos[b]]);
+                let n = pos.len() as u32;
+                for &i in &[f[0], f[k], f[k + 1]] {
+                    pos.push(self.pos[i as usize]);
                     if has_uv {
-                        uv.extend([self.uv[a], self.uv[b]]);
+                        uv.push(self.uv[i as usize]);
                     }
-                    tris.push([n, n + 1, f[k + 1]]);
                 }
+                tris.push([n, n + 1, n + 2]);
             }
         }
         (pos, uv, tris)
