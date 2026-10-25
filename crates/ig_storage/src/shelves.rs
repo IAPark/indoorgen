@@ -541,9 +541,11 @@ pub struct KitchenSpace {
 impl KitchenSpace {
     fn new(rng: &mut Rng, island: bool, factory_seed: u64) -> KitchenSpace {
         let mut r = rng.clone();
-        let mut dims = [r.uniform(0.7, 1.0), r.uniform(1.7, 5.0), r.uniform(2.3, 2.5)];
+        // python: dimensions = mathutils.Vector((...)) => float32 components (also after `dimensions.x *= uniform(1.5, 2)`)
+        let f = |x: f64| x as f32 as f64;
+        let mut dims = [f(r.uniform(0.7, 1.0)), f(r.uniform(1.7, 5.0)), f(r.uniform(2.3, 2.5))];
         if island {
-            dims[0] *= r.uniform(1.5, 2.0);
+            dims[0] = f(dims[0] * r.uniform(1.5, 2.0));
         }
         let bottom_h = r.uniform(0.8, 1.0);
         let top_h = r.uniform(0.8, 1.0);
@@ -700,8 +702,10 @@ impl Factory for KitchenSpace {
             return None;
         }
         let [x, y, z] = self.dims;
-        let b1 = cabnodes::new_bbox_exact([-x / 2.0 * 1.08, 0.0, 0.0], [x / 2.0 * 1.08, y, self.bottom_h + 0.13]);
-        let b2 = cabnodes::new_bbox_exact([-x / 2.0, 0.0, z - self.top_h - 0.1], [x * 0.16, y, z]);
+        let (l1, h1) = super::geomkit::new_bbox_f32(-x / 2.0 * 1.08, x / 2.0 * 1.08, 0.0, y, 0.0, self.bottom_h + 0.13);
+        let (l2, h2) = super::geomkit::new_bbox_f32(-x / 2.0, x * 0.16, 0.0, y, z - self.top_h - 0.1, z);
+        let b1 = cabnodes::new_bbox_exact(l1, h1);
+        let b2 = cabnodes::new_bbox_exact(l2, h2);
         let mut e = b1.clone();
         e.names[5] = "support".into();
         e.names[11] = "support".into();

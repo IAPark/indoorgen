@@ -43,8 +43,10 @@ fn main() {
         if let (true, Some(g)) = (real, gopt) {
             let d = (0..3).map(|k| (g.lo[k] - lo[k]).abs().max((g.hi[k] - hi[k]).abs())).fold(0.0, f64::max);
             if std::env::var_os("PHVERT").is_some() {
-                let ok = match &g.convex { Some(c) => c.len() == verts.len() && c.iter().zip(verts.iter()).all(|(a, b)| (0..3).all(|k| a[k] == b[k])), None => false };
-                if !ok { eprintln!("VERTDIFF {} fs {} inst {} rust {:?} py {:?}", class, fs, inst, g.convex.as_ref().map(|c| c.iter().take(3).cloned().collect::<Vec<_>>()), &verts[..3.min(verts.len())]); }
+                let polys = j["polys"].as_array().unwrap();
+                let ok = polys.len() == g.tris.len() && polys.iter().zip(g.tris.iter()).all(|(p, t)| { let ix: Vec<usize> = p.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(); (0..3).all(|k| t.v[k] == verts[ix[k]]) });
+                if !ok { eprintln!("VERTDIFF {} fs {} inst {} rust tris {} py {}", class, fs, inst, g.tris.len(), polys.len());
+                    if std::env::var("PHVERT").unwrap() == "2" { for (p, t) in polys.iter().zip(g.tris.iter()) { let ix: Vec<usize> = p.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(); if !(0..3).all(|k| t.v[k] == verts[ix[k]]) { eprintln!("   first diff: py {:?} rust {:?}", ix.iter().map(|&i| verts[i]).collect::<Vec<_>>(), t.v); break; } } } }
             }
             if std::env::var_os("PHTAGS").is_some() {
                 let names = j["face_names"].as_array().cloned().unwrap_or_default();
