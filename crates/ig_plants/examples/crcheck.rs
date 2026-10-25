@@ -54,8 +54,80 @@ fn cmp(name: &str, a: &CMesh, co: &[f32], sizes: &[i64], idx: &[i64]) {
     println!("{line}");
 }
 
+fn flat(j: &J, out: &mut Vec<f64>) {
+    match j {
+        J::Number(n) => out.push(n.as_f64().unwrap()),
+        J::Array(a) => a.iter().for_each(|x| flat(x, out)),
+        J::Object(m) => {
+            let mut ks: Vec<&String> = m.keys().collect();
+            ks.sort();
+            for k in ks {
+                flat(&m[k], out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn nurbs_json(p: &ig_plants::creature_nurbs::NurbsParams) -> J {
+    serde_json::json!({"ts": p.ts, "rads": p.rads, "skeleton_root": p.skeleton_root, "skeleton_yoffs": p.skeleton_yoffs, "length": p.length, "proportions": p.proportions, "thetas": p.thetas, "profiles_norm": p.profiles_norm})
+}
+
+/// compare the Rust genome (python draw order) with the dumped part parameters
+fn genome_check(dir: &str, fs: u64, herb: bool) {
+    use ig_plants::creature_gen::*;
+    let d: J = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/parts.json")).unwrap()).unwrap();
+    let mut r0 = ig_kit::inst_rng(fs, 0);
+    let i2 = r0.randint(0, 10_000_000) as u64;
+    let mut r = ig_kit::inst_rng(fs, i2);
+    let (g, root) = if herb { herbivore_genome(&mut r) } else { tiger_genome(&mut r) };
+    let order = g.preorder(root);
+    let parts = d["parts"].as_array().unwrap();
+    println!("genome: {} nodes (python {} parts), i2 {}", order.len(), parts.len(), i2);
+    for (k, &ni) in order.iter().enumerate() {
+        let fac = &g.facs[g.nodes[ni].fac];
+        let (cls, mine): (String, J) = match &fac.kind {
+            Kind::NurbsBody(p) => ("NurbsBody".into(), nurbs_json(p)),
+            Kind::NurbsHead(p) => ("NurbsHead".into(), nurbs_json(p)),
+            k => (format!("{:?}", k), fac.params.clone()),
+        };
+        let pj = &parts[k];
+        let pcls = pj["cls"].as_str().unwrap();
+        let mut a = vec![];
+        let mut b = vec![];
+        flat(&mine, &mut a);
+        flat(&pj["params"], &mut b);
+        let mut mx = 0f64;
+        if a.len() == b.len() {
+            for (x, y) in a.iter().zip(b.iter()) {
+                mx = mx.max((x - y).abs() / (1.0 + y.abs()));
+            }
+        }
+        let att = &g.nodes[ni].att;
+        let pa = &d["posed"][k]["att"];
+        let mut amx = 0f64;
+        if let Some(att) = att {
+            let mut pc = vec![];
+            flat(&pa["coord"], &mut pc);
+            for c in 0..3 {
+                amx = amx.max((att.coord[c] - pc[c]).abs());
+            }
+            if att.side as i64 != pa["side"].as_i64().unwrap() {
+                amx = 99.0;
+            }
+        }
+        let ok = cls.starts_with(&pcls[..3.min(pcls.len())]) || cls == pcls;
+        println!("  {k:2} {cls:14} py {pcls:18} params n {}/{} maxrel {:.1e}  att coord maxerr {:.1e} {}", a.len(), b.len(), mx, amx, if ok { "" } else { "CLASS?" });
+    }
+}
+
 fn main() {
     let dir = std::env::args().nth(1).unwrap();
+    if std::env::args().nth(2).as_deref() == Some("genome") {
+        let fs: u64 = std::env::args().nth(3).unwrap().parse().unwrap();
+        genome_check(&dir, fs, std::env::args().nth(4).as_deref() == Some("herb"));
+        return;
+    }
     let only = std::env::args().nth(2);
     let d: J = serde_json::from_str(&std::fs::read_to_string(format!("{dir}/parts.json")).unwrap()).unwrap();
     for (i, p) in d["parts"].as_array().unwrap().iter().enumerate() {
