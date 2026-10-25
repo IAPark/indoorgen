@@ -49,6 +49,20 @@ fn main() {
     }
     // lights_off stage: chance 0.2 (python: stage runs when uniform() <= chance)
     let lights_off = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "lights_off", "0"])).f64() <= 0.2;
+    if std::env::var("TILTCHECK").is_ok() {
+        // every placed object must only be rotated about the vertical axis (python's solver never tilts furniture)
+        let mut tilted = 0;
+        for (k, o) in &g.state.objs {
+            if let Some(gen) = &o.generator {
+                let r = o.pose.r;
+                if (r[2][2] - 1.0).abs() > 1e-4 || r[2][0].abs() > 1e-4 || r[2][1].abs() > 1e-4 || r[0][2].abs() > 1e-4 || r[1][2].abs() > 1e-4 {
+                    tilted += 1;
+                    eprintln!("TILTED {k} {} r={:?}", gen.class, r);
+                }
+            }
+        }
+        eprintln!("TILTCHECK {} objects tilted", tilted);
+    }
     if std::env::var("POSES").is_ok() {
         for (k, o) in &g.state.objs {
             if let Some(gen) = &o.generator {
