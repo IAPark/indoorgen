@@ -80,10 +80,21 @@ pub fn build(s: &Sink, r: &mut Rng) -> SinkBuilt {
         o
     } else {
         let p = bathtub::bowl_params(t);
-        let bowl = bathfree::make_bowl(&p);
-        let rt = bathfree::remove_top(&bowl, p.depth);
-        let sol = bathfree::solidify(&rt, t.thickness, -1.0);
-        super::subsurf::subsurf_bl(&sol, 2, false)
+        // every step carries the UV topology of the bpy cylinder (uvlab.rs): Blender refines UV-carrying meshes with a face-varying channel
+        let dump = |name: &str, m: &Mesh| {
+            if let Ok(d) = std::env::var("SINKDUMP") {
+                let v: Vec<Vec<f32>> = m.pos.iter().map(|p| vec![p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+                let _ = std::fs::write(format!("{d}/{name}.json"), serde_json::json!({"verts": v}).to_string());
+            }
+        };
+        let (bowl, lab) = bathfree::make_bowl_uv(&p);
+        dump("bowl", &bowl);
+        let (rt, lab) = bathfree::remove_top_uv(&bowl, &lab, p.depth);
+        let (sol, lab) = bathfree::solidify_exact(&rt, &lab, t.thickness, -1.0);
+        dump("solid", &sol);
+        let fin = super::uvlab::subsurf_uv(&sol, &lab, 2, false, None).expect("osd").0;
+        dump("side", &fin);
+        fin
     };
     // obj.location -= min(co); apply; scale = [width, size, depth] / dimensions; apply
     let mut lo = [f32::INFINITY; 3];
@@ -120,7 +131,7 @@ pub fn build(s: &Sink, r: &mut Rng) -> SinkBuilt {
         obj = join(&[&obj, &st]);
     }
     stage(&mut stages, "prehole", "prehole", &obj);
-    let hole = bathtub::add_hole(t, &obj, r, true);
+    let hole = bathtub::add_hole(t, &obj, r, true, true);
     if std::env::var("HOLEDBG").is_ok() {
         eprintln!("BODYN {} subsurf-nv", obj.pos.len());
     }

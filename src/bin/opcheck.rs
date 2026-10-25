@@ -224,7 +224,7 @@ fn r_solidify(c: &Case, p: &Value) -> Res {
                 _ => Boundary::Flat,
             };
             let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-            let r = solidify_nonmanifold(&pos, &c.mesh.faces, th as f32, off as f32, b)?;
+            let r = solidify_nonmanifold_ex(&pos, &c.mesh.faces, if std::env::var("SOLNOEDGES").is_ok() { None } else { c.edges.as_deref() }, th as f32, off as f32, b)?;
             let mut m = Mesh::new();
             m.pos = r.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
             m.faces = r.faces;
@@ -275,6 +275,24 @@ fn r_subsurf(c: &Case, p: &Value) -> Res {
     };
     if std::env::var("SUBSURF_OLD").is_ok() {
         return Ok(infinigen::assets::subsurf::subsurf(&c.mesh, lv, simple));
+    }
+    // optional per-loop UV (case key "uv", from tools/stagedump_uv): Blender refines UV-carrying meshes with a face-varying channel
+    let uvids: Option<Vec<i32>> = c.j.get("uv").and_then(|u| u.as_array()).map(|u| {
+        let mut ids: std::collections::HashMap<(u32, u64, u64), i32> = std::collections::HashMap::new();
+        let mut out = vec![];
+        let mut li = 0;
+        for f in &c.mesh.faces {
+            for &v in f {
+                let (a, b) = (u[li][0].as_f64().unwrap().to_bits(), u[li][1].as_f64().unwrap().to_bits());
+                let n = ids.len() as i32;
+                out.push(*ids.entry((v, a, b)).or_insert(n));
+                li += 1;
+            }
+        }
+        out
+    });
+    if uvids.is_some() {
+        return infinigen::assets::subsurf::subsurf_osd_uv(&c.mesh, lv, simple, true, pi(p, "quality", 3) as usize, c.edges.as_deref(), uvids.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string());
     }
     infinigen::assets::subsurf::subsurf_osd(&c.mesh, lv, simple, c.edges.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string())
 }

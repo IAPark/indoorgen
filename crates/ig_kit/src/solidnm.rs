@@ -388,3 +388,377 @@ pub fn solidify_nonmanifold(pos: &[V3], faces: &[Vec<u32>], thickness: f32, offs
     }
     Ok(SolidifyOut { pos: out_pos, faces: out_faces })
 }
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// Faithful port of the edge-group construction of MOD_solidify_nonmanifold.cc (no vertex merging / duplicate-face filtering / self-intersection
+// splitting): the ORDER of the constraint planes of a vertex (decides the dedupe / least-squares choice) follows Blender's group walk.
+
+#[derive(Clone, Copy)]
+struct NewEdge {
+    old_edge: usize,
+    /// face-side refs (face*2 + reversed); `None` = open
+    faces: [Option<usize>; 2],
+}
+
+struct Group {
+    edges: Vec<usize>,
+    is_orig_closed: bool,
+}
+
+fn angle_signed_on_axis(n: V3, ref_n: V3, axis: V3) -> f32 {
+    let d = dot(n, ref_n).clamp(-1.0, 1.0);
+    let mut angle = d.acos();
+    let c = cross(n, ref_n);
+    if dot(c, axis) >= 0.0 {
+        angle = (2.0 * std::f64::consts::PI - angle as f64) as f32;
+    }
+    angle
+}
+
+/// Blender-like edge list when none is known: first use by the face corners, as (corner vertex, next vertex)
+pub fn edges_by_first_use(faces: &[Vec<u32>]) -> Vec<[u32; 2]> {
+    let mut seen: HashMap<(u32, u32), ()> = HashMap::default();
+    let mut out = vec![];
+    for f in faces {
+        for c in 0..f.len() {
+            let (a, b) = (f[c], f[(c + 1) % f.len()]);
+            if seen.insert((a.min(b), a.max(b)), ()).is_none() {
+                out.push([a, b]);
+            }
+        }
+    }
+    out
+}
+
+/// `edges`: the Blender mesh's edge list (order and vertex order inside each edge matter for the plane order), None = `edges_by_first_use`.
+pub fn solidify_nonmanifold_ex(pos: &[V3], faces: &[Vec<u32>], edges: Option<&[[u32; 2]]>, thickness: f32, offset_fac: f32, boundary: Boundary) -> Result<SolidifyOut, String> {
+    let n = pos.len();
+    let owned;
+    let edges: &[[u32; 2]] = match edges {
+        Some(e) => e,
+        None => {
+            owned = edges_by_first_use(faces);
+            &owned
+        }
+    };
+    let ofs_front = (offset_fac + 1.0f32) * 0.5f32 * thickness;
+    let ofs_back = ofs_front - thickness * offset_fac;
+    let ofs_front_c = clamp_nonzero(ofs_front, 1e-5);
+    let ofs_back_c = clamp_nonzero(ofs_back, 1e-5);
+    // Mesh::face_normals() as the modifier sees it: Newell for every face size (verified against Blender 4.2; python's polygon.normal of tri / quad
+    // faces differs in the last bits, which decides near-parallel plane merges)
+    let mut fno: Vec<V3> = faces.iter().map(|f| crate::solidx::face_normal_v(pos, f)).collect();
+    let mut null_face = vec![false; faces.len()];
+    let mut emap: HashMap<(u32, u32), usize> = HashMap::default();
+    for (i, e) in edges.iter().enumerate() {
+        emap.insert((e[0].min(e[1]), e[0].max(e[1])), i);
+    }
+    let corner_edge = |f: &Vec<u32>, c: usize| -> Result<usize, String> {
+        let (a, b) = (f[c], f[(c + 1) % f.len()]);
+        emap.get(&(a.min(b), a.max(b))).copied().ok_or_else(|| "face edge missing in edge list".to_string())
+    };
+    for (fi, f) in faces.iter().enumerate() {
+        if dot(fno[fi], fno[fi]) < 0.5 {
+            let e = edges[corner_edge(f, 0)?];
+            let d = sub(pos[e[1] as usize], pos[e[0] as usize]);
+            if d[2].abs() < d[1].abs() {
+                fno[fi][2] = 1.0;
+            } else {
+                fno[fi][1] = 1.0;
+            }
+            null_face[fi] = true;
+        }
+    }
+    // edge -> adjacent (face, reversed) in face order
+    let mut adj: Vec<Vec<(usize, bool)>> = vec![vec![]; edges.len()];
+    for (fi, f) in faces.iter().enumerate() {
+        for c in 0..f.len() {
+            let e = corner_edge(f, c)?;
+            adj[e].push((fi, edges[e][1] != f[c]));
+        }
+    }
+    // new edges
+    let mut new_edges: Vec<NewEdge> = vec![];
+    let mut edge_new: Vec<Vec<usize>> = vec![vec![]; edges.len()];
+    for (i, e) in edges.iter().enumerate() {
+        if adj[i].is_empty() {
+            continue;
+        }
+        let (v1, v2) = (e[0] as usize, e[1] as usize);
+        let (a, b) = if v2 < v1 { (v2, v1) } else { (v1, v2) };
+        let d = sub(pos[b], pos[a]);
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if len * len <= 1e-8 || len <= f32::EPSILON {
+            return Err("degenerate edge (merge path not ported)".into());
+        }
+        let edgedir = mul(sub(pos[v2], pos[v1]), 1.0f32 / len);
+        let al = adj[i].len();
+        let mut sorted: Vec<(f32, usize)> = vec![];
+        if al > 1 {
+            let mut ref_nor = [0.0f32; 3];
+            for (j, &(fi, rev)) in adj[i].iter().enumerate() {
+                let mut nor = if rev { neg(fno[fi]) } else { fno[fi] };
+                let mut dd = 1.0f32;
+                if faces[fi].len() > 3 {
+                    dd = dot(nor, edgedir);
+                    nor = sub(nor, mul(edgedir, dd));
+                    if dd != 0.0 {
+                        let (nn, l) = normalize_len(nor);
+                        nor = nn;
+                        dd = l;
+                    } else {
+                        dd = 1.0;
+                    }
+                }
+                let angle = if dd == 0.0 {
+                    0.0
+                } else if j == 0 {
+                    ref_nor = nor;
+                    0.0
+                } else {
+                    -angle_signed_on_axis(nor, ref_nor, edgedir)
+                };
+                sorted.push((angle, fi * 2 + rev as usize));
+            }
+            crate::bpyops::libc_qsort(&mut sorted, &|x: &(f32, usize), y: &(f32, usize)| (x.0 > y.0) as i32 - (x.0 < y.0) as i32);
+        } else {
+            sorted.push((0.0, adj[i][0].0 * 2 + adj[i][0].1 as usize));
+        }
+        let cnt = if al > 1 { al } else { 2 };
+        for j in 0..cnt {
+            let ne = if al > 1 {
+                let nj = if j + 1 == al { 0 } else { j + 1 };
+                NewEdge { old_edge: i, faces: [Some(sorted[j].1), Some(sorted[nj].1 ^ 1)] }
+            } else {
+                NewEdge { old_edge: i, faces: [Some(sorted[0].1 ^ j), None] }
+            };
+            edge_new[i].push(new_edges.len());
+            new_edges.push(ne);
+        }
+    }
+    // vertex -> incident edges (edge index order)
+    let mut vedges: Vec<Vec<usize>> = vec![vec![]; n];
+    for (i, e) in edges.iter().enumerate() {
+        if adj[i].is_empty() {
+            continue;
+        }
+        vedges[e[0] as usize].push(i);
+        vedges[e[1] as usize].push(i);
+    }
+    let mut front = vec![[0.0f32; 3]; n];
+    let mut back = vec![[0.0f32; 3]; n];
+    let opp = |r: usize| r ^ 1;
+    for v in 0..n {
+        if vedges[v].len() < 2 {
+            front[v] = pos[v];
+            back[v] = pos[v];
+            continue;
+        }
+        let un: Vec<usize> = vedges[v].iter().flat_map(|&e| edge_new[e].iter().copied()).collect();
+        let mut unassigned: Vec<Option<usize>> = un.iter().map(|&x| Some(x)).collect();
+        let mut groups: Vec<Group> = vec![];
+        let mut track: [Option<usize>; 2] = [None, None];
+        let mut last_open: Option<usize> = None;
+        let mut assigned = 0;
+        let mut eg: isize = -1;
+        while assigned < unassigned.len() {
+            let mut found: Option<(usize, usize)> = None;
+            let mut at_start = false;
+            if eg >= 0 && groups[eg as usize].edges.is_empty() {
+                let mut j = 0;
+                let mut edge: Option<usize> = None;
+                while edge.is_none() && j < unassigned.len() {
+                    edge = unassigned[j];
+                    j += 1;
+                    if let (Some(e), Some(lo)) = (edge, last_open) {
+                        if new_edges[e].faces[0] != Some(lo) || new_edges[e].faces[1].is_some() {
+                            edge = None;
+                        }
+                    }
+                }
+                if edge.is_none() && last_open.is_some() {
+                    last_open = None;
+                    j = 0;
+                    while edge.is_none() && j < unassigned.len() {
+                        edge = unassigned[j];
+                        j += 1;
+                    }
+                }
+                let e = edge.ok_or("edge group walk: no start edge")?;
+                found = Some((e, j - 1));
+                let ne = new_edges[e];
+                if last_open.is_none() && edges[ne.old_edge][0] as usize == v {
+                    track = [ne.faces[0], ne.faces[1]];
+                    if ne.faces[1].is_none() {
+                        last_open = Some(opp(ne.faces[0].unwrap()));
+                    }
+                } else {
+                    track = [ne.faces[1], ne.faces[0]];
+                }
+            } else if eg >= 0 {
+                for idx in 0..unassigned.len() {
+                    let Some(e) = unassigned[idx] else { continue };
+                    let ne = new_edges[e];
+                    if ne.faces[0].is_some() && ne.faces[0] == track[1] {
+                        at_start = false;
+                        track[1] = ne.faces[1];
+                        found = Some((e, idx));
+                        if ne.faces[1].is_none() {
+                            groups[eg as usize].is_orig_closed = false;
+                            last_open = Some(opp(ne.faces[0].unwrap()));
+                        }
+                        break;
+                    }
+                    if ne.faces[0].is_some() && ne.faces[0] == track[0] {
+                        at_start = true;
+                        track[0] = ne.faces[1];
+                        found = Some((e, idx));
+                        if ne.faces[1].is_none() {
+                            groups[eg as usize].is_orig_closed = false;
+                        }
+                        break;
+                    }
+                    if ne.faces[1].is_some() {
+                        if ne.faces[1] == track[1] {
+                            at_start = false;
+                            track[1] = ne.faces[0];
+                            found = Some((e, idx));
+                            break;
+                        }
+                        if ne.faces[1] == track[0] {
+                            at_start = true;
+                            track[0] = ne.faces[0];
+                            found = Some((e, idx));
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some((e, idx)) = found {
+                unassigned[idx] = None;
+                assigned += 1;
+                let g = &mut groups[eg as usize];
+                if at_start {
+                    g.edges.insert(0, e);
+                } else {
+                    g.edges.push(e);
+                }
+                if new_edges[*g.edges.last().unwrap()].faces[1].is_some() {
+                    last_open = None;
+                }
+            } else {
+                eg += 1;
+                groups.push(Group { edges: vec![], is_orig_closed: true });
+                track = [None, None];
+            }
+        }
+        // long groups containing the same old edge twice need the split logic (not ported)
+        for g in &groups {
+            if g.edges.len() > 3 {
+                for a in 0..g.edges.len() {
+                    for b in a + 1..g.edges.len() {
+                        if new_edges[g.edges[a]].old_edge == new_edges[g.edges[b]].old_edge {
+                            return Err("self-intersecting edge group (split not ported)".into());
+                        }
+                    }
+                }
+            }
+        }
+        let mut got_front = false;
+        let mut got_back = false;
+        for g in &groups {
+            if g.edges.is_empty() {
+                continue;
+            }
+            let glen = g.edges.len();
+            let cycle = g.is_orig_closed;
+            let mut planes: Vec<[f32; 4]> = vec![];
+            let mut fallback: Option<(V3, f32)> = None;
+            let mut first_edge: Option<usize> = None;
+            for k in 0..glen {
+                if k & 1 == 0 || (!cycle && k == glen - 1) {
+                    let e = new_edges[g.edges[k]];
+                    for l in 0..2 {
+                        if let Some(face) = e.faces[l] {
+                            let skip = match first_edge {
+                                Some(fe) => new_edges[fe].faces[0] == Some(face) || new_edges[fe].faces[1] == Some(face),
+                                None => false,
+                            };
+                            if !skip {
+                                let rev = face & 1 == 1;
+                                let ofs = if rev { ofs_back_c } else { ofs_front_c };
+                                let fi = face >> 1;
+                                let nn = if rev { neg(fno[fi]) } else { fno[fi] };
+                                if !null_face[fi] {
+                                    planes.push(v4(nn, ofs));
+                                } else {
+                                    fallback = Some((nn, ofs));
+                                }
+                            }
+                        }
+                    }
+                    if (cycle && k == 0) || (!cycle && k + 3 >= glen) {
+                        first_edge = Some(g.edges[k]);
+                    }
+                }
+            }
+            let dirs: Vec<V3> = g
+                .edges
+                .iter()
+                .map(|&ne| {
+                    let e = edges[new_edges[ne].old_edge];
+                    let o = if e[0] as usize == v { e[1] } else { e[0] };
+                    sub(pos[o as usize], pos[v])
+                })
+                .collect();
+            let side = |ne: usize| -> V3 {
+                let r = new_edges[ne].faces[0].unwrap();
+                if r & 1 == 1 {
+                    neg(fno[r >> 1])
+                } else {
+                    fno[r >> 1]
+                }
+            };
+            let round = Some((side(g.edges[0]), side(g.edges[glen - 1])));
+            let nor = group_offset(planes, fallback, !g.is_orig_closed, &dirs, round, offset_fac, boundary);
+            let p = add(nor, pos[v]);
+            if new_edges[g.edges[0]].faces[0].unwrap() & 1 == 1 {
+                if got_back {
+                    return Err("several back groups".into());
+                }
+                got_back = true;
+                back[v] = p;
+            } else {
+                if got_front {
+                    return Err("several front groups".into());
+                }
+                got_front = true;
+                front[v] = p;
+            }
+        }
+        if !got_front || !got_back {
+            return Err("vertex without front/back group".into());
+        }
+    }
+    let mut out_pos = front;
+    out_pos.extend(back);
+    let mut out_faces: Vec<Vec<u32>> = faces.to_vec();
+    for f in faces {
+        out_faces.push(f.iter().rev().map(|&v| v + n as u32).collect());
+    }
+    for (i, e) in edges.iter().enumerate() {
+        let _ = e;
+        if adj[i].len() == 1 {
+            let (fi, _) = adj[i][0];
+            let f = &faces[fi];
+            for c in 0..f.len() {
+                let (a, b) = (f[c], f[(c + 1) % f.len()]);
+                if a.min(b) == edges[i][0].min(edges[i][1]) && a.max(b) == edges[i][0].max(edges[i][1]) {
+                    out_faces.push(vec![b, a, a + n as u32, b + n as u32]);
+                }
+            }
+        }
+    }
+    Ok(SolidifyOut { pos: out_pos, faces: out_faces })
+}

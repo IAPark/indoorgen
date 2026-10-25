@@ -1067,6 +1067,11 @@ fn emit_slabs(m: &mut Mesh, f: &[u32], on_a: &HashMap<u32, ()>, cut_id: &HashMap
 /// `edge_order`: the Blender mesh's edge list (vertex pairs) if known, else first-use order of the face corners; edges between consecutive
 /// loop vertices are added when missing. Two loops only. Returns the new mesh (original vertices first, then cut vertices in Blender's order).
 pub fn bridge_bm(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode: Interp, smooth: f64, profile_shape: &str, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
+    bridge_bm_ex(m, la, lb, cuts, shape, mode, smooth, profile_shape, edge_order).map(|r| r.0)
+}
+
+/// `bridge_bm` that also returns the Blender edge list of the result (BMesh edge order), as needed by modifiers that depend on it (SOLIDIFY NON_MANIFOLD)
+pub fn bridge_bm_ex(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode: Interp, smooth: f64, profile_shape: &str, edge_order: Option<&[[u32; 2]]>) -> Result<(Mesh, Vec<[u32; 2]>), String> {
     use crate::bm::{bridge as bb, BMesh};
     // BMesh input
     let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
@@ -1132,11 +1137,11 @@ pub fn bridge_bm(m: &Mesh, la: &[u32], lb: &[u32], cuts: usize, shape: f64, mode
             }
         }
     }
-    let (p, _e, f) = bm.to_mesh();
+    let (p, e, f) = bm.to_mesh();
     let mut out = Mesh::new();
     out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     out.faces = f;
-    Ok(out)
+    Ok((out, e))
 }
 
 /// `bridge_two_loops` with Blender's vertex / face order (see `bridge_bm`): replaces `m` by the bridged mesh. Loops are closed vertex lists;
