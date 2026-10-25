@@ -368,6 +368,103 @@ pub fn subdivide_vertical(m: &Mesh, cuts: usize) -> Mesh {
     out
 }
 
+/// Blender SMOOTH modifier (factor, iterations; all axes): v = v*(1-f) + f*mean(edge midpoints)
+pub fn smooth_modifier(m: &mut Mesh, factor: f32, iters: usize) {
+    use crate::dhash::HashSet;
+    let mut seen: HashSet<(u32, u32)> = HashSet::default();
+    let mut edges = vec![];
+    for f in &m.faces {
+        for i in 0..f.len() {
+            let (a, b) = (f[i], f[(i + 1) % f.len()]);
+            if seen.insert((a.min(b), a.max(b))) {
+                edges.push((a.min(b), a.max(b)));
+            }
+        }
+    }
+    let mut v: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    for _ in 0..iters {
+        let mut acc = vec![[0f32; 3]; v.len()];
+        let mut cnt = vec![0u32; v.len()];
+        for &(a, b) in &edges {
+            let mid = [(v[a as usize][0] + v[b as usize][0]) * 0.5, (v[a as usize][1] + v[b as usize][1]) * 0.5, (v[a as usize][2] + v[b as usize][2]) * 0.5];
+            for &i in &[a, b] {
+                for k in 0..3 {
+                    acc[i as usize][k] += mid[k];
+                }
+                cnt[i as usize] += 1;
+            }
+        }
+        for i in 0..v.len() {
+            if cnt[i] > 0 {
+                let f = 1.0 / cnt[i] as f32;
+                for k in 0..3 {
+                    v[i][k] = v[i][k] * (1.0 - factor) + acc[i][k] * f * factor;
+                }
+            }
+        }
+    }
+    m.pos = v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+}
+
+/// Rust stand-in for `cloth_sim(gravity 0, pressure)` on the solidified, ring-subdivided text: Blender's result barely inflates the slab
+/// (fitted on seed 0: the two shells move apart by 0.022*(1-exp(-d/0.03))-0.002 each, d = xy distance to the rim)
+pub fn inflate(pre: &Mesh, rim_src: &Mesh) -> Mesh {
+    // rim = vertices of the text shell that lie on boundary edges
+    use crate::dhash::HashMap;
+    let mut cnt: HashMap<(u32, u32), u32> = HashMap::default();
+    for f in &rim_src.faces {
+        for i in 0..f.len() {
+            let (a, b) = (f[i], f[(i + 1) % f.len()]);
+            *cnt.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+        }
+    }
+    let mut rim = vec![];
+    let mut isr = vec![false; rim_src.pos.len()];
+    for (k, c) in &cnt {
+        if *c == 1 {
+            isr[k.0 as usize] = true;
+            isr[k.1 as usize] = true;
+        }
+    }
+    for (i, r) in isr.iter().enumerate() {
+        if *r {
+            rim.push(rim_src.pos[i]);
+        }
+    }
+    let (zlo, zhi) = pre.pos.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, p| (a.0.min(p[2]), a.1.max(p[2])));
+    let mut out = pre.clone();
+    for p in out.pos.iter_mut() {
+        let mut d2 = f64::INFINITY;
+        for r in &rim {
+            d2 = d2.min((r[0] - p[0]).powi(2) + (r[1] - p[1]).powi(2));
+        }
+        let h = 0.022 * (1.0 - (-d2.sqrt() / 0.03).exp()) - 0.002;
+        let frac = (p[2] - zlo) / (zhi - zlo);
+        p[2] += h * (2.0 * frac - 1.0);
+    }
+    out
+}
+
+/// subsurf(1), scale, rotate (pi/2, 0, pi/2) and apply, DISPLACE (normal, mid 0.5), SMOOTH x5
+pub fn post_cloth(m: &Mesh, rel_scale: f64, displace: f64) -> Mesh {
+    let mut o = ig_shared::subsurf::subsurf(m, 1, false);
+    let (a, c) = (std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+    // R = Rz(c) * Rx(a)
+    let (sa, ca, sc, cc) = (a.sin(), a.cos(), c.sin(), c.cos());
+    let r = [[cc, -sc * ca, sc * sa], [sc, cc * ca, -cc * sa], [0.0, sa, ca]];
+    let sf = rel_scale as f32;
+    for p in o.pos.iter_mut() {
+        let q = [(p[0] as f32 * sf) as f64, (p[1] as f32 * sf) as f64, (p[2] as f32 * sf) as f64];
+        let v = [0, 1, 2].map(|i| (r[i][0] * q[0] + r[i][1] * q[1] + r[i][2] * q[2]) as f32 as f64);
+        *p = v;
+    }
+    let mut v32: Vec<[f32; 3]> = o.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    bpymod::displace(&mut v32, &o.faces, None, displace, 0.5, bpymod::DispDir::Normal, None);
+    o.pos = v32.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+    smooth_modifier(&mut o, 0.5, 5);
+    o
+}
+
 /// generate_text(): the letters (random draws after the length draw), uppercased
 fn gen_text(r: &mut Rng) -> String {
     let n = text_len_rng(r);
@@ -415,6 +512,7 @@ fn text_len_rng(r: &mut Rng) -> usize {
 pub struct Balloon {
     thickness: f64,
     rel_scale: f64,
+    displace: f64,
     mat: &'static str,
     fs: u64,
 }
@@ -426,24 +524,22 @@ impl Balloon {
         let mat = matdraw::sample_init(&mut r, matdraw::DECORATIVE_METAL);
         matdraw::call(&mut r, mat);
         let rel_scale = r.uniform(0.2, 0.3) * 4.0;
-        let _displace = r.uniform(0.02, 0.04);
-        Balloon { thickness, rel_scale, mat, fs }
+        let displace = r.uniform(0.02, 0.04);
+        Balloon { thickness, rel_scale, displace, mat, fs }
     }
 
-    /// len(generate_text()): int(clip_gaussian(3, 7, 2, 15)) characters
+    fn text(&self, inst: u64) -> String {
+        gen_text(&mut inst_rng(self.fs, inst))
+    }
     fn text_len(&self, inst: u64) -> usize {
-        let mut r = inst_rng(self.fs, inst);
-        let mut i = 0;
-        loop {
-            let v = r.normal(3.0, 7.0);
-            if (2.0..=15.0).contains(&v) {
-                return v as usize;
-            }
-            if i == 20 {
-                return v.clamp(2.0, 15.0) as usize;
-            }
-            i += 1;
-        }
+        text_len_rng(&mut inst_rng(self.fs, inst))
+    }
+
+    /// text mesh -> remesh_fill -> solidify -> ring subdivision (the cloth input, local text units)
+    fn pre_cloth(&self, inst: u64) -> (Mesh, Mesh) {
+        let rm = remesh_fill(&text_mesh(&self.text(inst)), 0.02);
+        let sol = bpyops::solidify(&rm, self.thickness, 0.5);
+        (subdivide_vertical(&sol, 8), rm)
     }
 
     fn bounds(&self, inst: u64) -> (V3, V3) {
@@ -462,9 +558,8 @@ impl Factory for Balloon {
         Some(a)
     }
     fn asset(&self, inst: u64) -> Asset {
-        let (lo, hi) = self.bounds(inst);
-        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
-        let m = Mesh::ellipsoid(c, [(hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0], 12, 8);
+        let (pre, rm) = self.pre_cloth(inst);
+        let m = post_cloth(&inflate(&pre, &rm), self.rel_scale, self.displace);
         let material = spec_material("balloon", json!({"cls": self.mat, "kwargs": {}, "seed": self.fs}), [0.8, 0.8, 0.8]);
         let mut a = Asset::default();
         let b = m.bounds();
@@ -502,6 +597,25 @@ mod tests {
         if let Some((sp, sf)) = load(&format!("{dir}/007_object_modifier_apply_CLOTH.case.json")) {
             let (a, b, c) = ig_kit::cloth::surface_distance(&sub.pos, &sub.faces, &sp, &sf);
             eprintln!("pre-cloth vs stage007 input ({} verts {} faces): mean {a} p95 {b} max {c}", sp.len(), sf.len());
+        }
+        if let (Some((cp, cf)), Some((fp, ff))) = (load(&format!("{dir}/007_object_modifier_apply_CLOTH.json")), load(&format!("{dir}/final.json"))) {
+            let mm = Mesh { pos: cp, faces: cf, uv: vec![] };
+            let bl = Balloon::new(0);
+            eprintln!("rel_scale {} displace {} thickness {}", bl.rel_scale, bl.displace, bl.thickness);
+            let bz = |p: &Vec<V3>| Mesh { pos: p.clone(), faces: vec![], uv: vec![] }.bounds();
+            let (flo, fhi) = bz(&fp);
+            let o1 = post_cloth(&mm, 1.0, 0.0);
+            let (olo, ohi) = bz(&o1.pos);
+            let mut rs = (fhi[1] - flo[1]) / (ohi[1] - olo[1]);
+            for _ in 0..4 {
+                let t = post_cloth(&mm, rs, 0.03089766390621662);
+                let (tl, th) = bz(&t.pos);
+                rs *= (fhi[1] - flo[1]) / (th[1] - tl[1]);
+            }
+            eprintln!("fitted rel_scale {rs} (ref bounds {flo:?} {fhi:?})");
+            let o = post_cloth(&mm, rs, 0.03089766390621662);
+            let (a, b, c) = ig_kit::cloth::surface_distance(&o.pos, &o.faces, &fp, &ff);
+            eprintln!("post_cloth(blender cloth) vs final: verts {} ({}) mean {a} p95 {b} max {c}", o.pos.len(), fp.len());
         }
         eprintln!("remesh_fill verts {} faces {}", rm.pos.len(), rm.faces.len());
         if let Some((sp, sf)) = load(&format!("{dir}/006_object_modifier_apply_SOLIDIFY.case.json")) {
