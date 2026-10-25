@@ -9,6 +9,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 parry3d-f64 = { workspace = true }
+rapier3d-f64 = "0.36"
 ig_core = { path = "../ig_core" }
 ig_kit = { path = "../ig_kit" }
 ig_furn = { path = "../ig_furn" }

@@ -5,6 +5,7 @@
 //! - `clutter`: extra objects dropped on floors and surfaces (clothes, books, dishes, ...), then settled.
 //! - `settle`: rigid-body settling of clutter (rapier) so nothing floats or intersects.
 //! All randomness comes from `MessCfg::rng(stream)` so results are deterministic per (scene seed, level, stream).
+pub mod check;
 pub mod clutter;
 pub mod settle;
 pub mod states;

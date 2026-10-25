@@ -189,7 +189,7 @@ fn main() {
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = std::time::Instant::now();
     // mess pass, part 2: clutter (no-op at --mess 0)
-    infinigen::mess::clutter::apply(&mut scene, &g.state, &visuals, &mess);
+    infinigen::mess::clutter::apply(&mut scene, &g.state, &visuals, &g.room_polys, &mess);
     scene.write_glb(&out).unwrap();
     if infinigen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());
