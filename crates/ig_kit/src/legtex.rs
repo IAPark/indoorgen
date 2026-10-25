@@ -119,8 +119,12 @@ pub fn vert_normals(m: &Mesh) -> Vec<[f32; 3]> {
         }
     };
     let mut acc = vec![[0.0f32; 3]; p32.len()];
+    let mut has_face = vec![false; p32.len()];
     for f in &m.faces {
         let k = f.len();
+        for &v in f {
+            has_face[v as usize] = true;
+        }
         let p: Vec<F3> = f.iter().map(|&i| p32[i as usize]).collect();
         // normals_calc_faces: Newell's method for every face size
         let fnrm: F3 = {
@@ -150,7 +154,7 @@ pub fn vert_normals(m: &Mesh) -> Vec<[f32; 3]> {
             }
         }
     }
-    acc.into_iter().enumerate().map(|(i, a)| { let n = normd(a); if n == [0.0; 3] { normd(p32[i]) } else { n } }).collect()
+    acc.into_iter().enumerate().map(|(i, a)| { let n = normd(a); if n == [0.0; 3] && !has_face[i] { normd(p32[i]) } else { n } }).collect()
 }
 
 /// DISPLACE modifier, direction NORMAL, texture coords = local vertex positions

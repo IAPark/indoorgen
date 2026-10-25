@@ -480,36 +480,42 @@ impl MushroomFactory {
         obj
     }
 
-    /// MushroomGrowthFactory.create_asset: cap + stem joined, lowered to z = 0 at the lowest vertex
+    /// MushroomGrowthFactory.create_asset: cap + stem joined (stem appended to the cap), origin2lowest
     fn growth(&self, i: u64) -> Mesh {
         let mut cap = self.cap_mesh(i, 0.0015);
         let stem = self.stem_mesh(i, 0.0015);
         cap.append(&stem);
         let mut lo = 0;
         for (k, p) in cap.pos.iter().enumerate() {
-            if p[2] < cap.pos[lo][2] {
+            if (p[2] as f32) < (cap.pos[lo][2] as f32) {
                 lo = k;
             }
         }
-        let l = [-cap.pos[lo][0], -cap.pos[lo][1], -cap.pos[lo][2]];
+        let l = [-(cap.pos[lo][0] as f32), -(cap.pos[lo][1] as f32), -(cap.pos[lo][2] as f32)];
         for p in cap.pos.iter_mut() {
             for k in 0..3 {
-                p[k] += l[k];
+                p[k] = (p[k] as f32 + l[k]) as f64;
             }
         }
         cap
     }
 
     pub fn mesh(&self, inst: u64) -> Mesh {
+        use crate::bl32::Obj32;
         let mut r = inst_rng(self.fs, inst);
         let n = r.randint(1, 6) as usize;
         let mut mushrooms: Vec<Mesh> = vec![];
         let mut keypoints: Vec<Vec<V>> = vec![];
         for j in 0..n {
             let m = self.growth(j as u64 + inst * 10);
-            let mut k: Vec<V> = m.pos.iter().step_by(40).copied().filter(|p| p[2] > self.tolerant).collect();
+            Self::dump(&format!("m{j}"), &m);
+            // clone -> REMESH voxel 0.04 (raw voxel surface), vertices above the tolerant length
+            let src = Self::lm(&m);
+            let tris = super::dualcon::corner_tris(&src.v, &src.f);
+            let nets = super::voxelremesh::voxel_remesh(&src.v, &tris, 0.04f32);
+            let mut k: Vec<V> = nets.v.iter().filter(|p| (p[2] as f64) > self.tolerant).map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
             if k.is_empty() {
-                k = m.pos.iter().step_by(40).copied().collect();
+                k = nets.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
             }
             if k.is_empty() {
                 k = vec![[0.0; 3]];
@@ -535,10 +541,33 @@ impl MushroomFactory {
                 (0..n).map(|i| [angles[i].cos(), angles[i].sin(), 0.0]).collect(),
             )
         };
-        // find_closest
+        // find_closest: Euler(rotations[i]).to_matrix() is a float32 matrix; vertices are rotated as float64 numpy
         let sc: Vec<f64> = (0..n).map(|_| r.uniform(0.3, 1.2)).collect();
-        let mats: Vec<Mat4> = (0..n).map(|i| Mat4::euler_xyz(rotations[i]).mul(&Mat4::scale([sc[i]; 3]))).collect();
-        let mut verts: Vec<Vec<V>> = (0..n).map(|i| keypoints[i].iter().map(|p| mat_apply(&mats[i], *p)).collect()).collect();
+        let rot3: Vec<[[f64; 3]; 3]> = (0..n)
+            .map(|i| {
+                let m = crate::bl32::eul_to_mat3([rotations[i][0] as f32, rotations[i][1] as f32, rotations[i][2] as f32]);
+                // bl32 matrices are column-major (m[col][row]); numpy wants rows
+                let mut o = [[0.0f64; 3]; 3];
+                for row in 0..3 {
+                    for col in 0..3 {
+                        o[row][col] = m[col][row] as f64;
+                    }
+                }
+                o
+            })
+            .collect();
+        let mut verts: Vec<Vec<V>> = (0..n)
+            .map(|i| {
+                keypoints[i]
+                    .iter()
+                    .map(|p| {
+                        let q = [p[0] * sc[i], p[1] * sc[i], p[2] * sc[i]];
+                        // (R @ diag(s) @ v.T).T
+                        [0, 1, 2].map(|row| rot3[i][row][0] * (sc[i] * p[0]) + rot3[i][row][1] * (sc[i] * p[1]) + rot3[i][row][2] * (sc[i] * p[2]) - 0.0 * q[0])
+                    })
+                    .collect()
+            })
+            .collect();
         let mut locations: Vec<V> = vec![[0.0; 3]];
         for i in 1..n {
             let basis: Vec<V> = verts[..i].iter().flatten().copied().collect();
@@ -549,10 +578,10 @@ impl MushroomFactory {
                 let mind = verts[i]
                     .iter()
                     .map(|v| {
-                        let q = [v[0] + off[0], v[1] + off[1], v[2] + off[2]];
-                        basis.iter().map(|b| ((b[0] - q[0]).powi(2) + (b[1] - q[1]).powi(2) + (b[2] - q[2]).powi(2)).sqrt()).fold(f64::MAX, f64::min)
+                        let q = [(v[0] + off[0]) as f32, (v[1] + off[1]) as f32, (v[2] + off[2]) as f32];
+                        basis.iter().map(|b| ((b[0] as f32 - q[0]).powi(2) + (b[1] as f32 - q[1]).powi(2) + (b[2] as f32 - q[2]).powi(2)).sqrt()).fold(f32::MAX, f32::min)
                     })
-                    .fold(f64::MAX, f64::min);
+                    .fold(f32::MAX, f32::min);
                 if mind > 0.008 {
                     chosen = Some(off);
                     break;
@@ -566,14 +595,29 @@ impl MushroomFactory {
             }
             locations.push(off);
         }
+        // m.location / rotation_euler / scale, apply_transform(loc=True)
         let mut out = Mesh::new();
         for i in 0..n {
             let mut m = mushrooms[i].clone();
-            m.transform(&Mat4::translation(locations[i]).mul(&mats[i]));
+            let ob = {
+                let mut o = Obj32::new([locations[i][0] as f32, locations[i][1] as f32, locations[i][2] as f32], [rotations[i][0] as f32, rotations[i][1] as f32, rotations[i][2] as f32]);
+                o.scale = [sc[i] as f32; 3];
+                o
+            };
+            let mat = ob.matrix_world();
+            for q in m.pos.iter_mut() {
+                let (x, y, z) = (q[0] as f32, q[1] as f32, q[2] as f32);
+                *q = [
+                    (x * mat[0][0] + y * mat[1][0] + z * mat[2][0] + mat[3][0]) as f64,
+                    (x * mat[0][1] + y * mat[1][1] + z * mat[2][1] + mat[3][1]) as f64,
+                    (x * mat[0][2] + y * mat[1][2] + z * mat[2][2] + mat[3][2]) as f64,
+                ];
+            }
             out.append(&m);
         }
         let a = r.uniform(-PI / 8.0, PI / 8.0);
         let axis = r.choice_idx(2);
+        Self::dump("final_pre_bend", &out);
         Self::deform(&mut out, Deform::Bend, a, axis);
         out
     }
