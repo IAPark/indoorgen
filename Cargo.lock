@@ -480,6 +480,7 @@ dependencies = [
  "ig_assets",
  "ig_core",
  "ig_furn",
+ "ig_gn",
  "ig_kit",
  "ig_rooms",
  "indexmap",
