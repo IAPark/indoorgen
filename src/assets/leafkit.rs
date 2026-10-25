@@ -380,6 +380,11 @@ pub fn solidify(m: &LMesh, thickness: f32) -> LMesh {
 
 /// geo node SampleNearestSurface of a point attribute (barycentric interpolation at the closest point of the corner triangles)
 pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, F3)> {
+    sample_nearest_surface_ex(src, val, at, false)
+}
+
+/// `walls`: exact distance ties are won by the rim-wall triangles (solidify output: triangles first, quads after), otherwise by the first triangle
+pub fn sample_nearest_surface_ex(src: &LMesh, val: &[f32], at: &[F3], walls: bool) -> Vec<(f32, F3)> {
     let tris = super::dualcon::corner_tris(&src.v, &src.f);
     let first_wall = src.f.iter().take_while(|f| f.len() == 3).count();
     // uniform grid over triangle bounding boxes
@@ -433,7 +438,7 @@ pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, 
                                     };
                                     // equal distance (point on a shared edge / in a coplanar region): prefer the larger triangle, slivers give noisy weights
                                     let tie = best.1 != usize::MAX && d2 == best.0;
-                                    let tm = if fmamode() >> 8 == 0 { 3 } else { fmamode() >> 8 };
+                                    let tm = if fmamode() >> 8 == 0 { if walls { 3 } else { 1 } } else { fmamode() >> 8 };
                                     if (!tie && d2 < best.0) || (tie && match tm { 1 => false, 2 => true, 3 => tris[ti as usize] != tris[best.1] && src.f.iter().take(0).count() == 0 && (ti as usize) >= first_wall, _ => area(t) > area(tris[best.1]) }) {
                                         best = (d2, ti as usize, r);
                                     }
@@ -576,7 +581,7 @@ pub fn remesh_fill(m: &LMesh, resolution: f64) -> LMesh {
     r.ensure_face_edges();
     r.trace("REMESH");
     // transfer_all copies every non-internal attribute -- `top` and the vertex `position` itself: each vertex snaps onto the nearest point of the solid
-    let samp = sample_nearest_surface(&s, &top, &r.v);
+    let samp = sample_nearest_surface_ex(&s, &top, &r.v, true);
     let tv: Vec<f32> = samp.iter().map(|x| x.0).collect();
     for (i, x) in samp.iter().enumerate() {
         r.v[i] = x.1;
