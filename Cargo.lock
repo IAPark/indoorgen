@@ -862,6 +862,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ig_cams"
+version = "0.1.0"
+dependencies = [
+ "ig_core",
+ "parry3d-f64 0.18.0",
+ "serde_json",
+]
+
+[[package]]
 name = "ig_core"
 version = "0.1.0"
 dependencies = [
@@ -1259,6 +1268,7 @@ dependencies = [
  "geos",
  "ig_assets",
  "ig_bm",
+ "ig_cams",
  "ig_core",
  "ig_exbool",
  "ig_furn",

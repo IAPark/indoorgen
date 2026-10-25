@@ -48,6 +48,7 @@ ig_rooms = { path = "crates/ig_rooms" }
 ig_assets = { path = "crates/ig_assets" }
 ig_mess = { path = "crates/ig_mess" }
 ig_people = { path = "crates/ig_people" }
+ig_cams = { path = "crates/ig_cams" }
 
 [profile.release]
 opt-level = 3
