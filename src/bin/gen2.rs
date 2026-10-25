@@ -90,7 +90,8 @@ fn main() {
         // mess pass: room door open angles varied
         let mut it: Vec<(&str, &mut infinigen::mesh::Mesh)> = opening_pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
         let (n, tot) = infinigen::mess::doors::open_doors(&mut it, &g.cutters, g.c.door_width, g.c.door_size, g.c.wall_thickness, &g.state, &mess);
-        eprintln!("MESS doors changed {n} of {tot}");
+        let (cn, ctot) = infinigen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
+        eprintln!("MESS doors changed {n} of {tot}; curtains changed {cn} of {ctot}");
     }
     for p in opening_pieces {
         let m = scene.material(p.mat);
