@@ -164,7 +164,7 @@ pub fn apply(state: &mut State, cfg: &MessCfg) {
     let lvl = cfg.level.clamp(0.0, 1.0);
     if std::env::var("MESS_DUMP").is_ok() {
         for (k, o) in &state.objs {
-            eprintln!("OBJ {k} cls={:?} t={:.2?} lo={:.2?} hi={:.2?} nproxy={}", o.generator.as_ref().map(|g| g.class.clone()), o.pose.t, o.geom.lo, o.geom.hi, o.geom.proxies.len());
+            eprintln!("OBJ {k} front=({:.3},{:.3}) cls={:?} t={:.2?} lo={:.2?} hi={:.2?} nproxy={}", o.pose.r[0][0], o.pose.r[1][0], o.generator.as_ref().map(|g| g.class.clone()), o.pose.t, o.geom.lo, o.geom.hi, o.geom.proxies.len());
         }
     }
     let names: Vec<(String, String)> = state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|g| (k.clone(), g.class.clone()))).collect();

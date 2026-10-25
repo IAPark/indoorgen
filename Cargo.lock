@@ -433,6 +433,7 @@ dependencies = [
  "ig_furn",
  "ig_kit",
  "ig_rooms",
+ "ig_storage",
  "indexmap",
  "parry3d-f64",
  "rayon",
