@@ -16,7 +16,7 @@ pub const HANDLE: Weighted = &[
 
 pub fn spec_of(name: &str, cls: &str, seed: u64) -> Material {
     let rgb = if cls.starts_with("ceramic.Glass") || cls.contains("Glass") { [0.1, 0.1, 0.12] } else { [0.6, 0.6, 0.62] };
-    spec_material(name, json!({"cls": cls, "kwargs": {}, "seed": seed}), rgb)
+    spec_material(name, json!({"cls": cls, "kwargs": {}, "seed": seed % 2_000_000_000}), rgb)
 }
 
 /// GN appliance material sockets, in the order of get_material_params (the exported templates name the stubs "stub", "stub.001", ... in that order).

@@ -23,7 +23,7 @@ fn shelf_mat(rng: &mut Rng, p: &[f64]) -> Material {
 fn respec(m: &Material, seed: u64) -> Material {
     let mut m = m.clone();
     if let Some(sp) = m.spec.as_mut() {
-        sp["seed"] = serde_json::json!(seed);
+        sp["seed"] = serde_json::json!(seed % 2_000_000_000);
     }
     m
 }
@@ -42,17 +42,17 @@ fn plywood(kind: &str, z: bool, seed: u64) -> Material {
         (k, true) => format!("shader.wood.plywood.shader_shelves_{k}_z"),
         _ => unreachable!(),
     };
-    let mut m = spec_material(&format!("{name}{}", if z { "_z" } else { "" }), serde_json::json!({"cls": cls, "kwargs": {}, "seed": seed}), rgb);
+    let mut m = spec_material(&format!("{name}{}", if z { "_z" } else { "" }), serde_json::json!({"cls": cls, "kwargs": {}, "seed": seed % 2_000_000_000}), rgb);
     m.roughness = 0.5;
     m
 }
 
 fn shader_spec(name: &str, shader: &str, seed: u64, rgb: [f32; 3]) -> Material {
-    spec_material(name, serde_json::json!({"cls": format!("shader.{shader}"), "kwargs": {}, "seed": seed}), rgb)
+    spec_material(name, serde_json::json!({"cls": format!("shader.{shader}"), "kwargs": {}, "seed": seed % 2_000_000_000}), rgb)
 }
 
 fn cls_spec(name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> Material {
-    spec_material(name, serde_json::json!({"cls": cls, "kwargs": {}, "seed": seed}), rgb)
+    spec_material(name, serde_json::json!({"cls": cls, "kwargs": {}, "seed": seed % 2_000_000_000}), rgb)
 }
 
 /// get_shelf_material("metal"): choice over 5 shader functions (one np.random.choice draw)
