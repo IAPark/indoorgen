@@ -227,6 +227,11 @@ pub trait Factory {
     fn exact(&self, _inst_seed: u64) -> Option<cabnodes::ExactMesh> {
         None
     }
+    /// per-polygon material slot of `exact(inst)` (same polygon order) and the slot materials; scene_asset then gives each exact face the
+    /// material of its slot instead of the one of the nearest `asset()` part (parts are still split by nearest part, so colliders are unchanged)
+    fn exact_slots(&self, _inst_seed: u64) -> Option<(Vec<u16>, Vec<Material>)> {
+        None
+    }
 }
 
 /// bounding box placeholder of the final asset (uses the float32 exact mesh when the class is ported at topology level)
@@ -266,9 +271,12 @@ pub fn scene_asset(f: &dyn Factory, inst: u64) -> Asset {
         }
         d
     };
-    let mut meshes: Vec<Mesh> = approx.parts.iter().map(|_| Mesh::new()).collect();
-    let mut maps: Vec<crate::dhash::HashMap<u32, u32>> = approx.parts.iter().map(|_| crate::dhash::HashMap::default()).collect();
-    for poly in &e.polys {
+    let slots = f.exact_slots(inst).filter(|(s, m)| s.len() == e.polys.len() && s.iter().all(|&x| (x as usize) < m.len()));
+    // piece key = (nearest approx part, material slot); without slots the slot is always 0
+    let mut keys: Vec<(usize, u16)> = vec![];
+    let mut meshes: Vec<Mesh> = vec![];
+    let mut maps: Vec<crate::dhash::HashMap<u32, u32>> = vec![];
+    for (pi, poly) in e.polys.iter().enumerate() {
         let n = poly.len() as f64;
         let mut c = [0.0; 3];
         for &i in poly {
@@ -277,8 +285,18 @@ pub fn scene_asset(f: &dyn Factory, inst: u64) -> Asset {
             }
         }
         let best = (0..boxes.len()).min_by(|&a, &b| dist(c, &boxes[a]).partial_cmp(&dist(c, &boxes[b])).unwrap()).unwrap();
-        let m = &mut meshes[best];
-        let map = &mut maps[best];
+        let slot = slots.as_ref().map_or(0, |(s, _)| s[pi]);
+        let ki = match (if keys.last() == Some(&(best, slot)) { Some(keys.len() - 1) } else { keys.iter().position(|&k| k == (best, slot)) }) {
+            Some(k) => k,
+            None => {
+                keys.push((best, slot));
+                meshes.push(Mesh::new());
+                maps.push(crate::dhash::HashMap::default());
+                keys.len() - 1
+            }
+        };
+        let m = &mut meshes[ki];
+        let map = &mut maps[ki];
         let face: Vec<u32> = poly.iter().map(|&i| *map.entry(i).or_insert_with(|| {
             m.pos.push(e.verts[i as usize]);
             (m.pos.len() - 1) as u32
@@ -286,10 +304,23 @@ pub fn scene_asset(f: &dyn Factory, inst: u64) -> Asset {
         m.faces.push(face);
     }
     let mut out = Asset { parts: vec![], supports: approx.supports.clone(), ..Default::default() };
-    for (k, m) in meshes.into_iter().enumerate() {
-        if !m.faces.is_empty() {
-            out.parts.push(Part { mesh: m, mat: approx.parts[k].mat.clone(), col: approx.parts[k].col });
+    // old part order (by nearest part), then slot; the collider box stays on the first piece of each approx part
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by_key(|&i| keys[i]);
+    let mut seen = vec![false; approx.parts.len()];
+    for ki in order {
+        let (k, slot) = keys[ki];
+        let m = std::mem::replace(&mut meshes[ki], Mesh::new());
+        if m.faces.is_empty() {
+            continue;
         }
+        let mat = match &slots {
+            Some((_, mats)) => mats[slot as usize].clone(),
+            None => approx.parts[k].mat.clone(),
+        };
+        let col = if seen[k] { None } else { approx.parts[k].col };
+        seen[k] = true;
+        out.parts.push(Part { mesh: m, mat, col });
     }
     out
 }
