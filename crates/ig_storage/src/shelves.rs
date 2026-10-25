@@ -1,5 +1,6 @@
 //! shelves/*.py: LargeShelf, SimpleBookcase, CellShelf, TVStand, SimpleDesk, SidetableDesk, SingleCabinet, KitchenCabinet, KitchenSpace/Island
 use super::*;
+use crate::materials::*;
 
 pub fn handles(c: &str) -> bool {
     matches!(
@@ -15,11 +16,59 @@ fn clip(x: f64, lo: f64, hi: f64) -> f64 {
 fn shelf_mat(rng: &mut Rng, p: &[f64]) -> Material {
     // ["white", "black_wood", "wood"] style choices
     let i = rng.choice_p(p);
-    match i {
-        0 => mat("shelf_white", [0.82, 0.8, 0.76], 0.5),
-        1 => mat("shelf_black_wood", [0.08, 0.06, 0.05], 0.45),
-        _ => mat("shelf_wood", [0.45, 0.3, 0.17], 0.5),
+    plywood(["white", "black_wood", "wood"][i.min(2)], false, 0)
+}
+
+/// same material with a deterministic per-asset spec seed
+fn respec(m: &Material, seed: u64) -> Material {
+    let mut m = m.clone();
+    if let Some(sp) = m.spec.as_mut() {
+        sp["seed"] = serde_json::json!(seed);
     }
+    m
+}
+
+/// plywood.py shader_shelves_{white,black_wood,wood}[_z] as a render spec (z = z_axis_texture variant, used by kitchen/door frames and panels)
+fn plywood(kind: &str, z: bool, seed: u64) -> Material {
+    let (name, rgb) = match kind {
+        "white" => ("shelf_white", [0.82, 0.8, 0.76]),
+        "black_wood" => ("shelf_black_wood", [0.08, 0.06, 0.05]),
+        _ => ("shelf_wood", [0.45, 0.3, 0.17]),
+    };
+    let cls = match (kind, z) {
+        ("white", _) => "wood.WhitePlywood".to_string(),
+        ("black_wood", false) => "wood.BlackPlywood".to_string(),
+        ("wood", false) => "wood.BlondePlywood".to_string(),
+        (k, true) => format!("shader.wood.plywood.shader_shelves_{k}_z"),
+        _ => unreachable!(),
+    };
+    let mut m = spec_material(&format!("{name}{}", if z { "_z" } else { "" }), serde_json::json!({"cls": cls, "kwargs": {}, "seed": seed}), rgb);
+    m.roughness = 0.5;
+    m
+}
+
+fn shader_spec(name: &str, shader: &str, seed: u64, rgb: [f32; 3]) -> Material {
+    spec_material(name, serde_json::json!({"cls": format!("shader.{shader}"), "kwargs": {}, "seed": seed}), rgb)
+}
+
+fn cls_spec(name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> Material {
+    spec_material(name, serde_json::json!({"cls": cls, "kwargs": {}, "seed": seed}), rgb)
+}
+
+/// get_shelf_material("metal"): choice over 5 shader functions (one np.random.choice draw)
+fn shelf_metal(rng: &mut Rng, seed: u64) -> Material {
+    let cls = ["metal.BrushedMetal", "metal.GalvanizedMetal", "metal.GrainedMetal", "metal.HammeredMetal", "metal.MetalBasic"][rng.choice_idx(5)];
+    cls_spec("shelf_metal", cls, seed, [0.5, 0.5, 0.52])
+}
+
+/// get_shelf_material("white"): choice([shader_shelves_white, shader_rough_plastic], p=[0.6, 0.4])
+fn shelf_white_choice(rng: &mut Rng, seed: u64) -> Material {
+    if rng.choice_p(&[0.6, 0.4]) == 0 { plywood("white", false, seed) } else { cls_spec("shelf_white_plastic", "plastic.PlasticRough", seed, [0.85, 0.84, 0.8]) }
+}
+
+/// kind chosen under FixedSeed(factory_seed): the first np.random.choice of a fresh stream (cabinet factories' get_material_params)
+fn fixed_kind(fseed: u64, p: &[f64]) -> &'static str {
+    ["white", "black_wood", "wood"][Rng::seeded(fseed).choice_p(p).min(2)]
 }
 
 /// Frame of boards: shared by LargeShelf / SingleCabinet / KitchenCabinet
@@ -116,6 +165,7 @@ impl LargeShelf {
             r.uniform(lo, hi);
         }
         let mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
+        let mat = respec(&mat, self.fseed * 1000 + inst);
         let mut p = cabnodes::ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap, bottom_h, div_t, screw_depth, screw_r, screw_wgap, cell_w, cell_h, ..Default::default() };
         p.derive();
         (p, mat)
@@ -188,8 +238,9 @@ impl Factory for SimpleBookcase {
         let aw = r.uniform(0.01, 0.04);
         let atl = r.uniform(0.03, 0.1);
         let abl = r.uniform(0.02, 0.05);
-        let m = mat("bookcase_white", [0.85, 0.84, 0.8], 0.5);
-        let metal = mat("bookcase_metal", [0.5, 0.5, 0.52], 0.3);
+        // get_asset_params tail: frame_material = get_shelf_material("white"), metal_material = get_shelf_material("metal") (stream continues after the 11 draws above)
+        let m = shelf_white_choice(&mut r, self.fseed * 1000 + i);
+        let metal = shelf_metal(&mut r, self.fseed * 1000 + i + 1);
         let mut a = Asset::default();
         use cabnodes::*;
         let push = |a: &mut Asset, mesh: Mesh, mt: &Material, sup: bool| {
@@ -247,10 +298,13 @@ pub struct CellShelf {
     ext_t: f64,
     attach: f64,
     mat: Material,
+    screw: Material,
 }
 
+const METALS_TABLE: Weighted = &[("metal.MetalBasic", 3.0), ("metal.BrushedMetal", 2.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 0.7), ("metal.BrushedBlackMetal", 0.3)];
+
 impl CellShelf {
-    fn new(rng: &mut Rng, tv: bool) -> CellShelf {
+    fn new(rng: &mut Rng, tv: bool, fseed: u64) -> CellShelf {
         let mut r = rng.clone();
         let mut dims = if tv {
             [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.3, 0.5)]
@@ -264,8 +318,11 @@ impl CellShelf {
         let div_t = clip(r.normal(0.015, 0.005), 0.008, 0.022);
         let ext_t = clip(r.normal(0.04, 0.005), 0.028, 0.052);
         let attach = clip(r.normal(0.05, 0.02), 0.02, 0.1);
-        let mat = shelf_mat(&mut r, &[0.3, 0.2, 0.5]);
-        CellShelf { dims, cell, hn, vn, div_t, ext_t, attach, mat }
+        let mat = plywood(["black_wood", "white", "wood"][r.choice_p(&[0.3, 0.2, 0.5]).min(2)], false, fseed);
+        // screw heads: weighted_sample(material_assignments.metals)()()
+        let screw = weighted(&mut r, METALS_TABLE);
+        let screw = cls_spec("shelf_screw", screw, fseed + 1, [0.5, 0.5, 0.52]);
+        CellShelf { dims, cell, hn, vn, div_t, ext_t, attach, mat, screw }
     }
 }
 
@@ -327,7 +384,7 @@ impl Factory for CellShelf {
             cyl.transform(&Mat4::translation([x, y, szz]));
             sc.append(&cyl);
         }
-        push(&mut a, sc, false);
+        { let b = sc.bounds(); a.mesh(sc, &self.screw, Some(b)); }
         a.transform(&Mat4::rot_z(-R90));
         a
     }
@@ -389,8 +446,9 @@ impl Factory for SimpleDesk {
     fn asset(&self, i: u64) -> Asset {
         let p = self.params(i);
         let (d, w, h, t, leg_r, leg_dist) = (p.d, p.w, p.h, p.t, p.leg_r, p.leg_dist);
-        let top = if p.top_white { mat("desk_top_white", [0.85, 0.85, 0.83], 0.4) } else { mat("desk_top_black", [0.1, 0.08, 0.07], 0.4) };
-        let leg = if p.leg_white { mat("leg_white", [0.9, 0.9, 0.9], 0.3) } else { mat("leg_black", [0.05, 0.05, 0.05], 0.3) };
+        let sd = self.fseed * 1000 + i;
+        let top = if p.top_white { plywood("white", false, sd) } else { plywood("black_wood", false, sd) };
+        let leg = if p.leg_white { shader_spec("leg_white", "wood.plywood.shader_shelves_white_metallic", sd, [0.9, 0.9, 0.9]) } else { shader_spec("leg_black", "wood.plywood.shader_shelves_black_metallic", sd, [0.05, 0.05, 0.05]) };
         let mut a = Asset::default();
         a.board([-d / 2.0, -w / 2.0, h - t], [d / 2.0, w / 2.0, h], &top);
         for sx in [-1.0, 1.0] {
@@ -427,7 +485,11 @@ impl Factory for SingleCabinet {
         let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
         // per-instance draws (python get_asset_params): frame material choice, then the large-shelf parameters
         let mut r = inst_rng(self.fseed, inst);
-        let mat = shelf_mat(&mut r, &[0.5, 0.2, 0.3]);
+        let _ = shelf_mat(&mut r, &[0.5, 0.2, 0.3]); // keeps the stream position of the geometry draws below
+        // python: frame_material = first np.random.choice of FixedSeed(factory_seed) (get_material_params)
+        let kind = fixed_kind(self.fseed, &[0.5, 0.2, 0.3]);
+        let mat = plywood(kind, false, self.fseed);
+        let panel = plywood(kind, true, self.fseed + 1);
         let side_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
         let _bottom_gap = r.uniform(0.01, 0.05);
         let div_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
@@ -440,7 +502,7 @@ impl Factory for SingleCabinet {
         let dw = if nd == 1 { w } else { w / 2.0 - 0.0005 };
         for k in 0..nd {
             let y0 = if nd == 1 { -w / 2.0 } else { -w / 2.0 + k as f64 * (w / 2.0 + 0.0005) };
-            a.cuboid([d / 2.0, y0, frame.bottom_h], [d / 2.0 + 0.015, y0 + dw, h], &mat);
+            a.cuboid([d / 2.0, y0, frame.bottom_h], [d / 2.0 + 0.015, y0 + dw, h], &panel);
         }
         a
     }
@@ -483,22 +545,24 @@ impl KitchenCabinet {
     fn build(&self, a: &mut Asset, origin: V3) {
         let (d, w, h) = (self.dims[0], self.dims[1], self.dims[2]);
         let t = 0.02;
+        let kind = fixed_kind(self.fseed.unwrap_or(0), &[0.4, 0.3, 0.3]);
+        let (frame, board) = (plywood(kind, true, self.fseed.unwrap_or(0)), plywood(kind, false, self.fseed.unwrap_or(0) + 1));
         let (x0, x1) = (origin[0] - d / 2.0 - 0.005, origin[0] + d / 2.0 + 0.005);
         let mut y = origin[1] - w / 2.0;
         let z0 = origin[2];
-        a.cuboid([x0, y, z0], [x0 + 0.01, origin[1] + w / 2.0, z0 + h], &self.mat);
+        a.cuboid([x0, y, z0], [x0 + 0.01, origin[1] + w / 2.0, z0 + h], &frame);
         let mut ys = vec![y];
         for cw in &self.widths {
             y += cw;
             ys.push(y);
         }
         for yy in &ys {
-            a.cuboid([x0, yy - t / 2.0, z0], [x1, yy + t / 2.0, z0 + h], &self.mat);
+            a.cuboid([x0, yy - t / 2.0, z0], [x1, yy + t / 2.0, z0 + h], &frame);
         }
-        a.board([x0, origin[1] - w / 2.0, z0], [x1, origin[1] + w / 2.0, z0 + t], &self.mat);
-        a.board([x0, origin[1] - w / 2.0, z0 + h - t], [x1, origin[1] + w / 2.0, z0 + h], &self.mat);
+        a.board([x0, origin[1] - w / 2.0, z0], [x1, origin[1] + w / 2.0, z0 + t], &board);
+        a.board([x0, origin[1] - w / 2.0, z0 + h - t], [x1, origin[1] + w / 2.0, z0 + h], &board);
         for k in 0..self.widths.len() {
-            a.cuboid([x1, ys[k] + 0.001, z0 + 0.06], [x1 + 0.015, ys[k + 1] - 0.001, z0 + h - 0.0], &self.mat);
+            a.cuboid([x1, ys[k] + 0.001, z0 + 0.06], [x1 + 0.015, ys[k + 1] - 0.001, z0 + h - 0.0], &frame);
         }
     }
 }
@@ -593,6 +657,38 @@ impl KitchenSpace {
     /// KitchenSpaceFactory.create_asset(i): bottom cabinet + countertop (geometry_nodes_add_cabinet_top), three top cabinets, joined and
     /// (non-island) scaled to `dimensions`
     fn assemble(&self, inst: u64) -> cabnodes::GMesh {
+        let parts = self.raw_parts(inst);
+        let mut g = hwexact::join_fwd(&parts);
+        if !self.island {
+            self.scale_to_dims(std::slice::from_mut(&mut g));
+        }
+        g
+    }
+
+    /// non-island: scale the joined set so its bbox equals `dimensions` (applied to a list of parts it uses their common bbox)
+    fn scale_to_dims(&self, parts: &mut [cabnodes::GMesh]) {
+        let [x, y, z] = self.dims;
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for g in parts.iter() {
+            for v in &g.v {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(v[k]);
+                    hi[k] = hi[k].max(v[k]);
+                }
+            }
+        }
+        let dims = [x as f32, y as f32, z as f32];
+        for g in parts.iter_mut() {
+            for v in g.v.iter_mut() {
+                for k in 0..3 {
+                    v[k] = v[k] * (dims[k] / (hi[k] - lo[k]));
+                }
+            }
+        }
+    }
+
+    /// [bottom cabinet, countertop, (top left, top right, top mid)] before the final scaling
+    fn raw_parts(&self, inst: u64) -> Vec<cabnodes::GMesh> {
         let [x, y, z] = self.dims;
         let bottom = self.bottom_cabinet();
         let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
@@ -623,23 +719,7 @@ impl KitchenSpace {
             parts.push(Self::translated(right, [-x / 4.0, y - ctw, z - th]));
             parts.push(Self::translated(mid, [-x / 6.0, y / 2.0 - tmw / 2.0, z - th * 0.8]));
         }
-        let mut g = hwexact::join_fwd(&parts);
-        if !self.island {
-            let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-            for v in &g.v {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(v[k]);
-                    hi[k] = hi[k].max(v[k]);
-                }
-            }
-            let dims = [x as f32, y as f32, z as f32];
-            for v in g.v.iter_mut() {
-                for k in 0..3 {
-                    v[k] = v[k] * (dims[k] / (hi[k] - lo[k]));
-                }
-            }
-        }
-        g
+        parts
     }
 }
 
@@ -734,8 +814,17 @@ impl Factory for KitchenSpace {
     }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
-        let g = self.assemble(i);
-        a.mesh(g.to_mesh(), &mat("kitchen", [0.7, 0.62, 0.5], 0.5), None);
+        let mut parts = self.raw_parts(i);
+        if !self.island {
+            self.scale_to_dims(&mut parts);
+        }
+        // part 0/2.. = cabinets (KitchenCabinetFactory(factory_seed): z-textured frame material), part 1 = countertop (shader_marble)
+        let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
+        let cab = plywood(kind, true, self.factory_seed);
+        let top = cls_spec("counter_marble", "ceramic.Marble", self.factory_seed + 7, [0.85, 0.85, 0.85]);
+        for (k, g) in parts.iter().enumerate() {
+            a.mesh(g.to_mesh(), if k == 1 { &top } else { &cab }, None);
+        }
         a
     }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
@@ -755,8 +844,8 @@ pub fn make(c: &str, rng: &mut Rng, factory_seed: u64) -> Option<Box<dyn Factory
     Some(match c {
         "LargeShelfFactory" => Box::new(LargeShelf::new(rng, seed)),
         "SimpleBookcaseFactory" => Box::new(SimpleBookcase::new(rng, factory_seed)),
-        "CellShelfFactory" => Box::new(CellShelf::new(rng, false)),
-        "TVStandFactory" => Box::new(CellShelf::new(rng, true)),
+        "CellShelfFactory" => Box::new(CellShelf::new(rng, false, seed)),
+        "TVStandFactory" => Box::new(CellShelf::new(rng, true, seed)),
         "SimpleDeskFactory" => Box::new(SimpleDesk::new(rng, false, factory_seed)),
         "SidetableDeskFactory" => Box::new(SimpleDesk::new(rng, true, factory_seed)),
         "SingleCabinetFactory" => Box::new(SingleCabinet::new(rng, factory_seed)),
