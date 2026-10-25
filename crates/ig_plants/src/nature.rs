@@ -20,69 +20,9 @@ fn norm(a: P3) -> f64 {
 /// triangulated convex hull (outward oriented), incremental
 pub fn hull_tris(p: &[P3]) -> Vec<[usize; 3]> {
     if p.len() > 4000 {
-        // quickhull-style candidate growth: hull of directional extremes, then repeatedly add the farthest outside point of every face;
-        // points never outside the final candidate hull cannot be hull vertices, so the plain incremental hull runs on a small subset
-        let mut dirs: Vec<P3> = vec![];
-        for x in -1..=1 {
-            for y in -1..=1 {
-                for z in -1..=1 {
-                    if x != 0 || y != 0 || z != 0 {
-                        dirs.push([x as f64, y as f64, z as f64]);
-                    }
-                }
-            }
+        if let Some(h) = quickhull(p) {
+            return h;
         }
-        let mut cand: Vec<usize> = dirs
-            .iter()
-            .map(|d| (0..p.len()).max_by(|&a, &b| dot(p[a], *d).partial_cmp(&dot(p[b], *d)).unwrap().then(b.cmp(&a))).unwrap())
-            .collect();
-        cand.sort();
-        cand.dedup();
-        for _round in 0..64 {
-            let cp: Vec<P3> = cand.iter().map(|&i| p[i]).collect();
-            let ch = hull_tris_plain(&cp);
-            if ch.is_empty() {
-                break;
-            }
-            let planes: Vec<(P3, f64)> = ch
-                .iter()
-                .map(|f| {
-                    let n = cross(sub(cp[f[1]], cp[f[0]]), sub(cp[f[2]], cp[f[0]]));
-                    let l = norm(n);
-                    let n = [n[0] / l, n[1] / l, n[2] / l];
-                    (n, dot(n, cp[f[0]]))
-                })
-                .collect();
-            let mut far: Vec<(f64, usize)> = vec![(1e-9, usize::MAX); planes.len()];
-            for i in 0..p.len() {
-                // the face this point is farthest outside of
-                let mut bf = usize::MAX;
-                let mut bd = 1e-9;
-                for (fi, (n, d)) in planes.iter().enumerate() {
-                    let h = dot(*n, p[i]) - d;
-                    if h > bd {
-                        bd = h;
-                        bf = fi;
-                    }
-                }
-                if bf != usize::MAX && bd > far[bf].0 {
-                    far[bf] = (bd, i);
-                }
-            }
-            let mut added = false;
-            for (_, i) in far {
-                if i != usize::MAX && !cand.contains(&i) {
-                    cand.push(i);
-                    added = true;
-                }
-            }
-            if !added {
-                break;
-            }
-            cand.sort();
-        }
-        let sub_pts: Vec<P3> = cand.iter().map(|&i| p[i]).collect();
-        return hull_tris_plain(&sub_pts).into_iter().map(|f| [cand[f[0]], cand[f[1]], cand[f[2]]]).collect();
     }
     hull_tris_plain(p)
 }
@@ -373,4 +313,152 @@ pub fn finish_trinket(mut pos: Vec<[f32; 3]>, tris: &[[usize; 3]], size: f64) ->
         }
     }
     pos
+}
+
+struct QFace {
+    v: [usize; 3],
+    n: P3,
+    d: f64,
+    alive: bool,
+    outside: Vec<usize>,
+    nbr: [usize; 3],
+}
+
+/// quickhull with outside sets (same hull as the incremental one up to coplanar triangulation); None when the input is degenerate
+fn quickhull(p: &[P3]) -> Option<Vec<[usize; 3]>> {
+    const EPS: f64 = 1e-10;
+    let n = p.len();
+    let ext = |d: usize, sgn: f64| (0..n).max_by(|&a, &b| (p[a][d] * sgn).partial_cmp(&(p[b][d] * sgn)).unwrap().then(b.cmp(&a))).unwrap();
+    let ia = ext(0, -1.0);
+    let ib = ext(0, 1.0);
+    if ia == ib {
+        return None;
+    }
+    let ab = sub(p[ib], p[ia]);
+    let abl = norm(ab);
+    let ic = (0..n).max_by(|&a, &b| norm(cross(ab, sub(p[a], p[ia]))).partial_cmp(&norm(cross(ab, sub(p[b], p[ia])))).unwrap().then(b.cmp(&a))).unwrap();
+    let nrm = cross(ab, sub(p[ic], p[ia]));
+    if norm(nrm) / abl < EPS {
+        return None;
+    }
+    let id = (0..n).max_by(|&a, &b| dot(nrm, sub(p[a], p[ia])).abs().partial_cmp(&dot(nrm, sub(p[b], p[ia])).abs()).unwrap().then(b.cmp(&a))).unwrap();
+    if dot(nrm, sub(p[id], p[ia])).abs() / norm(nrm) < EPS {
+        return None;
+    }
+    let mut faces: Vec<QFace> = vec![];
+    let mk = |faces: &mut Vec<QFace>, v: [usize; 3]| -> usize {
+        let c = cross(sub(p[v[1]], p[v[0]]), sub(p[v[2]], p[v[0]]));
+        let l = norm(c);
+        let nn = [c[0] / l, c[1] / l, c[2] / l];
+        faces.push(QFace { v, n: nn, d: dot(nn, p[v[0]]), alive: true, outside: vec![], nbr: [usize::MAX; 3] });
+        faces.len() - 1
+    };
+    let tet: [[usize; 3]; 4] = if dot(nrm, sub(p[id], p[ia])) > 0.0 {
+        [[ia, ic, ib], [ia, ib, id], [ib, ic, id], [ic, ia, id]]
+    } else {
+        [[ia, ib, ic], [ia, id, ib], [ib, id, ic], [ic, id, ia]]
+    };
+    for t in tet {
+        mk(&mut faces, t);
+    }
+    // neighbours through shared (reversed) directed edges
+    let mut emap: HashMap<(usize, usize), (usize, usize)> = HashMap::default();
+    for (fi, f) in faces.iter().enumerate() {
+        for k in 0..3 {
+            emap.insert((f.v[k], f.v[(k + 1) % 3]), (fi, k));
+        }
+    }
+    for fi in 0..faces.len() {
+        for k in 0..3 {
+            let (a, b) = (faces[fi].v[k], faces[fi].v[(k + 1) % 3]);
+            faces[fi].nbr[k] = emap[&(b, a)].0;
+        }
+    }
+    let dist = |f: &QFace, q: P3| dot(f.n, q) - f.d;
+    let used = [ia, ib, ic, id];
+    for i in 0..n {
+        if used.contains(&i) {
+            continue;
+        }
+        for fi in 0..faces.len() {
+            if dist(&faces[fi], p[i]) > EPS {
+                faces[fi].outside.push(i);
+                break;
+            }
+        }
+    }
+    let mut stack: Vec<usize> = (0..faces.len()).filter(|&f| !faces[f].outside.is_empty()).collect();
+    while let Some(f) = stack.pop() {
+        if !faces[f].alive || faces[f].outside.is_empty() {
+            continue;
+        }
+        let eye = *faces[f].outside.iter().max_by(|&&a, &&b| dist(&faces[f], p[a]).partial_cmp(&dist(&faces[f], p[b])).unwrap().then(b.cmp(&a))).unwrap();
+        // visible region
+        let mut vis: Vec<usize> = vec![f];
+        let mut seen: HashMap<usize, bool> = HashMap::default();
+        seen.insert(f, true);
+        let mut qi = 0;
+        let mut horizon: Vec<(usize, usize, usize)> = vec![]; // (a, b, outer face)
+        while qi < vis.len() {
+            let g = vis[qi];
+            qi += 1;
+            for k in 0..3 {
+                let h = faces[g].nbr[k];
+                let hv = match seen.get(&h) {
+                    Some(&x) => x,
+                    None => {
+                        let x = dist(&faces[h], p[eye]) > EPS;
+                        seen.insert(h, x);
+                        if x {
+                            vis.push(h);
+                        }
+                        x
+                    }
+                };
+                if !hv {
+                    horizon.push((faces[g].v[k], faces[g].v[(k + 1) % 3], h));
+                }
+            }
+        }
+        let mut orphans: Vec<usize> = vec![];
+        for &g in &vis {
+            faces[g].alive = false;
+            orphans.extend(faces[g].outside.drain(..).filter(|&q| q != eye));
+        }
+        let mut by_start: HashMap<usize, usize> = HashMap::default();
+        let mut by_end: HashMap<usize, usize> = HashMap::default();
+        let mut newf: Vec<usize> = vec![];
+        for &(a, b, h) in &horizon {
+            let nf = mk(&mut faces, [a, b, eye]);
+            faces[nf].nbr[0] = h;
+            // fix the outer face's back pointer (edge b->a in h)
+            for k in 0..3 {
+                if faces[h].v[k] == b && faces[h].v[(k + 1) % 3] == a {
+                    faces[h].nbr[k] = nf;
+                }
+            }
+            by_start.insert(a, nf);
+            by_end.insert(b, nf);
+            newf.push(nf);
+        }
+        for &nf in &newf {
+            let [a, b, _] = faces[nf].v;
+            faces[nf].nbr[1] = *by_start.get(&b)?; // edge b->eye is shared with the face starting at b
+            faces[nf].nbr[2] = *by_end.get(&a)?; // edge eye->a is shared with the face ending at a
+        }
+        for q in orphans {
+            for &nf in &newf {
+                if dist(&faces[nf], p[q]) > EPS {
+                    faces[nf].outside.push(q);
+                    break;
+                }
+            }
+        }
+        for &nf in &newf {
+            if !faces[nf].outside.is_empty() {
+                stack.push(nf);
+            }
+        }
+    }
+    Some(faces.iter().filter(|f| f.alive).map(|f| f.v).collect())
 }
