@@ -450,3 +450,26 @@ pub fn rot_z90_f32(verts: &[V3]) -> Vec<V3> {
         })
         .collect()
 }
+
+/// quads of the blender cube primitive in `new_bbox_exact` vertex order (i = 4x + 2y + z), in blender's face order
+pub const CUBE_QUADS_ZFAST: [[u32; 4]; 6] = [[0, 1, 3, 2], [2, 3, 7, 6], [6, 7, 5, 4], [4, 5, 1, 0], [2, 6, 4, 0], [7, 3, 1, 5]];
+
+/// triangulate quads like the python placeholder pipeline (BM_face_triangulate, quad method BEAUTY, float32): all first triangles in place,
+/// then the second triangles appended
+pub fn triangulate_quads_beauty(verts: &[V3], quads: &[[u32; 4]]) -> Vec<Vec<u32>> {
+    let mut first = vec![];
+    let mut second = vec![];
+    for q in quads {
+        let (a, b, c, d) = (q[0], q[1], q[2], q[3]);
+        let p = |i: u32| -> [f32; 3] { let v = verts[i as usize]; [v[0] as f32, v[1] as f32, v[2] as f32] };
+        if crate::polyfill::quad_split_24_beauty([p(a), p(b), p(c), p(d)]) {
+            first.push(vec![a, c, d]);
+            second.push(vec![a, b, c]);
+        } else {
+            first.push(vec![b, d, a]);
+            second.push(vec![b, c, d]);
+        }
+    }
+    first.extend(second);
+    first
+}

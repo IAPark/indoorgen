@@ -67,6 +67,16 @@ pub struct ChairSpec {
     pub panel_cls: &'static str,
 }
 
+/// ChairFactory.create_placeholder: new_bbox(x0, x1, y0, y1, z0, z1), rotation_euler.z += pi/2, apply_transform (float32), canonical tags
+pub fn rotated_bbox_exact(x0: f64, x1: f64, y0: f64, y1: f64, z0: f64, z1: f64) -> super::cabnodes::ExactMesh {
+    let (lo, hi) = super::geomkit::new_bbox_f32(x0, x1, y0, y1, z0, z1);
+    let e = super::cabnodes::new_bbox_exact(lo, hi);
+    let verts = super::api::rot_z90_f32(&e.verts);
+    let polys = super::api::triangulate_quads_beauty(&verts, &super::api::CUBE_QUADS_ZFAST);
+    let names = super::api::canonical_names(&verts, &polys, &[]);
+    super::cabnodes::ExactMesh { verts, polys, names }
+}
+
 impl ChairSpec {
     pub fn new(fseed: u64) -> ChairSpec {
         Self::new_impl(fseed, false)
@@ -621,11 +631,7 @@ impl ChairSpec {
         let ox = self.leg_x_offset.max(self.back_x_offset);
         let (x0, x1) = (-self.width / 2.0 - ox, self.width / 2.0 + ox);
         let (y0, y1) = (-self.size - self.leg_y_offset[1] - self.leg_thickness * 0.5, self.leg_y_offset[0].max(self.back_y_offset));
-        let (lo, hi) = super::geomkit::new_bbox_f32(x0, x1, y0, y1, -self.leg_height, self.back_height * 1.2);
-        let e = super::cabnodes::new_bbox_exact(lo, hi);
-        let verts = super::api::rot_z90_f32(&e.verts);
-        let names = super::api::canonical_names(&verts, &e.polys, &[]);
-        super::cabnodes::ExactMesh { verts, polys: e.polys, names }
+        rotated_bbox_exact(x0, x1, y0, y1, -self.leg_height, self.back_height * 1.2)
     }
 
     pub fn placeholder_bounds(&self) -> (V3, V3) {
