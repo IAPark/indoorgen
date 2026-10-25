@@ -183,12 +183,13 @@ impl GMesh {
         }
         let identity = rot == [0.0; 3] && scale == [1.0; 3];
         let mut o = self.clone();
+        static FMAV: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let var = FMAV.get_or_init(|| std::env::var("FMAV").unwrap_or_default());
         for p in o.v.iter_mut() {
             if identity {
                 *p = [p[0] + loc[0], p[1] + loc[1], p[2] + loc[2]];
             } else {
                 let (x, y, z) = (p[0], p[1], p[2]);
-                let var = std::env::var("FMAV").unwrap_or_default();
                 let row = |k: usize| -> f32 {
                     match var.as_str() {
                         "a" => m[2][k].mul_add(z, y.mul_add(m[1][k], x * m[0][k])) + loc[k],
