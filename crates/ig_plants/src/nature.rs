@@ -19,6 +19,75 @@ fn norm(a: P3) -> f64 {
 
 /// triangulated convex hull (outward oriented), incremental
 pub fn hull_tris(p: &[P3]) -> Vec<[usize; 3]> {
+    if p.len() > 4000 {
+        // quickhull-style candidate growth: hull of directional extremes, then repeatedly add the farthest outside point of every face;
+        // points never outside the final candidate hull cannot be hull vertices, so the plain incremental hull runs on a small subset
+        let mut dirs: Vec<P3> = vec![];
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    if x != 0 || y != 0 || z != 0 {
+                        dirs.push([x as f64, y as f64, z as f64]);
+                    }
+                }
+            }
+        }
+        let mut cand: Vec<usize> = dirs
+            .iter()
+            .map(|d| (0..p.len()).max_by(|&a, &b| dot(p[a], *d).partial_cmp(&dot(p[b], *d)).unwrap().then(b.cmp(&a))).unwrap())
+            .collect();
+        cand.sort();
+        cand.dedup();
+        for _round in 0..64 {
+            let cp: Vec<P3> = cand.iter().map(|&i| p[i]).collect();
+            let ch = hull_tris_plain(&cp);
+            if ch.is_empty() {
+                break;
+            }
+            let planes: Vec<(P3, f64)> = ch
+                .iter()
+                .map(|f| {
+                    let n = cross(sub(cp[f[1]], cp[f[0]]), sub(cp[f[2]], cp[f[0]]));
+                    let l = norm(n);
+                    let n = [n[0] / l, n[1] / l, n[2] / l];
+                    (n, dot(n, cp[f[0]]))
+                })
+                .collect();
+            let mut far: Vec<(f64, usize)> = vec![(1e-9, usize::MAX); planes.len()];
+            for i in 0..p.len() {
+                // the face this point is farthest outside of
+                let mut bf = usize::MAX;
+                let mut bd = 1e-9;
+                for (fi, (n, d)) in planes.iter().enumerate() {
+                    let h = dot(*n, p[i]) - d;
+                    if h > bd {
+                        bd = h;
+                        bf = fi;
+                    }
+                }
+                if bf != usize::MAX && bd > far[bf].0 {
+                    far[bf] = (bd, i);
+                }
+            }
+            let mut added = false;
+            for (_, i) in far {
+                if i != usize::MAX && !cand.contains(&i) {
+                    cand.push(i);
+                    added = true;
+                }
+            }
+            if !added {
+                break;
+            }
+            cand.sort();
+        }
+        let sub_pts: Vec<P3> = cand.iter().map(|&i| p[i]).collect();
+        return hull_tris_plain(&sub_pts).into_iter().map(|f| [cand[f[0]], cand[f[1]], cand[f[2]]]).collect();
+    }
+    hull_tris_plain(p)
+}
+
+fn hull_tris_plain(p: &[P3]) -> Vec<[usize; 3]> {
     let n = p.len();
     let i0 = 0;
     let i1 = match (1..n).find(|&i| norm(sub(p[i], p[i0])) > 1e-12) {
@@ -45,7 +114,14 @@ pub fn hull_tris(p: &[P3]) -> Vec<[usize; 3]> {
         if [i0, i1, i2, i3].contains(&i) {
             continue;
         }
-        let visible: Vec<bool> = faces.iter().map(|f| dot(normal(p, f), sub(p[i], p[f[0]])) > eps).collect();
+        let visible: Vec<bool> = faces
+            .iter()
+            .map(|f| {
+                let nn = normal(p, f);
+                let l = norm(nn);
+                l > 0.0 && dot(nn, sub(p[i], p[f[0]])) / l > 1e-10
+            })
+            .collect();
         if !visible.iter().any(|&v| v) {
             continue;
         }
@@ -111,6 +187,7 @@ fn orient3d(plane: [P3; 3], pd: P3) -> f64 {
 pub fn stable_pose(verts: &[P3], tris: &[[usize; 3]]) -> [[f64; 3]; 3] {
     let com = center_mass(verts, tris);
     let hp: Vec<[usize; 3]> = hull_tris(verts);
+    if std::env::var("TRDBG").is_ok() { eprintln!("COM {:?} hull tris {}", com, hp.len()); }
     // hull vertices are used in place (triangles reference the input vertices)
     let nf = hp.len();
     let tv = |i: usize| -> [P3; 3] { [verts[hp[i][0]], verts[hp[i][1]], verts[hp[i][2]]] };
@@ -147,6 +224,13 @@ pub fn stable_pose(verts: &[P3], tris: &[[usize; 3]]) -> [[f64; 3]; 3] {
         }
     }
     let mut prob: Vec<f64> = (0..nf).map(|i| static_prob(tv(i), com)).collect();
+    if std::env::var("TRDBG").is_ok() {
+        let nonman = emap.values().filter(|v| v.len() != 2).count();
+        let nan = prob.iter().filter(|x| !x.is_finite()).count();
+        let mut a: Vec<(f64, usize)> = prob.iter().cloned().enumerate().map(|(i, x)| (x, i)).collect();
+        a.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap());
+        eprintln!("hull: nonmanifold edges {} nan {} sum prob {} top {:?}", nonman, nan, prob.iter().sum::<f64>(), &a[..4]);
+    }
     let mut succ: Vec<Option<usize>> = vec![None; nf];
     for fi in 0..nf {
         let t = tv(fi);
@@ -219,6 +303,14 @@ pub fn stable_pose(verts: &[P3], tris: &[[usize; 3]]) -> [[f64; 3]; 3] {
         }
     }
     let normal = acc[&best].1;
+    if std::env::var("TRDBG").is_ok() {
+        let mut v: Vec<f64> = acc.values().map(|e| e.0).collect();
+        v.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        eprintln!("nposes {} sum {} probs {:?} best normal {:?}", v.len(), v.iter().sum::<f64>(), &v[..6.min(v.len())], normal);
+        let mut l: Vec<_> = acc.iter().map(|(k, e)| (e.0, e.1)).collect();
+        l.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        for (pr, n) in l.iter().take(8) { eprintln!("  {:.4} {:.3?}", pr, n); }
+    }
     let z = [-normal[0], -normal[1], -normal[2]];
     let mut x = [-z[1], z[0], 0.0];
     if norm(x) == 0.0 {
