@@ -465,7 +465,7 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
     let mut pdir = vec![[0.0f64; 3]; n];
     let mut ap = vec![[0.0f64; 3]; n];
     let mut diag = vec![0.0f64; n];
-    let mut act: Vec<(u32, u32, f64, f64, V3)> = Vec::with_capacity(ns);
+    let mut act: Vec<(u32, u32, f64, f64, V3, u8)> = Vec::with_capacity(ns);
     for _step in 0..(frames * steps_per_frame) {
         for fo in forces.iter_mut() {
             *fo = [0.0; 3];
@@ -536,22 +536,30 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
         act.clear();
         for (si, s) in springs.iter().enumerate() {
             if alpha[si] != 0.0 || beta[si] != 0.0 {
-                act.push((s.i, s.j, alpha[si], beta[si], dirs[si]));
+                act.push((s.i, s.j, alpha[si], beta[si], dirs[si], (pinned[s.i as usize] as u8) | ((pinned[s.j as usize] as u8) << 1)));
             }
         }
         let matvec = |xv: &[V3], out: &mut [V3]| {
             for i in 0..n {
                 out[i] = if pinned[i] { [0.0; 3] } else { mul(xv[i], m) };
             }
-            for &(i, j, al, be, dr) in act.iter() {
+            for &(i, j, al, be, dr, pf) in act.iter() {
                 let (i, j) = (i as usize, j as usize);
-                let u = sub(xv[i], xv[j]);
-                let w = add(mul(u, al), mul(dr, be * dot(dr, u)));
-                if !pinned[i] {
-                    out[i] = add(out[i], w);
+                let (xi, xj) = (xv[i], xv[j]);
+                let u = [xi[0] - xj[0], xi[1] - xj[1], xi[2] - xj[2]];
+                let k = be * (dr[0] * u[0] + dr[1] * u[1] + dr[2] * u[2]);
+                let w = [u[0] * al + dr[0] * k, u[1] * al + dr[1] * k, u[2] * al + dr[2] * k];
+                if pf & 1 == 0 {
+                    let o = &mut out[i];
+                    o[0] += w[0];
+                    o[1] += w[1];
+                    o[2] += w[2];
                 }
-                if !pinned[j] {
-                    out[j] = sub(out[j], w);
+                if pf & 2 == 0 {
+                    let o = &mut out[j];
+                    o[0] -= w[0];
+                    o[1] -= w[1];
+                    o[2] -= w[2];
                 }
             }
         };
