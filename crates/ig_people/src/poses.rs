@@ -250,8 +250,8 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
                         b.side(s, "Calf", Op::Rel([-68.0 + v.v(6.0), 0.0, 0.0]));
                     }
                     if arms_up {
-                        b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.85, -0.40 + v.v(0.1), 0.05), twist: 0.0 });
-                        b.side(s, "Forearm", Op::Aim { dir: d(s * 0.30, -1.0, 0.10), twist: 0.0 });
+                        b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.95, -0.25 + v.v(0.1), 0.05), twist: 0.0 });
+                        b.side(s, "Forearm", Op::Aim { dir: d(s * 0.12, -1.0, 0.25), twist: 0.0 });
                     } else {
                         b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.14, 1.0, -0.12), twist: 0.0 });
                         b.side(s, "Forearm", Op::Aim { dir: d(s * 0.05, 1.0, 0.05), twist: 0.0 });

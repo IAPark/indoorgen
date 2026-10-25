@@ -27,7 +27,7 @@ pub fn enabled() -> bool {
 /// poses that are settled by physics (the others stay kinematic)
 pub fn wants(kind: crate::PoseKind) -> bool {
     use crate::PoseKind::*;
-    matches!(kind, LieBed | LieSofa | SitRelaxed | SitBedEdge)
+    matches!(kind, LieBed | LieSofa | SitRelaxed | SitBedEdge | SitUpright)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,6 +41,9 @@ pub struct Settled {
     /// deepest hull-vs-static penetration at the end (m)
     pub pen: f64,
     pub bodies: usize,
+    /// largest rotation (rad) of the pelvis / chest away from the key pose, and pelvis drift in xy (m)
+    pub tilt: f64,
+    pub drift: f64,
 }
 
 struct Seg {
@@ -251,11 +254,48 @@ fn env_f(k: &str, d: f64) -> f64 {
 /// Settle the avatar in the key pose `g_key` (local contract frame) placed in the world by `pose` against the static colliders.
 /// `lift`: start this far above the key pose (the body then falls onto the supports). Returns None when the model is incomplete.
 pub fn settle(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[StaticTris], floor_z: f64, lift: f64) -> Option<Settled> {
-    settle_k(av, m, g_key, pose, statics, floor_z, lift, 1.0)
+    settle_k(av, m, g_key, pose, statics, floor_z, lift, &Opts::default())
+}
+
+/// per-pose tuning of the ragdoll
+#[derive(Clone, Copy, Debug)]
+pub struct Opts {
+    /// scales the allowed joint deviation (larger = looser motors)
+    pub soft: f64,
+    /// world-orientation PD controller on pelvis and chest toward the key pose (1/s^2; 0 = off)
+    pub kp: f64,
+    /// fraction of the gravity moment of the upper body the chest controller cancels
+    pub gc: f64,
+    /// multiplier on the trunk / neck / head joint stiffness
+    pub trunk: f64,
+    /// multiplier on the arm joint stiffness
+    pub arms: f64,
+}
+impl Default for Opts {
+    fn default() -> Opts {
+        Opts { soft: 1.0, kp: 0.0, gc: 0.0, trunk: 1.0, arms: 1.0 }
+    }
+}
+impl Opts {
+    /// gains per pose kind: strong torso control for upright sitting, medium for relaxed (slouches into the backrest), none for lying
+    pub fn for_kind(kind: crate::PoseKind) -> Opts {
+        use crate::PoseKind::*;
+        let (kpm, tm) = (env_f("RAGDOLL_KPM", 1.0), env_f("RAGDOLL_TRUNKM", 1.0));
+        let mut o = match kind {
+            SitUpright | SitBedEdge => Opts { soft: 1.0, kp: 220.0, gc: 0.9, trunk: 3.0, arms: 1.0 },
+            SitRelaxed => Opts { soft: 1.0, kp: 80.0, gc: 0.6, trunk: 2.0, arms: 1.0 },
+            LieBed => Opts { arms: 3.0, ..Opts::default() },
+            _ => Opts::default(),
+        };
+        o.kp *= kpm;
+        o.trunk *= tm;
+        o
+    }
 }
 
 /// `soft` scales the allowed joint deviation (larger = looser motors)
-pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[StaticTris], floor_z: f64, lift: f64, soft: f64) -> Option<Settled> {
+pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[StaticTris], floor_z: f64, lift: f64, opt: &Opts) -> Option<Settled> {
+    let soft = opt.soft;
     let t0 = std::time::Instant::now();
     let rig = Rig::new(av);
     let segs = &m.segs;
@@ -284,6 +324,7 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
         }
     }
     let pad = 0.45;
+    let mut static_h: Vec<(ColliderHandle, bool)> = vec![];
     let mut n_tri = 0usize;
     let mut n_static = 0;
     let cell = env_f("RAGDOLL_CELL", 0.02);
@@ -328,7 +369,8 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
         let idx: Vec<[u32; 3]> = idx3.iter().map(|t| [t[0] as u32, t[1] as u32, t[2] as u32]).collect();
         n_tri += idx.len();
         if let Ok(c) = ColliderBuilder::trimesh(verts, idx) {
-            w.insert_collider(c.friction(0.8).restitution(0.0).collision_groups(g_static), None);
+            let ch = w.insert_collider(c.friction(0.8).restitution(0.0).collision_groups(g_static), None);
+            static_h.push((ch, st.dz != 0.0));
             n_static += 1;
         }
     }
@@ -390,7 +432,8 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     let kl = env_f("RAGDOLL_KL", 4.0);
     let gains = |si: usize, dev: f64, piv: V| -> (f64, f64) {
         let trunk = matches!(segs[si].name, "Bip01 Spine" | "Bip01 Spine1" | "Bip01 Spine2" | "Bip01 Neck" | "Bip01 Head");
-        let kscale = if trunk { kscale } else { kl };
+        let arm = segs[si].name.contains("Arm") || segs[si].name.contains("Hand");
+        let kscale = if trunk { kscale * opt.trunk } else if arm { kl * opt.arms } else { kl };
         let cm = scale(sub_c[si], 1.0 / sub_m[si].max(1e-6));
         let d = len(sub(cm, piv)).max(0.06);
         let kk = sub_m[si] * 9.81 * d / dev * kscale;
@@ -484,6 +527,27 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
         w.step();
         w.integration_parameters.dt = 1.0 / 60.0;
     }
+    // furniture the key pose already sinks into by more than 2.5 cm (a thigh under a table apron: placement tolerates it) is ghosted
+    // instead of being resolved violently: the person would be catapulted out of the chair
+    for &(sh, is_support) in &static_h {
+        let mut worst = 0.0f64;
+        let sc = &w.colliders[sh];
+        let (sp, ss) = (*sc.position(), sc.shared_shape().clone());
+        for &h in &handles {
+            for &ch in w.bodies[h].colliders() {
+                let col = &w.colliders[ch];
+                if let Ok(Some(ct)) = rapier3d_f64::parry::query::contact(col.position(), &**col.shared_shape(), &sp, &*ss, 0.0) {
+                    worst = worst.max(-ct.dist);
+                }
+            }
+        }
+        if worst > if is_support { 0.06 } else { 0.025 } {
+            w.colliders[sh].set_collision_groups(InteractionGroups::none());
+            if std::env::var_os("RAGDOLL_DBG").is_some() {
+                eprintln!("  ghosted static (pen {worst:.3}, support {is_support})");
+            }
+        }
+    }
     if std::env::var_os("RAGDOLL_DBG").is_some() {
         w.step();
         for (si, s) in segs.iter().enumerate() {
@@ -494,7 +558,54 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     let max_steps = env_f("RAGDOLL_STEPS", 120.0) as usize;
     let mut steps = 0;
     let mut calm = 0;
+    // world-orientation controllers: pelvis and chest toward their key-pose orientation (+ gravity compensation of the upper body)
+    let chest = segs.iter().position(|x| x.name == "Bip01 Spine2");
+    let mut ctl: Vec<(usize, Rotation, f64, bool)> = vec![];
+    if opt.kp > 0.0 {
+        ctl.push((0, quat_of(&gw[segs[0].bone].r), mass[0] * 0.08 + 0.3, false));
+        if let Some(c) = chest {
+            ctl.push((c, quat_of(&gw[segs[c].bone].r), sub_m[c] * 0.05, true));
+        }
+    }
+    let in_sub = |i: usize, root: usize| -> bool {
+        let mut c = Some(i);
+        while let Some(x) = c {
+            if x == root {
+                return true;
+            }
+            c = segs[x].parent;
+        }
+        false
+    };
     for step in 0..max_steps {
+        for &(si, ref tq, inertia, gcomp) in &ctl {
+            let b = &mut w.bodies[handles[si]];
+            let cur = b.position().rotation;
+            let mut qe = *tq * cur.inverse();
+            if qe.w < 0.0 {
+                qe = -qe;
+            }
+            let (ax, ang) = qe.to_axis_angle();
+            let om = b.angvel();
+            let kd = 2.0 * 0.8 * opt.kp.sqrt();
+            let mut tau = ax * (opt.kp * ang) * inertia - om * (kd * inertia);
+            if gcomp {
+                // moment of gravity of everything above the chest about its pivot, cancelled by `gc`
+                let c = chest.unwrap();
+                let piv = b.translation();
+                let (mut mm, mut cm) = (0.0, Vector::ZERO);
+                for j in 0..nseg {
+                    if in_sub(j, c) {
+                        let bj = &w.bodies[handles[j]];
+                        mm += mass[j];
+                        cm += bj.center_of_mass() * mass[j];
+                    }
+                }
+                let r = cm / mm - piv;
+                tau += r.cross(Vector::new(0.0, 0.0, mm * 9.81)) * opt.gc;
+            }
+            w.bodies[handles[si]].add_torque(tau, true);
+        }
         w.step();
         steps = step + 1;
         if step >= 30 && step % 5 == 4 {
@@ -561,5 +672,12 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     if std::env::var_os("RAGDOLL_DBG").is_some() {
         eprintln!("RAGDOLL bodies {} statics {} (tris {}) steps {} moved {:.3} pen {:.4} {:.0} ms (statics {:.0} ms)", segs.len(), n_static, n_tri, steps, moved, pen, ms, t_static);
     }
-    Some(Settled { g: gs, steps, ms, moved, pen, bodies: segs.len() })
+    let mut tilt = 0.0f64;
+    for &si in [0usize].iter().chain(chest.iter()) {
+        let q = w.bodies[handles[si]].position().rotation * quat_of(&gw[segs[si].bone].r).inverse();
+        tilt = tilt.max(2.0 * q.w.abs().min(1.0).acos());
+    }
+    let pp = w.bodies[handles[0]].translation();
+    let drift = (pp.x - key_pos[0][0]).hypot(pp.y - key_pos[0][1]);
+    Some(Settled { g: gs, steps, ms, moved, pen, bodies: segs.len(), tilt, drift })
 }

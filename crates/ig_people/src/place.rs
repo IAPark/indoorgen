@@ -803,8 +803,14 @@ fn ragdoll_person(w: &World, p: &mut Placement) {
     // a body that is flung away (> 0.45 m) or deeply stuck is retried with looser motors; then the key pose stays
     let mut res = None;
     for soft in [1.0, 2.0] {
-        if let Some(st) = settle_k(&av, &model, &g, &p.pose, &statics, w.floor_z, 0.03, soft) {
-            let ok = st.moved < 0.45 && st.pen < 0.05;
+        let base = if std::env::var_os("RAGDOLL_BASE").is_some() { Opts::default() } else { Opts::for_kind(p.kind) };
+        let opt = Opts { soft, ..base };
+        if let Some(st) = settle_k(&av, &model, &g, &p.pose, &statics, w.floor_z, 0.03, &opt) {
+            // reject: flung away, deeply stuck, torso rotated more than ~30 degrees, hips left the seat / mattress footprint
+            if std::env::var_os("RAGDOLL_DBG").is_some() {
+                eprintln!("RAGDOLL {:?} soft {} tilt {:.2} drift {:.2} moved {:.2} pen {:.3}", p.kind, soft, st.tilt, st.drift, st.moved, st.pen);
+            }
+            let ok = st.moved < 0.6 && st.pen < 0.05 && st.tilt < 0.53 && st.drift < 0.25;
             res = Some(st);
             if ok {
                 break;
