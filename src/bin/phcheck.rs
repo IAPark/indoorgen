@@ -41,7 +41,7 @@ fn main() {
                 if bad > 0 && std::env::var_os("PHTAGS").unwrap() == "2" { for (pi, poly) in polys.iter().enumerate() { let ix: Vec<usize> = poly.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(); let c: [f64; 3] = std::array::from_fn(|k| (verts[ix[0]][k] + verts[ix[1]][k] + verts[ix[2]][k]) / 3.0); let f = g.tris.iter().find(|t| (0..3).all(|k| ((t.v[0][k] + t.v[1][k] + t.v[2][k]) / 3.0 - c[k]).abs() < 1e-5)); eprintln!("  py {:?} c {:?} rust {:?}", names.get(pi), c, f.map(|t| t.tags)); } }
                 if bad > 0 { eprintln!("TAGDIFF {} fs {} inst {} bad {}/{}", class, fs, inst, bad, polys.len()); }
             }
-            if std::env::var("PHV").ok().as_deref() == Some(class.as_str()) && d > 1e-9 { eprintln!("{} fs {} inst {} d {:e} lo {:?} {:?} hi {:?} {:?}", class, fs, inst, d, lo, g.lo, hi, g.hi); }
+            if std::env::var("PHV").ok().as_deref() == Some(class.as_str()) && d > 1e-12 { eprintln!("{} fs {} inst {} d {:e} lo {:?} {:?} hi {:?} {:?}", class, fs, inst, d, lo, g.lo, hi, g.hi); }
             if d < std::env::var("PHTOL").ok().and_then(|s| s.parse().ok()).unwrap_or(1e-4) { e.1 += 1; }
             e.2 = e.2.max(d);
         } else { e.3 += 1; }
