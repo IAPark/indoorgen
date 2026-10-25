@@ -4,6 +4,7 @@ pub mod bevel;
 pub mod bridge;
 pub mod bvh;
 pub mod cdata;
+pub mod edgering;
 pub mod hull;
 pub mod edgenet;
 pub mod isect;
