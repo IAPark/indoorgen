@@ -345,3 +345,108 @@ pub fn round_geom_f32(mut g: ObjGeom) -> ObjGeom {
     r(&mut g.hi);
     g
 }
+
+/// tagging.tag_canonical_surfaces on a triangle mesh: per face the "back.front.top.bottom" names (min/max x, max/min z, all vertices within
+/// isclose(atol = 0.01 * dimension)); `extra[i]` is appended (generator tags such as "support").
+pub fn canonical_names(verts: &[V3], polys: &[Vec<u32>], extra: &[String]) -> Vec<String> {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for v in verts {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    let close = |a: f64, b: f64, axis: usize| (a - b).abs() <= 0.01 * (hi[axis] - lo[axis]) + 1e-5 * b.abs();
+    let defs: [(&str, usize, bool); 4] = [("back", 0, false), ("front", 0, true), ("top", 2, true), ("bottom", 2, false)];
+    polys
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut parts: Vec<String> = vec![];
+            for (name, axis, is_max) in defs {
+                let t = if is_max { hi[axis] } else { lo[axis] };
+                if p.iter().all(|&v| close(verts[v as usize][axis], t, axis)) {
+                    parts.push(name.to_string());
+                }
+            }
+            if let Some(e) = extra.get(i) {
+                for s in e.split('.').filter(|s| !s.is_empty()) {
+                    parts.push(s.to_string());
+                }
+            }
+            parts.join(".")
+        })
+        .collect()
+}
+
+/// solver geometry for a vertex-order-exact python placeholder mesh (triangles, python face names); one box proxy per connected component
+pub fn exact_geom(e: &cabnodes::ExactMesh) -> ObjGeom {
+    let tags_of = |n: &str| -> u32 {
+        n.split('.')
+            .map(|s| match s {
+                "back" => BACK,
+                "front" => FRONT,
+                "top" => TOP,
+                "bottom" => BOTTOM,
+                "side" => SIDE,
+                "support" => SUPPORT,
+                _ => 0,
+            })
+            .fold(0, |a, b| a | b)
+    };
+    let mut tris = vec![];
+    for (p, n) in e.polys.iter().zip(e.names.iter()) {
+        for k in 1..p.len() - 1 {
+            tris.push(Tri { v: [e.verts[p[0] as usize], e.verts[p[k] as usize], e.verts[p[k + 1] as usize]], tags: tags_of(n) });
+        }
+    }
+    // connected components of the vertex graph
+    let mut comp: Vec<usize> = (0..e.verts.len()).collect();
+    fn find(c: &mut Vec<usize>, a: usize) -> usize {
+        let mut r = a;
+        while c[r] != r {
+            r = c[r];
+        }
+        let mut a = a;
+        while c[a] != r {
+            let n = c[a];
+            c[a] = r;
+            a = n;
+        }
+        r
+    }
+    for p in &e.polys {
+        for w in p.windows(2) {
+            let (a, b) = (find(&mut comp, w[0] as usize), find(&mut comp, w[1] as usize));
+            comp[a] = b;
+        }
+    }
+    let mut boxes: Vec<(usize, V3, V3)> = vec![];
+    for i in 0..e.verts.len() {
+        let r = find(&mut comp, i);
+        match boxes.iter_mut().find(|b| b.0 == r) {
+            Some(b) => {
+                for k in 0..3 {
+                    b.1[k] = b.1[k].min(e.verts[i][k]);
+                    b.2[k] = b.2[k].max(e.verts[i][k]);
+                }
+            }
+            None => boxes.push((r, e.verts[i], e.verts[i])),
+        }
+    }
+    let proxies = boxes.iter().map(|(_, a, b)| (Proxy::Box { center: [(a[0] + b[0]) / 2., (a[1] + b[1]) / 2., (a[2] + b[2]) / 2.], half: [(b[0] - a[0]) / 2., (b[1] - a[1]) / 2., (b[2] - a[2]) / 2.] }, u32::MAX)).collect();
+    ObjGeom::from_tris(tris, proxies).with_mesh_verts(e.verts.clone())
+}
+
+/// python `obj.rotation_euler.z += pi/2; butil.apply_transform(obj)` of a mesh (float32 mul_m4_v3 of the rotation matrix)
+pub fn rot_z90_f32(verts: &[V3]) -> Vec<V3> {
+    let m = crate::bl32::eul_to_mat3([0.0, 0.0, (std::f64::consts::FRAC_PI_2) as f32]);
+    verts
+        .iter()
+        .map(|v| {
+            let (x, y, z) = (v[0] as f32, v[1] as f32, v[2] as f32);
+            let r = |row: usize| -> f64 { (x * m[0][row] + y * m[1][row] + z * m[2][row]) as f64 };
+            [r(0), r(1), r(2)]
+        })
+        .collect()
+}

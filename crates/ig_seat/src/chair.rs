@@ -616,6 +616,18 @@ impl ChairSpec {
         (vec![seat], limbs, back_decors)
     }
 
+    /// python create_placeholder: new_bbox(...) rotated +90 degrees about z and applied (float32); vertex/face order exact
+    pub fn placeholder_exact(&self) -> super::cabnodes::ExactMesh {
+        let ox = self.leg_x_offset.max(self.back_x_offset);
+        let (x0, x1) = (-self.width / 2.0 - ox, self.width / 2.0 + ox);
+        let (y0, y1) = (-self.size - self.leg_y_offset[1] - self.leg_thickness * 0.5, self.leg_y_offset[0].max(self.back_y_offset));
+        let (lo, hi) = super::geomkit::new_bbox_f32(x0, x1, y0, y1, -self.leg_height, self.back_height * 1.2);
+        let e = super::cabnodes::new_bbox_exact(lo, hi);
+        let verts = super::api::rot_z90_f32(&e.verts);
+        let names = super::api::canonical_names(&verts, &e.polys, &[]);
+        super::cabnodes::ExactMesh { verts, polys: e.polys, names }
+    }
+
     pub fn placeholder_bounds(&self) -> (V3, V3) {
         let ox = self.leg_x_offset.max(self.back_x_offset);
         let (x0, x1) = (-self.width / 2.0 - ox, self.width / 2.0 + ox);
@@ -626,6 +638,9 @@ impl ChairSpec {
 }
 
 impl Factory for Chair {
+    fn placeholder_exact(&self, _i: u64) -> Option<super::cabnodes::ExactMesh> {
+        Some(self.spec.placeholder_exact())
+    }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let (lo, hi) = self.spec.placeholder_bounds();
         let mut a = Asset::default();
