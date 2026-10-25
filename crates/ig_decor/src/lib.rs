@@ -27,6 +27,7 @@ pub mod chopsticks;
 pub mod cup;
 pub mod cutlery;
 pub mod decor;
+pub mod foodbag;
 pub mod foodbox;
 pub mod jar;
 pub mod lamps;
