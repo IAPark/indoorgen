@@ -464,6 +464,9 @@ impl BedSpec {
             let garbled = false;
             let mut g = if self.c.bed_back == 0 {
                 let g = back_divide(&slab, self.dot_distance, garbled, r);
+                if let Ok(p) = std::env::var("BEDDUMP2") {
+                    std::fs::write(p, serde_json::json!({"verts": g.pos, "polys": g.faces}).to_string()).ok();
+                }
                 coil(&g, self, r)
             } else {
                 let g = back_divide(&slab, self.panel_distance, garbled, r);
