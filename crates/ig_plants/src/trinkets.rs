@@ -56,6 +56,7 @@ enum Base {
     MolluskSnail(Maker),
     /// CarnivoreFactory (false) / HerbivoreFactory (true)
     Creature(bool),
+    Pinecone,
     Other,
 }
 
@@ -84,6 +85,14 @@ impl Trinkets {
         Some(match self.base {
             Base::Shell(k) | Base::MolluskShell(k) => shell_asset(k, &mut r, 0.003),
             Base::Snail(m) | Base::MolluskSnail(m) => snail_final(m, &mut r),
+            Base::Pinecone => {
+                let g = super::monocot::Growth::new(super::monocot::Kind::Pinecone, self.fs);
+                let lm = g.create_asset(&mut r, 0.003);
+                let mut o = Mesh::new();
+                o.pos = lm.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+                o.faces = lm.f.clone();
+                o
+            }
             Base::Creature(_) | Base::Other => return None,
         })
     }
@@ -178,6 +187,7 @@ pub fn make(c: &str, rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
         8 => Base::Shell(ShellKind::Mussel),
         9 => Base::Shell(ShellKind::Scallop),
         10 => Base::Snail(Maker::Volute),
+        3 => Base::Pinecone,
         11 => Base::Creature(false),
         12 => Base::Creature(true),
         _ => Base::Other,

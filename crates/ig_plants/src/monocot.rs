@@ -26,6 +26,7 @@ pub enum Kind {
     Wheat,
     WheatEar,
     VeratrumEar,
+    Pinecone,
 }
 
 impl Kind {
@@ -121,7 +122,7 @@ impl Growth {
                 }
             }
             Kind::Wheat => r.uniform(0.08, 0.12),
-            Kind::Banana | Kind::Taro => r.uniform(0.15, 0.35),
+            Kind::Banana | Kind::Taro | Kind::Pinecone => r.uniform(0.15, 0.35),
             Kind::WheatEar => r.uniform(0.12, 0.28),
             Kind::VeratrumEar => r.uniform(0.15, 0.35),
         };
@@ -260,6 +261,16 @@ impl Growth {
                     g.max_y = r.uniform(-PI * 0.05, 0.0);
                 }
             }
+            Kind::Pinecone => {
+                // PineconeFactory.__init__ restarts at the factory seed
+                g.angle = 2.0 * PI / (r.randint(4, 8) as f64 + 0.5);
+                g.max_y = r.uniform(0.7, 0.8) * PI / 2.0;
+                g.leaf_prob = r.uniform(0.9, 0.95);
+                g.count = log_uniform(&mut r, 64.0, 96.0) as i64;
+                g.stem_offset = r.uniform(0.2, 0.4);
+                g.perturb = 0.0;
+                g.scale_curve = vec![(0.0, 0.5), (0.5, r.uniform(0.6, 1.0)), (1.0, r.uniform(0.1, 0.2))];
+            }
             Kind::VeratrumEar => {}
             _ => unimplemented!("monocot kind {:?}", kind),
         }
@@ -378,6 +389,7 @@ impl Growth {
                 decorate_leaf(&mut obj, r, 4.0, PI / 6.0, PI / 6.0, 0.1, 0.02, true);
                 obj
             }
+            Kind::Pinecone => self.pinecone_leaf(r, face_size),
             Kind::Tussock => {
                 let x = [0.0, r.uniform(0.3, 0.7), 1.0];
                 let y = [0.0, 0.01, 0.0];
@@ -766,8 +778,8 @@ impl Growth {
         let top = top.as_str();
         // node construction draws: accumulate-field angle seed, rotation / scale perturbation seeds, bernoulli seed
         let s_acc = r.randint(0, 100000);
-        let s_rot = r.randint(0, 100000);
-        let s_scl = r.randint(0, 100000);
+        // nw.uniform for the perturbation only exists when perturb != 0
+        let (s_rot, s_scl) = if self.perturb != 0.0 { (r.randint(0, 100000), r.randint(0, 100000)) } else { (0, 0) };
         let s_ber = r.randint(0, 100000);
         set_in(&mut j, top, "Curve Line", "End", json!([0.0, 0.0, self.stem_offset]));
         set_in(&mut j, top, "Resample Curve", "Count", json!(self.count));
@@ -1044,4 +1056,73 @@ pub fn fit_in_container(m: &LMesh, side: f64, top: f64, dirt_z: f64) -> (Vec<F3>
         *p = [p[0] * scale, p[1] * scale, p[2] * scale + lz];
     }
     (v, scale)
+}
+
+impl Growth {
+    /// PineconeFactory.build_leaf: filled 128-gon shaped by angles, convex hull, bent along x, scaled / tilted, voxel remeshed, tiny stucci displacement
+    fn pinecone_leaf(&self, r: &mut Rng, face_size: f64) -> LMesh {
+        use super::shell::{fill_grid_circle_best, QuadSpline};
+        let n = 128usize;
+        let lp: Vec<[f64; 3]> = (0..n)
+            .map(|k| {
+                let (sn, cs) = super::cabnodes::sin_cos_from_fraction(k, n);
+                [((sn * -1.0f32) + 1.0f32) as f64, (cs * 1.0f32) as f64, 0.0]
+            })
+            .collect();
+        let grid = fill_grid_circle_best(&lp, 114);
+        let angles: Vec<f64> = [-1.0, -0.8, -0.5, 0.0, 0.5, 0.8, 1.0].iter().map(|a| a * self.angle / 2.0).collect();
+        let scale = r.uniform(0.9, 0.95);
+        let scales = [0.0, 0.7, scale, 1.0, scale, 0.7, 0.0];
+        let disp = [0.0, 0.0, 0.0, -r.uniform(0.2, 0.3), 0.0, 0.0, 0.0];
+        let fs_ = QuadSpline::new(&angles, &scales);
+        let fd = QuadSpline::new(&angles, &disp);
+        let mut pos: Vec<[f32; 3]> = grid.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        let vert_angles: Vec<f64> = pos.iter().map(|p| (p[1] as f64).atan2(p[0] as f64)).collect();
+        for (p, &a) in pos.iter_mut().zip(vert_angles.iter()) {
+            let s = fs_.eval(a);
+            *p = [(s * p[0] as f64) as f32, (s * p[1] as f64) as f32, (s * p[2] as f64) as f32];
+        }
+        for (p, &a) in pos.iter_mut().zip(vert_angles.iter()) {
+            let nrm = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            p[2] = (p[2] as f64 + fd.eval(a) * nrm as f64) as f32;
+        }
+        // bpy.ops.mesh.convex_hull on the whole mesh (exact bmesh port)
+        let faces = grid.faces.clone();
+        let edges: Vec<[u32; 2]> = super::bathkit::edge_list(&faces).into_iter().map(|(a, b)| [a, b]).collect();
+        let mut ce: Vec<Vec<u32>> = vec![];
+        {
+            let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
+            for (i, e) in edges.iter().enumerate() {
+                emap.insert((e[0].min(e[1]), e[0].max(e[1])), i as u32);
+            }
+            for f in &faces {
+                ce.push((0..f.len()).map(|k| emap[&(f[k].min(f[(k + 1) % f.len()]), f[k].max(f[(k + 1) % f.len()]))]).collect());
+            }
+        }
+        let mut bm = crate::bm::BMesh::from_mesh(&pos, &edges, &faces, &ce);
+        crate::bm::hull::convex_hull(&mut bm, &crate::bm::hull::HullParams::default());
+        let (hp, he, hf) = bm.to_mesh();
+        let mut v = hp;
+        // shape_by_xs: z += quadratic interpolation of [0, 0, 0.5] over x in [0, 2]
+        let fx = QuadSpline::new(&[0.0, 1.0, 2.0], &[0.0, 0.0, 0.5]);
+        for p in v.iter_mut() {
+            p[2] = (p[2] as f64 + fx.eval(p[0] as f64)) as f32;
+        }
+        // scale 0.1, rotation_euler[1] -= uniform(pi / 18, pi / 12), both applied
+        let a = -(r.uniform(PI / 18.0, PI / 12.0) as f32);
+        let (c, sn) = (a.cos(), a.sin());
+        for p in v.iter_mut() {
+            let q = [p[0] * 0.1f32, p[1] * 0.1f32, p[2] * 0.1f32];
+            // R_y(a): x' = c x + s z ; z' = -s x + c z
+            *p = [c * q[0] + sn * q[2], q[1], -sn * q[0] + c * q[2]];
+        }
+        let mut m = LMesh { v, f: hf, e: he };
+        m.ensure_face_edges();
+        let mut m = super::voxelremesh::remesh_with_attrs(&m, face_size);
+        let ns = log_uniform(r, 0.002, 0.005);
+        let tex = stucci(ns);
+        displace(&mut m.v, &m.f, Some(&tex), 0.001, 0.0, DispDir::Normal, None);
+        m.trace("DISPLACE");
+        m
+    }
 }

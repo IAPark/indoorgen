@@ -196,7 +196,12 @@ fn transform_by_tri(pt: F3, tar: &[F3; 3], src: &[F3; 3]) -> F3 {
 /// Blender picks circle vertex 892 as the grid corner (f32 angle noise; the circle is the same for every shell). Grid x runs along
 /// increasing circle index, y along decreasing index; boundary vertices keep their circle index, interior vertices follow row by row.
 fn fill_grid_circle(lp: &[[f64; 3]]) -> Mesh {
-    const BEST: usize = 892;
+    fill_grid_circle_best(lp, 892)
+}
+
+/// fill_grid_circle with an explicit grid corner `best` (circle vertex index)
+pub fn fill_grid_circle_best(lp: &[[f64; 3]], best: usize) -> Mesh {
+    let BEST = best;
     let n = lp.len();
     let (xt, yt) = (n / 4 + 1, n / 4 + 1);
     let (xm, ym) = (xt - 1, yt - 1);
