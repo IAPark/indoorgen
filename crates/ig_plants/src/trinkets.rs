@@ -141,7 +141,8 @@ impl Factory for Trinkets {
             o.faces = cm.faces.clone();
             let b = o.bounds();
             let mut a = Asset::default();
-            a.mesh(o, &mollusk_mat("elements.nature_shelf_trinkets.generate.NatureShelfTrinketsFactory", "base_factory.material", self.fs), Some(b));
+            // creatures keep their material in `body_material` (no `.material` attribute)
+            a.mesh(o, &mollusk_mat("elements.nature_shelf_trinkets.generate.NatureShelfTrinketsFactory", "base_factory.body_material", self.fs), Some(b));
             return a;
         }
         let t0 = std::time::Instant::now();
