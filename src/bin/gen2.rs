@@ -128,8 +128,16 @@ fn main() {
                 "CeilingLightFactory" => Some([0.0, 0.0, -0.03]),
                 "CeilingClassicLampFactory" => Some([0.0, 0.0, o.geom.lo[2] - 0.03]),
                 "DeskLampFactory" | "FloorLampFactory" | "LampFactory" => {
-                    let (lo, hi) = (o.geom.lo, o.geom.hi);
-                    Some([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] + 0.04])
+                    // python lamp.py create_asset: `if np.random.uniform() < 0.6` (first draw of the spawn_asset instance stream) adds the
+                    // bulb at local (0, 0, bound_box max z - ShadeHeight / 2), i.e. inside the shade
+                    if infinigen::assets::inst_rng(gen.factory_seed, gen.inst_seed).f64() < 0.6 {
+                        let a = &visuals[k];
+                        let zmax = a.parts.iter().flat_map(|p| p.mesh.pos.iter()).map(|q| q[2]).fold(f64::MIN, f64::max);
+                        let (slo, shi) = a.parts[0].mesh.bounds(); // part 0 = shade
+                        Some([0.0, 0.0, zmax - (shi[2] - slo[2]) * 0.5])
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
@@ -145,6 +153,8 @@ fn main() {
                     tries += 1;
                 }
                 let temp = temp.clamp(3500.0, 6500.0);
+                // LampFactory: bulb_fac Temperature = max(T * 0.6, 2500)
+                let temp = if gen.class.contains("Lamp") && !gen.class.contains("Ceiling") { (temp * 0.6).max(2500.0) } else { temp };
                 scene.lights.push(infinigen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() });
             }
         }
