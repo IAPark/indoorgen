@@ -223,3 +223,39 @@ pub fn subsurf_bl(m: &Mesh, levels: usize, simple: bool) -> Mesh {
     out.pos = pos;
     out
 }
+
+/// SUBSURF modifier through OpenSubdiv 3.6.0 itself (csrc/osd_shim.cpp), Blender's output layout and float32 evaluation. `edges`: the Blender
+/// mesh's edge list when known (decides the order of the edge vertices), else first-use order of the face corners.
+pub fn subsurf_osd(m: &Mesh, levels: usize, simple: bool, edges: Option<&[[u32; 2]]>) -> Option<Mesh> {
+    subsurf_osd_ex(m, levels, simple, true, 3, edges)
+}
+
+/// `limit_surface` = the modifier's use_limit_surface (adaptive refinement to `quality`, evaluator level = quality; SIMPLE always uses level 1)
+pub fn subsurf_osd_ex(m: &Mesh, levels: usize, simple: bool, limit_surface: bool, quality: usize, edges: Option<&[[u32; 2]]>) -> Option<Mesh> {
+    use super::cabnodes::GMesh;
+    if levels == 0 {
+        return Some(m.clone());
+    }
+    let mut g = GMesh::new();
+    g.v = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    g.p = m.faces.clone();
+    g.tag = vec![0; g.p.len()];
+    g.e = match edges {
+        Some(e) => e.to_vec(),
+        None => super::bathkit::edge_list(&m.faces).into_iter().map(|(a, b)| [a, b]).collect(),
+    };
+    let eval_level = if simple { 1 } else if limit_surface { quality } else { levels };
+    let osd = crate::osd::Osd::new(&g.v, &g.p, eval_level, limit_surface, simple)?;
+    let off = osd.face_ptex_offset.clone();
+    let ev = |fi: usize, ptex: usize, u: f32, v: f32| -> [f32; 3] { osd.eval(&[(off[fi] + ptex as i32, u, v)])[0] };
+    if let Ok(d) = std::env::var("OSD_CLAIMDUMP") {
+        let c = super::gweld::claim_candidates(&g, levels as u32, &ev);
+        let j: Vec<_> = c.iter().map(|(k, v)| serde_json::json!([k, v.iter().map(|(f, p)| serde_json::json!([f, p])).collect::<Vec<_>>()])).collect();
+        let _ = std::fs::write(d, serde_json::Value::Array(j).to_string());
+    }
+    let gb = super::gweld::subdivide_ev(&g, levels as u32, Some(&ev));
+    let mut out = Mesh::new();
+    out.faces = gb.p.clone();
+    out.pos = gb.v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+    Some(out)
+}

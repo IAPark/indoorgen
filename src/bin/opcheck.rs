@@ -268,12 +268,15 @@ fn r_fill_grid(c: &Case, p: &Value) -> Res {
 
 fn r_subsurf(c: &Case, p: &Value) -> Res {
     let lv = pi(p, "levels", 1) as usize;
-    let keep = ps(p, "boundary_smooth", "ALL") == "PRESERVE_CORNERS";
-    match ps(p, "subdivision_type", "CATMULL_CLARK") {
-        "CATMULL_CLARK" => Ok(infinigen::assets::subsurf::subsurf_bs(&c.mesh, lv, false, keep)),
-        "SIMPLE" => Ok(infinigen::assets::subsurf::subsurf(&c.mesh, lv, true)),
-        t => Err(format!("subdivision_type {t}")),
+    let simple = match ps(p, "subdivision_type", "CATMULL_CLARK") {
+        "CATMULL_CLARK" => false,
+        "SIMPLE" => true,
+        t => return Err(format!("subdivision_type {t}")),
+    };
+    if std::env::var("SUBSURF_OLD").is_ok() {
+        return Ok(infinigen::assets::subsurf::subsurf(&c.mesh, lv, simple));
     }
+    infinigen::assets::subsurf::subsurf_osd(&c.mesh, lv, simple, c.edges.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string())
 }
 
 fn r_subdivide(c: &Case, p: &Value) -> Res {

@@ -337,3 +337,19 @@ pub fn boolean(op: &str, first: &Mesh, second: &Mesh) -> Mesh {
     o.faces = r.faces_vec();
     o
 }
+
+/// Blender's EXACT boolean solver (src/exbool: vertex / face order identical to Blender 4.2); `op` as in `boolean`
+pub fn boolean_exact(op: &str, first: &Mesh, second: &Mesh) -> Mesh {
+    use crate::exbool::exact_boolean::*;
+    let conv = |m: &Mesh| BoolInput { verts: m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), faces: m.faces.clone() };
+    let bop = match op {
+        "DIFFERENCE" => BoolOp::Difference,
+        "INTERSECT" => BoolOp::Intersect,
+        _ => BoolOp::Union,
+    };
+    let o = exact_boolean(&[conv(first), conv(second)], bop, false, false);
+    let mut m = Mesh::new();
+    m.pos = o.verts.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+    m.faces = o.faces;
+    m
+}

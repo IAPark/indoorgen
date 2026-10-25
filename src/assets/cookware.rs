@@ -48,6 +48,9 @@ pub struct Pan {
     s_handle: f64,
     bar_inner: f64,
     bar_x_offset: f64,
+    bar_scale: [f64; 3],
+    bar_taper: f64,
+    bar_y_rot: f64,
     fseed: u64,
 }
 
@@ -69,7 +72,7 @@ impl Pan {
         let x_guard = r_expand + r.uniform(0.0, 0.2) * x_handle;
         let guard_depth = r.log_uniform(1.0, 2.0) * thickness;
         let scale = r.log_uniform(0.1, 0.15);
-        let mut pan = Pan { pot, r_expand, r_mid, depth, has_handle: true, has_bar: false, x_handle, z_handle, thickness, scale, bar_height: 0.0, bar_radius: 0.0, seed: 0, has_guard, has_handle_hole, x_guard, guard_depth, z_handle_mid, s_handle, bar_inner: 0.0, bar_x_offset: 0.0, fseed: 0 };
+        let mut pan = Pan { pot, r_expand, r_mid, depth, has_handle: true, has_bar: false, x_handle, z_handle, thickness, scale, bar_height: 0.0, bar_radius: 0.0, seed: 0, has_guard, has_handle_hole, x_guard, guard_depth, z_handle_mid, s_handle, bar_inner: 0.0, bar_x_offset: 0.0, bar_scale: [1.0; 3], bar_taper: 0.0, bar_y_rot: 0.0, fseed: 0 };
         if pot {
             // PotFactory.__init__ re-seeds FixedSeed(factory_seed): its own block overrides depth/r_expand/r_mid/scale and adds bars
             let mut b = rng.clone();
@@ -85,9 +88,10 @@ impl Pan {
             let _bar_x = 1.0 + r.uniform(-pan.bar_radius, pan.bar_radius) * 0.05;
             pan.bar_inner = r.log_uniform(0.2, 0.4) * pan.bar_radius;
             let sc = r.log_uniform(0.6, 1.5);
-            let _bs = (r.log_uniform(0.6, 1.0) * sc, sc, r.log_uniform(0.6, 1.2) * sc);
-            let _taper = r.log_uniform(0.3, 0.8);
-            let _rot = r.uniform(-std::f64::consts::PI / 6.0, 0.0);
+            let bs = [r.log_uniform(0.6, 1.0) * sc, sc, r.log_uniform(0.6, 1.2) * sc];
+            pan.bar_scale = bs;
+            pan.bar_taper = r.log_uniform(0.3, 0.8);
+            pan.bar_y_rot = r.uniform(-std::f64::consts::PI / 6.0, 0.0);
             pan.bar_x_offset = pan.bar_radius * r.uniform(-0.1, 0.1);
             pan.has_guard = !pan.has_bar;
             pan.guard_depth = r.log_uniform(0.5, 1.0) * pan.thickness;
@@ -189,6 +193,9 @@ impl Factory for Pan {
             hole: if self.has_handle_hole { Some((self.r_expand + hole_u2 * self.x_handle, hole_rad)) } else { None },
         };
         let mut m = super::pangeom::pan_unit_mesh(&p).expect("pan");
+        if self.pot && self.has_bar {
+            m = super::potbars::add_bars(&m, self.bar_radius, self.bar_inner, self.bar_x_offset, self.bar_height, self.bar_scale, self.bar_taper, self.bar_y_rot);
+        }
         // origin2lowest(vertical): lowest z -> 0; scale
         // PotFactory.create_asset has no origin2lowest
         let zmin = if self.pot { 0.0 } else { m.pos.iter().map(|q| q[2] as f32).fold(f32::INFINITY, f32::min) };

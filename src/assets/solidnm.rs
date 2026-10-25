@@ -23,7 +23,7 @@ fn clamp_nonzero(v: f32, eps: f32) -> f32 {
 pub fn face_normal32(pos: &[V3], f: &[u32]) -> V3 {
     let p = |i: usize| pos[f[i] as usize];
     match f.len() {
-        3 => normalize(cross(sub(p(1), p(0)), sub(p(2), p(0)))),
+        3 => normalize(cross(sub(p(0), p(1)), sub(p(1), p(2)))), // normal_tri_v3
         4 => normalize(cross(sub(p(2), p(0)), sub(p(3), p(1)))),
         n => {
             // newell
@@ -83,7 +83,7 @@ pub enum Boundary {
 
 /// position offset `nor` of one edge group (CONSTRAINTS method). `open`: the fan ends in boundary edges.
 #[allow(clippy::too_many_arguments)]
-fn group_offset(mut planes: Vec<[f32; 4]>, open: bool, edges_dirs: &[V3], face_dirs_for_round: Option<(V3, V3)>, offset_fac: f32, boundary: Boundary) -> V3 {
+fn group_offset(mut planes: Vec<[f32; 4]>, fallback: Option<(V3, f32)>, open: bool, edges_dirs: &[V3], face_dirs_for_round: Option<(V3, V3)>, offset_fac: f32, boundary: Boundary) -> V3 {
     let edges_len = edges_dirs.len();
     let mut nor = [0.0f32; 3];
     let mut move_nor = [0.0f32; 3];
@@ -219,6 +219,10 @@ fn group_offset(mut planes: Vec<[f32; 4]>, open: bool, edges_dirs: &[V3], face_d
             approximate_free_direction = true;
         }
     } else {
+        // fallback case for null faces
+        if let Some((fnor, fofs)) = fallback {
+            nor = mul(fnor, fofs);
+        }
         disable_boundary_fix = true;
     }
     if approximate_free_direction {
@@ -263,7 +267,19 @@ pub fn solidify_nonmanifold(pos: &[V3], faces: &[Vec<u32>], thickness: f32, offs
     let ofs_back = ofs_front - thickness * offset_fac;
     let ofs_front_c = clamp_nonzero(ofs_front, 1e-5);
     let ofs_back_c = clamp_nonzero(ofs_back, 1e-5);
-    let fno: Vec<V3> = faces.iter().map(|f| face_normal32(pos, f)).collect();
+    let mut fno: Vec<V3> = faces.iter().map(|f| face_normal32(pos, f)).collect();
+    let mut null_face = vec![false; faces.len()];
+    for (fi, f) in faces.iter().enumerate() {
+        if dot(fno[fi], fno[fi]) < 0.5 {
+            let d = sub(pos[f[1] as usize], pos[f[0] as usize]);
+            if d[2].abs() < d[1].abs() {
+                fno[fi][2] = 1.0;
+            } else {
+                fno[fi][1] = 1.0;
+            }
+            null_face[fi] = true;
+        }
+    }
     // edge -> faces
     let mut efaces: HashMap<(u32, u32), Vec<usize>> = HashMap::default();
     for (fi, f) in faces.iter().enumerate() {
@@ -336,12 +352,18 @@ pub fn solidify_nonmanifold(pos: &[V3], faces: &[Vec<u32>], thickness: f32, offs
             nb.push(next_of(f, corner_of(f)));
         }
         let dirs: Vec<V3> = if open { nb.iter().map(|&q| sub(pos[q as usize], pos[v])).collect() } else { nb[..m].iter().map(|&q| sub(pos[q as usize], pos[v])).collect() };
-        let pf: Vec<[f32; 4]> = fan.iter().map(|&f| v4(fno[f], ofs_front_c)).collect();
-        let pb: Vec<[f32; 4]> = fan.iter().map(|&f| v4(neg(fno[f]), ofs_back_c)).collect();
+        let pf: Vec<[f32; 4]> = fan.iter().filter(|&&f| !null_face[f]).map(|&f| v4(fno[f], ofs_front_c)).collect();
+        let pb: Vec<[f32; 4]> = fan.iter().filter(|&&f| !null_face[f]).map(|&f| v4(neg(fno[f]), ofs_back_c)).collect();
+        // last null face of the fan is the fallback (the C loop overwrites fallback_nor for every null face)
+        let fb_f = fan.iter().rev().find(|&&f| null_face[f]).map(|&f| (fno[f], ofs_front_c));
+        let fb_b = fan.iter().rev().find(|&&f| null_face[f]).map(|&f| (neg(fno[f]), ofs_back_c));
         let round = Some((fno[fan[0]], fno[fan[m - 1]]));
         let roundb = Some((neg(fno[fan[0]]), neg(fno[fan[m - 1]])));
-        let nf = group_offset(pf, open, &dirs, round, offset_fac, boundary);
-        let nbk = group_offset(pb, open, &dirs, roundb, offset_fac, boundary);
+        if std::env::var("SOLDBG").ok().and_then(|x| x.parse::<usize>().ok()) == Some(v) {
+            eprintln!("solidnm v {v} open {open} fan {:?} planes {:?} dirs {:?}", fan, pf, dirs);
+        }
+        let nf = group_offset(pf, fb_f, open, &dirs, round, offset_fac, boundary);
+        let nbk = group_offset(pb, fb_b, open, &dirs, roundb, offset_fac, boundary);
         front[v] = add(nf, pos[v]);
         back[v] = add(nbk, pos[v]);
     }

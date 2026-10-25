@@ -7,6 +7,7 @@ type F3 = [f32; 3];
 pub enum Deform {
     Bend,
     Twist,
+    Taper,
 }
 
 /// SimpleDeformModifier (local space, limits 0..1, no lock axes). `axis` 0/1/2 = X/Y/Z, `factor` = the modifier's angle.
@@ -52,6 +53,16 @@ pub fn simple_deform(v: &mut [F3], method: Deform, angle: f64, axis: usize) {
         let mut c = [co[map[0]], co[map[1]], co[map[2]]];
         let d = [dcut[map[0]], dcut[map[1]], dcut[map[2]]];
         match method {
+            Deform::Taper => {
+                let (x, y, z) = (c[0], c[1], c[2]);
+                let scale = z * factor;
+                c[0] = x + x * scale;
+                c[1] = y + y * scale;
+                c[2] = z;
+                c[0] += d[0];
+                c[1] += d[1];
+                c[2] += d[2];
+            }
             Deform::Twist => {
                 let (x, y, z) = (c[0], c[1], c[2]);
                 let theta = z * factor;

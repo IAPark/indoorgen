@@ -12,6 +12,7 @@ pub mod rng;
 pub mod rooms;
 pub mod shp;
 pub mod subdiv;
+pub mod osd;
 
 /// infinigen int_hash((a, b)) = abs(int(md5(str(a)+str(b)), 16)) % (2^32 - 1)
 pub fn int_hash(parts: &[&str]) -> u64 {

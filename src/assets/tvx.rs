@@ -27,13 +27,55 @@ pub fn build(t: &Tv, r: &mut Rng) -> TvBuilt {
     let mut stages = vec![];
     // make_base
     let base = cube([tw / 2.0, d / 2.0, th / 2.0], [0.0; 3], Some([0.0, 1.0, 1.0]));
-    let mut obj = bevel_def(&base, t.bevel_w, 8);
+    let ang = 30.0f32 * (std::f64::consts::PI / 180.0) as f32;
+    let (mut obj, obj_edges) = super::bevmod::bevel_modifier_edges(&base, t.bevel_w, 8, Some(ang), true, 0.5, Some(&CUBE_EDGES)).expect("bevel");
     if t.has_extrude {
         let nr = super::bpyx::face_normals(&obj);
         let keep: Vec<bool> = nr.iter().map(|n| !((n[1] as f32) > 0.5)).collect();
         let open = separate_faces(&obj, &keep);
-        let loops = boundary_loops(&open);
-        assert_eq!(loops.len(), 1, "tv back loop");
+        // bpy.ops.mesh.bridge_edge_loops: BM_mesh_edgeloops_find starts the loop with the first selected edge (v1, v2) in mesh edge order and
+        // continues through v2 (list = [v1, v2, ...]); compact() keeps the ascending order of the used vertices
+        let mut used = vec![false; obj.pos.len()];
+        let mut cnt: crate::dhash::HashMap<(u32, u32), u32> = Default::default();
+        for (fi, f) in obj.faces.iter().enumerate() {
+            if !keep[fi] {
+                continue;
+            }
+            for k in 0..f.len() {
+                used[f[k] as usize] = true;
+                let (a, b) = (f[k], f[(k + 1) % f.len()]);
+                *cnt.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+        }
+        let mut newidx = vec![u32::MAX; obj.pos.len()];
+        let mut nn = 0u32;
+        for v in 0..obj.pos.len() {
+            if used[v] {
+                newidx[v] = nn;
+                nn += 1;
+            }
+        }
+        let loops = {
+            let bnd: Vec<[u32; 2]> = obj_edges.iter().cloned().filter(|e| cnt.get(&(e[0].min(e[1]), e[0].max(e[1]))) == Some(&1)).collect();
+            let mut adj: crate::dhash::HashMap<u32, Vec<u32>> = Default::default();
+            for e in &bnd {
+                adj.entry(e[0]).or_default().push(e[1]);
+                adj.entry(e[1]).or_default().push(e[0]);
+            }
+            let (v1, v2) = (bnd[0][0], bnd[0][1]);
+            let mut lp = vec![v1, v2];
+            let (mut prev, mut cur) = (v1, v2);
+            loop {
+                let nx = adj[&cur].iter().cloned().find(|&w| w != prev).expect("tv loop");
+                if nx == v1 {
+                    break;
+                }
+                lp.push(nx);
+                prev = cur;
+                cur = nx;
+            }
+            vec![lp.into_iter().map(|v| newidx[v as usize]).collect::<Vec<u32>>()]
+        };
         let hmin = th * r.uniform(0.1, 0.3);
         let hmax = th * r.uniform(0.5, 0.7);
         let width = tw * r.uniform(0.3, 0.6);
@@ -45,13 +87,20 @@ pub fn build(t: &Tv, r: &mut Rng) -> TvBuilt {
         let n0 = open.pos.len() as u32;
         let mut m = join(&[&open, &plane]);
         let shape = -r.uniform(0.0, 0.4);
+        let la = loops[0].clone();
+        let lb = vec![n0 + 2, n0, n0 + 1, n0 + 3];
+        // edge list of the joined mesh in Blender order: the kept edges of the bevelled cube, then the plane's (2,0),(0,1),(1,3),(3,2)
+        let mut eo: Vec<[u32; 2]> = obj_edges
+            .iter()
+            .filter(|e| used[e[0] as usize] && used[e[1] as usize] && cnt.contains_key(&(e[0].min(e[1]), e[0].max(e[1]))))
+            .map(|e| [newidx[e[0] as usize], newidx[e[1] as usize]])
+            .collect();
+        eo.extend([[n0 + 2, n0], [n0, n0 + 1], [n0 + 1, n0 + 3], [n0 + 3, n0 + 2]]);
         if let Ok(d) = std::env::var("BRIDGEDUMP") {
-            let js = serde_json::json!({"v": m.pos, "p": m.faces, "loops": [loops[0], [n0, n0 + 1, n0 + 3, n0 + 2]], "cuts": 32, "shape": shape});
+            let js = serde_json::json!({"v": m.pos, "p": m.faces, "loops": [loops[0], [n0 + 2, n0, n0 + 1, n0 + 3]], "edges": eo, "cuts": 32, "shape": shape});
             std::fs::write(format!("{d}/tv_bridge_in.json"), js.to_string()).unwrap();
         }
-        let la = loops[0].clone();
-        let lb = vec![n0, n0 + 1, n0 + 3, n0 + 2];
-        super::bridge::bridge_two_loops(&mut m, la, lb, 32, shape);
+        m = super::bridge::bridge_bm(&m, &la, &lb, 32, shape, super::bridge::Interp::Path, 1.0, "SMOOTH", Some(&eo)).expect("tv bridge");
         let shift = (hmax + hmin - th) / 2.0;
         for p in m.pos.iter_mut() {
             let (y, z) = (p[1] as f32, p[2] as f32);
@@ -59,10 +108,13 @@ pub fn build(t: &Tv, r: &mut Rng) -> TvBuilt {
         }
         obj = m;
     }
+    if let Ok(d) = std::env::var("PANDBG") {
+        let _ = std::fs::write(format!("{d}/rs_tvbase.json"), serde_json::json!({"v": obj.pos, "p": obj.faces}).to_string());
+    }
     stage(&mut stages, "base", "base", &obj);
     // make_screen: cutter cube
     let cutter = cube([t.width / 2.0, 1.0, t.height / 2.0], [0.0, 1e-3, t.bottom], Some([0.0, -1.0, 1.0]));
-    obj = boolean("DIFFERENCE", &obj, &cutter);
+    obj = boolean_exact("DIFFERENCE", &obj, &cutter);
     stage(&mut stages, "screen", "screen", &obj);
     // legs
     let mut legs = vec![];
@@ -71,6 +123,9 @@ pub fn build(t: &Tv, r: &mut Rng) -> TvBuilt {
         let verts = [p0, [0.0, 0.0, -t.leg_len], [0.0, t.leg_len_y / 2.0, -t.leg_len], [0.0, -t.leg_len_y / 2.0, -t.leg_len]];
         let f32v: Vec<[f64; 3]> = verts.iter().map(|p| [p[0] as f32 as f64, p[1] as f32 as f64, p[2] as f32 as f64]).collect();
         let mut leg = super::gnhelpers::geo_radius_graph(&f32v, &[[0, 1], [1, 2], [1, 3]], t.leg_radius(), 16, 0.004, true);
+        if let Ok(d) = std::env::var("PANDBG") {
+            let _ = std::fs::write(format!("{d}/rs_leg.json"), serde_json::json!({"v": leg.pos, "p": leg.faces}).to_string());
+        }
         let zmin = (-t.leg_len - t.leg_r * r.uniform(0.0, 0.6)) as f32;
         for p in leg.pos.iter_mut() {
             p[2] = (p[2] as f32).max(zmin) as f64;
@@ -108,3 +163,6 @@ impl Tv {
         self.leg_r
     }
 }
+
+/// bpy.ops.mesh.primitive_cube_add edge order (v1, v2 as stored)
+const CUBE_EDGES: [[u32; 2]; 12] = [[2, 0], [0, 1], [1, 3], [3, 2], [6, 2], [3, 7], [7, 6], [4, 6], [7, 5], [5, 4], [0, 4], [5, 1]];

@@ -152,14 +152,12 @@ pub fn fill_grid_loop(lp: &[V]) -> Mesh {
 pub fn fill_grid_loop_ex(lp: &[V], first_is_best: bool) -> Mesh {
     let n = lp.len();
     let half = n / 2;
-    // corner angles |pi - angle(prev, v, next)|
+    // corner angles |pi - angle(prev, v, next)| in float32 (edbm_fill_grid_vert_tag_angle)
+    let f3 = |p: V| [p[0] as f32, p[1] as f32, p[2] as f32];
     let ang: Vec<f64> = (0..n)
         .map(|i| {
             let (p, v, q) = (lp[(i + n - 1) % n], lp[i], lp[(i + 1) % n]);
-            let a = norm(sub(p, v));
-            let b = norm(sub(q, v));
-            let d = dot(a, b).clamp(-1.0, 1.0);
-            (std::f64::consts::PI - d.acos()).abs()
+            (std::f32::consts::PI - crate::bm::query::angle_v3v3v3(f3(p), f3(v), f3(q))).abs() as f64
         })
         .collect();
     let mut best = 0;
@@ -174,7 +172,14 @@ pub fn fill_grid_loop_ex(lp: &[V], first_is_best: bool) -> Mesh {
     let a2: Vec<f64> = rot.iter().map(|&i| ang[i]).collect();
     let mut span = n / 4;
     let mut sorted: Vec<(f64, usize)> = a2.iter().cloned().enumerate().map(|(i, a)| (a, i)).collect();
-    sorted.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap().then(x.1.cmp(&y.1)));
+    // C qsort of macOS libc (FreeBSD derived, not stable) with BLI_sortutil_cmp_float_reverse: ties between corners go by its partitioning
+    libc_qsort(&mut sorted, &|a: &(f64, usize), b: &(f64, usize)| {
+        let (x, y) = (a.0 as f32, b.0 as f32);
+        if x < y { 1 } else if x > y { -1 } else { 0 }
+    });
+    if std::env::var("FGDBG").is_ok() {
+        eprintln!("fill_grid n {n} best {best} top {:?} last {:?}", &sorted[..8.min(n)], sorted[n - 1]);
+    }
     if sorted[2].0 - sorted[n - 1].0 > 1e-3 {
         let tagged: Vec<usize> = sorted.iter().take(4).map(|x| x.1).collect();
         for i in 0..half {
@@ -239,4 +244,127 @@ pub fn fill_grid_loop_ex(lp: &[V], first_is_best: bool) -> Mesh {
 
 pub fn _unused(_: V) -> V {
     cross([0.0; 3], [0.0; 3])
+}
+
+/// macOS libc `qsort` (Libc/stdlib/FreeBSD/qsort.c): median-of-three quicksort with insertion sort for n < 7 and when a partitioning pass swapped nothing
+pub fn libc_qsort<T: Clone>(a: &mut [T], cmp: &dyn Fn(&T, &T) -> i32) {
+    qs(a, 0, a.len(), cmp);
+}
+
+fn qs<T: Clone>(a: &mut [T], start: usize, n0: usize, cmp: &dyn Fn(&T, &T) -> i32) {
+    let (mut base, mut n) = (start, n0);
+    loop {
+        let mut swap_cnt = false;
+        if n < 7 {
+            insertion(a, base, n, cmp);
+            return;
+        }
+        let med3 = |a: &[T], x: usize, y: usize, z: usize| -> usize {
+            if cmp(&a[x], &a[y]) < 0 {
+                if cmp(&a[y], &a[z]) < 0 { y } else if cmp(&a[x], &a[z]) < 0 { z } else { x }
+            } else if cmp(&a[y], &a[z]) > 0 {
+                y
+            } else if cmp(&a[x], &a[z]) < 0 {
+                x
+            } else {
+                z
+            }
+        };
+        let mut pm = base + n / 2;
+        if n > 7 {
+            let mut pl = base;
+            let mut pn = base + n - 1;
+            if n > 40 {
+                let d = n / 8;
+                pl = med3(a, pl, pl + d, pl + 2 * d);
+                pm = med3(a, pm - d, pm, pm + d);
+                pn = med3(a, pn - 2 * d, pn - d, pn);
+            }
+            pm = med3(a, pl, pm, pn);
+        }
+        a.swap(base, pm);
+        let mut pa = base + 1;
+        let mut pb = pa;
+        let mut pc = base + n - 1;
+        let mut pd = pc;
+        loop {
+            while pb <= pc {
+                let r = cmp(&a[pb], &a[base]);
+                if r > 0 {
+                    break;
+                }
+                if r == 0 {
+                    swap_cnt = true;
+                    a.swap(pa, pb);
+                    pa += 1;
+                }
+                pb += 1;
+            }
+            while pb <= pc {
+                let r = cmp(&a[pc], &a[base]);
+                if r < 0 {
+                    break;
+                }
+                if r == 0 {
+                    swap_cnt = true;
+                    a.swap(pc, pd);
+                    pd -= 1;
+                }
+                pc -= 1;
+            }
+            if pb > pc {
+                break;
+            }
+            a.swap(pb, pc);
+            swap_cnt = true;
+            pb += 1;
+            pc -= 1;
+        }
+        if !swap_cnt {
+            insertion(a, base, n, cmp);
+            return;
+        }
+        let pn = base + n;
+        let mut d1 = (pa - base).min(pb - pa);
+        vecswap(a, base, pb - d1, d1);
+        d1 = (pd - pc).min(pn - pd - 1);
+        vecswap(a, pb, pn - d1, d1);
+        let d1 = pb - pa;
+        let d2 = pd - pc;
+        if d1 <= d2 {
+            if d1 > 1 {
+                qs(a, base, d1, cmp);
+            }
+            if d2 > 1 {
+                base = pn - d2;
+                n = d2;
+                continue;
+            }
+        } else {
+            if d2 > 1 {
+                qs(a, pn - d2, d2, cmp);
+            }
+            if d1 > 1 {
+                n = d1;
+                continue;
+            }
+        }
+        return;
+    }
+}
+
+fn insertion<T: Clone>(a: &mut [T], base: usize, n: usize, cmp: &dyn Fn(&T, &T) -> i32) {
+    for pm in base + 1..base + n {
+        let mut pl = pm;
+        while pl > base && cmp(&a[pl - 1], &a[pl]) > 0 {
+            a.swap(pl, pl - 1);
+            pl -= 1;
+        }
+    }
+}
+
+fn vecswap<T: Clone>(a: &mut [T], i: usize, j: usize, n: usize) {
+    for k in 0..n {
+        a.swap(i + k, j + k);
+    }
 }

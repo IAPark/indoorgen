@@ -14,6 +14,11 @@ pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, c
 /// like `bevel_modifier`; `edge_order`: the Blender mesh's edge list (vertex pairs in edge index order, e.g. `mesh.edges`), used instead of the
 /// first-use order of the face corners (matters for the vertex/face order of the result)
 pub fn bevel_modifier_ex(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
+    bevel_modifier_edges(m, width, segments, angle, clamp, profile, edge_order).map(|r| r.0)
+}
+
+/// like `bevel_modifier_ex`, also returning the result's edge list in Blender's (BMesh) order with the stored vertex order (v1, v2)
+pub fn bevel_modifier_edges(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32, edge_order: Option<&[[u32; 2]]>) -> Result<(Mesh, Vec<[u32; 2]>), String> {
     let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
     // edges in first-use order of the face corners (BKE mesh edge calculation order)
     let mut emap: HashMap<(u32, u32), u32> = HashMap::default();
@@ -72,11 +77,11 @@ pub fn bevel_modifier_ex(m: &Mesh, width: f64, segments: i32, angle: Option<f32>
     }
     let o = BevelOpts { offset: width as f32, offset_type: OffsetType::Offset, segments, profile, limit_offset: clamp, loop_slide: true, mat_nr: -1 };
     bm_mesh_bevel(&mut bm, &o)?;
-    let (p, _e, f) = bm.to_mesh();
+    let (p, e, f) = bm.to_mesh();
     let mut out = Mesh::new();
     out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     out.faces = f;
-    Ok(out)
+    Ok((out, e))
 }
 
 pub(crate) fn safe_acos_approx(x: f32) -> f32 {
