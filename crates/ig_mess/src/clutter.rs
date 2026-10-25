@@ -721,7 +721,12 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
             for q in &mut draped.pos {
                 let local_z = q[2] - m.0[2][3];
                 let top = q[2] + 1.0;
-                let sz = world.ray([q[0], q[1], top], [0.0, 0.0, -1.0], 1.6).map_or(floor_z, |t| top - t);
+                let mut sz = floor_z;
+                for (ox, oy) in [(0.0, 0.0), (0.025, 0.0), (-0.025, 0.0), (0.0, 0.025), (0.0, -0.025)] {
+                    if let Some(t) = world.ray([q[0] + ox, q[1] + oy, top], [0.0, 0.0, -1.0], 1.6) {
+                        sz = sz.max(top - t);
+                    }
+                }
                 q[2] = sz + local_z + 0.003 + 0.004 * (q[0] * 23.0 + wob).sin() * (q[1] * 19.0).sin();
             }
             let (glo, ghi) = pre.bounds();
