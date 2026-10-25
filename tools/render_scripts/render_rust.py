@@ -99,7 +99,10 @@ for o in list(bpy.data.objects):
             try:
                 if spec.get("skip"):  # replay the generator position of the python draw stream (cabinet drawer materials): burn `skip` 32-bit words
                     import numpy as _np; _np.random.randint(0, 2**32, size=int(spec["skip"]), dtype=_np.uint32)
-                if mod == "shader":  # generic: "shader.<module under infinigen.assets.materials>.<func>"
+                if mod == "people":  # Rocketbox avatars (ig_people): people.skin / people.cloth / people.hair, kwargs = texture paths
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import people_mats
+                    cache[ck] = people_mats.make(spec)
+                elif mod == "shader":  # generic: "shader.<module under infinigen.assets.materials>.<func>"
                     from infinigen.core import surface as _surf
                     _mp, _fn = cls.rsplit(".", 1)
                     cache[ck] = _surf.shaderfunc_to_material(getattr(importlib.import_module("infinigen.assets.materials." + _mp), _fn), **spec.get("kwargs", {}))

@@ -3,7 +3,10 @@
 //! - `body`  (owner: people-body worker): avatar library loading (FBX via assimp), skinning, pose library, materials.
 //! - `place` (owner: people-place worker): choosing spots + poses from the solved State, collision checks.
 //! The contract between them is `PoseKind`, `PoseInfo`, `pose_info` and `build_person` below.
+pub mod avatar;
 pub mod body;
+pub mod poses;
+pub mod rig;
 pub mod place;
 pub mod pworld;
 
@@ -60,4 +63,13 @@ pub fn pose_info(avatar: usize, kind: PoseKind) -> PoseInfo {
 /// Full posed, textured avatar mesh in its local frame (parts carry material specs for render_rust.py).
 pub fn build_person(avatar: usize, kind: PoseKind, seed: u64) -> ig_kit::api::Asset {
     body::build_person(avatar, kind, seed)
+}
+
+/// Sitting poses adapted to a seat of the given height (additive to the contract): legs are solved so the seat contact is at `seat_z`
+/// and the feet stay flat on the floor. Other poses ignore `seat_z`.
+pub fn pose_info_seat(avatar: usize, kind: PoseKind, seat_z: f64) -> PoseInfo {
+    body::pose_info_seat(avatar, kind, seat_z)
+}
+pub fn build_person_seat(avatar: usize, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> ig_kit::api::Asset {
+    body::build_person_seat(avatar, kind, seed, seat_z)
 }
