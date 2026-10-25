@@ -1,4 +1,5 @@
-// usage: gen2 <seed> [room] [out.glb] [--rust-cloth] [--mess LEVEL]
+// usage: gen2 <seed> [room] [out.glb] [--rust-cloth] [--mess LEVEL] [--cams K]
+//   --cams K: K photographer-like camera poses per furnished room written to the sidecar json "cameras" (crates/ig_cams); 0 (default) = unchanged
 //   --people N: up to N posed photoreal avatars placed after the solve (crates/ig_people); 0 (default) = unchanged output
 //   --mess LEVEL: lived-in disorder 0..1 added after the solve (crates/ig_mess); 0 (default) = unchanged output
 //   --rust-cloth: also run the native cloth sim for bed cloth that is exported as a sidecar job (default: skip, Blender re-simulates it)
@@ -25,6 +26,14 @@ fn main() {
     let people_n: usize = match args.iter().position(|a| a == "--people") {
         Some(i) => {
             let v = args[i + 1].parse().expect("--people N");
+            args.drain(i..i + 2);
+            v
+        }
+        None => 0,
+    };
+    let cams_k: usize = match args.iter().position(|a| a == "--cams") {
+        Some(i) => {
+            let v = args[i + 1].parse().expect("--cams K");
             args.drain(i..i + 2);
             v
         }
@@ -260,10 +269,24 @@ fn main() {
     // mess pass, part 2: clutter (no-op at --mess 0)
     infinigen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
     scene.write_glb(&out).unwrap();
+    if cams_k > 0 { add_cameras(&scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }
     if infinigen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());
         infinigen::assets::prof_report();
     }
+}
+
+/// `--cams K`: photographer-like camera poses (crates/ig_cams) appended to the sidecar json as "cameras"
+fn add_cameras(scene: &Scene, polys: &[(String, infinigen::shp::G)], k: usize, seed: u64, wall_t: f64, glb: &std::path::Path) {
+    let t = std::time::Instant::now();
+    let cams = infinigen::cams::generate(scene, polys, &infinigen::cams::Cfg { k, seed, wall_t });
+    let sp = glb.with_extension("json");
+    if let Ok(txt) = std::fs::read_to_string(&sp) {
+        let mut j: serde_json::Value = serde_json::from_str(&txt).unwrap();
+        j["cameras"] = serde_json::Value::Array(cams.clone());
+        std::fs::write(&sp, serde_json::to_vec_pretty(&j).unwrap()).unwrap();
+    }
+    eprintln!("CAMS {} cameras in {:?}", cams.len(), t.elapsed());
 }
 
 /// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through

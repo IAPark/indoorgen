@@ -60,6 +60,7 @@ specs = {n["name"]: n for n in sidecar["nodes"]}
 from infinigen.core.util.math import FixedSeed, int_hash
 import importlib
 from infinigen.assets.materials import ceramic, wood, fabric, metal, plastic, terrain, art, lamp_shaders, text
+import bl5compat; bl5compat.install()  # Blender 5: geometry-nodes modifier sockets via mod.properties (no-op on 4.x)
 mods = {"ceramic": ceramic, "wood": wood, "fabric": fabric, "metal": metal, "plastic": plastic, "terrain": terrain, "art": art, "lamp_shaders": lamp_shaders, "text": text}
 for _n in ("plant", "creature", "dev"):  # extra material modules for specs ("plant.SpiderPlant", ...)
     try:
@@ -290,6 +291,12 @@ for _o in list(bpy.data.objects):
 # camera
 if args.view in ("cornerA", "cornerB"):
     import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import viewcam; viewcam.view_camera(sc, args.room, args.view); co = sc.camera; cam = co.data
+elif args.view and args.view.startswith("cam"):
+  _cj = {c["name"]: c for c in sidecar.get("cameras", [])}
+  assert args.view in _cj, "camera %s not in sidecar (have %s)" % (args.view, list(_cj))
+  c = _cj[args.view]
+  cam = bpy.data.cameras.new("cam");   co = bpy.data.objects.new("cam", cam); sc.collection.objects.link(co); sc.camera = co
+  co.matrix_world = mathutils.Matrix(c["matrix"]); cam.lens = c.get("lens", 24); cam.sensor_width = c.get("sensor_width", 36); print("VIEWCAM", args.view, c.get("subject"))
 else:
   cam = bpy.data.cameras.new("cam");   co = bpy.data.objects.new("cam", cam); sc.collection.objects.link(co); sc.camera = co
   if args.cam:

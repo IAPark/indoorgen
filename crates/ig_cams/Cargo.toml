@@ -1,0 +1,9 @@
+[package]
+name = "ig_cams"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde_json = { workspace = true }
+parry3d-f64 = { workspace = true }
+ig_core = { path = "../ig_core" }
