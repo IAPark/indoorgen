@@ -347,9 +347,23 @@ fn extrude_faces_individual(m: &Mesh, sel: &[bool], off: &[V3]) -> (Mesh, Dom, V
         }
         new_corner_vert.insert(f, vs);
     }
-    // edges: new top edges, then connecting edges, per face in order
+    // edges (Blender extrude_individual_mesh_faces): original edges, then one connecting edge per extruded corner, then one duplicate edge
+    // per extruded corner (the face's new edges)
     let mut face_new_edges: HashMap<usize, Vec<u32>> = HashMap::default();
     let mut face_conn: HashMap<usize, Vec<u32>> = HashMap::default();
+    for f in 0..nf0 {
+        if !sel[f] {
+            continue;
+        }
+        let vs = &new_corner_vert[&f];
+        let r = m.face_range(f);
+        let mut cn = vec![];
+        for c in 0..vs.len() {
+            cn.push(o.edges.len() as u32);
+            o.edges.push([m.cv[r.start + c], vs[c]]);
+        }
+        face_conn.insert(f, cn);
+    }
     for f in 0..nf0 {
         if !sel[f] {
             continue;
@@ -363,19 +377,6 @@ fn extrude_faces_individual(m: &Mesh, sel: &[bool], off: &[V3]) -> (Mesh, Dom, V
             new_edges_src.push(m.ce[m.face_range(f).start + c] as usize);
         }
         face_new_edges.insert(f, ne);
-    }
-    for f in 0..nf0 {
-        if !sel[f] {
-            continue;
-        }
-        let vs = &new_corner_vert[&f];
-        let r = m.face_range(f);
-        let mut cn = vec![];
-        for c in 0..vs.len() {
-            cn.push(o.edges.len() as u32);
-            o.edges.push([m.cv[r.start + c], vs[c]]);
-        }
-        face_conn.insert(f, cn);
     }
     let mut side_faces = 0;
     for f in 0..nf0 {
@@ -399,8 +400,8 @@ fn extrude_faces_individual(m: &Mesh, sel: &[bool], off: &[V3]) -> (Mesh, Dom, V
         let vs = new_corner_vert[&f].clone();
         for c in 0..n {
             let c1 = (c + 1) % n;
-            let face = vec![vs[c], m.cv[r.start + c], m.cv[r.start + c1], vs[c1]];
-            let ces = vec![face_conn[&f][c], m.ce[r.start + c], face_conn[&f][c1], face_new_edges[&f][c]];
+            let face = vec![vs[c1], vs[c], m.cv[r.start + c], m.cv[r.start + c1]];
+            let ces = vec![face_new_edges[&f][c], face_conn[&f][c], m.ce[r.start + c], face_conn[&f][c1]];
             o.cv.extend_from_slice(&face);
             o.ce.extend_from_slice(&ces);
             o.foff.push(o.cv.len() as u32);
@@ -409,8 +410,8 @@ fn extrude_faces_individual(m: &Mesh, sel: &[bool], off: &[V3]) -> (Mesh, Dom, V
         }
     }
     extend_attrs(&mut o, Dom::Point, &srcv);
-    extend_attrs(&mut o, Dom::Edge, &new_edges_src);
     extend_attrs(&mut o, Dom::Edge, &srcv.iter().map(|_| usize::MAX).collect::<Vec<_>>());
+    extend_attrs(&mut o, Dom::Edge, &new_edges_src);
     extend_attrs(&mut o, Dom::Face, &side_src);
     let nc = o.cv.len();
     for a in o.attrs.values_mut() {

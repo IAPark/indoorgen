@@ -174,6 +174,8 @@ pub struct BevFactory {
     pub gas: bool,
     /// last built geometry (asset() and exact() of one scene asset both need it; a gas oven takes seconds)
     pub cache: std::sync::Mutex<Option<GGeom>>,
+    /// material slot name ("stub.001", "gn", ...) -> python's sampled material for that socket
+    pub slot_mats: Vec<(String, Material)>,
 }
 
 impl BevFactory {
@@ -217,7 +219,10 @@ impl Factory for BevFactory {
         }
         let Ok(g) = self.cached_geometry(inst) else { return self.inner.asset(inst) };
         let mut a = Asset::default();
-        a.parts = parts_of(&g, &|n| mat(if n.is_empty() { "gn" } else { n }, [0.6, 0.6, 0.62], 0.4));
+        a.parts = parts_of(&g, &|n| {
+            let n = if n.is_empty() { "gn" } else { n };
+            self.slot_mats.iter().find(|x| x.0 == n).map(|x| x.1.clone()).unwrap_or_else(|| mat(n, [0.6, 0.6, 0.62], 0.4))
+        });
         a
     }
     fn placeholder(&self, i: u64) -> Option<Asset> {
@@ -266,8 +271,15 @@ pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
         }
         _ => return None,
     };
-    let supports_variants = c != "OvenFactory" || std::env::var("OVEN_GAS").map_or(false, |v| v == "1");
-    Some(Box::new(BevFactory { tpls, sample, rng: rng.clone(), offset: if c == "MicrowaveFactory" { 0.03 } else { 0.01 }, segments: 8, inner, supports_variants, gas: c == "OvenFactory", cache: std::sync::Mutex::new(None) }))
+    let supports_variants = c != "OvenFactory" || std::env::var("OVEN_GAS").map_or(true, |v| v != "0");
+    let after = match c {
+        "DishwasherFactory" => dishwasher_params_r(rng.clone()).1,
+        "BeverageFridgeFactory" => fridge_params_r(rng.clone()).1,
+        "OvenFactory" => oven_params_r(rng.clone()).1,
+        _ => microwave_params_r(rng.clone()).1,
+    };
+    let slot_mats = super::matpick::gn_appliance_mats(c, after, fseed);
+    Some(Box::new(BevFactory { tpls, sample, rng: rng.clone(), offset: if c == "MicrowaveFactory" { 0.03 } else { 0.01 }, segments: 8, inner, supports_variants, gas: c == "OvenFactory", cache: std::sync::Mutex::new(None), slot_mats }))
 }
 
 fn num(s: &mut Sampled, k: &str, v: f64) {
@@ -276,7 +288,11 @@ fn num(s: &mut Sampled, k: &str, v: f64) {
 
 /// appliances/dishwasher.py sample_parameters (FixedSeed(factory_seed) stream)
 fn dishwasher_params(rng: &Rng) -> Sampled {
-    let mut r = rng.clone();
+    dishwasher_params_r(rng.clone()).0
+}
+
+/// same, also returning the generator after the draws (material choices continue the FixedSeed stream)
+fn dishwasher_params_r(mut r: Rng) -> (Sampled, Rng) {
     let mut s = Sampled::default();
     let depth = 1.0 + r.normal(0.0, 0.1);
     let width = 1.0 + r.normal(0.0, 0.1);
@@ -292,12 +308,16 @@ fn dishwasher_params(rng: &Rng) -> Sampled {
     num(&mut s, "RackRadius", rack_r);
     num(&mut s, "RackAmount", racks as f64);
     s.strs.insert("BrandName".into(), "BrandName".into());
-    s
+    (s, r)
 }
 
 /// appliances/beverage_fridge.py sample_parameters
 fn fridge_params(rng: &Rng) -> Sampled {
-    let mut r = rng.clone();
+    fridge_params_r(rng.clone()).0
+}
+
+/// same, also returning the generator after the draws (material choices continue the FixedSeed stream)
+fn fridge_params_r(mut r: Rng) -> (Sampled, Rng) {
     let mut s = Sampled::default();
     let depth = 1.0 + r.normal(0.0, 0.1);
     let width = 1.0 + r.normal(0.0, 0.1);
@@ -315,12 +335,16 @@ fn fridge_params(rng: &Rng) -> Sampled {
     num(&mut s, "RackHAmount", rh as f64);
     num(&mut s, "RackDAmount", rd as f64);
     s.strs.insert("BrandName".into(), "BrandName".into());
-    s
+    (s, r)
 }
 
 /// appliances/oven.py sample_parameters (geometry-node parameters + the gas-grate parameters Grids .. MiddleRatio, which only gas_grates reads)
 fn oven_params(rng: &Rng) -> Sampled {
-    let mut r = rng.clone();
+    oven_params_r(rng.clone()).0
+}
+
+/// same, also returning the generator after the draws (material choices continue the FixedSeed stream)
+fn oven_params_r(mut r: Rng) -> (Sampled, Rng) {
     let mut s = Sampled::default();
     let depth = 1.0 + r.normal(0.0, 0.1);
     let width = 1.0 + r.normal(0.0, 0.1);
@@ -361,12 +385,16 @@ fn oven_params(rng: &Rng) -> Sampled {
     num(&mut s, "HeaterRadiusRatio", heat);
     s.strs.insert("BrandName".into(), brand);
     s.variant = use_gas as usize;
-    s
+    (s, r)
 }
 
 /// appliances/microwave.py sample_parameters
 fn microwave_params(rng: &Rng) -> Sampled {
-    let mut r = rng.clone();
+    microwave_params_r(rng.clone()).0
+}
+
+/// same, also returning the generator after the draws (material choices continue the FixedSeed stream)
+fn microwave_params_r(mut r: Rng) -> (Sampled, Rng) {
     let mut s = Sampled::default();
     num(&mut s, "Depth", r.uniform(0.5, 0.7));
     num(&mut s, "Width", r.uniform(0.6, 1.0));
@@ -377,11 +405,38 @@ fn microwave_params(rng: &Rng) -> Sampled {
     num(&mut s, "DoorMargin", r.uniform(0.03, 0.1));
     num(&mut s, "DoorRotation", 0.0);
     s.strs.insert("BrandName".into(), appliances::generate_text(&mut r));
-    s
+    (s, r)
 }
 
 /// OvenFactory.create_asset tail for use_gas: grates + hollow cut of the body + join (see gasgrate.rs)
+/// plain (Send) copy of a finished gas oven mesh: gas ovens take seconds, the result is shared between factory instances (solver / visual asset)
+struct GasCached {
+    pos: Vec<[f32; 3]>,
+    faces: Vec<Vec<u32>>,
+    mi: Vec<i32>,
+    mats: Vec<String>,
+}
+
 fn add_gas_grates(body: &GMesh, s: &Sampled) -> Result<GMesh, String> {
+    static GAS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, GasCached>>> = std::sync::OnceLock::new();
+    let key = {
+        let mut k: Vec<_> = s.nums.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+        k.sort();
+        k.join(";")
+    };
+    if let Some(c) = GAS.get_or_init(Default::default).lock().unwrap().get(&key) {
+        let mut out = GMesh::from_faces(c.pos.clone(), &c.faces, &[]);
+        out.mats = c.mats.clone();
+        out.attrs.insert("material_index".to_string(), Attr { dom: Dom::Face, ty: Ty::I, data: c.mi.iter().map(|&i| Val::I(i)).collect() });
+        return Ok(out);
+    }
+    let out = add_gas_grates_uncached(body, s)?;
+    let mi: Vec<i32> = (0..out.nf()).map(|f| out.attrs.get("material_index").map(|a| a.data[f].i()).unwrap_or(0)).collect();
+    GAS.get_or_init(Default::default).lock().unwrap().insert(key, GasCached { pos: out.pos.clone(), faces: out.faces_vec(), mi, mats: out.mats.clone() });
+    Ok(out)
+}
+
+fn add_gas_grates_uncached(body: &GMesh, s: &Sampled) -> Result<GMesh, String> {
     use super::gasgrate::*;
     let n = |k: &str| s.nums.get(k).map(|v| v[0]).ok_or_else(|| format!("missing {k}"));
     let (width, depth0, height0, door) = (n("Width")?, n("Depth")?, n("Height")?, n("DoorThickness")?);
