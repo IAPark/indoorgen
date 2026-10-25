@@ -28,6 +28,7 @@ struct World {
     tm: TriMesh,
     ntri: usize,
     floor: Vec<bool>,
+    door: Vec<bool>,
     owner: Vec<u32>, // per triangle: index into keys
     keys: Vec<String>,
 }
@@ -64,7 +65,7 @@ fn subject_weight(c: &str) -> f64 {
     for (s, w) in [
         ("Sofa", 3.5), ("BedFactory", 4.0), ("TableDining", 2.5), ("Bathtub", 2.5), ("Desk", 2.0), ("KitchenIsland", 2.0),
         ("ArmChair", 1.5), ("TVStand", 0.8), ("KitchenCabinet", 1.5), ("Sink", 1.5), ("CoffeeTable", 1.2), ("SideTable", 1.0),
-        ("Bookcase", 0.5), ("Shelf", 0.4), ("LargePlant", 0.7), ("Toilet", 0.4), ("Rug", 0.3), ("Dresser", 0.8), ("Wardrobe", 0.6),
+        ("Bookcase", 1.0), ("Shelf", 0.8), ("LargePlant", 0.7), ("Toilet", 0.4), ("Rug", 0.3), ("Dresser", 0.8), ("Wardrobe", 0.6),
     ] {
         if c.contains(s) { return w }
     }
@@ -108,11 +109,15 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         if subj.len() < 3 { continue } // shell only (room not furnished in this run)
         let cand: Vec<Subj> = subj.iter().filter(|s| s.w > 0.0 && (s.hi[0] - s.lo[0]).max(s.hi[1] - s.lo[1]).max(s.hi[2] - s.lo[2]) >= 0.5).cloned().collect();
         if cand.is_empty() { continue }
+        // keep the strong subjects (people always): weak ones (appliances, small shelves) make dull photos
+        let maxw = cand.iter().filter(|s| !s.person).map(|s| s.w).fold(0.0, f64::max);
+        let cand: Vec<Subj> = cand.into_iter().filter(|s| s.person || s.w >= 0.4 * maxw).collect();
         // collision world: nodes overlapping the room box (tiny clutter skipped)
         let (mut fz, mut cz) = (f64::NAN, f64::NAN);
         let mut verts: Vec<Point3<f64>> = vec![];
         let mut idx: Vec<[u32; 3]> = vec![];
         let (mut floor, mut owner, mut keys): (Vec<bool>, Vec<u32>, Vec<String>) = (vec![], vec![], vec![]);
+        let mut door: Vec<bool> = vec![];
         let (fname, cname) = (format!("{rname}.floor"), format!("{rname}.ceiling"));
         for (i, n) in scene.nodes.iter().enumerate() {
             let (lo, hi) = bbs[i];
@@ -132,6 +137,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     for t in [[q[0], q[1], q[2]], [q[0], q[2], q[3]]] {
                         idx.push([base + t[0], base + t[1], base + t[2]]);
                         floor.push(is_floor);
+                        door.push(n.class.contains("Door"));
                         owner.push(ki as u32);
                     }
                 }
@@ -142,6 +148,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                 for j in 1..f.len().saturating_sub(1) {
                     idx.push([base + f[0], base + f[j], base + f[j + 1]]);
                     floor.push(is_floor);
+                    door.push(n.class.contains("Door"));
                     owner.push(ki as u32);
                 }
             }
@@ -150,7 +157,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         if cz.is_nan() { cz = fz + 2.6 }
         let ntri = idx.len();
         let Ok(tm) = TriMesh::new(verts, idx) else { continue };
-        let w = World { tm, ntri, floor, owner, keys };
+        let w = World { tm, ntri, floor, door, owner, keys };
         let mut rng = Rng::seeded(ig_core::int_hash(&[&cfg.seed.to_string(), rname, "cams"]));
         let mut got: Vec<(V3, V3, String)> = vec![];
         let mut used = vec![0.0f64; cand.len()];
@@ -260,7 +267,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             // coarse ray grid (stricter near-occluder test first, the spec's 0.6 m / 15% after 350 failed tries)
             let (near_d, near_f) = if cam_tries < 350 { (0.9, 0.08) } else { (0.6, 0.15) };
             let (gw, gh) = (16, 9);
-            let (mut near, mut close, mut tot, mut dsum, mut mid, mut wall) = (0, 0, 0, 0.0f64, 0, 0);
+            let (mut near, mut close, mut tot, mut dsum, mut mid, mut wall, mut doorc) = (0, 0, 0, 0.0f64, 0, 0, 0);
             for iy in 0..gh {
                 for ix in 0..gw {
                     let nx = ((ix as f64 + 0.5) / gw as f64) * 2.0 - 1.0;
@@ -270,6 +277,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     if let Some((t, ti)) = w.cast(o, d, 6.0) {
                         dsum += t;
                         if t < 1.8 { mid += 1 }
+                        if t < 3.0 && w.door[ti] { doorc += 1 }
                         if t < 3.0 && w.keys[w.owner[ti] as usize].contains(".wall") { wall += 1 }
                         if t < 1.2 { close += 1 }
                         if t < near_d { near += 1 }
@@ -280,7 +288,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             }
             if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { continue }
             let strict = cam_tries < 350;
-            if strict && (mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { continue }
+            if strict && (doorc as f64 > 0.1 * tot as f64 || mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { continue }
             // the subject box should be mostly inside the frame
             let inf = (0..8).filter(|k| {
                 let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
