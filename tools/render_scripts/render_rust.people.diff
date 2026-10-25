@@ -1,0 +1,7 @@
+102c102,105
+<                 if mod == "shader":  # generic: "shader.<module under infinigen.assets.materials>.<func>"
+---
+>                 if mod == "people":  # Rocketbox avatars (ig_people): people.skin / people.cloth / people.hair, kwargs = texture paths
+>                     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import people_mats
+>                     cache[ck] = people_mats.make(spec)
+>                 elif mod == "shader":  # generic: "shader.<module under infinigen.assets.materials>.<func>"
