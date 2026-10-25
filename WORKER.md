@@ -28,6 +28,16 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
 - RNG order of a python factory: `~/work/ref/scripts/rnglog.py module.Class seed`.
 - Only ONE python/Blender process at a time (4 shared cores).
 
+## Fast previews: `tools/preview.sh` (use this while iterating; Cycles only for final checks)
+Real-time wgpu/Metal renderer (`tools/preview/`, own cargo project, built on first use, ~1.5 min): reads `X.glb` + `X.json`,
+base colors, Rocketbox textures on people, sun + 4096 shadow map (windows let sun in, glass transparent), point lights, SSAO, ACES.
+~1.5-2 s for a 520 MB scene from cold start incl. file load, ~0.01-0.04 s per extra camera. Not PBR: no Infinigen materials/patterns, no GI.
+- `tools/preview.sh X.glb --cams 6 --sheet OUT.png` auto cameras (2 per room with objects, wall-ray-checked), contact sheet
+- `tools/preview.sh X.glb --person 0 OUT.png` / `--at ex,ey,ez,tx,ty,tz[,lens]` / `--cam cam.json` (render_rust.py format) / `--view cam0` (sidecar cameras) / `--top`
+- several scenes: `preview.sh A.glb B.glb --cams 2 --sheet sheet.png`; `OUT_DIR` writes one png per camera; `-v` prints timings
+- look: `--sun az,el`, `--exposure`, `--ao`, `--res WxH` (default 960x540, 2x supersampled), `--no-ceiling`
+Cycles: `render_rust.py` unchanged (final quality; 15-40 s + ~1 min for a 500 MB glb import).
+
 ## Debugging one op (Blender op vs the Rust port, seconds per iteration)
 - `tools/opsuite.sh [-b] [-f] [-v] [id-substr...]` runs the regression table `tools/opcases/suite.txt` (63 cases, Blender results cached in
   `tools/opcases/<id>.blender.json`, so no Blender needed on reruns; `-f` re-runs Blender). Levels: exact > verts (vertex order exact, face

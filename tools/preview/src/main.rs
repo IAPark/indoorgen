@@ -211,26 +211,108 @@ fn node_bbox(s: &Scene, pred: impl Fn(&str) -> bool) -> Option<(Vec3, Vec3)> {
     for d in &s.draws { if pred(&s.glb.nodes[d.node].name) { lo = lo.min(d.bmin); hi = hi.max(d.bmax); any = true; } }
     if any { Some((lo, hi)) } else { None }
 }
-fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
-    // subject = centre of the furniture/people (everything that is not a room shell or opening)
-    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior");
-    let (mut acc, mut cnt) = (Vec3::ZERO, 0.0);
-    for d in &s.draws { if !skip(&s.glb.nodes[d.node].name) { acc += (d.bmin + d.bmax) * 0.5; cnt += 1.0; } }
-    let subj = if cnt > 0.0 { acc / cnt } else { (s.bmin + s.bmax) * 0.5 };
-    let mut rooms: Vec<(f32, Vec3, Vec3, String)> = vec![];
-    for d in &s.draws { let nm = &s.glb.nodes[d.node].name; if nm.ends_with(".floor") { let a = (d.bmax.x - d.bmin.x) * (d.bmax.y - d.bmin.y); rooms.push((a, d.bmin, d.bmax, nm.clone())); } }
-    rooms.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+// ---- CPU helpers: wall triangles for camera placement (visibility / clearance), floor triangles for room membership ----
+type Tri = [Vec3; 3];
+fn node_tris(s: &Scene, pred: impl Fn(&str) -> bool) -> Vec<Tri> {
     let mut out = vec![];
-    for (_, lo, hi, nm) in rooms.iter() {
-        let c = (*lo + *hi) * 0.5;
-        let mut corners = vec![Vec3::new(lo.x, lo.y, 0.0), Vec3::new(hi.x, lo.y, 0.0), Vec3::new(hi.x, hi.y, 0.0), Vec3::new(lo.x, hi.y, 0.0)];
-        corners.sort_by(|a, b| (*b - subj.truncate().extend(0.0)).length().partial_cmp(&(*a - subj.truncate().extend(0.0)).length()).unwrap());
-        for k in 0..2 {
-            let p = corners[k]; let d = (c - p).truncate().normalize_or_zero().extend(0.0);
-            let eye = Vec3::new(p.x, p.y, lo.z + 1.5) + d * 0.5;
-            let mut cm = cam_look(eye, Vec3::new(subj.x, subj.y, lo.z + 0.9), 18.0);
-            cm.name = format!("{}_{}", nm.trim_end_matches(".floor").replace('/', "_"), if k == 0 { "A" } else { "B" });
-            out.push(cm);
+    for d in &s.draws {
+        if !pred(&s.glb.nodes[d.node].name) { continue; }
+        let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
+        let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
+        let p = |i: usize| -> Vec3 { let r = |k: usize| f32::from_le_bytes(pb[(i * 3 + k) * 4..(i * 3 + k) * 4 + 4].try_into().unwrap()); Vec3::new(r(0), r(1), r(2)) };
+        let ix = |k: usize| -> usize { if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as usize } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) as usize } };
+        for t in 0..d.icount as usize / 3 { out.push([p(ix(t * 3)), p(ix(t * 3 + 1)), p(ix(t * 3 + 2))]); }
+    }
+    out
+}
+fn ray_hit(tris: &[Tri], o: Vec3, dir: Vec3, maxd: f32) -> bool {
+    for t in tris {
+        let e1 = t[1] - t[0]; let e2 = t[2] - t[0]; let pv = dir.cross(e2); let det = e1.dot(pv);
+        if det.abs() < 1e-9 { continue; }
+        let inv = 1.0 / det; let tv = o - t[0]; let u = tv.dot(pv) * inv; if !(0.0..=1.0).contains(&u) { continue; }
+        let qv = tv.cross(e1); let v = dir.dot(qv) * inv; if v < 0.0 || u + v > 1.0 { continue; }
+        let tt = e2.dot(qv) * inv; if tt > 0.01 && tt < maxd { return true; }
+    }
+    false
+}
+fn in_tri2(p: Vec3, t: &Tri) -> bool {
+    let s = |a: Vec3, b: Vec3, c: Vec3| (a.x - c.x) * (b.y - c.y) - (b.x - c.x) * (a.y - c.y);
+    let d1 = s(p, t[0], t[1]); let d2 = s(p, t[1], t[2]); let d3 = s(p, t[2], t[0]);
+    !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+}
+struct Shell { walls: Vec<Tri>, boxes: Vec<(Vec3, Vec3)> }
+fn shell_of(s: &Scene) -> Shell {
+    let walls = node_tris(s, |n| n.contains(".wall") || n.contains("exterior"));
+    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.contains("rug");
+    let boxes = s.draws.iter().filter(|d| !skip(&s.glb.nodes[d.node].name) && d.bmax.z > 0.3 && d.bmin.z < 1.9 && (d.bmax - d.bmin).length() > 0.5).map(|d| (d.bmin, d.bmax)).collect();
+    Shell { walls, boxes }
+}
+impl Shell {
+    fn blocked(&self, eye: Vec3, tgt: Vec3) -> bool { let d = tgt - eye; ray_hit(&self.walls, eye, d.normalize(), d.length() - 0.15) }
+    fn clearance(&self, e: Vec3) -> f32 {
+        let mut m = 3.0f32;
+        for k in 0..8 { let a = k as f32 * std::f32::consts::FRAC_PI_4; let d = Vec3::new(a.cos(), a.sin(), 0.0);
+            // distance to nearest wall along d (binary probe)
+            let mut lo = 0.0f32; let mut hi = 3.0f32; if !ray_hit(&self.walls, e, d, hi) { continue; }
+            for _ in 0..7 { let mid = (lo + hi) * 0.5; if ray_hit(&self.walls, e, d, mid) { hi = mid } else { lo = mid } } m = m.min(hi); }
+        for (lo, hi) in &self.boxes { let dx = (lo.x - e.x).max(0.0).max(e.x - hi.x); let dy = (lo.y - e.y).max(0.0).max(e.y - hi.y); if e.z > lo.z - 0.2 && e.z < hi.z + 0.2 || true { m = m.min((dx * dx + dy * dy).sqrt()); } }
+        m
+    }
+    /// how many of 9 rays across +-40deg toward the subject travel > `len` before hitting a wall
+    fn openness(&self, e: Vec3, tgt: Vec3, len: f32) -> usize {
+        let f = (tgt - e).truncate().normalize_or_zero(); let mut n = 0;
+        for k in -4..=4 { let a = (k as f32 * 10.0).to_radians(); let d = Vec3::new(f.x * a.cos() - f.y * a.sin(), f.x * a.sin() + f.y * a.cos(), 0.0); if !ray_hit(&self.walls, e, d, len) { n += 1; } }
+        n
+    }
+}
+fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
+    let sh = shell_of(s);
+    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.contains("rug");
+    let mut floors: HashMap<String, Vec<Tri>> = HashMap::new();
+    for d in &s.draws { let nm = &s.glb.nodes[d.node].name; if nm.ends_with(".floor") { floors.entry(nm.clone()).or_default(); } }
+    let names: Vec<String> = floors.keys().cloned().collect();
+    for nm in names { let t = node_tris(s, |x| x == nm); floors.insert(nm, t); }
+    struct Room { name: String, tris: Vec<Tri>, subj: Vec3, nobj: usize, area: f32 }
+    let mut rooms: Vec<Room> = vec![];
+    for (nm, tris) in floors.iter() {
+        if tris.is_empty() { continue; }
+        let area: f32 = tris.iter().map(|t| ((t[1] - t[0]).cross(t[2] - t[0]).z.abs()) * 0.5).sum();
+        let (mut acc, mut w, mut cnt) = (Vec3::ZERO, 0.0, 0);
+        for d in &s.draws { if skip(&s.glb.nodes[d.node].name) { continue; } let c = (d.bmin + d.bmax) * 0.5;
+            if tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, 0.0), t)) { let wt = (d.bmax - d.bmin).length(); acc += c * wt; w += wt; cnt += 1; } }
+        let fc: Vec3 = tris.iter().map(|t| (t[0] + t[1] + t[2]) / 3.0 * ((t[1] - t[0]).cross(t[2] - t[0]).z.abs())).sum::<Vec3>() / (2.0 * area);
+        let subj = if w > 0.0 { acc / w } else { fc };
+        rooms.push(Room { name: nm.trim_end_matches(".floor").replace('/', "_"), tris: tris.clone(), subj, nobj: cnt, area });
+    }
+    rooms.sort_by(|a, b| (b.nobj, b.area as i32).cmp(&(a.nobj, a.area as i32)).then(a.name.cmp(&b.name)));
+    let mut out = vec![];
+    for rm in rooms.iter().filter(|r| r.nobj > 0 || r.area > 6.0) {
+        let z0 = rm.tris[0][0].z; let tgt = Vec3::new(rm.subj.x, rm.subj.y, z0 + 0.9);
+        let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
+        for t in &rm.tris { for v in t { lo = lo.min(*v); hi = hi.max(*v); } }
+        let mut cands: Vec<(f32, Vec3)> = vec![];
+        let step = 0.6; let mut y = lo.y + step / 2.0;
+        while y < hi.y { let mut x = lo.x + step / 2.0; while x < hi.x {
+            let p = Vec3::new(x, y, z0);
+            if rm.tris.iter().any(|t| in_tri2(p, t)) {
+                let e = Vec3::new(x, y, z0 + 1.5); let dist = (e - tgt).truncate().length();
+                if dist > 1.8 && !sh.blocked(e, tgt) { cands.push((dist, e)); }
+            }
+            x += step; } y += step; }
+        cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        let mut chosen: Vec<Vec3> = vec![]; let mut tried = 0;
+        for (dist, e) in cands {
+            if chosen.len() >= 2 || tried > 60 { break; }
+            if chosen.iter().any(|c| (*c - e).truncate().length() < 3.0 && chosen.len() < 2 && false) { continue; }
+            tried += 1;
+            if dist > 7.5 { continue; }
+            let cl = sh.clearance(e); if cl < 0.45 { continue; }
+            if sh.openness(e, tgt, 1.2) < 7 { continue; }
+            if chosen.iter().any(|c| (*c - e).truncate().length() < 2.5) { continue; }
+            chosen.push(e);
+        }
+        for (k, e) in chosen.iter().enumerate() {
+            let mut cm = cam_look(*e, tgt, 18.0); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }); out.push(cm);
             if out.len() >= n { return out; }
         }
     }
@@ -253,9 +335,16 @@ fn resolve_cams(s: &Scene, o: &Opts) -> Vec<Cam> {
             }
             CamSpec::Person(i) => {
                 if let Some(p) = person_pos(s, i) {
-                    let subj = node_bbox(s, |_| false); let _ = subj;
-                    let c0 = (s.bmin + s.bmax) * 0.5; let mut d = (c0 - p).truncate().normalize_or_zero(); if d == glam::Vec2::ZERO { d = glam::Vec2::X; }
-                    let eye = p + d.extend(0.0) * 3.0 + Vec3::Z * 1.7; let mut c = cam_look(eye, p + Vec3::Z * 0.9, 24.0); c.name = format!("person{i}"); v.push(c);
+                    let sh = shell_of(s);
+                    let c0 = (s.bmin + s.bmax) * 0.5; let mut d0 = (c0 - p).truncate().normalize_or_zero(); if d0 == glam::Vec2::ZERO { d0 = glam::Vec2::X; }
+                    let base = d0.y.atan2(d0.x); let tgt = p + Vec3::Z * 0.9; let mut best: Option<Vec3> = None;
+                    'o: for rad in [3.2f32, 2.6, 2.0, 1.6] {
+                        let mut ks: Vec<i32> = (-8..8).collect(); ks.sort_by_key(|k| k.abs());
+                        for k in ks { let a = base + k as f32 * std::f32::consts::PI / 8.0; let e = Vec3::new(p.x + a.cos() * rad, p.y + a.sin() * rad, 1.55);
+                            if sh.blocked(e, tgt) || sh.blocked(e, p + Vec3::Z * 1.5) || sh.clearance(e) < 0.35 { continue; } best = Some(e); break 'o; }
+                    }
+                    let eye = best.unwrap_or(p + d0.extend(0.0) * 2.0 + Vec3::Z * 1.6);
+                    let mut c = cam_look(eye, tgt, 24.0); c.name = format!("person{i}"); v.push(c);
                 } else { eprintln!("person {i} not found"); }
             }
             CamSpec::Top => {
