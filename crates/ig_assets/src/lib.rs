@@ -56,6 +56,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if chair::handles(c) => chair::make(c, &mut rng, factory_seed),
         c if towel::handles(c) && unseeded().is_some() => towel::make(c, &mut rng, factory_seed),
         c if stools::handles(c) => stools::make(c, &mut rng),
+        c if foodbag::handles(c) => foodbag::make(c, &mut rng, factory_seed),
         c if foodbox::handles(c) => foodbox::make(c, &mut rng, factory_seed),
         c if cutlery::handles(c) => cutlery::make(c, &mut rng, factory_seed),
         c if bottle::handles(c) => bottle::make(c, &mut rng, factory_seed),

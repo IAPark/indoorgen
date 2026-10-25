@@ -4,6 +4,7 @@
 //! to be told when an open path exists), the optional flood fill is not ported, and the 3x3 SVD of the QEF uses a symmetric Jacobi eigen solver
 //! (the same pseudo-inverse mathematically; agrees to ~1e-7 relative).
 use crate::polyfill;
+mod patch;
 
 const GRID_DIMENSION: i32 = 20;
 const NUM_AXES: usize = 13;
@@ -253,6 +254,7 @@ struct Octree {
     mode: i32,
     verts: Vec<[f32; 3]>,
     quads: Vec<[i32; 4]>,
+    pes: Vec<patch::Pe>,
 }
 
 fn popcount_below(mask: u8, idx: usize) -> usize {
@@ -991,6 +993,7 @@ pub fn dualcon(pos: &[[f32; 3]], faces: &[Vec<u32>], mode: i32, depth: i32, scal
         mode,
         verts: vec![],
         quads: vec![],
+        pes: vec![],
     };
     for t in &tris {
         let vt = [pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]];
@@ -1002,6 +1005,11 @@ pub fn dualcon(pos: &[[f32; 3]], faces: &[Vec<u32>], mode: i32, depth: i32, scal
     // resetMinimalEdges
     o.cell_proc(Some(o.root), false, false);
     o.prepare_primal(o.root);
+    // hole patching: trace() (finds and closes rings of odd face parity), then once more as a check (Octree::scanConvert)
+    if std::env::var("DUALCON_NOPATCH").is_err() {
+        o.trace_all();
+        o.trace_all();
+    }
     if std::env::var("DUALCON_DEBUG").is_ok() {
         eprintln!("dualcon: {} tris, {} leaves, {} internal, odd faces {}", tris.len(), o.leaves.len(), o.ints.len(), o.debug_open_paths());
     }

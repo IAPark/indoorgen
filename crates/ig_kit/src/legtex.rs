@@ -84,7 +84,7 @@ impl Tex {
 pub fn safe_acos_approx(x: f32) -> f32 {
     let f = x.abs();
     let m = if f < 1.0 { 1.0 - (1.0 - f) } else { 1.0 };
-    let a = (1.0 - m).sqrt() * (1.570_796_3 + m * (-0.213_300_99 + m * (0.077_980_48 + m * -0.021_640_95)));
+    let a = (1.0 - m).sqrt() * (1.570_796_326_7 + m * (-0.213_300_99 + m * (0.077_980_48 + m * -0.021_640_95)));
     if x < 0.0 {
         std::f32::consts::PI - a
     } else {
@@ -119,8 +119,12 @@ pub fn vert_normals(m: &Mesh) -> Vec<[f32; 3]> {
         }
     };
     let mut acc = vec![[0.0f32; 3]; p32.len()];
+    let mut has_face = vec![false; p32.len()];
     for f in &m.faces {
         let k = f.len();
+        for &v in f {
+            has_face[v as usize] = true;
+        }
         let p: Vec<F3> = f.iter().map(|&i| p32[i as usize]).collect();
         // normals_calc_faces: Newell's method for every face size
         let fnrm: F3 = {
@@ -150,7 +154,7 @@ pub fn vert_normals(m: &Mesh) -> Vec<[f32; 3]> {
             }
         }
     }
-    acc.into_iter().enumerate().map(|(i, a)| { let n = normd(a); if n == [0.0; 3] { normd(p32[i]) } else { n } }).collect()
+    acc.into_iter().enumerate().map(|(i, a)| { let n = normd(a); if n == [0.0; 3] && !has_face[i] { normd(p32[i]) } else { n } }).collect()
 }
 
 /// DISPLACE modifier, direction NORMAL, texture coords = local vertex positions

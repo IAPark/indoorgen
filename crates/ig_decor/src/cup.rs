@@ -1,4 +1,4 @@
-//! tableware/cup.py CupFactory (handle-less path exact; the handle boolean is not ported)
+//! tableware/cup.py CupFactory (body, wrap, handle: torus -> TAPER x2 -> exact BOOLEAN difference -> keep the outer loose part -> SUBSURF 1 -> join)
 use super::bevel::{bevel, Offset};
 use super::blops::*;
 use super::matdraw;
@@ -18,6 +18,11 @@ pub struct Cup {
     depth: f64,
     has_guard: bool,
     thickness: f64,
+    handle_location: f64,
+    handle_radius: f64,
+    handle_inner: f64,
+    taper_x: f64,
+    taper_y: f64,
     x_lower_ratio: f64,
     wrap_margin: f64,
     scale: f64,
@@ -41,12 +46,12 @@ impl Cup {
             depth = r.log_uniform(0.5, 1.0);
             has_guard = false;
         }
-        let _handle_location = if straight { r.uniform(0.45, 0.65) } else { r.uniform(-0.1, 0.3) };
+        let handle_location = if straight { r.uniform(0.45, 0.65) } else { r.uniform(-0.1, 0.3) };
         let _handle_type = r.uniform(0.0, 1.0) < 0.5;
         let handle_radius = depth * r.uniform(0.2, 0.4);
-        let _inner = handle_radius * r.log_uniform(0.2, 0.3);
-        let _tx = r.uniform(0.0, 2.0);
-        let _ty = r.uniform(0.0, 2.0);
+        let inner = handle_radius * r.log_uniform(0.2, 0.3);
+        let tx = r.uniform(0.0, 2.0);
+        let ty = r.uniform(0.0, 2.0);
         let x_lower_ratio = r.log_uniform(0.8, 1.0);
         let thickness = r.log_uniform(0.01, 0.04);
         let _has_wrap = r.uniform(0.0, 1.0) < 0.3;
@@ -54,7 +59,7 @@ impl Cup {
         matdraw::sample_call(&mut r, matdraw::GRAPHICDESIGN);
         let _has_inside = r.uniform(0.0, 1.0) < 0.5;
         let scale = r.log_uniform(0.15, 0.3);
-        Cup { x_end, straight, x_lowest, depth, has_guard, thickness, x_lower_ratio, wrap_margin, scale, fs }
+        Cup { x_end, straight, x_lowest, depth, has_guard, thickness, handle_location, handle_radius, handle_inner: inner, taper_x: tx, taper_y: ty, x_lower_ratio, wrap_margin, scale, fs }
     }
 }
 
@@ -106,8 +111,20 @@ impl Factory for Cup {
         }
         let s = books::solidify_simple(&m, -(self.thickness as f32 as f64), None);
         let s = subsurf(&s, 2, false);
+        // handle_angle is drawn even without a guard
+        let (xl, zl) = (xs[xs.len() - 1] - xs[xs.len() - 2], zs[zs.len() - 1] - zs[zs.len() - 2]);
+        let angle_low = (xl / zl).atan();
+        let angle_high = ((xs[2] - xs[1]) / (zs[2] - zs[1])).atan();
+        let handle_angle = r.uniform(angle_low, angle_high + 1e-3);
         let mut all = Mesh::new();
         all.append(&s);
+        if self.has_guard {
+            let hl = self.handle_location;
+            let n = xs.len();
+            let loc = [xs[n - 2] * (1.0 - hl) + xs[n - 1] * hl, 0.0, zs[n - 2] * (1.0 - hl) + zs[n - 1] * hl];
+            let h = self.make_handle(&s, loc, handle_angle);
+            all.append(&h);
+        }
         all.append(&wrap);
         let sc32 = sc as f32;
         for p in all.pos.iter_mut() {
@@ -120,6 +137,149 @@ impl Factory for Cup {
         let b = all.bounds();
         a.mesh(all, &mat, Some(b));
         a
+    }
+}
+
+fn mat_mul_v(m: &crate::bl32::M4, v: [f32; 3]) -> [f32; 3] {
+    [
+        v[0] * m[0][0] + v[1] * m[1][0] + v[2] * m[2][0] + m[3][0],
+        v[0] * m[0][1] + v[1] * m[1][1] + v[2] * m[2][1] + m[3][1],
+        v[0] * m[0][2] + v[1] * m[1][2] + v[2] * m[2][2] + m[3][2],
+    ]
+}
+
+/// bpy_operators add_torus (48 x 12): mathutils float32 rotation matrix times a float32 vector (products in float, sum in double)
+fn torus(major: f64, minor: f64) -> Mesh {
+    let (maj_seg, min_seg) = (48usize, 12usize);
+    let pi2 = std::f64::consts::PI * 2.0;
+    let mut m = Mesh::new();
+    let tot = maj_seg * min_seg;
+    let mut i1 = 0usize;
+    for mi in 0..maj_seg {
+        let a = ((mi as f64 / maj_seg as f64) * pi2) as f32;
+        let (c, s) = (a.cos(), a.sin());
+        // Matrix.Rotation(angle, 3, 'Z'): [[c, -s, 0], [s, c, 0], [0, 0, 1]]
+        for ni in 0..min_seg {
+            let ang = pi2 * ni as f64 / min_seg as f64;
+            let v = [(major + ang.cos() * minor) as f32, 0.0f32, (ang.sin() * minor) as f32];
+            let row = |r: [f32; 3]| ((r[0] * v[0]) as f64 + (r[1] * v[1]) as f64 + (r[2] * v[2]) as f64) as f32;
+            let p = [row([c, -s, 0.0]), row([s, c, 0.0]), row([0.0, 0.0, 1.0])];
+            m.pos.push([p[0] as f64, p[1] as f64, p[2] as f64]);
+            let (i2, i3, i4);
+            if ni + 1 == min_seg {
+                i2 = mi * min_seg;
+                i3 = i1 + min_seg;
+                i4 = i2 + min_seg;
+            } else {
+                i2 = i1 + 1;
+                i3 = i1 + min_seg;
+                i4 = i3 + 1;
+            }
+            let w = |x: usize| (if x >= tot { x - tot } else { x }) as u32;
+            m.faces.push(vec![i1 as u32, w(i3), w(i4), w(i2)]);
+            i1 += 1;
+        }
+    }
+    m
+}
+
+impl Cup {
+    /// add_handle: returns the selected loose part in the cup's space
+    fn make_handle(&self, cup: &Mesh, loc: [f64; 3], angle: f64) -> Mesh {
+        use crate::bl32::Obj32;
+        let mut t = torus(self.handle_radius, self.handle_inner);
+        let ob = Obj32::new([loc[0] as f32, loc[1] as f32, loc[2] as f32], [std::f64::consts::FRAC_PI_2 as f32, angle as f32, 0.0]);
+        let w = ob.matrix_world();
+        // two SIMPLE_DEFORM TAPER modifiers in object space
+        let mut v: Vec<[f32; 3]> = t.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        super::bpymod::simple_deform(&mut v, super::bpymod::Deform::Taper, self.taper_x, 0);
+        super::bpymod::simple_deform(&mut v, super::bpymod::Deform::Taper, self.taper_y, 1);
+        t.pos = v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+        // operand (cup) into the torus' object space: inverse of the (rigid) world matrix
+        let rt = |i: usize, j: usize| w[j][i];
+        let mut inv = [[0.0f32; 4]; 4];
+        for i in 0..3 {
+            for j in 0..3 {
+                inv[i][j] = rt(i, j);
+            }
+        }
+        for j in 0..3 {
+            inv[3][j] = -(w[3][0] * inv[0][j] + w[3][1] * inv[1][j] + w[3][2] * inv[2][j]);
+        }
+        inv[3][3] = 1.0;
+        let mut c2 = cup.clone();
+        for p in c2.pos.iter_mut() {
+            let q = mat_mul_v(&inv, [p[0] as f32, p[1] as f32, p[2] as f32]);
+            *p = [q[0] as f64, q[1] as f64, q[2] as f64];
+        }
+        let d = super::bathkit::boolean_exact("DIFFERENCE", &t, &c2);
+        // separate loose parts, keep the one with the largest local x
+        let nv = d.pos.len();
+        let mut parent: Vec<usize> = (0..nv).collect();
+        fn find(p: &mut Vec<usize>, x: usize) -> usize {
+            let mut r = x;
+            while p[r] != r {
+                r = p[r];
+            }
+            let mut y = x;
+            while p[y] != r {
+                let nx = p[y];
+                p[y] = r;
+                y = nx;
+            }
+            r
+        }
+        for f in &d.faces {
+            for k in 1..f.len() {
+                let (a, b) = (find(&mut parent, f[0] as usize), find(&mut parent, f[k] as usize));
+                if a != b {
+                    parent[a.max(b)] = a.min(b);
+                }
+            }
+        }
+        let mut used = vec![false; nv];
+        for f in &d.faces {
+            for &v in f {
+                used[v as usize] = true;
+            }
+        }
+        // parts in order of their lowest vertex; argmax of max x (first on ties)
+        let mut best: Option<(usize, f64)> = None;
+        let mut roots: Vec<usize> = vec![];
+        for i in 0..nv {
+            if used[i] {
+                let r = find(&mut parent, i);
+                if !roots.contains(&r) {
+                    roots.push(r);
+                }
+            }
+        }
+        for &r in &roots {
+            let mx = (0..nv).filter(|&i| used[i] && find(&mut parent, i) == r).map(|i| d.pos[i][0] as f32 as f64).fold(f64::MIN, f64::max);
+            if best.map_or(true, |(_, b)| mx > b) {
+                best = Some((r, mx));
+            }
+        }
+        let r = best.unwrap().0;
+        let mut part = Mesh::new();
+        let mut map = vec![u32::MAX; nv];
+        for i in 0..nv {
+            if used[i] && find(&mut parent, i) == r {
+                map[i] = part.pos.len() as u32;
+                part.pos.push(d.pos[i]);
+            }
+        }
+        for f in &d.faces {
+            if map[f[0] as usize] != u32::MAX {
+                part.faces.push(f.iter().map(|&v| map[v as usize]).collect());
+            }
+        }
+        let mut part = subsurf(&part, 1, false);
+        for p in part.pos.iter_mut() {
+            let q = mat_mul_v(&w, [p[0] as f32, p[1] as f32, p[2] as f32]);
+            *p = [q[0] as f64, q[1] as f64, q[2] as f64];
+        }
+        part
     }
 }
 
