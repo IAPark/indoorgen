@@ -185,8 +185,16 @@ pub fn box_from_corners_verts(lo: V3, hi: V3) -> [V3; 8] {
     }))
 }
 
+/// box_from_corners mesh as the solver sees it: nodegroup cube, quads_convert_to_tris(BEAUTY) and canonical tags; vertex/face order exact
+pub fn box_from_corners_exact(lo: V3, hi: V3) -> cabnodes::ExactMesh {
+    let verts: Vec<V3> = box_from_corners_verts(lo, hi).to_vec();
+    let polys = triangulate_quads_beauty(&verts, &CUBE_QUADS_XFAST);
+    let names = canonical_names(&verts, &polys, &[]);
+    cabnodes::ExactMesh { verts, polys, names }
+}
+
 pub fn box_from_corners_geom(lo: V3, hi: V3) -> ObjGeom {
-    crate::geom::cuboid_py_verts(box_from_corners_verts(lo, hi), 1, 0)
+    exact_geom(&box_from_corners_exact(lo, hi))
 }
 
 pub trait Factory {
@@ -473,3 +481,6 @@ pub fn triangulate_quads_beauty(verts: &[V3], quads: &[[u32; 4]]) -> Vec<Vec<u32
     first.extend(second);
     first
 }
+
+/// quads of the geometry-nodes cube (mesh cube node) in `box_exact` vertex order (i = x + 2y + 4z), in its face order
+pub const CUBE_QUADS_XFAST: [[u32; 4]; 6] = [[0, 2, 3, 1], [0, 1, 5, 4], [4, 5, 7, 6], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
