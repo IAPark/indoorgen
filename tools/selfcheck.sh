@@ -16,7 +16,7 @@ $B/phcheck ~/work/ref/ph_LR3_hs0b.jsonl 2>&1 | awk '$NF!=0 && NF>=5 {bad++} END 
 PHD=$SCW/ph; mkdir -p $PHD; i=0
 for f in ~/work/ref/ph_LR3_hs0b.jsonl ~/work/ref/traces/case_*_ph.jsonl; do i=$((i+1)); (PHTAGS=1 $B/phcheck $f > /dev/null 2> $PHD/$i.err) & done; wait
 nt=$(cat $PHD/*.err | grep -c '^TAGDIFF'); [ "$nt" = 0 ] && echo "placeholder tags: OK (0 TAGDIFF)" || { echo "FAIL placeholder tags: $nt TAGDIFF"; cat $PHD/*.err | grep '^TAGDIFF' | awk '{print $2}' | sort | uniq -c; }
-# standalone: no placed object may have a non-vertical rotation
+# standalone: no placed object may be tilted more than 0.05 rad off vertical (python itself leaves <= ~0.02 on a few)
 for c in "3 Kitchen" "1 Kitchen" "0 Kitchen" "3 Bedroom" "1 LivingRoom" "0 DiningRoom"; do set -- ${=c}
   nt=$(TILTCHECK=1 $B/gen2 $1 $2 $SCW/t.glb 2>&1 | grep '^TILTCHECK' | awk '{print $2}')
   [ "$nt" = 0 ] && echo "no tilted objects: $c" || { echo "FAIL tilted objects ($nt): $c"; TILTCHECK=1 $B/gen2 $1 $2 $SCW/t.glb 2>&1 | grep '^TILTED' | cut -c1-120; }

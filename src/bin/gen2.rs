@@ -55,7 +55,9 @@ fn main() {
         for (k, o) in &g.state.objs {
             if let Some(gen) = &o.generator {
                 let r = o.pose.r;
-                if (r[2][2] - 1.0).abs() > 1e-4 || r[2][0].abs() > 1e-4 || r[2][1].abs() > 1e-4 || r[0][2].abs() > 1e-4 || r[1][2].abs() > 1e-4 {
+                // python itself leaves up to ~0.02 rad of tilt on objects stable against slightly sloped room planes (e.g. DiningRoom_0 Chair 26163);
+                // the tilted-oven bug was far larger, so flag > 0.05 rad (~3 degrees)
+                if r[2][0].abs() > 0.05 || r[2][1].abs() > 0.05 || r[0][2].abs() > 0.05 || r[1][2].abs() > 0.05 {
                     tilted += 1;
                     eprintln!("TILTED {k} {} r={:?}", gen.class, r);
                 }
