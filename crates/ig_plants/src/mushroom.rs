@@ -169,6 +169,29 @@ impl MushroomFactory {
         }
     }
 
+    /// draw.remesh_fill with ig_kit's dual contouring port; its missing hole patching can leave quads that reference non-existent vertices
+    /// (thin tips of the gill sheet), those quads are dropped
+    fn remesh_fill_safe(m: &LMesh, resolution: f64) -> LMesh {
+        let n = m.v.len();
+        let s = super::leafkit::solidify(m, 0.1);
+        let top: Vec<f32> = (0..s.v.len()).map(|i| if i >= n { 1.0 } else { 0.0 }).collect();
+        let dims = s.dimensions();
+        let maxd = dims[0].max(dims[1]).max(dims[2]) as f64;
+        let depth = (((maxd + 0.01) / resolution).log2()).ceil() as i32;
+        let (rv, rq) = super::dualcon::dualcon(&s.v, &s.f, 2, depth, 0.9, 1.0);
+        let nv = rv.len() as i32;
+        let rf: Vec<Vec<u32>> = rq.iter().filter(|q| q.iter().all(|&i| i >= 0 && i < nv)).map(|q| q.iter().map(|&i| i as u32).collect()).collect();
+        let mut r = LMesh { v: rv, f: rf, e: vec![] };
+        r.ensure_face_edges();
+        let samp = super::leafkit::sample_nearest_surface_ex(&s, &top, &r.v, true);
+        let tv: Vec<f32> = samp.iter().map(|x| x.0).collect();
+        for (i, x) in samp.iter().enumerate() {
+            r.v[i] = x.1;
+        }
+        let del: Vec<bool> = tv.iter().map(|&t| t > 1e-3).collect();
+        r.delete_verts(&del)
+    }
+
     fn cap_mesh(&self, i: u64, face_size: f64) -> Mesh {
         let mut r = inst_rng(self.fs, i);
         let mut obj = self.spin(&self.cap.x, &self.cap.z, &self.cap.vec);
@@ -210,29 +233,40 @@ impl MushroomFactory {
         }
         if let Some(g) = &self.gill {
             let steps = r.randint(8, 20) as usize;
-            // closed outline in the xz plane -> flat sheet, repeated around z
             let pts: Vec<[f64; 3]> = (0..g.x.len()).map(|k| [g.x[k], 0.0, g.z[k]]).collect();
-            let c = super::blops::bezier_curve_points(&pts, &g.vec);
-            let n = c.len();
-            let mut sheet = Mesh::new();
-            let ring: Vec<[f64; 3]> = c.iter().map(|p| [p[0] as f64, 0.0, p[2] as f64]).collect();
-            // fan from the centroid (the outline is a thin convex-ish sliver)
-            let mut cen = [0.0; 3];
-            for p in &ring {
-                for k in 0..3 {
-                    cen[k] += p[k] / n as f64;
+            let prof = super::blops::bezier_curve_points(&pts, &g.vec);
+            let w = super::blops::weld_polyline(&prof, 1e-3);
+            let n = w.len();
+            let mut outline = LMesh { v: w, f: vec![], e: (0..n.saturating_sub(1) as u32).map(|i| [i, i + 1]).collect() };
+            outline.e.push([n as u32 - 1, 0]);
+            let filled = super::leafkit::fill_outline(&outline);
+            Self::dump("g012", &Self::from_lm(&filled));
+            Self::dump("g013", &Self::from_lm(&super::leafkit::solidify(&filled, 0.1)));
+            let sheet = Self::remesh_fill_safe(&filled, 0.005);
+            let sheet = Self::from_lm(&sheet);
+            Self::dump("g017", &sheet);
+            // bpy.ops.mesh.spin(dupli=True): copy k+1 = R * copy k (float32), then remove_doubles
+            let a = -((2.0 * PI) as f32 / steps as f32);
+            let (c, sn) = ((a as f64).cos() as f32, (a as f64).sin() as f32);
+            let mut cur: Vec<[f32; 3]> = sheet.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+            let mut gm = Mesh::new();
+            for k in 0..steps {
+                let off = gm.pos.len() as u32;
+                for p in &cur {
+                    gm.pos.push([p[0] as f64, p[1] as f64, p[2] as f64]);
                 }
+                for f in &sheet.faces {
+                    gm.faces.push(f.iter().map(|&v| v + off).collect());
+                }
+                cur = cur.iter().map(|p| [p[0] * c + p[1] * -sn, p[0] * sn + p[1] * c, p[2]]).collect();
             }
-            for k in 0..n {
-                sheet.add_face(&[cen, ring[k], ring[(k + 1) % n]]);
-            }
-            let mut gill = Mesh::new();
-            for s in 0..steps {
-                let mut sh = sheet.clone();
-                sh.transform(&Mat4::rot_z(2.0 * PI * s as f64 / steps as f64));
-                gill.append(&sh);
-            }
+            Self::dump("g018", &gm);
+            let mut gill = super::blops::remove_doubles(&gm, 1e-3);
+            Self::dump("g019", &gill);
+            gill = Self::subsurf2face(&gill, face_size);
+            Self::dump("g019b", &gill);
             obj.append(&gill);
+            Self::dump("c020", &obj);
         }
         let marble = r.choice_idx(2) == 1;
         let scale = r.log_uniform(0.01, 0.05);
@@ -258,37 +292,198 @@ impl MushroomFactory {
         obj
     }
 
-    fn stem_mesh(&self, i: u64) -> Mesh {
+    fn graphs() -> &'static serde_json::Value {
+        static G: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+        G.get_or_init(|| serde_json::from_str(include_str!("../data/mushroom_gn.json")).unwrap())
+    }
+
+    /// evaluate one exported node group on a mesh; `patches` = (node name, input id, value). Returns the mesh and its edge array
+    fn run_group(name: &str, m: &Mesh, edges: &[[u32; 2]], patches: &[(&str, &str, serde_json::Value)]) -> (Mesh, Vec<[u32; 2]>) {
+        use crate::gn;
+        use crate::gn::geom::{Geometry as GGeom, Mesh as GMeshT};
+        use crate::gn::val::Ty;
+        let mut j = Self::graphs().clone();
+        if let Some(nodes) = j["groups"][name]["nodes"].as_array_mut() {
+            for n in nodes.iter_mut() {
+                for (nn, sock, v) in patches {
+                    if n["name"].as_str() == Some(*nn) {
+                        if let Some(ins) = n["in"].as_array_mut() {
+                            for s in ins.iter_mut() {
+                                if s["id"].as_str() == Some(*sock) {
+                                    s["v"] = v.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let groups = gn::load::load_groups(j);
+        let g = groups.map.get(name).unwrap();
+        let v: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        let gm = GMeshT::from_faces(v, &m.faces, edges);
+        let mut inputs: crate::dhash::HashMap<String, gn::Value> = crate::dhash::HashMap::default();
+        let gi = g.inputs.iter().find(|i| i.ty == Ty::Geo).unwrap();
+        inputs.insert(gi.id.clone(), gn::Value::geo(GGeom::from_mesh(gm)));
+        let outs = gn::eval(&groups, name, &inputs, &gn::Objects::default()).expect("mushroom group eval");
+        let oi = g.outputs.iter().position(|o| o.ty == Ty::Geo).unwrap();
+        match &outs[oi].1 {
+            gn::Value::G(gg) => {
+                let r = gn::meshops::realize_instances(gg, 1000);
+                let mut o = Mesh::new();
+                let mut e = vec![];
+                if let Some(gm) = &r.mesh {
+                    o.pos = gm.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+                    o.faces = gm.faces_vec();
+                    e = gm.edges.clone();
+                }
+                (o, e)
+            }
+            _ => (Mesh::new(), vec![]),
+        }
+    }
+
+    /// SMOOTH modifier (all axes) over the edge array
+    fn smooth(m: &mut Mesh, edges: &[[u32; 2]], factor: f32, iterations: usize) {
+        let n = m.pos.len();
+        let mut co: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        let fo = 1.0f32 - factor;
+        for _ in 0..iterations {
+            let mut acc = vec![[0.0f32; 3]; n];
+            let mut cnt = vec![0u32; n];
+            for e in edges {
+                let (a, b) = (e[0] as usize, e[1] as usize);
+                let mid = [(co[a][0] + co[b][0]) * 0.5, (co[a][1] + co[b][1]) * 0.5, (co[a][2] + co[b][2]) * 0.5];
+                cnt[a] += 1;
+                cnt[b] += 1;
+                for k in 0..3 {
+                    acc[a][k] += mid[k];
+                    acc[b][k] += mid[k];
+                }
+            }
+            for i in 0..n {
+                if cnt[i] > 0 {
+                    let f = 1.0f32 / cnt[i] as f32;
+                    for k in 0..3 {
+                        acc[i][k] *= f;
+                    }
+                }
+                for k in 0..3 {
+                    co[i][k] = fo * co[i][k] + factor * acc[i][k];
+                }
+            }
+        }
+        m.pos = co.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+    }
+
+    fn snap_remesh(obj: &Mesh, face_size: f64, tag: &str) -> Mesh {
+        let src = Self::lm(obj);
+        let tris = super::dualcon::corner_tris(&src.v, &src.f);
+        let nets = super::voxelremesh::voxel_remesh(&src.v, &tris, face_size as f32);
+        let raw = Self::from_lm(&LMesh { v: nets.v.clone(), f: nets.f.clone(), e: vec![] });
+        Self::dump(&format!("{tag}raw"), &raw);
+        let mut l = LMesh { v: nets.v, f: nets.f, e: vec![] };
+        let snapped = super::leafkit::sample_nearest_surface(&src, &vec![0f32; src.v.len()], &l.v);
+        for (i, sp) in snapped.iter().enumerate() {
+            l.v[i] = sp.1;
+        }
+        Self::from_lm(&l)
+    }
+
+    /// decorate.subsurface2face_size
+    fn subsurf2face(m: &Mesh, face_size: f64) -> Mesh {
+        let mut tot = 0.0f64;
+        for f in &m.faces {
+            tot += face_area(m, f);
+        }
+        let area = tot / m.faces.len().max(1) as f64;
+        if area < 1e-6 {
+            return m.clone();
+        }
+        let levels = (area / face_size).log2().ceil() as i64;
+        if levels > 0 {
+            super::subsurf::subsurf_osd(m, levels as usize, false, None).unwrap_or_else(|| super::subsurf::subsurf(m, levels as usize, false))
+        } else {
+            m.clone()
+        }
+    }
+
+    fn stem_mesh(&self, i: u64, face_size: f64) -> Mesh {
+        use serde_json::json;
         let mut r = inst_rng(self.fs, i);
         let ir = self.inner_radius;
         let length = r.log_uniform(0.4, 0.8);
         let x = [0.0, ir, r.log_uniform(1.0, 2.0) * ir, ir * r.uniform(1.0, 1.2), 0.0];
         let z = [0.0, 0.0, -length * r.uniform(0.3, 0.7), -length, -length];
         let mut obj = self.spin(&x, &z, &[1, 4]);
+        Self::dump("s018", &obj);
+        obj = Self::snap_remesh(&obj, face_size, "s019");
+        Self::dump("s021", &obj);
         if self.has_band {
-            let _ = (r.log_uniform(5.0, 10.0), r.uniform(5.0, 10.0), r.uniform(0.3, 0.7), r.uniform(0.008, 0.01));
+            let scale = r.uniform(0.008, 0.01);
+            let wscale = r.log_uniform(5.0, 10.0);
+            let dist = r.uniform(5.0, 10.0);
+            let thr = -r.uniform(0.3, 0.7) * length;
+            let (m, _) = Self::run_group("geo_band", &obj, &[], &[("Wave Texture", "Scale", json!(wscale)), ("Wave Texture", "Distortion", json!(dist)), ("Compare", "B", json!(thr)), ("Vector Math.002", "Scale", json!(scale))]);
+            obj = m;
+            Self::dump("s022band", &obj);
         }
         if self.web != 2 {
-            // skirt (solid approximation of the hollow / solid web)
-            let outer = ir * if self.web == 0 { r.uniform(2.0, 3.5) } else { r.uniform(1.5, 3.5) };
-            let zt = r.uniform(0.0, 0.05);
-            let len = if self.web == 0 { r.log_uniform(0.2, 0.4) } else { r.uniform(0.15, 0.2) };
-            let xa = [ir, (outer + ir) / 2.0, outer];
-            let za = [-zt, -zt - r.uniform(0.3, 0.4) * len, -zt - len];
-            let web = self.spin(&xa, &za, &[]);
-            obj.append(&web);
+            let mut web;
+            if self.web == 0 {
+                let outer = ir * r.uniform(2.0, 3.5);
+                let zt = r.uniform(0.0, 0.05);
+                let len = r.log_uniform(0.2, 0.4);
+                let xa = [ir, (outer + ir) / 2.0, outer];
+                let za = [-zt, -zt - r.uniform(0.3, 0.4) * len, -zt - len];
+                web = self.spin(&xa, &za, &[]);
+                Self::dump("w025", &web);
+                web = super::subsurf::subsurf_osd(&web, 3, false, None).unwrap_or_else(|| super::subsurf::subsurf(&web, 3, false));
+                Self::dump("w026", &web);
+                let vs = r.uniform(15.0, 20.0);
+                let (m, e) = Self::run_group("geo_voronoi", &web, &[], &[("Voronoi Texture", "Scale", json!(vs))]);
+                web = m;
+                Self::dump("w027", &web);
+                Self::smooth(&mut web, &e, 0.5, 2);
+                Self::dump("w028", &web);
+            } else {
+                let outer = ir * r.uniform(1.5, 3.5);
+                let zt = r.uniform(0.0, 0.05);
+                let len = r.uniform(0.15, 0.2);
+                let xa = [ir, (outer + ir) / 2.0, outer];
+                let za = [-zt, -zt - r.uniform(0.3, 0.4) * len, -zt - len];
+                web = self.spin(&xa, &za, &[]);
+                let sc = -r.uniform(0.008, 0.01);
+                let wscale = r.log_uniform(5.0, 10.0);
+                let dist = r.uniform(5.0, 10.0);
+                let (m, _) = Self::run_group("geo_inverse_band", &web, &[], &[("Wave Texture", "Scale", json!(wscale)), ("Wave Texture", "Distortion", json!(dist)), ("Vector Math.002", "Scale", json!(sc))]);
+                web = m;
+                Self::dump("w027", &web);
+            }
+            let strength = r.uniform(0.1, 0.2);
+            let nscale = r.uniform(1.4, 2.8);
+            let off = [r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0)];
+            web = super::gnhelpers::geo_extension(&web, off, nscale, strength);
+            Self::dump("w029", &web);
+            web = Self::subsurf2face(&web, face_size / 2.0);
+            let mut j = web;
+            j.append(&obj);
+            obj = j;
+            Self::dump("s030", &obj);
         }
-        let marble_scale = r.uniform(0.005, 0.01);
-        displace(&mut obj, &Tex::new(TexKind::Stucci(0), marble_scale), 0.008, 0.0);
+        let ns = r.uniform(0.005, 0.01);
+        Self::disp(&mut obj, Some(&Tex::new(TexKind::Stucci(0), ns)), 0.008, 0.0, None);
+        Self::dump("s031", &obj);
         let a = -r.uniform(0.0, PI / 2.0);
         Self::deform(&mut obj, Deform::Bend, a, 1);
+        Self::dump("s032", &obj);
         obj
     }
 
     /// MushroomGrowthFactory.create_asset: cap + stem joined, lowered to z = 0 at the lowest vertex
     fn growth(&self, i: u64) -> Mesh {
         let mut cap = self.cap_mesh(i, 0.0015);
-        let stem = self.stem_mesh(i);
+        let stem = self.stem_mesh(i, 0.0015);
         cap.append(&stem);
         let mut lo = 0;
         for (k, p) in cap.pos.iter().enumerate() {
@@ -401,4 +596,23 @@ impl Factory for MushroomFactory {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(MushroomFactory::new(fs)))
+}
+
+fn face_area(m: &Mesh, f: &[u32]) -> f64 {
+    // polygon area as Blender's area_poly_v3 (Newell magnitude / 2)
+    let n = f.len();
+    let mut a = [0.0f32; 3];
+    let p = |k: usize| {
+        let q = m.pos[f[k] as usize];
+        [q[0] as f32, q[1] as f32, q[2] as f32]
+    };
+    let mut vp = p(n - 1);
+    for k in 0..n {
+        let vc = p(k);
+        a[0] += (vp[1] - vc[1]) * (vp[2] + vc[2]);
+        a[1] += (vp[2] - vc[2]) * (vp[0] + vc[0]);
+        a[2] += (vp[0] - vc[0]) * (vp[1] + vc[1]);
+        vp = vc;
+    }
+    ((a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt() * 0.5f32) as f64
 }
