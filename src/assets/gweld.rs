@@ -736,6 +736,69 @@ fn bilin(pts: [[f32; 3]; 4], s: f32, t: f32, mode: u32) -> [f32; 3] {
     r
 }
 
+
+/// debug / calibration: every face that could evaluate a shared corner / edge vertex, with the position it would get
+/// (vertex index -> [(face, position)]); `ev(face, ptex_in_face, u, v)` as in `subdivide_ev`
+pub fn claim_candidates(m: &GMesh, level: u32, ev: &dyn Fn(usize, usize, f32, f32) -> [f32; 3]) -> std::collections::BTreeMap<usize, Vec<(usize, [f32; 3])>> {
+    let res = (1usize << level) + 1;
+    let nv = m.v.len();
+    let ce = corner_edges(m);
+    let res2 = res - 2;
+    let edge_off = nv;
+    let inv_res1 = 1.0f32 / (res - 1) as f32;
+    let mut out: std::collections::BTreeMap<usize, Vec<(usize, [f32; 3])>> = Default::default();
+    for (fi, f) in m.p.iter().enumerate() {
+        let n = f.len();
+        for (c, &vi) in f.iter().enumerate() {
+            let p = if n == 4 {
+                let (u, v) = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)][c];
+                ev(fi, 0, u, v)
+            } else {
+                ev(fi, c, 0.0, 0.0)
+            };
+            out.entry(vi as usize).or_default().push((fi, p));
+        }
+        for corner in 0..n {
+            let coarse_vert = f[corner];
+            let ei = ce[fi][corner] as usize;
+            let flip = m.e[ei][1] == coarse_vert;
+            if n == 4 {
+                let base = edge_off + ei * res2;
+                for vi in 0..res2 {
+                    let mut fac = (vi + 1) as f32 * inv_res1;
+                    if flip {
+                        fac = 1.0 - fac;
+                    }
+                    if corner >= 2 {
+                        fac = 1.0 - fac;
+                    }
+                    let (u, v) = if corner & 1 == 0 { (fac, if corner == 2 { 1.0 } else { 0.0 }) } else { (if corner == 1 { 1.0 } else { 0.0 }, fac) };
+                    out.entry(base + vi).or_default().push((fi, ev(fi, 0, u, v)));
+                }
+            } else {
+                let nvp = (res >> 1) + 1;
+                let inv_p1 = 1.0f32 / (nvp - 1) as f32;
+                let mut idx = (edge_off + ei * res2) as i64;
+                let mut delta = 1i64;
+                if flip {
+                    idx += res2 as i64 - 1;
+                    delta = -1;
+                }
+                for vi in 1..nvp {
+                    out.entry(idx as usize).or_default().push((fi, ev(fi, corner, vi as f32 * inv_p1, 0.0)));
+                    idx += delta;
+                }
+                let next_corner = (corner + 1) % n;
+                for vi in 1..nvp - 1 {
+                    out.entry(idx as usize).or_default().push((fi, ev(fi, next_corner, 0.0, 1.0 - vi as f32 * inv_p1)));
+                    idx += delta;
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn subdivide(m: &GMesh, level: u32) -> GMesh {
     subdivide_ev(m, level, None)
 }
@@ -769,14 +832,25 @@ pub fn subdivide_ev(m: &GMesh, level: u32, ev: Option<&dyn Fn(usize, usize, f32,
     for i in 0..nv {
         pos[i] = m.v[i];
     }
+    // shared corner / edge vertices are evaluated by the face that claims them first (BLI_task_parallel_range over faces in Blender)
+    let face_order: Vec<usize> = match std::env::var("OSD_ORDER").as_deref() {
+        Ok("desc") => (0..m.p.len()).rev().collect(),
+        _ => (0..m.p.len()).collect(),
+    };
     if let Some(e) = ev {
+        // corner vertices: evaluated by the first face that uses them (regular: corner uv of ptex 0, special: u = v = 0 of ptex `corner`)
         let mut done = vec![false; nv];
-        for (fi, f) in m.p.iter().enumerate() {
+        for (fi, f) in face_order.iter().map(|&i| (i, &m.p[i])) {
             for (c, &vi) in f.iter().enumerate() {
-                if !done[vi as usize] && f.len() == 4 {
-                    done[vi as usize] = true;
+                if done[vi as usize] {
+                    continue;
+                }
+                done[vi as usize] = true;
+                if f.len() == 4 {
                     let (u, v) = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)][c];
                     pos[vi as usize] = e(fi, 0, u, v);
+                } else {
+                    pos[vi as usize] = e(fi, c, 0.0, 0.0);
                 }
             }
         }
@@ -833,7 +907,7 @@ pub fn subdivide_ev(m: &GMesh, level: u32, ev: Option<&dyn Fn(usize, usize, f32,
     };
     let mut edge_used = vec![false; ne];
     let inv_res1 = 1.0f32 / (res - 1) as f32;
-    for (fi, f) in m.p.iter().enumerate() {
+    for (fi, f) in face_order.iter().map(|&i| (i, &m.p[i])) {
         let n = f.len();
         if n == 4 {
             for corner in 0..4 {
