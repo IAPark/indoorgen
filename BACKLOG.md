@@ -68,6 +68,7 @@ Status values: todo / doing(<worker>) / done / blocked(<why>). Workers update th
 | id | item | status | notes |
 |---|---|---|---|
 | E1 | First blind pass (2026-10-24, 11 rooms x cornerA, 3 sonnet judges, neutral prompt): **Rust preferred 8/33 = 24%** | done | losses: camera inside objects (garbled close-up, black near-clip triangle) -> render camera fixed for both sides; Rust beds are slabs (S1); dark Rust bathroom floors/lighting (Bathroom 4 lum 43 vs 87); sparse-looking Rust rooms (LivingRoom 4, Bedroom 4); 'floating' rugs (both sides) |
+| E3 | Quick pass (2026-10-24 19:05, 8 rooms x cornerA, half-res 8 samples, Rust cloth, 3 sonnet judges, master after placeholder-tag fix): **Rust preferred 12/24 = 50%** (A chosen 12/24, no position bias). Small sample (95% CI roughly 30-70%). Rust loss reasons: floating/tilted rug, dark slab in foreground, odd green sofa with dark holes, dark intersecting counter, cluttered/intersecting dining chairs, muddled bathtub scene | done | next: more rooms/seeds + cornerB to tighten the estimate |
 | E2 | Second pass after S1/D1-D5 + camera fix: re-render BOTH sides (camera code changed), 14 rooms x 2 views, 3 judges | todo | |
 
 
