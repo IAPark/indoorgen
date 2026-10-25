@@ -1,9 +1,17 @@
+// usage: gen2 <seed> [room] [out.glb] [--rust-cloth]
+//   --rust-cloth: also run the native cloth sim for bed cloth that is exported as a sidecar job (default: skip, Blender re-simulates it)
 use infinigen::furn::assets::TableAssets;
 use infinigen::mesh::*;
 use infinigen::pipeline::*;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    // cloth that is exported as a sidecar job is re-simulated in Blender at render time: skip the Rust sim unless --rust-cloth
+    if let Some(i) = args.iter().position(|a| a == "--rust-cloth") {
+        args.remove(i);
+    } else {
+        infinigen::assets::cloth::SKIP_JOB_SIM.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let seed: u64 = args[1].parse().unwrap();
     let room = args.get(2).cloned();
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));

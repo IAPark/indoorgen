@@ -200,7 +200,7 @@ impl BedSpec {
 // ------------------------------------------------------------------------------------------------ assembly
 use super::mattress::MattressSpec;
 use super::pillow::PillowSpec;
-use super::cloth::{simulate, Calib, ClothParams, Collider};
+use super::cloth::{simulate_job, Calib, ClothParams, Collider};
 use super::clothes::{Blanket, BlanketKind};
 use super::ctor_draws::{blanket_ctor, pillow_ctor, towel_material_draw};
 use super::towel::{subdivide_edge_ring, TowelSpec};
@@ -649,7 +649,7 @@ impl Factory for Bed {
         p.use_self_collision = s.sheet_folded;
         let mut cal = Calib::default();
         cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
-        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
+        let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
         let sheet = subsurf(&sheet, 2, false);
@@ -677,7 +677,7 @@ impl Factory for Bed {
         p.tension = 2.0;
         p.distance_min = 5e-3;
         p.end_frame = 80;
-        let out = simulate(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
+        let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;
         let cvm = subsurf(&cvm, 2, false);
