@@ -240,7 +240,6 @@ pub fn apply(state: &mut State, cfg: &MessCfg) {
         let done = mv.try_move(k, cc, yaw, [ang.cos() * dist, ang.sin() * dist, 0.0], &[], &|s, n| footprint_in_parent(s, n, &parent) >= before);
         mv.count("decor", done);
     }
-    mv.rep.print();
     LAST.with(|l| *l.borrow_mut() = Some(mv.rep.clone()));
 }
 
@@ -269,4 +268,12 @@ fn inside_rooms(state: &State, k: &str, margin: f64) -> bool {
         let Ok(sq) = ig_core::shp::polygon(&sq, &[]) else { return false };
         state.objs.values().any(|o| o.polygon.as_ref().map_or(false, |p| p.contains(&sq).unwrap_or(false)))
     })
+}
+
+/// Edits the built visual assets (bed cloth, cabinet doors / drawers). No-op when `!cfg.on()`.
+pub fn post_visuals(visuals: &mut std::collections::HashMap<String, ig_kit::api::Asset>, state: &State, cfg: &MessCfg) {
+    if !cfg.on() {
+        return;
+    }
+    crate::visuals::post_visuals(visuals, state, cfg);
 }

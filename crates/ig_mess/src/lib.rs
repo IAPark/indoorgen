@@ -8,6 +8,7 @@
 pub mod clutter;
 pub mod settle;
 pub mod states;
+pub mod visuals;
 
 pub use ig_core::*;
 

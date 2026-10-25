@@ -72,8 +72,9 @@ def _build_blanket(b, z, pose=None):
         butil.apply_transform(obj, True)
         obj.rotation_euler[-1] = -theta
         butil.apply_transform(obj)
-    obj.location = b["x"], 0, z - (pose[2][3] if pose else 0.0)
-    obj.rotation_euler[-1] = math.pi / 2
+    # mess pass (unmade bed): optional sideways offset / yaw of the throw, absent = unchanged
+    obj.location = b["x"], b.get("dy", 0.0), z - (pose[2][3] if pose else 0.0)
+    obj.rotation_euler[-1] = math.pi / 2 + b.get("yaw", 0.0)
     butil.apply_transform(obj, True)
     if pose:
         import mathutils

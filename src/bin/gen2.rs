@@ -118,7 +118,7 @@ fn main() {
     infinigen::mess::states::apply(&mut g.state, &mess);
     // build the final assets of all generated objects in parallel (each build is independent and deterministic; results are consumed in
     // the original order below)
-    let visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
+    let mut visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
         use rayon::prelude::*;
         let items: Vec<(&String, &infinigen::furn::state::GenRef)> = g.state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen))).collect();
         items
@@ -131,6 +131,8 @@ fn main() {
             })
             .collect()
     };
+    // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
+    infinigen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
     let mut counts = std::collections::BTreeMap::new();
     for (k, o) in &g.state.objs {
         let Some(gen) = &o.generator else { continue };
