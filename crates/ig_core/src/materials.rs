@@ -176,3 +176,21 @@ pub fn decorate_rooms(seed: u64, rooms: &[(String, String)]) -> Vec<RoomMaterial
     }
     res
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn alt_hist() {
+        let rooms = vec![("living-room_0/0".to_string(), "living-room".to_string()), ("kitchen_0/0".to_string(), "kitchen".to_string())];
+        let mut h = std::collections::BTreeMap::new();
+        for seed in 0..400u64 {
+            let r = decorate_rooms(seed, &rooms);
+            for (i, m) in r.iter().enumerate() {
+                let k = (i, m.alt_wall.as_ref().map(|x| x.spec.as_ref().unwrap()["cls"].as_str().unwrap().to_string()), format!("{:?}", std::mem::discriminant(&m.alt)));
+                *h.entry(k).or_insert(0) += 1;
+            }
+        }
+        for (k, v) in h { println!("{k:?} {v}"); }
+    }
+}
