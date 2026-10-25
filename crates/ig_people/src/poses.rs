@@ -180,7 +180,7 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
                     b.rel("Spine2", [-6.0, 0.0, 0.0]);
                     head(&mut b, &mut v, 6.0, 0.0);
                     for s in [-1.0, 1.0] {
-                        b.side(s, "UpperArm", Op::Ik { target: [pelvis[0] + s * 0.30, pelvis[1] + 0.05 + v.v(0.05), pelvis[2] + 0.22], pole: d(s * 0.8, -0.5, -0.2) });
+                        b.side(s, "UpperArm", Op::Ik { target: [pelvis[0] + s * (0.13 + v.v(0.02)), pelvis[1] + 0.13 + v.v(0.05), pelvis[2] + 0.17], pole: d(s * 0.8, -0.5, -0.2) });
                     }
                 }
                 _ => {
@@ -197,8 +197,8 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
         }
         LieBed | LieSofa => {
             anchor = Anchor::Lie;
-            let side = kind == LieSofa && v.flag();
-            let roll = if side { if v.flag() { 90.0 } else { -90.0 } } else { 0.0 };
+            let side = kind == LieSofa && seed % 4 == 3;
+            let roll = if side { if seed % 8 == 3 { 90.0 } else { -90.0 } } else { 0.0 };
             // lie down: rotate the whole body about x (head towards -y, face up), then optionally roll onto the side
             let r0 = rmul(&rot_axis([0., 1., 0.], roll), &rot_axis([1., 0., 0.], 90.0));
             let (ex, ey, ez) = euler_of(&r0);
@@ -212,6 +212,13 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
                     b.side(s, "Thigh", Op::Rel([s * 0.0 + 25.0, 0.0, 0.0]));
                     b.side(s, "Calf", Op::Rel([-45.0, 0.0, 0.0]));
                 }
+                // face direction (world x) and which arm is on top
+                let fx = if roll < 0.0 { -1.0 } else { 1.0 };
+                let top = if roll < 0.0 { 1.0 } else { -1.0 };
+                b.side(top, "UpperArm", Op::Aim { dir: d(fx * 0.30, 1.0, -0.35), twist: 0.0 });
+                b.side(top, "Forearm", Op::Aim { dir: d(fx * 0.55, 0.9, -0.25), twist: 0.0 });
+                b.side(-top, "UpperArm", Op::Aim { dir: d(fx * 0.9, -0.25, 0.05), twist: 0.0 });
+                b.side(-top, "Forearm", Op::Aim { dir: d(fx * 0.85, -0.35, 0.25), twist: 0.0 });
             } else {
                 for s in [-1.0, 1.0] {
                     b.side(s, "Thigh", Op::Rel([0.0, 0.0, s * (5.0 + v.v(2.0))]));
@@ -244,7 +251,41 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
             }
         }
     }
+    let curl = match kind {
+        LeanCounter | StandAtSink => 8.0,
+        StandAtDesk => 14.0,
+        Reach => 12.0,
+        _ => 20.0,
+    };
+    for side in [-1.0, 1.0] {
+        let c = curl * (1.0 + v.v(0.25));
+        curl_hand(&mut b, side, c);
+    }
     Def { ops: b.ops, anchor, hands }
+}
+
+/// relaxed finger curl (`c` degrees at the middle joints) on the rest-pose hand: axes come from the rest geometry (palm faces the body in the A pose)
+fn curl_hand(b: &mut B, s: f64, c: f64) {
+    let rig = b.rig;
+    let sd = if s < 0.0 { "L" } else { "R" };
+    let palm = [-s, 0.0, 0.0];
+    let fac = [0.5, 0.75, 0.9, 1.0, 1.15];
+    for k in 0..5 {
+        let names = [format!("Bip01 {sd} Finger{k}"), format!("Bip01 {sd} Finger{k}1"), format!("Bip01 {sd} Finger{k}2")];
+        let ids: Vec<Option<usize>> = names.iter().map(|n| rig.try_id(n)).collect();
+        let amt = [0.55 * c, c, 0.7 * c];
+        for j in 0..3 {
+            let Some(i) = ids[j] else { continue };
+            let f = if let Some(Some(ch)) = ids.get(j + 1) { sub(rig.rest(*ch), rig.rest(i)) } else if j > 0 { sub(rig.rest(i), rig.rest(ids[j - 1].unwrap())) } else { continue };
+            let f = norm(f);
+            let n = norm(sub(palm, scale(f, dot(palm, f))));
+            let ax = cross(f, n);
+            let ang = amt[j] * fac[k] * if k == 0 { 0.8 } else { 1.0 };
+            let q = rot_axis(ax, ang);
+            let (ex, ey, ez) = euler_of(&q);
+            b.ops.insert(i, Op::Rel([ex, ey, ez]));
+        }
+    }
 }
 
 /// recover euler (degrees, R = Rz Ry Rx) from a rotation matrix

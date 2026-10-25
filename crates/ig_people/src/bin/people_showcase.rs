@@ -16,6 +16,7 @@ fn main() {
         None => ALL_POSES.to_vec(),
     };
     let seed: u64 = arg("--seed").map(|s| s.parse().unwrap()).unwrap_or(1);
+    let yaw: f64 = arg("--yaw").map(|s| s.parse().unwrap()).unwrap_or(0.0);
     let mut sc = Scene::default();
     let floor = sc.material(Material::diffuse("floor", [0.55, 0.5, 0.45], 0.7));
     let prop = sc.material(Material::diffuse("prop", [0.35, 0.3, 0.3], 0.6));
@@ -34,13 +35,24 @@ fn main() {
             cnt += 1;
             let (x, y) = (c as f64 * dx, -(r as f64) * dy);
             use PoseKind::*;
+            let pose = ig_core::mesh::Mat4::translation([x, y, 0.0]).mul(&ig_core::mesh::Mat4::rot_z(yaw.to_radians()));
+            let mut props: Vec<([f64; 3], [f64; 3], usize)> = vec![];
             if let Some(s) = info.seat {
                 match k {
-                    LieBed | LieSofa => sc.add("bed", "Bed", Mesh::cuboid([x - 0.7, y - 1.2, -0.0 - 0.3], [x + 0.7, y + 1.2, 0.0]), prop),
-                    _ => sc.add("chair", "Chair", Mesh::cuboid([x - 0.3, y - 0.3, 0.0], [x + 0.3, y + 0.3, s[2] - 0.0]), prop),
+                    LieBed | LieSofa => props.push(([-0.7, -1.2, -0.3], [0.7, 1.2, 0.0], prop)),
+                    _ => props.push(([-0.3, -0.32, 0.0], [0.3, 0.12, s[2]], prop)),
                 }
             }
-            let pose = ig_core::mesh::Mat4::translation([x, y, 0.0]);
+            if let Some(h) = info.hands {
+                let top = (h[0][2] + h[1][2]) * 0.5 - 0.015;
+                let yf = h[0][1].max(h[1][1]) + 0.12;
+                props.push(([-0.6, yf, 0.0], [0.6, yf + 0.6, top], prop));
+            }
+            for (lo, hi, m) in props {
+                let mut cm = Mesh::cuboid(lo, hi);
+                cm.transform(&pose);
+                sc.add("prop", "Prop", cm, m);
+            }
             for (i, p) in asset.parts.iter().enumerate() {
                 let mut m = p.mesh.clone();
                 m.transform(&pose);
