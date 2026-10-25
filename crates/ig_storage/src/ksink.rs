@@ -83,8 +83,12 @@ impl Factory for KSink {
         let m = super::matpick::spec_of("sink", self.sink_cls, self.fseed);
         let tap_m = super::matpick::spec_of("sink_tap", self.tap_cls, self.fseed + 1);
         let mut a = Asset::default();
-        for (_, g) in &outs {
-            a.mesh(super::gnhelpers::to_mesh(g), &m, None);
+        for (n, g) in &outs {
+            if n == "Cutter" {
+                a.cutters.push(super::gnhelpers::to_mesh(g));
+            } else {
+                a.mesh(super::gnhelpers::to_mesh(g), &m, None);
+            }
         }
         // tap child at (-Depth / 2, 0, Upper Height)
         let mut tm = super::taps::tap_mesh(self.fseed, i);

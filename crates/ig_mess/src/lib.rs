@@ -9,7 +9,9 @@ pub mod check;
 pub mod clutter;
 pub mod garment;
 pub mod settle;
+pub mod doors;
 pub mod states;
+pub mod visuals;
 
 pub use ig_core::*;
 

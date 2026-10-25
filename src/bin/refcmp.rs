@@ -184,6 +184,12 @@ fn main() {
             rs.v.extend(p.mesh.pos.iter().cloned());
             rs.f.extend(p.mesh.faces.iter().map(|fc| fc.iter().map(|x| x + off).collect::<Vec<u32>>()));
         }
+        // the refcache keeps the boolean cutter (python deletes it only at spawn time)
+        for c in &asset.cutters {
+            let off = rs.v.len() as u32;
+            rs.v.extend(c.pos.iter().cloned());
+            rs.f.extend(c.faces.iter().map(|fc| fc.iter().map(|x| x + off).collect::<Vec<u32>>()));
+        }
         if let Ok(d) = std::env::var("DUMPRS") {
             std::fs::write(format!("{d}/{cls}_{s}_{i}_rs.json"), serde_json::json!({"v": rs.v, "p": rs.f}).to_string()).unwrap();
             std::fs::write(format!("{d}/{cls}_{s}_{i}_py.json"), serde_json::json!({"v": py.v, "p": py.f}).to_string()).unwrap();

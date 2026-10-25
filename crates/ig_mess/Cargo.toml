@@ -15,4 +15,9 @@ ig_kit = { path = "../ig_kit" }
 ig_furn = { path = "../ig_furn" }
 ig_rooms = { path = "../ig_rooms" }
 ig_assets = { path = "../ig_assets" }
+<<<<<<< HEAD
 ig_gn = { path = "../ig_gn" }
+=======
+geos = { workspace = true }
+ig_storage = { path = "../ig_storage" }
+>>>>>>> master

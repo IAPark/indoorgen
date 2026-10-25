@@ -53,6 +53,8 @@ pub struct Asset {
     pub parts: Vec<Part>,
     /// top faces of these boxes carry the SupportSurface tag
     pub supports: Vec<(V3, V3)>,
+    /// boolean cutters (local space): difference-ed from the parts of every relation-target object (python apply_cutter)
+    pub cutters: Vec<Mesh>,
 }
 
 impl Asset {
