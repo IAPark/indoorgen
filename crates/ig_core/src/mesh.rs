@@ -303,6 +303,9 @@ pub struct Node {
     pub material: usize,
     /// free-form tag for reporting, e.g. generator class name
     pub class: String,
+    /// asset placement (row-major 4x4, Z-up world) the mesh was transformed by; written to the sidecar so the renderer can
+    /// restore python-style object-local coordinates (Infinigen shaders use Object texture coordinates)
+    pub pose: Option<[[f64; 4]; 4]>,
 }
 
 #[derive(Clone, Debug)]
@@ -333,7 +336,12 @@ impl Scene {
     }
     pub fn add(&mut self, name: &str, class: &str, mesh: Mesh, material: usize) {
         if !mesh.is_empty() {
-            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into() });
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None });
+        }
+    }
+    pub fn add_posed(&mut self, name: &str, class: &str, mesh: Mesh, material: usize, pose: [[f64; 4]; 4]) {
+        if !mesh.is_empty() {
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: Some(pose) });
         }
     }
 
@@ -466,7 +474,7 @@ impl Scene {
         while bin.len() % 4 != 0 {
             bin.push(0);
         }
-        let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec})).collect();
+        let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec, "pose": n.pose})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
         let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth});
         if let Some(sp) = path.parent() {

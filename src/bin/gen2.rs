@@ -161,7 +161,7 @@ fn main() {
             let mut m = part.mesh.clone();
             m.transform(&pose_m);
             let mi = scene.material(part.mat.clone());
-            scene.add(&format!("{k}#{pi}"), &gen.class, m, mi);
+            scene.add_posed(&format!("{k}#{pi}"), &gen.class, m, mi, pose_m.0);
         }
     }
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
