@@ -1,0 +1,28 @@
+[package]
+name = "ig_shared"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+geos = { workspace = true }
+indexmap = { workspace = true }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+md5 = { workspace = true }
+earcutr = { workspace = true }
+parry3d-f64 = { workspace = true }
+num-bigint = { workspace = true }
+num-rational = { workspace = true }
+num-traits = { workspace = true }
+num-integer = { workspace = true }
+robust = { workspace = true }
+ig_core = { path = "../ig_core" }
+ig_exbool = { path = "../ig_exbool" }
+ig_bm = { path = "../ig_bm" }
+ig_geom = { path = "../ig_geom" }
+ig_kit = { path = "../ig_kit" }
+ig_gn = { path = "../ig_gn" }
+ig_rooms = { path = "../ig_rooms" }

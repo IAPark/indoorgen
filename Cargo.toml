@@ -3,7 +3,11 @@ name = "infinigen"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.dependencies]
 geos = { version = "11", features = ["v3_11_0"] }
 indexmap = "2"
 nalgebra = "0.33"
@@ -19,16 +23,35 @@ num-rational = "0.4"
 num-traits = "0.2"
 num-integer = "0.1"
 robust = "1.2"
-mimalloc = { version = "0.1", default-features = false }
-
-[build-dependencies]
 cc = "1"
+
+[dependencies]
+geos = { workspace = true }
+indexmap = { workspace = true }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+md5 = { workspace = true }
+earcutr = { workspace = true }
+parry3d-f64 = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
+ig_core = { path = "crates/ig_core" }
+ig_exbool = { path = "crates/ig_exbool" }
+ig_bm = { path = "crates/ig_bm" }
+ig_geom = { path = "crates/ig_geom" }
+ig_kit = { path = "crates/ig_kit" }
+ig_gn = { path = "crates/ig_gn" }
+ig_furn = { path = "crates/ig_furn" }
+ig_rooms = { path = "crates/ig_rooms" }
+ig_assets = { path = "crates/ig_assets" }
 
 [profile.release]
 opt-level = 3
 debug = 0
 
-# fast edit-compile loop for agents: incremental, many codegen units (runtime ~10-30% slower than release)
+# fast edit-compile loop: incremental, many codegen units (runtime ~10-30% slower than release)
 [profile.fast]
 inherits = "release"
 opt-level = 2

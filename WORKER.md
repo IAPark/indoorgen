@@ -13,6 +13,8 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
   Disk is shared and small.
 
 ## Fast loop (seconds, not minutes)
+- The code is a Cargo WORKSPACE: crates under `crates/` (see `crates/README.md` for which crate holds what). Edit files there; an edit
+  rebuilds only its crate + dependents (asset-family edits ~2 s, gn/core ~5 s on an idle machine).
 - Build only what you run: `. ~/.cargo/env; CARGO_BUILD_JOBS=2 cargo build --profile fast --bin refcmp` (~20 s per edit).
   Never build all 60 bins; never use `--release` unless timing.
 - Asset check WITHOUT Blender: `target/fast/refcmp <PythonClassName> [seeds]` compares the Rust factory output with
@@ -44,7 +46,7 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
 ## Linking C/C++ libraries is allowed (user decision, 2026-10-24)
 - Where exactness depends on a library that Blender/python itself uses, LINK it instead of porting: e.g. OpenSubdiv 3.6.0 (Blender 4.2's
   subdivision), libc `qsort` (macOS, unstable; decides some Blender ties), OpenVDB (voxel remesh), libccd/FCL (collision), Eigen via a small
-  C++ shim. Use the `cc` crate (add to Cargo.toml) for C/C++ shims under `csrc/`, or link Homebrew/system libs; put sources/tarballs under
+  C++ shim. Use the `cc` crate (add to Cargo.toml) for C/C++ shims under `crates/ig_core/csrc/` (built by crates/ig_core/build.rs), or link Homebrew/system libs; put sources/tarballs under
   your tmp/ or a pinned path, not in the repo if large (>5 MB). Match the version Blender 4.2 / the python wheels use, and the compile flags
   that matter for float results (arm64 clang contracts a*b+c into FMA by default: `-ffp-contract=on`; that is how python-fcl behaves).
 - Keep a pure-Rust path only if a port already exists and is exact.
@@ -57,11 +59,11 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
 - macOS tools: BSD `sed -i ''` (not GNU), no `timeout`; prefer small python edits for multi-line changes.
 - Object counts per room are chaotic per seed; judge solver/room changes with `tools/countbench.sh` (means over all rooms).
 - Use `crate::dhash::{HashMap, HashSet}` (`HashMap::default()`), never std RandomState maps (nondeterministic output).
-- Reuse before writing: bevel = `src/bm/bevel.rs` (exact bmesh bevel) / `src/assets/bevelfull.rs` (modifier); bridge loops =
-  `src/assets/bridge.rs`; fill_grid/solidify = `src/assets/bpyops.rs`; subdivision = `src/subdiv.rs`, gn SubdivisionSurface;
-  CDT = `src/gn/cdt.rs`; booleans = `src/gn/csg.rs`. If something is missing in shared code, extend it there (with a test),
+- Reuse before writing: bevel = `crates/ig_bm/src/bevel.rs` (exact bmesh bevel) / `crates/ig_kit/src/bevelfull.rs` (modifier); bridge loops =
+  `crates/ig_kit/src/bridge.rs`; fill_grid/solidify = `crates/ig_kit/src/bpyops.rs`; subdivision = `crates/ig_core/src/subdiv.rs`, gn SubdivisionSurface;
+  CDT = `crates/ig_gn/src/cdt.rs`; booleans = `crates/ig_gn/src/csg.rs`. If something is missing in shared code, extend it there (with a test),
   don't fork a private copy.
-- Keep asset code in its own file; touch `src/assets/mod.rs` only to add `pub mod` + one dispatch arm.
+- Keep asset code in its own file; add `pub mod` to your crate's lib.rs and one dispatch arm in `crates/ig_assets/src/lib.rs` (make_factory).
 - Don't stop at a "first pass". Work through your backlog items until done or genuinely blocked; update `BACKLOG.md`
   (status + measured numbers + next step) as you go and commit it.
 - Final reply: <= 15 lines: what is done (refcmp numbers), what is not, branch name, last commit.

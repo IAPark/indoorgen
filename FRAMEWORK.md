@@ -1,4 +1,4 @@
-# Geometry Nodes framework (src/gn, tools/gn_*.py, src/bin/gncheck.rs)
+# Geometry Nodes framework (crates/ig_gn, tools/gn_*.py, src/bin/gncheck.rs)
 
 Goal: port the ~330 infinigen assets that build geometry with `nw.new_node(Nodes.X, ...)` without hand-translating each graph.
 The graph is exported from Blender 4.2 as JSON, a Rust interpreter evaluates it (float32, Blender semantics), and an automatic
@@ -13,11 +13,11 @@ checker compares the interpreter with Blender's own evaluation (vertices, faces,
 | `tools/gn_check.py` | checker driver: `unit`, `group`, `asset` modes (+ `--bisect`); builds case files, runs `target/release/gncheck` |
 | `tools/gn_units.py` | per-node unit graphs (python/bpy); `gn_check.py unit [filter]` |
 | `tools/gn_survey.sh` | run `gn_check.py asset` over a list of factories (sequential, 240 s watchdog) |
-| `src/gn/` | the interpreter (below) |
+| `crates/ig_gn/src/` | the interpreter (below) |
 | `src/bin/gncheck.rs` | evaluates a case file with the interpreter and compares with Blender's result |
-| `src/assets/gnasset.rs`, `gnports.rs` | node-graph assets as `Factory` (template JSON in `data/gn/` + RNG-exact sampler) |
+| `crates/ig_shared/src/gnasset.rs`, `crates/ig_storage/src/gnports.rs` | node-graph assets as `Factory` (template JSON in `data/gn/` + RNG-exact sampler) |
 
-`src/gn/` modules: `val.rs` (socket value types, Ty/Val), `geom.rs` (Mesh / Curves / Instances / Points, attribute maps on
+`crates/ig_gn/src/` modules: `val.rs` (socket value types, Ty/Val), `geom.rs` (Mesh / Curves / Instances / Points, attribute maps on
 domains), `field.rs` (lazy fields: `FNode`, `Ctx`, kernels), `attr.rs` (domain interpolation = Blender "adapt domain",
 normals), `load.rs` (JSON -> `Group`), `eval.rs` (demand-driven evaluator, memoised per node, nested groups, probes),
 `nodes*.rs` (node implementations, dispatched by `bl_idname`), `meshops.rs` (join/transform/realize/keep), `curveops.rs`
@@ -57,7 +57,7 @@ Comparison of materials is by name (slot numbering differs after modifier apply)
 
 ## Adding a node
 
-1. Implement it in the matching `src/gn/nodes_*.rs` match arm (`outs(node, vec![("SocketId", value)])`; fetch inputs with
+1. Implement it in the matching `crates/ig_gn/src/nodes_*.rs` match arm (`outs(node, vec![("SocketId", value)])`; fetch inputs with
    `ev.field/ev.geo/ev.cf/ev.ci/ev.cv`, socket ids are the Blender *identifiers*: see `tools` dump in `/tmp` or
    `n.inputs[i].identifier`). Function-style nodes build a kernel with `mf1/mf` (fields stay lazy); geometry nodes work on `Rc<Geometry>`.
 2. Add unit graphs to `tools/gn_units.py` (use `base_grid`, `field_case` helpers) and run `gn_check.py unit <name>`.
@@ -67,7 +67,7 @@ Comparison of materials is by name (slot numbering differs after modifier apply)
 
 1. `gn_export.py template ...` for two seeds; check `unmapped` (derived parameters must be re-computed in the sampler).
 2. Port `get_asset_params` draw-for-draw (`inst_rng(factory_seed, inst)` = `FixedSeed(int_hash((factory_seed,i)))`; verify with
-   `~/work/ref/scripts/rnglog.py`), register the class in `src/assets/gnports.rs` (+ `handles`), data file in `data/gn/`.
+   `~/work/ref/scripts/rnglog.py`), register the class in `crates/ig_storage/src/gnports.rs` (+ `handles`), data file in `data/gn/`.
 3. `gn_check.py asset MODULE.CLASS SEED --bisect` must pass; surface check of the final asset with `gc.sh` as usual.
 
 ## Known gaps / deviations (see DONE.md)

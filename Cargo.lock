@@ -195,6 +195,407 @@ dependencies = [
 ]
 
 [[package]]
+name = "ig_assets"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_decor",
+ "ig_exbool",
+ "ig_furn",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_openings",
+ "ig_plants",
+ "ig_rooms",
+ "ig_seat",
+ "ig_shared",
+ "ig_storage",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_bm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_core",
+ "ig_exbool",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "earcutr",
+ "geos",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_decor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
+ "ig_shared",
+ "ig_storage",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_exbool"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_core",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_furn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_core",
+ "ig_geom",
+ "ig_kit",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_geom"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_core",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_gn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "ig_kit",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_kit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_openings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
+ "ig_seat",
+ "ig_shared",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_plants"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_decor",
+ "ig_exbool",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
+ "ig_shared",
+ "ig_storage",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_rooms"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_seat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
+ "ig_shared",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ig_storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
+ "ig_shared",
+ "indexmap",
+ "md5",
+ "nalgebra",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+ "parry3d-f64",
+ "rayon",
+ "robust",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -209,20 +610,23 @@ name = "infinigen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cc",
  "earcutr",
  "geos",
+ "ig_assets",
+ "ig_bm",
+ "ig_core",
+ "ig_exbool",
+ "ig_furn",
+ "ig_geom",
+ "ig_gn",
+ "ig_kit",
+ "ig_rooms",
  "indexmap",
  "md5",
  "mimalloc",
  "nalgebra",
- "num-bigint",
- "num-integer",
- "num-rational",
- "num-traits",
  "parry3d-f64",
  "rayon",
- "robust",
  "serde",
  "serde_json",
 ]
