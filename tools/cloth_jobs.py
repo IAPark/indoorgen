@@ -94,6 +94,10 @@ def run_jobs(jobs, world_mesh, set_mesh, verbose=True):
                 verts = np.array([tuple(v.co) for v in obj.data.vertices])
             else:
                 verts = np.array(j["verts"], dtype=float).reshape(-1, 3)
+                if j.get("post"):
+                    # asset-local frame: sim, subsurf and the post steps run unposed; the pose is re-applied at the end
+                    inv = np.linalg.inv(np.array(j["pose"], dtype=float))
+                    verts = verts @ inv[:3, :3].T + inv[:3, 3]
                 if j.get("z_from"):
                     pv, _ = world_mesh(j["z_from"]["part"])
                     verts[:, 2] += pv[:, 2].max() - j["z_from"]["z_used"]
@@ -106,7 +110,17 @@ def run_jobs(jobs, world_mesh, set_mesh, verbose=True):
             cloth_sim(obj, cols, int(j["end_frame"]), **j["kwargs"])
             if j.get("subsurf"):
                 subsurf(obj, int(j["subsurf"]))
+            if j.get("post"):
+                po = j["post"]
+                obj.scale = [po["scale"]] * 3
+                obj.rotation_euler = tuple(po["rot"])
+                butil.apply_transform(obj, True)
+                butil.modify_mesh(obj, "DISPLACE", strength=po["displace"])
+                butil.modify_mesh(obj, "SMOOTH", iterations=int(po["smooth"]))
             v, f = _read(obj)
+            if j.get("post"):
+                pose = np.array(j["pose"], dtype=float)
+                v = v @ pose[:3, :3].T + pose[:3, 3]
             if verbose:
                 print("CLOTHJOB", j["target"], len(verts), "->", len(v), "z", v[:, 2].min(), v[:, 2].max())
             set_mesh(j["target"], v, f)

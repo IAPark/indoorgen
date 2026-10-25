@@ -108,73 +108,37 @@ fn point_in(poly: &[[f32; 2]], q: [f32; 2]) -> bool {
     inside
 }
 
-/// bpy text object (Bfont, size 1, default settings) converted to a mesh: one filled triangle set, z = 0, +z facing
+/// bpy text object (Bfont, size 1, default settings) converted to a mesh: the displist fill (BLI_scanfill, all contours at once), z = 0, +z facing
 pub fn text_mesh(text: &str) -> Mesh {
     let mut m = Mesh::new();
+    let mut edges: Vec<[usize; 2]> = vec![];
     let mut x = 0f32;
     for ch in text.chars() {
         let Some((g, adv)) = font().get(&ch) else { continue };
-        let conts: Vec<Vec<[f32; 2]>> = g.splines.iter().map(|s| spline_points(s, x)).collect();
-        x += adv;
-        if conts.is_empty() {
-            continue;
-        }
-        let areas: Vec<f64> = conts.iter().map(|c| area2(c)).collect();
-        let big = (0..conts.len()).max_by(|&a, &b| areas[a].abs().partial_cmp(&areas[b].abs()).unwrap()).unwrap();
-        let outer_sign = areas[big].signum();
-        let outers: Vec<usize> = (0..conts.len()).filter(|&i| areas[i].signum() == outer_sign).collect();
-        let base = m.pos.len() as u32;
-        let mut starts = vec![];
-        let mut acc = 0u32;
-        for c in &conts {
-            starts.push(acc);
-            acc += c.len() as u32;
-            for p in c {
+        for s in &g.splines {
+            let c = spline_points(s, x);
+            let b = m.pos.len();
+            for k in 0..c.len() {
+                edges.push([b + k, b + (k + 1) % c.len()]);
+            }
+            for p in &c {
                 m.pos.push([p[0] as f64, p[1] as f64, 0.0]);
             }
         }
-        for &o in &outers {
-            let holes: Vec<usize> = (0..conts.len())
-                .filter(|&h| {
-                    areas[h].signum() != outer_sign
-                        && point_in(&conts[o], conts[h][0])
-                        && !outers.iter().any(|&o2| o2 != o && areas[o2].abs() < areas[o].abs() && point_in(&conts[o2], conts[h][0]) && point_in(&conts[o], conts[o2][0]))
-                })
-                .collect();
-            let mut flat: Vec<f64> = vec![];
-            let mut idx: Vec<u32> = vec![];
-            let mut hole_starts = vec![];
-            for p in &conts[o] {
-                flat.extend([p[0] as f64, p[1] as f64]);
-            }
-            for k in 0..conts[o].len() as u32 {
-                idx.push(starts[o] + k);
-            }
-            for &h in &holes {
-                hole_starts.push(idx.len());
-                for p in &conts[h] {
-                    flat.extend([p[0] as f64, p[1] as f64]);
-                }
-                for k in 0..conts[h].len() as u32 {
-                    idx.push(starts[h] + k);
-                }
-            }
-            let tris = earcutr::earcut(&flat, &hole_starts, 2).unwrap_or_default();
-            for t in tris.chunks(3) {
-                let (a, b, c) = (idx[t[0]], idx[t[1]], idx[t[2]]);
-                let (pa, pb, pc) = (m.pos[(base + a) as usize], m.pos[(base + b) as usize], m.pos[(base + c) as usize]);
-                let cr = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0]);
-                if cr >= 0.0 {
-                    m.faces.push(vec![base + a, base + b, base + c]);
-                } else {
-                    m.faces.push(vec![base + a, base + c, base + b]);
-                }
-            }
+        x += adv;
+    }
+    let co: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, 0.0]).collect();
+    for t in ig_bm::scanfill::triangle_fill(&co, &edges, [0.0, 0.0, 1.0]) {
+        let (a, b, c) = (m.pos[t[0]], m.pos[t[1]], m.pos[t[2]]);
+        let cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if cr >= 0.0 {
+            m.faces.push(vec![t[0] as u32, t[1] as u32, t[2] as u32]);
+        } else {
+            m.faces.push(vec![t[0] as u32, t[2] as u32, t[1] as u32]);
         }
     }
     m
 }
-
 
 type V3f = [f64; 3];
 fn vsub(a: V3f, b: V3f) -> V3f {
@@ -304,6 +268,71 @@ pub fn remesh_fill(text: &Mesh, res: f64) -> Mesh {
         if f.iter().all(|&i| (i as usize) < keep.len() && keep[i as usize]) {
             out.faces.push(f.iter().map(|&i| map[i as usize]).collect());
         }
+    }
+    let nb = out.faces.len();
+    let o2 = clean_remesh(out);
+    if std::env::var("BDBG").is_ok() { eprintln!("clean_remesh {} -> {} faces", nb, o2.faces.len()); }
+    o2
+}
+
+/// The dualcon port lacks Blender's hole-patching pass, so a few thin spots come out as collapsed (coincident vertices) or folded quads:
+/// weld coincident vertices, drop degenerate quads, re-orient downward quads (open dualcon paths flip the inside/outside parity of later cells; the kept shell faces +z), drop unused vertices
+fn clean_remesh(m: Mesh) -> Mesh {
+    use crate::dhash::HashMap;
+    let mut key: HashMap<[i64; 3], u32> = HashMap::default();
+    let mut remap = vec![0u32; m.pos.len()];
+    let mut w = Mesh::new();
+    for (i, p) in m.pos.iter().enumerate() {
+        let k = [(p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64, (p[2] * 1e5).round() as i64];
+        remap[i] = *key.entry(k).or_insert_with(|| {
+            w.pos.push(*p);
+            (w.pos.len() - 1) as u32
+        });
+    }
+    let mut faces = vec![];
+    for f in &m.faces {
+        let mut g: Vec<u32> = vec![];
+        for &i in f {
+            let v = remap[i as usize];
+            if g.last() != Some(&v) {
+                g.push(v);
+            }
+        }
+        if g.len() > 1 && g[0] == *g.last().unwrap() {
+            g.pop();
+        }
+        if g.len() < 3 {
+            continue;
+        }
+        let mut seen = g.clone();
+        seen.sort();
+        seen.dedup();
+        if seen.len() != g.len() {
+            continue;
+        }
+        w.faces.push(g.clone());
+        let n = bpyops::face_normal(&w, &g);
+        w.faces.pop();
+        if n[2] == 0.0 {
+            continue;
+        }
+        if n[2] < 0.0 {
+            g.reverse();
+        }
+        faces.push(g);
+    }
+    let mut used = vec![u32::MAX; w.pos.len()];
+    let mut out = Mesh::new();
+    for f in &faces {
+        let mut nf = vec![];
+        for &i in f {
+            if used[i as usize] == u32::MAX {
+                used[i as usize] = out.pos.len() as u32;
+                out.pos.push(w.pos[i as usize]);
+            }
+            nf.push(used[i as usize]);
+        }
+        out.faces.push(nf);
     }
     out
 }
@@ -564,6 +593,21 @@ impl Factory for Balloon {
         let mut a = Asset::default();
         let b = m.bounds();
         a.mesh(m, &material, Some(b));
+        // Blender re-runs python's own cloth_sim + the post steps at render time (sidecar job, tools/cloth_jobs.py)
+        let mut r = inst_rng(self.fs, inst);
+        let (tension, pressure) = (r.uniform(0.0, 5.0), r.uniform(10.0, 20.0));
+        a.cloth.push(ClothJob {
+            target: 0,
+            pre,
+            collide: vec![],
+            kwargs: json!({"tension_stiffness": tension, "gravity": 0, "use_pressure": true, "uniform_pressure_force": pressure, "vertex_group_mass": "pin"}),
+            end_frame: 50,
+            subsurf: 1,
+            pin: vec![],
+            z_from: None,
+            build: None,
+            post: Some(json!({"scale": self.rel_scale, "rot": [std::f64::consts::FRAC_PI_2, 0.0, std::f64::consts::FRAC_PI_2], "displace": self.displace, "smooth": 5})),
+        });
         a
     }
 }
@@ -593,6 +637,49 @@ mod tests {
         eprintln!("surface dist mean {a} p95 {b} max {c}");
         let rm = remesh_fill(&m, 0.02);
         let sub = subdivide_vertical(&bpyops::solidify(&rm, 0.0819525420665741, 0.5), 8);
+        {
+            let (mut up, mut dn) = (0, 0);
+            for f in &rm.faces {
+                let n = bpyops::face_normal(&rm, f);
+                if n[2] > 0.0 { up += 1 } else { dn += 1 }
+            }
+            let mut k = 0;
+            for f in &rm.faces {
+                let n = bpyops::face_normal(&rm, f);
+                if n[2] <= 0.0 && k < 6 { k += 1; eprintln!("DOWN {:?} n {:?}", f.iter().map(|&i| rm.pos[i as usize]).collect::<Vec<_>>(), n); }
+            }
+            eprintln!("rm normals up {up} down {dn} bounds {:?}", rm.bounds());
+        }
+        {
+            let mut deg = 0;
+            let mut area = 0.0;
+            for f in &m.faces {
+                let (a, b, c) = (m.pos[f[0] as usize], m.pos[f[1] as usize], m.pos[f[2] as usize]);
+                let cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                if cr.abs() < 1e-7 { deg += 1; }
+                area += cr / 2.0;
+            }
+            let (mut ra, mut rn) = (0.0, 0);
+            for f in &rf { let (a, b, c) = (rp[f[0] as usize], rp[f[1] as usize], rp[f[2] as usize]); ra += ((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))/2.0; if f.len()!=3 {rn+=1;} }
+            eprintln!("text tris degenerate {deg} area {area} ref area {ra}");
+        }
+        if let Some((ip, if_)) = load(&format!("{dir}/003_object_modifier_apply_REMESH.case.json")) {
+            let p32: Vec<[f32; 3]> = ip.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+            let (v, q) = dualcon::dualcon(&p32, &if_, 2, 8, 0.9, 1.0);
+            let (mut dn, mut xs) = (0, vec![]);
+            for f in &q {
+                let ps: Vec<V3> = f.iter().map(|&i| [v[i as usize][0] as f64, v[i as usize][1] as f64, v[i as usize][2] as f64]).collect();
+                if ps.iter().all(|p| p[2].abs() < 0.01) {
+                    let mm = Mesh { pos: ps.clone(), faces: vec![vec![0, 1, 2, 3]], uv: vec![] };
+                    if bpyops::face_normal(&mm, &[0, 1, 2, 3])[2] <= 0.0 { dn += 1; xs.push(ps[0][0]); }
+                }
+            }
+            eprintln!("BLENDER-INPUT dualcon: {} quads, plane-down {dn} x range {:?}", q.len(), (xs.iter().cloned().fold(1e9, f64::min), xs.iter().cloned().fold(-1e9, f64::max)));
+        }
+        eprintln!("sub bounds {:?}", sub.bounds());
+        let bl0 = { std::env::set_var("REFSTUB", "2"); Balloon::new(0) };
+        let (p2, _) = bl0.pre_cloth(0);
+        eprintln!("pre_cloth bounds {:?} thickness {}", p2.bounds(), bl0.thickness);
         eprintln!("pre-cloth verts {} faces {}", sub.pos.len(), sub.faces.len());
         if let Some((sp, sf)) = load(&format!("{dir}/007_object_modifier_apply_CLOTH.case.json")) {
             let (a, b, c) = ig_kit::cloth::surface_distance(&sub.pos, &sub.faces, &sp, &sf);
