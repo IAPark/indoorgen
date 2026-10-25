@@ -15,6 +15,7 @@ fn main() {
             let all: Vec<f64> = i.lo.iter().chain(i.hi.iter()).cloned().chain(i.seat.iter().flatten().cloned()).collect();
             if all.iter().any(|x| !x.is_finite()) { bad += 1; }
             if let Some(s) = i.seat { seat_lo = seat_lo.min(s[2]); seat_hi = seat_hi.max(s[2]); }
+            if std::env::var("VERBOSE").is_ok() { println!("  {:?} av{a} {:?} top {:.2} seat {:?} feety {:?}", k, ig_people::body::avatar_name(a), i.hi[2], i.seat.map(|s| (s[1]*100.0).round()/100.0), i.feet.map(|f| f[0][1])); }
             h_lo = h_lo.min(i.hi[2]); h_hi = h_hi.max(i.hi[2]);
             if let Some(f) = i.feet { fz_hi = fz_hi.max(f[0][2]).max(f[1][2]); }
             if let Some(h) = i.hands { hz.0 = hz.0.min(h[0][2].min(h[1][2])); hz.1 = hz.1.max(h[0][2].max(h[1][2])); }

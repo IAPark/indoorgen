@@ -7,7 +7,7 @@ PY=${RB_PY:-$HOME/work/infinigen-ref/.venv/bin/python}
 HERE=$(cd "$(dirname "$0")" && pwd)
 BASE=https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/master/Assets/Avatars
 LIST="Female_Adult_01 Female_Adult_02 Female_Adult_04 Female_Adult_05 Female_Adult_07 Female_Adult_09 Female_Adult_11 Female_Adult_14 Female_Adult_17
-Male_Adult_01 Male_Adult_03 Male_Adult_05 Male_Adult_07 Male_Adult_09 Male_Adult_11 Male_Adult_13 Male_Adult_15 Male_Adult_17 Male_Adult_20
+Male_Adult_01 Male_Adult_03 Male_Adult_05 Male_Adult_07 Male_Adult_09 Male_Adult_11 Male_Adult_06 Male_Adult_13 Male_Adult_17 Male_Adult_20
 Business_Female_01 Business_Male_01 Female_Adult_13 Female_Adult_15 Male_Adult_02 Male_Adult_08"
 [ $# -gt 0 ] && LIST="$*"
 mkdir -p "$OUT"

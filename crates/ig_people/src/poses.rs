@@ -47,6 +47,7 @@ pub enum Anchor {
 
 pub struct Def {
     pub ops: HashMap<usize, Op>,
+    pub root_t: V,
     pub anchor: Anchor,
     pub hands: bool,
 }
@@ -80,11 +81,11 @@ impl<'a> B<'a> {
 
 /// build the joint operations of a pose. `org` = (x, y, z) of the final frame's origin in the avatar's rest body frame (for hand targets
 /// of standing poses, whose feet stay at the rest position).
-pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
+pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64>) -> Def {
     use PoseKind::*;
     let mut v = Var::new(seed);
     let mut b = B { rig, ops: HashMap::new() };
-    let pelvis = rig.rest(rig.id("Bip01 Pelvis"));
+    let pelvis = add(rig.rest(rig.id("Bip01 Pelvis")), [0.0, 0.0, root_z.unwrap_or(0.0)]);
     let at = |x: f64, y: f64, z: f64| add(org, [x, y, z]);
     // common head / neck variation
     let head = |b: &mut B, v: &mut Var, pitch: f64, yaw: f64| {
@@ -154,6 +155,15 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
             };
             for s in [-1.0, 1.0] {
                 let sp = spread + v.v(0.03);
+                if root_z.is_some() {
+                    // seat height given: legs by IK, ankles flat on the floor below / in front of the hips
+                    let fz = rig.rest(rig.id(&format!("Bip01 {} Foot", if s < 0.0 { "L" } else { "R" })))[2];
+                    let reach = if kind == SitRelaxed { 0.55 + v.v(0.1) } else { 0.40 + v.v(0.02) };
+                    let tgt = [pelvis[0] + s * (0.088 + sp * 0.55 * reach), pelvis[1] + reach, fz];
+                    b.side(s, "Thigh", Op::Ik { target: tgt, pole: d(s * 0.15, 0.4, 1.0) });
+                    b.side(s, "Foot", Op::World([if kind == SitRelaxed { 6.0 } else { 0.0 }, 0.0, -s * (8.0 + v.v(4.0))]));
+                    continue;
+                }
                 b.side(s, "Thigh", Op::Aim { dir: d(s * sp, 1.0, -0.04), twist: 0.0 });
                 let (cf, cy) = match kind {
                     SitRelaxed => (0.55 + v.v(0.2), 0.0),
@@ -261,7 +271,7 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V) -> Def {
         let c = curl * (1.0 + v.v(0.25));
         curl_hand(&mut b, side, c);
     }
-    Def { ops: b.ops, anchor, hands }
+    Def { ops: b.ops, root_t: [0.0, 0.0, root_z.unwrap_or(0.0)], anchor, hands }
 }
 
 /// relaxed finger curl (`c` degrees at the middle joints) on the rest-pose hand: axes come from the rest geometry (palm faces the body in the A pose)
@@ -311,7 +321,7 @@ pub struct Meas {
 }
 
 /// `skin`: skinned positions per part. Bones are looked up by name.
-pub fn measure(av: &Avatar, rig: &Rig, skin: &[(Vec<[f32; 3]>, Vec<[f32; 3]>)]) -> Meas {
+pub fn measure(av: &Avatar, rig: &Rig, skin: &[(Vec<[f32; 3]>, Vec<[f32; 3]>)], hip: [f64; 3]) -> Meas {
     let bl = |n: &str| rig.id(n);
     let foot_l = [bl("Bip01 L Foot"), bl("Bip01 L Toe0")];
     let foot_r = [bl("Bip01 R Foot"), bl("Bip01 R Toe0")];
@@ -348,7 +358,7 @@ pub fn measure(av: &Avatar, rig: &Rig, skin: &[(Vec<[f32; 3]>, Vec<[f32; 3]>)]) 
             if wsum(p, i, &foot_r) > 0.5 {
                 fr.push(q);
             }
-            if wsum(p, i, &pel) > 0.5 {
+            if wsum(p, i, &pel) > 0.5 && q[1] - hip[1] > -0.13 && q[1] - hip[1] < 0.03 {
                 pv.push(q);
             }
             if wsum(p, i, &hl) > 0.5 {

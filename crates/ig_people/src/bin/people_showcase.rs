@@ -29,8 +29,9 @@ fn main() {
         for (c0, &av) in avs.iter().enumerate() {
             let (r, c) = if byav { (c0, r0) } else { (r0, c0) };
             let t = Instant::now();
-            let info = pose_info(av, k);
-            let asset = build_person(av, k, seed + c0 as u64 + r0 as u64 * 7);
+            let sz: Option<f64> = arg("--seat").map(|s| s.parse().unwrap());
+            let info = match sz { Some(z) => pose_info_seat(av, k, z), None => pose_info(av, k) };
+            let asset = build_person_seat(av, k, seed + c0 as u64 + r0 as u64 * 7, sz);
             tb += t.elapsed().as_secs_f64();
             cnt += 1;
             let (x, y) = (c as f64 * dx, -(r as f64) * dy);

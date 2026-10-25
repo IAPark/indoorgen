@@ -63,3 +63,12 @@ pub fn pose_info(avatar: usize, kind: PoseKind) -> PoseInfo {
 pub fn build_person(avatar: usize, kind: PoseKind, seed: u64) -> ig_kit::api::Asset {
     body::build_person(avatar, kind, seed)
 }
+
+/// Sitting poses adapted to a seat of the given height (additive to the contract): legs are solved so the seat contact is at `seat_z`
+/// and the feet stay flat on the floor. Other poses ignore `seat_z`.
+pub fn pose_info_seat(avatar: usize, kind: PoseKind, seat_z: f64) -> PoseInfo {
+    body::pose_info_seat(avatar, kind, seat_z)
+}
+pub fn build_person_seat(avatar: usize, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> ig_kit::api::Asset {
+    body::build_person_seat(avatar, kind, seed, seat_z)
+}

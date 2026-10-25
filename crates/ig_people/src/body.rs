@@ -45,14 +45,44 @@ pub struct Posed {
 }
 
 pub fn pose_avatar(av: &Avatar, kind: PoseKind, seed: u64) -> Posed {
+    pose_avatar_seat(av, kind, seed, None)
+}
+
+/// like `pose_avatar`; with `seat_z` (sitting poses only) the legs are solved by IK so that the seat contact lies at that height with the
+/// feet flat on the floor (chairs / beds / sofas of different heights)
+pub fn pose_avatar_seat(av: &Avatar, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> Posed {
+    use PoseKind::*;
+    // default seat heights: dining/office chair, sofa, bed edge
+    let seat_z = match kind {
+        SitUpright => Some(seat_z.unwrap_or(0.45)),
+        SitRelaxed => Some(seat_z.unwrap_or(0.42)),
+        SitBedEdge => Some(seat_z.unwrap_or(0.50)),
+        _ => None,
+    };
+    let Some(target) = seat_z else { return pose_once(av, kind, seed, None) };
+    let mut r = 0.0;
+    let mut p = pose_once(av, kind, seed, Some(r));
+    for _ in 0..4 {
+        let err = target - p.info.seat.map(|s| s[2]).unwrap_or(target);
+        if err.abs() < 2e-3 {
+            break;
+        }
+        r += err;
+        p = pose_once(av, kind, seed, Some(r));
+    }
+    p
+}
+
+fn pose_once(av: &Avatar, kind: PoseKind, seed: u64, root_z: Option<f64>) -> Posed {
     let rig = Rig::new(av);
     let mut org = [0.0; 3];
     let mut out = None;
     for _pass in 0..3 {
-        let def = make_def(&rig, kind, seed, org);
-        let g = rig.eval(&def.ops, [0.0; 3]);
+        let def = make_def(&rig, kind, seed, org, root_z);
+        let g = rig.eval(&def.ops, def.root_t);
         let skin: Vec<_> = av.parts.iter().map(|p| skin_part(p, &g)).collect();
-        let m = measure(av, &rig, &skin);
+        let hip = g[rig.id("Bip01 Pelvis")].apply(rig.rest(rig.id("Bip01 Pelvis")));
+        let m = measure(av, &rig, &skin, hip);
         let (ox, oy, oz) = match def.anchor {
             Anchor::Feet => ((m.sole[0][0] + m.sole[1][0]) * 0.5, (m.sole[0][1] + m.sole[1][1]) * 0.5, m.zfoot),
             Anchor::Seat => (m.seat[0], m.seat[1], m.zfoot),
@@ -112,6 +142,21 @@ pub fn pose_info(avatar: usize, kind: PoseKind) -> PoseInfo {
     info
 }
 
+/// pose info for a sitting pose adapted to a seat of height `seat_z` (see `pose_avatar_seat`)
+pub fn pose_info_seat(avatar: usize, kind: PoseKind, seat_z: f64) -> PoseInfo {
+    match avatar_of(avatar) {
+        Some(av) => {
+            let mut i = pose_avatar_seat(&av, kind, 0, Some(seat_z)).info;
+            for k in 0..3 {
+                i.lo[k] -= 0.04;
+                i.hi[k] += 0.04;
+            }
+            i
+        }
+        None => pose_info(avatar, kind),
+    }
+}
+
 /// rough adult proportions, used when no avatar library is installed
 fn fallback_info(kind: PoseKind) -> PoseInfo {
     use PoseKind::*;
@@ -132,9 +177,14 @@ fn spec(cls: &str, av: &Avatar, p: &avatar::AvPart) -> serde_json::Value {
 
 /// Full posed, textured avatar mesh in the contract frame. Parts: body (skin + clothes), head, hair/opacity cards.
 pub fn build_person(avatar: usize, kind: PoseKind, seed: u64) -> ig_kit::api::Asset {
+    build_person_seat(avatar, kind, seed, None)
+}
+
+/// `build_person` with the seat height adapted (sitting poses; None = natural pose)
+pub fn build_person_seat(avatar: usize, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> ig_kit::api::Asset {
     let mut asset = ig_kit::api::Asset::default();
     let Some(av) = avatar_of(avatar) else { return asset };
-    let posed = pose_avatar(&av, kind, seed);
+    let posed = pose_avatar_seat(&av, kind, seed, seat_z);
     for (pi, p) in av.parts.iter().enumerate() {
         let cls = match p.kind {
             PartKind::Body => "people.cloth",
