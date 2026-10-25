@@ -79,6 +79,15 @@ impl<'a> B<'a> {
     }
 }
 
+/// legs straight below the hips (the biped's rest pose has the ankles ~14 cm behind the hips), feet flat, toes slightly out
+fn stand_legs(b: &mut B, v: &mut Var) {
+    for s in [-1.0, 1.0] {
+        b.side(s, "Thigh", Op::Aim { dir: d(s * (0.03 + v.v(0.01)), 0.02, -1.0), twist: 0.0 });
+        b.side(s, "Calf", Op::Aim { dir: d(s * 0.0, -0.03, -1.0), twist: 0.0 });
+        b.side(s, "Foot", Op::World([0.0, 0.0, -s * (6.0 + v.v(3.0))]));
+    }
+}
+
 /// build the joint operations of a pose. `org` = (x, y, z) of the final frame's origin in the avatar's rest body frame (for hand targets
 /// of standing poses, whose feet stay at the rest position).
 pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64>) -> Def {
@@ -98,6 +107,7 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
     let mut hands = false;
     match kind {
         Stand => {
+            stand_legs(&mut b, &mut v);
             b.rel("Spine1", [v.v(2.0) - 1.0, 0.0, v.v(3.0)]);
             b.rel("Spine2", [v.v(2.0), 0.0, v.v(3.0)]);
             head(&mut b, &mut v, 0.0, 0.0);
@@ -242,14 +252,16 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
         LeanCounter | StandAtSink | StandAtDesk | Reach => {
             hands = true;
             let (lean, hz, hy, hx, hp) = match kind {
-                LeanCounter => (14.0, 0.93, 0.40, 0.22, 0.0),
-                StandAtSink => (10.0, 0.95, 0.36, 0.13, 20.0),
-                StandAtDesk => (6.0, 0.78, 0.34, 0.16, 12.0),
-                _ => (-4.0, 1.65, 0.50, 0.12, -10.0),
+                LeanCounter => (20.0, 0.93, 0.38, 0.24, 0.0),
+                StandAtSink => (14.0, 0.95, 0.31, 0.13, 20.0),
+                StandAtDesk => (8.0, 0.78, 0.30, 0.17, 12.0),
+                _ => (-3.0, 1.65, 0.50, 0.12, -10.0),
             };
-            b.rel("Pelvis", [-lean * 0.35, 0.0, 0.0]);
-            b.rel("Spine1", [-lean * 0.35, 0.0, 0.0]);
-            b.rel("Spine2", [-lean * 0.30, 0.0, 0.0]);
+            // hip hinge: legs upright, the trunk leans
+            stand_legs(&mut b, &mut v);
+            b.rel("Pelvis", [-lean * 0.55, 0.0, 0.0]);
+            b.rel("Spine1", [-lean * 0.25, 0.0, 0.0]);
+            b.rel("Spine2", [-lean * 0.20, 0.0, 0.0]);
             head(&mut b, &mut v, hp, 0.0);
             for s in [-1.0, 1.0] {
                 if kind == Reach && s < 0.0 {
