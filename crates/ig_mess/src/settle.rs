@@ -142,7 +142,7 @@ impl RoomWorld {
             let mut cs = vec![];
             for h in &it.hulls {
                 if let Some(b) = ColliderBuilder::convex_hull(&h.iter().map(|&q| v(q)).collect::<Vec<_>>()) {
-                    cs.push(w.insert_collider(b.density(it.density).friction(0.7).restitution(0.05).contact_skin(0.001), Some(bh)));
+                    cs.push(w.insert_collider(b.density(it.density).friction(0.8).restitution(0.0), Some(bh)));
                 }
             }
             handles.push((bh, cs));
@@ -150,7 +150,17 @@ impl RoomWorld {
         w.integration_parameters.dt = 1.0 / 60.0;
         for step in 0..max_steps {
             w.step();
-            if step % 10 == 9 && handles.iter().all(|(b, _)| w.bodies[*b].is_sleeping()) {
+            if step % 60 == 59 && std::env::var_os("MESSDBG").is_some() {
+                let mut v: Vec<(f64, usize)> = handles.iter().enumerate().map(|(i, (b, _))| (w.bodies[*b].linvel().length() + 0.1 * w.bodies[*b].angvel().length(), i)).collect();
+                v.sort_by(|a, b| b.partial_cmp(a).unwrap());
+                eprintln!("MESSDBG step {step} fastest {:?}", &v[..v.len().min(3)]);
+                let b = &w.bodies[handles[v[0].1].0];
+                eprintln!("   body {} pos {:?} up_z {:.3} lin {:?} ang {:?} sleeping {} n_colliders {}", v[0].1, b.translation(), mat_of(b.position())[2][2], b.linvel(), b.angvel(), b.is_sleeping(), b.colliders().len());
+            }
+            if step % 10 == 9 && step > 30 && handles.iter().all(|(b, _)| w.bodies[*b].is_sleeping() || (w.bodies[*b].linvel().length() + 0.1 * w.bodies[*b].angvel().length()) < 0.03) {
+                if std::env::var_os("MESSDBG").is_some() {
+                    eprintln!("MESSDBG settle stopped after {step} steps");
+                }
                 break;
             }
         }
@@ -208,5 +218,41 @@ impl RoomWorld {
             out.push(rest);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn frustum(r0: f64, r1: f64, h: f64, n: usize) -> Hull {
+        let mut p = vec![];
+        for i in 0..n {
+            let a = i as f64 / n as f64 * std::f64::consts::TAU;
+            p.push([r0 * a.cos(), r0 * a.sin(), 0.0]);
+            p.push([r1 * a.cos(), r1 * a.sin(), h]);
+        }
+        p
+    }
+    #[test]
+    fn rest_on_plane() {
+        // a slab (box) floor like the room floors, plus a frustum cup and a flat book
+        let floor = Static::Mesh {
+            verts: vec![[-5.0, -5.0, 0.0], [5.0, -5.0, 0.0], [5.0, 5.0, 0.0], [-5.0, 5.0, 0.0]],
+            tris: vec![[0, 1, 2], [0, 2, 3]],
+        };
+        let mut w = RoomWorld::new(&[floor]);
+        let items = vec![
+            BodyIn { hulls: vec![frustum(0.04, 0.05, 0.1, 24)], t: [0.0, 0.0, 0.02], yaw: 0.0, tilt: [0.0; 2], density: 400.0 },
+            BodyIn { hulls: vec![vec![[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.3, 0.0], [0.2, 0.3, 0.0], [0.0, 0.0, 0.03], [0.2, 0.0, 0.03], [0.0, 0.3, 0.03], [0.2, 0.3, 0.03]]], t: [1.0, 0.0, 0.02], yaw: 0.3, tilt: [0.0; 2], density: 400.0 },
+        ];
+        let mut items = items;
+        items.push(BodyIn { hulls: vec![frustum(0.04, 0.05, 0.1, 24)], t: [-1.0, 0.0, 0.06], yaw: 0.0, tilt: [1.57, 0.0], density: 400.0 });
+        items.push(BodyIn { hulls: vec![frustum(0.04, 0.05, 0.1, 24)], t: [-2.0, 0.0, 0.06], yaw: 0.0, tilt: [0.5, 0.0], density: 400.0 });
+        for steps in [60, 120, 240, 480] {
+            let mut w2 = RoomWorld::new(&[Static::Mesh { verts: vec![[-5.0, -5.0, 0.0], [5.0, -5.0, 0.0], [5.0, 5.0, 0.0], [-5.0, 5.0, 0.0]], tris: vec![[0, 1, 2], [0, 2, 3]] }]);
+            let r = w2.settle(&items, steps);
+            println!("steps {steps}: {:?}", r.iter().map(|x| (x.speed, x.gap, x.m[2][3])).collect::<Vec<_>>());
+        }
+        let _ = &mut w;
     }
 }

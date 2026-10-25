@@ -7,6 +7,7 @@
 //! All randomness comes from `MessCfg::rng(stream)` so results are deterministic per (scene seed, level, stream).
 pub mod check;
 pub mod clutter;
+pub mod garment;
 pub mod settle;
 pub mod states;
 

@@ -2,6 +2,7 @@
 //! Runs after the furniture visuals: for every room that holds furniture it picks items per room type and level, places them on the
 //! floor (near beds, sofas, chairs, desks, away from doors) and on tabletop-like surfaces found in the final furniture meshes, settles
 //! them with rapier against the furniture, and adds the survivors to the scene.
+use crate::garment;
 use crate::settle::{self, BodyIn, Hull, RoomWorld, Static};
 use crate::MessCfg;
 use ig_core::mesh::{Mat4, Mesh, Scene, V3};
@@ -47,6 +48,9 @@ const FLOOR: &[Spec] = &[
     Spec { class: "CanFactory", w: [0.3, 0.7, 1.0, 0.0, 0.3, 0.3], max_xy: 0.15, max_z: 0.25 },
     Spec { class: "BottleFactory", w: [0.3, 0.7, 1.0, 0.3, 0.3, 0.3], max_xy: 0.15, max_z: 0.4 },
     Spec { class: "CupFactory", w: [0.5, 0.5, 0.3, 0.0, 0.0, 0.3], max_xy: 0.2, max_z: 0.25 },
+    // dropped clothes: cloth jobs (re-simulated in Blender at render time), height-field drape as the default mesh
+    Spec { class: "ShirtFactory", w: [3.0, 1.0, 0.0, 1.5, 0.0, 1.0], max_xy: 1.4, max_z: 0.3 },
+    Spec { class: "PantsFactory", w: [2.0, 0.7, 0.0, 1.0, 0.0, 0.7], max_xy: 1.4, max_z: 0.3 },
 ];
 
 /// floor clutter per m^2 of room floor at level 1, per room type [bedroom, living, kitchen, bath, dining, other]
@@ -136,6 +140,11 @@ struct Item {
     hi: V3,
     body: BodyIn,
     floor: bool,
+    garment: bool,
+    drop_t: V3,
+    drop_yaw: f64,
+    /// free height needed above the drop spot
+    head: f64,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -159,10 +168,66 @@ fn cup_has_handle(fseed: u64) -> bool {
     }
 }
 
+/// A well-conditioned point set for the convex hull of a (round, high-poly) part: extreme points along ~96 directions plus a snapped,
+/// subsampled bottom ring. Hulls of raw dense vertices have thousands of near-coplanar facets, and the contact manifold then rocks on a
+/// single tiny facet forever; with few large facets the item comes to rest.
+fn simplify_hull(pos: &[V3]) -> Hull {
+    if pos.len() <= 16 {
+        return pos.to_vec();
+    }
+    let mut out: Hull = vec![];
+    let n = 96;
+    let ga = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+    let mut used = std::collections::BTreeSet::new();
+    for i in 0..n {
+        let z = 1.0 - 2.0 * (i as f64 + 0.5) / n as f64;
+        let r = (1.0 - z * z).sqrt();
+        let d = [r * (ga * i as f64).cos(), r * (ga * i as f64).sin(), z];
+        let mut best = (f64::MIN, 0usize);
+        for (k, p) in pos.iter().enumerate() {
+            let v = p[0] * d[0] + p[1] * d[1] + p[2] * d[2];
+            if v > best.0 {
+                best = (v, k);
+            }
+        }
+        if used.insert(best.1) {
+            out.push(pos[best.1]);
+        }
+    }
+    let minz = pos.iter().map(|p| p[2]).fold(f64::MAX, f64::min);
+    let mut ring: Vec<V3> = pos.iter().filter(|p| p[2] < minz + 0.0007).map(|p| [p[0], p[1], minz]).collect();
+    if ring.len() > 3 {
+        let c = [ring.iter().map(|p| p[0]).sum::<f64>() / ring.len() as f64, ring.iter().map(|p| p[1]).sum::<f64>() / ring.len() as f64];
+        ring.sort_by(|a, b| (a[1] - c[1]).atan2(a[0] - c[0]).partial_cmp(&(b[1] - c[1]).atan2(b[0] - c[0])).unwrap());
+        let step = (ring.len() / 20).max(1);
+        out.extend(ring.iter().step_by(step).copied());
+    } else {
+        out.extend(ring);
+    }
+    out
+}
+
 /// Build one clutter asset from a fresh factory seed. `want_handle`: Some(true) only handled cups, Some(false) only plain ones.
 fn build_item(rng: &mut Rng, spec: &'static Spec, cup_handle: Option<bool>) -> Option<Item> {
     let mut fseed = rng.randint(0, 1_000_000) as u64;
     let iseed = rng.randint(0, 1_000_000) as u64;
+    if spec.class == "ShirtFactory" || spec.class == "PantsFactory" {
+        let mut gr = Rng::seeded(fseed);
+        let kind = if spec.class == "ShirtFactory" { garment::Kind::Shirt } else { garment::Kind::Pants };
+        let mut g = garment::make(&mut gr, kind);
+        garment::crumple(&mut g.mesh, &mut gr, 1.0);
+        let (mut lo, mut hi) = g.mesh.bounds();
+        for q in &mut g.mesh.pos {
+            q[2] -= lo[2];
+        }
+        hi[2] -= lo[2];
+        lo[2] = 0.0;
+        let hull: Hull = (0..8).map(|i| [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]).collect();
+        let mut asset = Asset::default();
+        asset.parts.push(ig_kit::api::Part { mesh: g.mesh, mat: g.mat, col: None });
+        let body = BodyIn { hulls: vec![hull.clone()], t: [0.0; 3], yaw: 0.0, tilt: [0.0; 2], density: 100.0 };
+        return Some(Item { class: spec.class, asset, hulls: vec![hull], lo, hi, body, floor: true, garment: true, drop_t: [0.0; 3], drop_yaw: 0.0, head: 0.45 });
+    }
     if spec.class == "CupFactory" {
         // cups with a handle run an exact boolean (~1.7 s): redraw until the requested kind
         let want = cup_handle.unwrap_or(false);
@@ -227,8 +292,7 @@ fn build_item(rng: &mut Rng, spec: &'static Spec, cup_handle: Option<bool>) -> O
         if p.mesh.pos.len() < 4 {
             continue;
         }
-        let stride = (p.mesh.pos.len() / 800).max(1);
-        let pts: Hull = p.mesh.pos.iter().step_by(stride).copied().collect();
+        let pts = simplify_hull(&p.mesh.pos);
         if settle::hull_shape(&pts).is_some() {
             hulls.push(pts);
         }
@@ -237,7 +301,8 @@ fn build_item(rng: &mut Rng, spec: &'static Spec, cup_handle: Option<bool>) -> O
         return None;
     }
     let body = BodyIn { hulls: hulls.clone(), t: [0.0; 3], yaw: 0.0, tilt: [0.0; 2], density: 400.0 };
-    Some(Item { class: spec.class, asset, hulls, lo, hi, body, floor: false })
+    let head = hi[2] - lo[2] + 0.06;
+    Some(Item { class: spec.class, asset, hulls, lo, hi, body, floor: false, garment: false, drop_t: [0.0; 3], drop_yaw: 0.0, head })
 }
 
 pub fn apply(scene: &mut Scene, state: &State, _visuals: &std::collections::HashMap<String, Asset>, rooms: &[(String, ig_core::shp::G)], cfg: &MessCfg) {
@@ -362,15 +427,41 @@ impl Room<'_> {
                     continue;
                 }
             }
-            if self.world.ray([px, py, pz + 0.004], [0.0, 0.0, 1.0], hgt + 0.06).is_some() {
+            if self.world.ray([px, py, pz + 0.004], [0.0, 0.0, 1.0], it.head.max(hgt + 0.06)).is_some() {
                 continue;
+            }
+            if it.garment {
+                // the whole outline must lie on open floor: nothing within 0.4 m above any sample, floor level below it
+                let rm = rz(yaw);
+                let pts = &it.asset.parts[0].mesh.pos;
+                let mut open = true;
+                for q in pts.iter().step_by((pts.len() / 60).max(1)) {
+                    let (lx, ly) = (q[0] - cx, q[1] - cy);
+                    let (wx, wy) = (px + rm[0][0] * lx + rm[0][1] * ly, py + rm[1][0] * lx + rm[1][1] * ly);
+                    if self.world.ray([wx, wy, pz + 0.004], [0.0, 0.0, 1.0], 0.4).is_some() || !in_poly([wx, wy], self.poly) || poly_edge_dist([wx, wy], self.poly) < 0.15 {
+                        open = false;
+                        break;
+                    }
+                    match self.world.ray([wx, wy, pz + 0.1], [0.0, 0.0, -1.0], 0.3) {
+                        Some(t) if (t - 0.1).abs() < 0.04 => {}
+                        _ => {
+                            open = false;
+                            break;
+                        }
+                    }
+                }
+                if !open {
+                    continue;
+                }
             }
             // asset origin so that the local bbox centre sits at p, bottom 12 mm above the surface
             let rm = rz(yaw);
             let t = [px - (rm[0][0] * cx + rm[0][1] * cy), py - (rm[1][0] * cx + rm[1][1] * cy), pz + 0.012];
             it.body.t = t;
             it.body.yaw = yaw;
-            it.body.tilt = if floor && rng.f64() < 0.25 { [rng.uniform(-0.25, 0.25), rng.uniform(-0.25, 0.25)] } else { [0.0; 2] };
+            it.drop_t = t;
+            it.drop_yaw = yaw;
+            it.body.tilt = if floor && !it.garment && rng.f64() < 0.25 { [rng.uniform(-0.25, 0.25), rng.uniform(-0.25, 0.25)] } else { [0.0; 2] };
             let pose = settle::pose_of(t, yaw, it.body.tilt);
             let shapes: Vec<(Pose, SharedShape)> = it.hulls.iter().filter_map(|h| settle::hull_shape(h).map(|s| (pose, s))).collect();
             let mut lo = [f64::MAX; 3];
@@ -514,43 +605,54 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
     let mut room = Room { poly, bbox: [bx0, by0, bx1, by1], floor_z, doors, obstacles, surf_tris, cum, world, placed: vec![] };
     let mut rng = cfg.rng(&format!("clutter.{rname}"));
 
-    // slow assets (pillow ~2.5 s, cup with a handle ~1.7 s) are built on their own threads while the cheap ones are placed
+    // candidates are drawn first (deterministic), built in parallel, then placed in order until the targets are met.
+    // The two slow assets (pillow ~2.5 s, cup with a handle ~1.7 s) are at most one each per room and come first.
+    struct Cand {
+        spec: &'static Spec,
+        floor: bool,
+        seed: u64,
+        handle: Option<bool>,
+    }
     let mut srng = cfg.rng(&format!("clutter.slow.{rname}"));
-    let want_pillow = FLOOR[2].w[slot] > 0.0 && n_floor_target >= 2 && srng.f64() < (0.4 + cfg.level * 0.6).min(1.0);
+    let want_pillow = FLOOR.iter().find(|s| s.class == "PillowFactory").unwrap().w[slot] > 0.0 && n_floor_target >= 2 && srng.f64() < (0.4 + cfg.level * 0.6).min(1.0);
     let want_cup = SURFACE[0].w[slot] > 0.0 && n_surf_target >= 2 && srng.f64() < 0.8;
-    let (mut r_pillow, mut r_cup) = (cfg.rng(&format!("clutter.pillow.{rname}")), cfg.rng(&format!("clutter.cup.{rname}")));
-    let tb = std::time::Instant::now();
-    let slow_handle = std::thread::scope(|sc| {
-        let hp = sc.spawn(|| if want_pillow { build_item(&mut r_pillow, find_spec(FLOOR, "PillowFactory"), None) } else { None });
-        let hc = sc.spawn(|| if want_cup { build_item(&mut r_cup, find_spec(SURFACE, "CupFactory"), Some(true)) } else { None });
-        // cheap items are built on this thread meanwhile
-        let mut cheap: Vec<Item> = vec![];
-        for (floor, n_want) in [(false, n_surf_target), (true, n_floor_target)] {
-            let mut got = 0;
-            let mut guard = 0;
-            while got < n_want && guard < n_want * 12 + 12 {
-                guard += 1;
-                let specs = if floor { FLOOR } else { SURFACE };
-                let Some(spec) = pick(&mut rng, specs, slot) else { break };
-                if spec.class == "PillowFactory" {
-                    continue; // placed from the slow slot
-                }
-                let Some(mut it) = build_item(&mut rng, spec, Some(false)) else { continue };
-                stats.tried += 1;
-                if room.place(&mut rng, &mut it, floor) {
-                    cheap.push(it);
-                    got += 1;
-                }
+    let mut cands: Vec<Cand> = vec![];
+    if want_cup {
+        cands.push(Cand { spec: find_spec(SURFACE, "CupFactory"), floor: false, seed: srng.next_u64(), handle: Some(true) });
+    }
+    if want_pillow {
+        cands.push(Cand { spec: find_spec(FLOOR, "PillowFactory"), floor: true, seed: srng.next_u64(), handle: None });
+    }
+    for (floor, n_want) in [(false, n_surf_target), (true, n_floor_target)] {
+        for _ in 0..(n_want * 3 / 2 + 3) {
+            let Some(spec) = pick(&mut rng, if floor { FLOOR } else { SURFACE }, slot) else { break };
+            if spec.class == "PillowFactory" {
+                continue;
             }
+            cands.push(Cand { spec, floor, seed: rng.next_u64(), handle: Some(false) });
         }
-        (cheap, hp.join().unwrap(), hc.join().unwrap())
-    });
-    let (mut items, pillow, cup) = slow_handle;
-    for (opt, floor) in [(pillow, true), (cup, false)] {
-        if let Some(mut it) = opt {
+    }
+    let tb = std::time::Instant::now();
+    let mut built: Vec<Option<Item>> = {
+        use rayon::prelude::*;
+        cands.par_iter().map(|c| build_item(&mut Rng::seeded(c.seed), c.spec, c.handle)).collect()
+    };
+    if dbg {
+        eprintln!("MESSDBG {rname} built {} candidates in {:.2}s", cands.len(), tb.elapsed().as_secs_f64());
+    }
+    let mut items: Vec<Item> = vec![];
+    for floor in [false, true] {
+        let n_want = if floor { n_floor_target } else { n_surf_target };
+        let mut got = 0;
+        for (c, it) in cands.iter().zip(built.iter_mut()) {
+            if c.floor != floor || got >= n_want {
+                continue;
+            }
+            let Some(mut it) = it.take() else { continue };
             stats.tried += 1;
             if room.place(&mut rng, &mut it, floor) {
                 items.push(it);
+                got += 1;
             }
         }
     }
@@ -559,21 +661,40 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
         return stats;
     }
     let mut world = room.world;
-    let bodies: Vec<BodyIn> = items.iter_mut().map(|i| std::mem::replace(&mut i.body, BodyIn { hulls: vec![], t: [0.0; 3], yaw: 0.0, tilt: [0.0; 2], density: 1.0 })).collect();
+    let rigid: Vec<usize> = (0..items.len()).filter(|&i| !items[i].garment).collect();
+    let bodies: Vec<BodyIn> = rigid.iter().map(|&i| std::mem::replace(&mut items[i].body, BodyIn { hulls: vec![], t: [0.0; 3], yaw: 0.0, tilt: [0.0; 2], density: 1.0 })).collect();
+    if dbg {
+        for (k, &i) in rigid.iter().enumerate() {
+            eprintln!("MESSDBG body {k}: {} floor={} t={:.2?}", items[i].class, items[i].floor, bodies[k].t);
+        }
+    }
     let ts = std::time::Instant::now();
-    let rest = world.settle(&bodies, 480);
+    let rest_rigid = world.settle(&bodies, 480);
     if dbg {
         eprintln!("MESSDBG {rname} build+place {t_build:.2}s settle {:.2}s total {:.2}s", ts.elapsed().as_secs_f64(), t_room.elapsed().as_secs_f64());
     }
-    for (idx, (it, r)) in items.iter().zip(&rest).enumerate() {
-        let m = Mat4(r.m);
-        let c = m.apply([(it.lo[0] + it.hi[0]) / 2.0, (it.lo[1] + it.hi[1]) / 2.0, (it.lo[2] + it.hi[2]) / 2.0]);
-        let bad = r.pen_static > 0.008 || r.pen_item > 0.008 || r.speed > 0.5 || r.gap > 0.01 || !in_poly([c[0], c[1]], poly) || poly_edge_dist([c[0], c[1]], poly) < 0.1;
-        if bad {
-            if dbg {
-                eprintln!("  removed {} lo {:?} hi {:?} t {:?} yaw {:.2} tilt {:?} nh {} m {:?}", it.class, it.lo, it.hi, bodies[idx].t, bodies[idx].yaw, bodies[idx].tilt, it.hulls.len(), r.m);
-                eprintln!("  removed {} pen_static {:.4} pen_item {:.4} speed {:.3} gap {:.3} floor {}", it.class, r.pen_static, r.pen_item, r.speed, r.gap.min(9.0), it.floor);
+    let mut rest: Vec<Option<crate::settle::Rest>> = vec![None; items.len()];
+    for (k, &i) in rigid.iter().enumerate() {
+        rest[i] = Some(rest_rigid[k].clone());
+    }
+    for (idx, it) in items.iter().enumerate() {
+        let (m, ok) = match &rest[idx] {
+            Some(r) => {
+                let m = Mat4(r.m);
+                let c = m.apply([(it.lo[0] + it.hi[0]) / 2.0, (it.lo[1] + it.hi[1]) / 2.0, (it.lo[2] + it.hi[2]) / 2.0]);
+                let bad = r.pen_static > 0.008 || r.pen_item > 0.008 || r.speed > 0.5 || r.gap > 0.01 || !in_poly([c[0], c[1]], poly) || poly_edge_dist([c[0], c[1]], poly) < 0.1;
+                if bad && dbg {
+                    eprintln!("  removed {} pen_static {:.4} pen_item {:.4} speed {:.3} gap {:.3} floor {}", it.class, r.pen_static, r.pen_item, r.speed, r.gap.min(9.0), it.floor);
+                }
+                (m, !bad)
             }
+            None => {
+                // garment: stays where it was placed (cloth job drops it from 0.15 m)
+                let t = it.drop_t;
+                (Mat4(settle::mat_of(&settle::pose_of(t, it.drop_yaw, [0.0; 2]))), true)
+            }
+        };
+        if !ok {
             stats.removed += 1;
             continue;
         }
@@ -582,11 +703,59 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
         } else {
             stats.surface += 1;
         }
+        let nm_base = format!("mess_{rname}_{idx}_{}", it.class);
+        if it.garment {
+            let part = &it.asset.parts[0];
+            let mut pre = part.mesh.clone();
+            pre.transform(&m);
+            // pre-sim state: 0.15 m above the support
+            let lift = 0.15 - 0.012;
+            for q in &mut pre.pos {
+                q[2] += lift;
+            }
+            // default mesh: height-field drape (each vertex lands on whatever lies below it)
+            let mut draped = part.mesh.clone();
+            draped.transform(&m);
+            let mut rr = cfg.rng(&format!("drape.{rname}.{idx}"));
+            let wob = rr.uniform(0.0, 6.28);
+            for q in &mut draped.pos {
+                let local_z = q[2] - m.0[2][3];
+                let top = q[2] + 1.0;
+                let sz = world.ray([q[0], q[1], top], [0.0, 0.0, -1.0], 1.6).map_or(floor_z, |t| top - t);
+                q[2] = sz + local_z + 0.003 + 0.004 * (q[0] * 23.0 + wob).sin() * (q[1] * 19.0).sin();
+            }
+            let (glo, ghi) = pre.bounds();
+            let mut collide: Vec<String> = vec![format!("{rname}.floor")];
+            for n in &scene.nodes {
+                if n.class == "room" || n.name.starts_with("mess_") || n.mesh.is_empty() || n.class == "Door" || n.class == "Window" || n.class == "skirting" || n.class.contains("Light") {
+                    continue;
+                }
+                let (a, b) = n.mesh.bounds();
+                if a[0] > ghi[0] + 0.2 || b[0] < glo[0] - 0.2 || a[1] > ghi[1] + 0.2 || b[1] < glo[1] - 0.2 || a[2] > floor_z + 0.9 {
+                    continue;
+                }
+                if n.mesh.pos.len() > 120000 {
+                    continue;
+                }
+                collide.push(n.name.clone());
+            }
+            collide.truncate(8);
+            let name = format!("{nm_base}#0");
+            let faces = pre.faces.clone();
+            scene.cloth.push(serde_json::json!({
+                "kind": "cloth", "target": name, "verts": pre.pos.iter().map(|p| serde_json::json!([p[0], p[1], p[2]])).collect::<Vec<_>>(), "faces": faces,
+                "collide": collide, "kwargs": {"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}, "end_frame": 50,
+                "subsurf": 1, "pin": [], "build": null, "pose": Mat4::identity().0, "post": null, "z_from": null,
+            }));
+            let mi = scene.material(part.mat.clone());
+            scene.add_posed(&name, it.class, draped, mi, m.0);
+            continue;
+        }
         for (pi, part) in it.asset.parts.iter().enumerate() {
             let mut mesh: Mesh = part.mesh.clone();
             mesh.transform(&m);
             let mi = scene.material(part.mat.clone());
-            scene.add_posed(&format!("mess_{rname}_{idx}_{}#{pi}", it.class), it.class, mesh, mi, m.0);
+            scene.add_posed(&format!("{nm_base}#{pi}"), it.class, mesh, mi, m.0);
         }
     }
     stats

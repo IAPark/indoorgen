@@ -77,9 +77,22 @@ pub fn audit(scene: &Scene, rooms: &[(String, ig_core::shp::G)]) -> Report {
             if n.mesh.pos.len() < 4 {
                 continue;
             }
+            // large (cloth-like, non-convex) parts: one hull per 5 cm cell so a bridge over a step is not mistaken for penetration
+            let (a, b) = n.mesh.bounds();
+            if (b[0] - a[0]).max(b[1] - a[1]) > 0.3 && n.class.contains("Shirt") || n.class.contains("Pants") {
+                let mut cells: std::collections::BTreeMap<(i32, i32), Hull> = Default::default();
+                for p in &n.mesh.pos {
+                    cells.entry((((p[0] - a[0]) / 0.05) as i32, ((p[1] - a[1]) / 0.05) as i32)).or_default().push(*p);
+                }
+                for (_, h) in cells {
+                    if h.len() >= 4 {
+                        hs.push(h);
+                    }
+                }
+                continue;
+            }
             let stride = (n.mesh.pos.len() / 800).max(1);
             let h: Hull = n.mesh.pos.iter().step_by(stride).copied().collect();
-            // the lowest vertices decide the support: keep them in the sample
             hs.push(h);
         }
         hulls.push(hs);
@@ -88,6 +101,9 @@ pub fn audit(scene: &Scene, rooms: &[(String, ig_core::shp::G)]) -> Report {
     let res = world.audit(&hulls);
     for ((_, g), r) in groups.iter().zip(&res) {
         rep.items += 1;
+        if std::env::var_os("MESSDBG").is_some() && (r.pen_static > 0.01 || r.pen_item > 0.01 || r.gap > 0.01) {
+            eprintln!("  audit {} pen_static {:.4} pen_item {:.4} gap {:.3}", g[0].name, r.pen_static, r.pen_item, r.gap.min(9.0));
+        }
         rep.max_pen_furniture = rep.max_pen_furniture.max(r.pen_static);
         rep.max_pen_item = rep.max_pen_item.max(r.pen_item);
         if r.gap > 0.01 {
