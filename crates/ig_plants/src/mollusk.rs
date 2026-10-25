@@ -288,20 +288,26 @@ pub struct Snail {
     fs: u64,
 }
 
+/// SnailBaseFactory.create_asset + MolluskFactory.decorate_mollusk
+pub fn snail_final(maker: Maker, r: &mut Rng) -> Mesh {
+    let stage: i32 = std::env::var("MOLSTAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
+    let mut m = if stage < 0 { snail_mesh(maker, r) } else { snail_create_asset(maker, r) };
+    if stage >= 1 {
+        // decorate_mollusk: SOLIDIFY(0.005) then DISPLACE
+        m = books::solidify_simple(&m, 0.005, None);
+    }
+    if stage >= 2 {
+        let st = if r.choice_idx(2) == 0 { TexKind::Stucci(0) } else { TexKind::Marble(0, 0) };
+        let scale = r.log_uniform(0.1, 0.2);
+        displace(&mut m, &Tex::new(st, scale), 0.02, 0.0);
+    }
+    m
+}
+
 impl Factory for Snail {
     fn asset(&self, inst: u64) -> Asset {
         let mut r = inst_rng(self.fs, inst);
-        let stage: i32 = std::env::var("MOLSTAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
-        let mut m = if stage < 0 { snail_mesh(self.maker, &mut r) } else { snail_create_asset(self.maker, &mut r) };
-        if stage >= 1 {
-            // decorate_mollusk: SOLIDIFY(0.005) then DISPLACE
-            m = books::solidify_simple(&m, 0.005, None);
-        }
-        if stage >= 2 {
-            let st = if r.choice_idx(2) == 0 { TexKind::Stucci(0) } else { TexKind::Marble(0, 0) };
-            let scale = r.log_uniform(0.1, 0.2);
-            displace(&mut m, &Tex::new(st, scale), 0.02, 0.0);
-        }
+        let m = snail_final(self.maker, &mut r);
         let mat = mat("mollusk", [0.8, 0.7, 0.6], 0.5);
         let mut a = Asset::default();
         let b = m.bounds();

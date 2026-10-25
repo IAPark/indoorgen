@@ -348,7 +348,7 @@ pub fn scale_islands(m: &Mesh, tip: &[usize], s: f64) -> Mesh {
     o
 }
 
-/// TRIANGULATE (quads / ngons, min_vertices 4) as fans from the shortest-diagonal split (beauty is not reproduced)
+/// TRIANGULATE modifier (min_vertices 4): quads by SHORTEST_DIAGONAL (modifier default), n-gons by beauty
 pub fn triangulate(m: &Mesh) -> Mesh {
     let mut o = Mesh::new();
     o.pos = m.pos.clone();
@@ -356,8 +356,11 @@ pub fn triangulate(m: &Mesh) -> Mesh {
         if f.len() <= 3 {
             o.faces.push(f.clone());
         } else if f.len() == 4 {
+            // quad_method SHORTEST_DIAGONAL (the TRIANGULATE modifier default): l_v1 = corner 1, l_v2 = corner 2, l_v3 = corner 3, l_v4 = corner 0
             let c = |i: usize| { let p = m.pos[f[i] as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] };
-            if super::polyfill::quad_split_24_beauty([c(0), c(1), c(2), c(3)]) {
+            let sq = |a: [f32; 3], b: [f32; 3]| { let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; d[0] * d[0] + d[1] * d[1] + d[2] * d[2] };
+            let (d1, d2) = (sq(c(0), c(2)), sq(c(1), c(3)));
+            if (d2 - d1) > 0.0 {
                 o.faces.push(vec![f[0], f[1], f[2]]);
                 o.faces.push(vec![f[0], f[2], f[3]]);
             } else {

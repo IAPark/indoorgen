@@ -157,16 +157,52 @@ impl Asset {
         cabnodes::box_exact(lo, hi)
     }
 
+    /// placeholder box whose python bounds are plain float32 of the bounds (not built by new_bbox): Mirror, WallArt, PlantContainer, ...
+    pub fn bbox_geom_plain(&self) -> ObjGeom {
+        let (lo, hi) = self.bounds();
+        crate::geom::cuboid_py(f32v(lo), f32v(hi), 0, 0)
+    }
+
     pub fn bbox_geom(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
+        // python create_placeholder overrides build their box with assets.utils.object.new_bbox (float32 object scale / location, applied)
+        let (lo, hi) = crate::geomkit::new_bbox_f32(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
         crate::geom::cuboid_py(lo, hi, 0, 0)
     }
 
     /// bbox_mesh_from_hipoly(use_pholder=True): box_from_corners (the node-group cube; vertex/face layout variant 1)
     pub fn bbox_geom_corners(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
-        crate::geom::cuboid_py(lo, hi, 1, 0)
+        box_from_corners_geom(lo, hi)
     }
+}
+
+fn f32v(v: V3) -> V3 {
+    [v[0] as f32 as f64, v[1] as f32 as f64, v[2] as f32 as f64]
+}
+
+/// python bbox_from_mesh.box_from_corners in float32: cube of size (max-min), translated by mix(min, max, 0.5); vertex order x fastest
+pub fn box_from_corners_verts(lo: V3, hi: V3) -> [V3; 8] {
+    let (lo, hi) = ([lo[0] as f32, lo[1] as f32, lo[2] as f32], [hi[0] as f32, hi[1] as f32, hi[2] as f32]);
+    let size: [f32; 3] = std::array::from_fn(|k| hi[k] - lo[k]);
+    let half: [f32; 3] = std::array::from_fn(|k| size[k] * 0.5);
+    let c: [f32; 3] = std::array::from_fn(|k| lo[k] * 0.5 + hi[k] * 0.5);
+    std::array::from_fn(|i| std::array::from_fn(|k| {
+        let s = if (i >> k) & 1 == 0 { -half[k] } else { half[k] };
+        (s + c[k]) as f64
+    }))
+}
+
+/// box_from_corners mesh as the solver sees it: nodegroup cube, quads_convert_to_tris(BEAUTY) and canonical tags; vertex/face order exact
+pub fn box_from_corners_exact(lo: V3, hi: V3) -> cabnodes::ExactMesh {
+    let verts: Vec<V3> = box_from_corners_verts(lo, hi).to_vec();
+    let polys = triangulate_quads_beauty(&verts, &CUBE_QUADS_XFAST);
+    let names = canonical_names(&verts, &polys, &[]);
+    cabnodes::ExactMesh { verts, polys, names }
+}
+
+pub fn box_from_corners_geom(lo: V3, hi: V3) -> ObjGeom {
+    exact_geom(&box_from_corners_exact(lo, hi))
 }
 
 pub trait Factory {
@@ -193,7 +229,7 @@ pub trait Factory {
 /// bounding box placeholder of the final asset (uses the float32 exact mesh when the class is ported at topology level)
 pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
     if let Some((lo, hi)) = f.bounds_hint(inst) {
-        return crate::geom::cuboid_py(lo, hi, 1, 0);
+        return box_from_corners_geom(lo, hi);
     }
     if let Some(e) = f.exact(inst) {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -203,10 +239,10 @@ pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
                 hi[k] = hi[k].max(v[k]);
             }
         }
-        return crate::geom::cuboid_py(lo, hi, 1, 0);
+        return box_from_corners_geom(lo, hi);
     }
     let (lo, hi) = f.asset(inst).bounds();
-    crate::geom::cuboid_py(lo, hi, 1, 0)
+    box_from_corners_geom(lo, hi)
 }
 
 /// The asset scenes should use: the exact (python-matching) geometry when the class has one behind `Factory::exact`,
@@ -325,3 +361,134 @@ pub fn round_geom_f32(mut g: ObjGeom) -> ObjGeom {
     r(&mut g.hi);
     g
 }
+
+/// tagging.tag_canonical_surfaces on a triangle mesh: per face the "back.front.top.bottom" names (min/max x, max/min z, all vertices within
+/// isclose(atol = 0.01 * dimension)); `extra[i]` is appended (generator tags such as "support").
+pub fn canonical_names(verts: &[V3], polys: &[Vec<u32>], extra: &[String]) -> Vec<String> {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for v in verts {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
+    let close = |a: f64, b: f64, axis: usize| (a - b).abs() <= 0.01 * (hi[axis] - lo[axis]) + 1e-5 * b.abs();
+    let defs: [(&str, usize, bool); 4] = [("back", 0, false), ("front", 0, true), ("top", 2, true), ("bottom", 2, false)];
+    polys
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut parts: Vec<String> = vec![];
+            for (name, axis, is_max) in defs {
+                let t = if is_max { hi[axis] } else { lo[axis] };
+                if p.iter().all(|&v| close(verts[v as usize][axis], t, axis)) {
+                    parts.push(name.to_string());
+                }
+            }
+            if let Some(e) = extra.get(i) {
+                for s in e.split('.').filter(|s| !s.is_empty()) {
+                    parts.push(s.to_string());
+                }
+            }
+            parts.join(".")
+        })
+        .collect()
+}
+
+/// solver geometry for a vertex-order-exact python placeholder mesh (triangles, python face names); one box proxy per connected component
+pub fn exact_geom(e: &cabnodes::ExactMesh) -> ObjGeom {
+    let tags_of = |n: &str| -> u32 {
+        n.split('.')
+            .map(|s| match s {
+                "back" => BACK,
+                "front" => FRONT,
+                "top" => TOP,
+                "bottom" => BOTTOM,
+                "side" => SIDE,
+                "support" => SUPPORT,
+                _ => 0,
+            })
+            .fold(0, |a, b| a | b)
+    };
+    let mut tris = vec![];
+    for (p, n) in e.polys.iter().zip(e.names.iter()) {
+        for k in 1..p.len() - 1 {
+            tris.push(Tri { v: [e.verts[p[0] as usize], e.verts[p[k] as usize], e.verts[p[k + 1] as usize]], tags: tags_of(n) });
+        }
+    }
+    // connected components of the vertex graph
+    let mut comp: Vec<usize> = (0..e.verts.len()).collect();
+    fn find(c: &mut Vec<usize>, a: usize) -> usize {
+        let mut r = a;
+        while c[r] != r {
+            r = c[r];
+        }
+        let mut a = a;
+        while c[a] != r {
+            let n = c[a];
+            c[a] = r;
+            a = n;
+        }
+        r
+    }
+    for p in &e.polys {
+        for w in p.windows(2) {
+            let (a, b) = (find(&mut comp, w[0] as usize), find(&mut comp, w[1] as usize));
+            comp[a] = b;
+        }
+    }
+    let mut boxes: Vec<(usize, V3, V3)> = vec![];
+    for i in 0..e.verts.len() {
+        let r = find(&mut comp, i);
+        match boxes.iter_mut().find(|b| b.0 == r) {
+            Some(b) => {
+                for k in 0..3 {
+                    b.1[k] = b.1[k].min(e.verts[i][k]);
+                    b.2[k] = b.2[k].max(e.verts[i][k]);
+                }
+            }
+            None => boxes.push((r, e.verts[i], e.verts[i])),
+        }
+    }
+    let proxies = boxes.iter().map(|(_, a, b)| (Proxy::Box { center: [(a[0] + b[0]) / 2., (a[1] + b[1]) / 2., (a[2] + b[2]) / 2.], half: [(b[0] - a[0]) / 2., (b[1] - a[1]) / 2., (b[2] - a[2]) / 2.] }, u32::MAX)).collect();
+    ObjGeom::from_tris(tris, proxies).with_mesh_verts(e.verts.clone())
+}
+
+/// python `obj.rotation_euler.z += pi/2; butil.apply_transform(obj)` of a mesh (float32 mul_m4_v3 of the rotation matrix)
+pub fn rot_z90_f32(verts: &[V3]) -> Vec<V3> {
+    let m = crate::bl32::eul_to_mat3([0.0, 0.0, (std::f64::consts::FRAC_PI_2) as f32]);
+    verts
+        .iter()
+        .map(|v| {
+            let (x, y, z) = (v[0] as f32, v[1] as f32, v[2] as f32);
+            let r = |row: usize| -> f64 { (x * m[0][row] + y * m[1][row] + z * m[2][row]) as f64 };
+            [r(0), r(1), r(2)]
+        })
+        .collect()
+}
+
+/// quads of the blender cube primitive in `new_bbox_exact` vertex order (i = 4x + 2y + z), in blender's face order
+pub const CUBE_QUADS_ZFAST: [[u32; 4]; 6] = [[0, 1, 3, 2], [2, 3, 7, 6], [6, 7, 5, 4], [4, 5, 1, 0], [2, 6, 4, 0], [7, 3, 1, 5]];
+
+/// triangulate quads like the python placeholder pipeline (BM_face_triangulate, quad method BEAUTY, float32): all first triangles in place,
+/// then the second triangles appended
+pub fn triangulate_quads_beauty(verts: &[V3], quads: &[[u32; 4]]) -> Vec<Vec<u32>> {
+    let mut first = vec![];
+    let mut second = vec![];
+    for q in quads {
+        let (a, b, c, d) = (q[0], q[1], q[2], q[3]);
+        let p = |i: u32| -> [f32; 3] { let v = verts[i as usize]; [v[0] as f32, v[1] as f32, v[2] as f32] };
+        if crate::polyfill::quad_split_24_beauty([p(a), p(b), p(c), p(d)]) {
+            first.push(vec![a, c, d]);
+            second.push(vec![a, b, c]);
+        } else {
+            first.push(vec![b, d, a]);
+            second.push(vec![b, c, d]);
+        }
+    }
+    first.extend(second);
+    first
+}
+
+/// quads of the geometry-nodes cube (mesh cube node) in `box_exact` vertex order (i = x + 2y + 4z), in its face order
+pub const CUBE_QUADS_XFAST: [[u32; 4]; 6] = [[0, 2, 3, 1], [0, 1, 5, 4], [4, 5, 7, 6], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];

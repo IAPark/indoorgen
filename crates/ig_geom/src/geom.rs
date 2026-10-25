@@ -611,6 +611,20 @@ pub fn cuboid_py(lo: V3, hi: V3, variant: u8, extra: u32) -> ObjGeom {
         let (x, y, z) = if variant == 0 { ((i >> 2) & 1, (i >> 1) & 1, i & 1) } else { (i & 1, (i >> 1) & 1, (i >> 2) & 1) };
         [if x == 0 { lo[0] } else { hi[0] }, if y == 0 { lo[1] } else { hi[1] }, if z == 0 { lo[2] } else { hi[2] }]
     };
+    let verts: [V3; 8] = std::array::from_fn(vert);
+    cuboid_py_verts(verts, variant, extra)
+}
+
+/// like cuboid_py with the 8 vertex positions given explicitly (python vertex order of `variant`)
+pub fn cuboid_py_verts(verts: [V3; 8], variant: u8, extra: u32) -> ObjGeom {
+    let vert = |i: usize| -> V3 { verts[i] };
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for v in &verts {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v[k]);
+            hi[k] = hi[k].max(v[k]);
+        }
+    }
     let (polys, names): ([[usize; 3]; 12], [&str; 12]) = if variant == 0 {
         (
             [[1, 2, 0], [3, 6, 2], [7, 4, 6], [5, 0, 4], [6, 0, 2], [3, 5, 7], [1, 3, 2], [3, 7, 6], [7, 5, 4], [5, 1, 0], [6, 4, 0], [3, 1, 5]],

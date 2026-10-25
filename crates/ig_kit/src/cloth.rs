@@ -434,6 +434,17 @@ fn pressure_forces(x: &[V3], faces: &[Vec<u32>], p: f64, out: &mut [V3]) {
     }
 }
 
+/// When set (gen2 default), `simulate_job` returns the pre-sim positions: the cloth is exported as a sidecar job and re-simulated in Blender at render time.
+pub static SKIP_JOB_SIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `simulate` for cloth that is also exported as a sidecar job (mattress, sheet, cover); skipped when SKIP_JOB_SIM is set
+pub fn simulate_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
+    if SKIP_JOB_SIM.load(std::sync::atomic::Ordering::Relaxed) {
+        return pos0.to_vec();
+    }
+    simulate(pos0, faces, p, colliders, cal)
+}
+
 pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
     let n = pos0.len();
     let springs = build_springs(pos0, faces);

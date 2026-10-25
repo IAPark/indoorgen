@@ -384,6 +384,24 @@ pub fn sample_nearest_surface(src: &LMesh, val: &[f32], at: &[F3]) -> Vec<(f32, 
 }
 
 /// `walls`: exact distance ties are won by the rim-wall triangles (solidify output: triangles first, quads after), otherwise by the first triangle
+/// cheap multiplicative hasher for lookup-only maps (never iterate a map that uses it: order is not part of any contract here)
+#[derive(Default, Clone, Copy)]
+pub struct FxHasher(u64);
+impl std::hash::Hasher for FxHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, b: &[u8]) {
+        for &x in b {
+            self.0 = (self.0.rotate_left(5) ^ x as u64).wrapping_mul(0x517cc1b727220a95);
+        }
+    }
+    fn write_i64(&mut self, x: i64) {
+        self.0 = (self.0.rotate_left(5) ^ x as u64).wrapping_mul(0x517cc1b727220a95);
+    }
+}
+pub type FxBuild = std::hash::BuildHasherDefault<FxHasher>;
+
 pub fn sample_nearest_surface_ex(src: &LMesh, val: &[f32], at: &[F3], walls: bool) -> Vec<(f32, F3)> {
     let tris = super::dualcon::corner_tris(&src.v, &src.f);
     let first_wall = src.f.iter().take_while(|f| f.len() == 3).count();
@@ -392,7 +410,7 @@ pub fn sample_nearest_surface_ex(src: &LMesh, val: &[f32], at: &[F3], walls: boo
     let ext = (0..3).map(|k| hi[k] - lo[k]).fold(0.0f32, f32::max).max(1e-6);
     let cell = (ext / 24.0).max(0.01);
     let key = |p: F3| -> [i64; 3] { [0, 1, 2].map(|k| ((p[k] - lo[k]) / cell).floor() as i64) };
-    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    let mut grid: std::collections::HashMap<[i64; 3], Vec<u32>, FxBuild> = Default::default(); // lookup only (never iterated): a fast hasher is safe
     for (ti, t) in tris.iter().enumerate() {
         let ps = [src.v[t[0] as usize], src.v[t[1] as usize], src.v[t[2] as usize]];
         let mut a = ps[0];

@@ -351,6 +351,9 @@ impl Bed {
 }
 
 impl Factory for Bed {
+    fn placeholder_exact(&self, _i: u64) -> Option<super::cabnodes::ExactMesh> {
+        Some(super::chair::rotated_bbox_exact(-self.width / 2.0, self.width / 2.0, -self.size - self.leg_t * 0.5, 0.0, -self.leg_h, self.back_h * 1.2))
+    }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         // ChairFactory.create_placeholder with the BedFrame attributes (vertical legs => zero offsets), rotated +90deg
         let (y0, y1) = (-self.size - self.leg_t * 0.5, 0.0);

@@ -200,7 +200,7 @@ impl BedSpec {
 // ------------------------------------------------------------------------------------------------ assembly
 use super::mattress::MattressSpec;
 use super::pillow::PillowSpec;
-use super::cloth::{simulate, Calib, ClothParams, Collider};
+use super::cloth::{simulate_job, Calib, ClothParams, Collider};
 use super::clothes::{Blanket, BlanketKind};
 use super::ctor_draws::{blanket_ctor, pillow_ctor, towel_material_draw};
 use super::towel::{subdivide_edge_ring, TowelSpec};
@@ -259,27 +259,59 @@ fn compact(m: &Mesh) -> Mesh {
     o
 }
 
-fn clip_above(m: &Mesh, z: f64) -> Mesh {
+/// bpy.ops.mesh.bisect(plane_co=(0,0,z), plane_no=(0,0,1), clear_inner=True) (threshold 1e-4): vertices within the threshold are "on the plane"
+/// and kept; only edges with endpoints strictly on opposite sides are cut (factor d_a / (d_a - d_b) in f32); faces entirely on the inner side go.
+pub fn clip_above(m: &Mesh, z: f64) -> Mesh {
+    let zf = z as f32;
+    let eps = 1e-4f32;
+    let side = |p: V3| -> i32 {
+        let d = p[2] as f32 - zf;
+        if d.abs() < eps { 0 } else if d > 0.0 { 1 } else { -1 }
+    };
     let mut out = Mesh::new();
+    let mut vmap: crate::dhash::HashMap<u32, u32> = crate::dhash::HashMap::default();
+    let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
     for f in &m.faces {
-        let pts: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
-        let mut poly: Vec<V3> = vec![];
-        for k in 0..pts.len() {
-            let (a, b) = (pts[k], pts[(k + 1) % pts.len()]);
-            let (ina, inb) = (a[2] >= z, b[2] >= z);
-            if ina {
-                poly.push(a);
+        let k = f.len();
+        let sd: Vec<i32> = f.iter().map(|&i| side(m.pos[i as usize])).collect();
+        if sd.iter().all(|&x| x == 0) {
+            // flat on the plane: kept untouched
+        } else if sd.iter().all(|&x| x <= 0) {
+            continue;
+        }
+        let mut poly: Vec<u32> = vec![];
+        for i in 0..k {
+            let (a, b) = (f[i], f[(i + 1) % k]);
+            let (sa, sb) = (sd[i], sd[(i + 1) % k]);
+            if sa >= 0 {
+                let id = *vmap.entry(a).or_insert_with(|| {
+                    out.pos.push(m.pos[a as usize]);
+                    (out.pos.len() - 1) as u32
+                });
+                poly.push(id);
             }
-            if ina != inb {
-                let t = (z - a[2]) / (b[2] - a[2]);
-                poly.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, z]);
+            if sa * sb < 0 {
+                let key = (a.min(b), a.max(b));
+                let id = *emap.entry(key).or_insert_with(|| {
+                    // interpolate from the lower index endpoint (edge v1 -> v2 order of a Blender mesh is not known here)
+                    let (v1, v2) = (m.pos[key.0 as usize], m.pos[key.1 as usize]);
+                    let (da, db) = (v1[2] as f32 - zf, v2[2] as f32 - zf);
+                    let fac = da / (da - db);
+                    let c = |q: usize| (v1[q] as f32 + (v2[q] as f32 - v1[q] as f32) * fac) as f64;
+                    out.pos.push([c(0), c(1), c(2)]);
+                    (out.pos.len() - 1) as u32
+                });
+                poly.push(id);
             }
+        }
+        poly.dedup();
+        if poly.len() >= 2 && poly.first() == poly.last() {
+            poly.pop();
         }
         if poly.len() >= 3 {
-            out.add_face(&poly);
+            out.faces.push(poly);
         }
     }
-    out.weld(1e-9);
     out
 }
 
@@ -290,11 +322,23 @@ fn coil(g: &Mesh, s: &BedSpec, r: &mut Rng) -> Mesh {
     }
     let ru = r.uniform(0.06, 0.08);
     let sf = r.uniform(0.5, 1.0);
+    if std::env::var("COILPARAMS").is_ok() { eprintln!("COILPARAMS dd {} dep {} ds {} ru {} sf {}", s.dot_distance, s.dot_depth, s.dot_size, ru, sf); }
+    if std::env::var("COIL_F64").is_err() {
+        if let Some(m) = super::coilx::make_coiled_f32(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf, None) {
+            return m;
+        }
+    }
     super::coil::make_coiled(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf)
 }
 
 /// butil.modify_mesh(obj, "BEVEL", segments=4): width 0.1, angle limit 30 degrees
 fn pad_bevel(m: &Mesh) -> Mesh {
+    if std::env::var("PAD_OLD").is_err() {
+        match super::bevmod::bevel_modifier(m, 0.1, 4, Some(30f64.to_radians() as f32), true, 0.5) {
+            Ok(r) => return r,
+            Err(e) => eprintln!("pad bevmod failed: {e}"),
+        }
+    }
     bevel_angle_ex(m, 0.1, 4, 30f64.to_radians(), false, None).unwrap_or_else(|e| {
         eprintln!("pad bevel failed: {e}");
         m.clone()
@@ -328,28 +372,23 @@ fn back_hull_slab(backs: &[Vec<V3>], t: f64) -> Mesh {
     let mut bm = BMesh::from_mesh(&pos, &edges, &[], &[]);
     crate::bm::hull::convex_hull(&mut bm, &crate::bm::hull::HullParams::default());
     let (hp, he, hf) = bm.to_mesh();
+    if let Ok(p) = std::env::var("BEDDUMP4") {
+        std::fs::write(p, serde_json::json!({"verts": hp.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect::<Vec<_>>(), "polys": hf}).to_string()).ok();
+    }
     let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
     for (i, e) in he.iter().enumerate() {
         emap.insert((e[0].min(e[1]), e[0].max(e[1])), i as u32);
     }
     let ce: Vec<Vec<u32>> = hf.iter().map(|f| (0..f.len()).map(|k| emap[&(f[k].min(f[(k + 1) % f.len()]), f[k].max(f[(k + 1) % f.len()]))]).collect()).collect();
     let s = super::solidx::solidify_extrude(&hp, &he, &hf, &ce, t as f32, 0.0, true);
+    // normals_make_consistent (Blender's outer-most-loop criterion) on a BMesh of the solid
+    let mut sbm = crate::bm::BMesh::from_mesh(&s.pos, &s.edges, &s.faces, &s.corner_edges);
+    super::coilx::recalc_face_normals_bm(&mut sbm);
+    let (sp, se, sf) = sbm.to_mesh();
     let mut m = Mesh::new();
-    m.pos = s.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
-    m.faces = s.faces;
-    // normals_make_consistent(inside=False): flip everything if the signed volume is negative
-    let mut vol = 0.0;
-    for f in &m.faces {
-        for k in 1..f.len() - 1 {
-            let (a, b, c) = (m.pos[f[0] as usize], m.pos[f[k] as usize], m.pos[f[k + 1] as usize]);
-            vol += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
-        }
-    }
-    if vol < 0.0 {
-        for f in m.faces.iter_mut() {
-            f.reverse();
-        }
-    }
+    m.pos = sp.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    m.faces = sf;
+    let _ = se;
     m
 }
 
@@ -462,6 +501,9 @@ impl BedSpec {
                 back_hull_slab(&backs, t)
             };
             let garbled = false;
+            if let Ok(p) = std::env::var("BEDDUMP3") {
+                std::fs::write(p, serde_json::json!({"verts": slab.pos, "polys": slab.faces}).to_string()).ok();
+            }
             let mut g = if self.c.bed_back == 0 {
                 let g = back_divide(&slab, self.dot_distance, garbled, r);
                 if let Ok(p) = std::env::var("BEDDUMP2") {
@@ -550,6 +592,11 @@ fn quad_grid_pillow(w: f64, s: f64, pressure_h: f64, n: usize) -> Mesh {
 }
 
 impl Factory for Bed {
+    fn placeholder_exact(&self, _i: u64) -> Option<super::cabnodes::ExactMesh> {
+        let c = &self.s.c;
+        Some(super::chair::rotated_bbox_exact(-c.width / 2.0, c.width / 2.0, -c.size - c.leg_thickness * 0.5, 0.0, -c.leg_height, c.back_height * 1.2))
+    }
+
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let c = &self.s.c;
         let (y0, y1) = (-c.size - c.leg_thickness * 0.5, 0.0);
@@ -644,7 +691,7 @@ impl Factory for Bed {
         p.use_self_collision = s.sheet_folded;
         let mut cal = Calib::default();
         cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
-        let out = simulate(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
+        let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
         let sheet = subsurf(&sheet, 2, false);
@@ -672,7 +719,7 @@ impl Factory for Bed {
         p.tension = 2.0;
         p.distance_min = 5e-3;
         p.end_frame = 80;
-        let out = simulate(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
+        let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;
         let cvm = subsurf(&cvm, 2, false);

@@ -44,6 +44,8 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if cookware::handles(c) => cookware::make(c, &mut rng, factory_seed),
         c if appliances::handles(c) => appliances::make(c, &mut rng, factory_seed),
         c if vase::handles(c) => vase::make(c, &mut rng, factory_seed),
+        "MolluskFactory" => Some(trinkets::make_mollusk(factory_seed)),
+        c if trinkets::handles(c) => trinkets::make(c, &mut rng, factory_seed),
         c if decor::handles(c) => decor::make(c, &mut rng, factory_seed),
         c if sofa::handles(c) => sofa::make(c, &mut rng),
         c if officechair::handles(c) => officechair::make(c, &mut rng, factory_seed),
@@ -140,7 +142,10 @@ impl RealAssets {
     pub fn placeholder_raw(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
         if let Some(f) = make_factory(class, factory_seed) {
             return Some(match kind {
+                PlaceholderKind::Real if f.placeholder_exact(inst_seed).is_some() => exact_geom(&f.placeholder_exact(inst_seed).unwrap()),
                 PlaceholderKind::Real => match f.placeholder(inst_seed) {
+                    // Mirror / WallArt / PlantContainer placeholders are not new_bbox boxes (plain float32 bounds)
+                    Some(p) if matches!(class, "MirrorFactory" | "WallArtFactory" | "PlantContainerFactory" | "LargePlantContainerFactory") => p.bbox_geom_plain(),
                     Some(p) => p.bbox_geom(),
                     // python overrides create_placeholder for these classes (a custom bbox); until the formula is ported use the sampled box
                     None => match self.fallback.placeholder(class, factory_seed, inst_seed, kind) {
