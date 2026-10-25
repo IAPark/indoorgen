@@ -47,7 +47,17 @@ fn main() {
     for (nm, ceil, z) in [("skirting_floor", false, wt / 2.0), ("skirting_ceiling", true, g.c.wall_height - wt / 2.0)] {
         let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), nm]));
         if let Some(sk) = infinigen::rooms::skirting::make(&polys, z, ceil, &mut r) {
-            let mi = scene.material(Material::diffuse(nm, [0.85, 0.85, 0.85], sk.roughness));
+            // skirting_board.py: shader_rough_plastic(base_color=hsv2rgba(white_hsv()), roughness=uniform(0.5, 1)) from the same FixedSeed stream
+            // (thickness, height, white_hsv = (0, U(0, .1), U(.8, 1)), roughness)
+            let mut pr = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), nm]));
+            pr.uniform(0.02, 0.05);
+            pr.uniform(0.08, 0.15);
+            let (sat, val) = (pr.uniform(0.0, 0.1), pr.uniform(0.8, 1.0));
+            let rough = pr.uniform(0.5, 1.0);
+            let col = [val, val * (1.0 - sat), val * (1.0 - sat), 1.0];
+            let mut skm = Material::diffuse(nm, [0.85, 0.85, 0.85], sk.roughness);
+            skm.spec = Some(serde_json::json!({"cls": "shader.plastic.plastic_rough.shader_rough_plastic", "kwargs": {"base_color": col, "roughness": rough}, "seed": 0}));
+            let mi = scene.material(skm);
             scene.add(nm, "skirting", sk.mesh, mi);
         }
     }
