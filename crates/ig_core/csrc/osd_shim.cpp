@@ -138,12 +138,14 @@ struct Evaluator {
 extern "C" {
 
 // positions: float[3 * num_verts]; face_sizes: int[num_faces]; face_verts: concatenated
-void *osd_create(int num_verts, const float *positions, int num_faces, const int *face_sizes, const int *face_verts, int level, int adaptive, int simple,
-                 int boundary_corner)
+// fvar: optional face-varying (UV) value id per face corner (loops sharing a vertex AND a UV value share an id), num_fvar = number of ids; Blender
+// builds this channel for every mesh with a UV map, and it changes the adaptive isolation (hence the last float bits). null = no UV map.
+void *osd_create_uv(int num_verts, const float *positions, int num_faces, const int *face_sizes, const int *face_verts, int level, int adaptive, int simple,
+                    int boundary_corner, const int *fvar, int num_fvar)
 {
   adaptive = ev("OSD_ADAPT", adaptive);
   level = ev("OSD_LEVEL", level);
-  MeshData md{num_verts, num_faces, face_sizes, face_verts, simple != 0};
+  MeshData md{num_verts, num_faces, face_sizes, face_verts, simple != 0, fvar, num_fvar};
   std::vector<int> fv;
   if (const char *fp = getenv("OSD_FVAR")) {  // experiment: file of per-corner uv value ids
     FILE *fh = fopen(fp, "r");
@@ -213,6 +215,12 @@ void *osd_create(int num_verts, const float *positions, int num_faces, const int
   dst_desc.offset += ev->num_coarse * ev->src_desc.stride;
   Osd::CpuEvaluator::EvalStencils(ev->src, ev->src_desc, ev->src, dst_desc, stencils);
   return ev;
+}
+
+void *osd_create(int num_verts, const float *positions, int num_faces, const int *face_sizes, const int *face_verts, int level, int adaptive, int simple,
+                 int boundary_corner)
+{
+  return osd_create_uv(num_verts, positions, num_faces, face_sizes, face_verts, level, adaptive, simple, boundary_corner, nullptr, 0);
 }
 
 void osd_eval(void *h, int n, const int *ptex, const float *u, const float *v, float *out)
