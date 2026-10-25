@@ -143,8 +143,17 @@ pub fn mesh_tris(m: &Mesh) -> Vec<(usize, [u32; 3])> {
         if fv.len() == 3 {
             t.push((f, [fv[0], fv[1], fv[2]]));
         } else if fv.len() == 4 {
-            t.push((f, [fv[0], fv[1], fv[2]]));
-            t.push((f, [fv[0], fv[2], fv[3]]));
+            // mesh_calc_tessellation_for_face: (0,1,2),(0,2,3) unless is_quad_flip_v3_first_third_fast ("flip out of degenerate 0-2 state"): (0,1,3),(1,2,3)
+            let (v1, v2, v3, v4) = (m.pos[fv[0] as usize], m.pos[fv[1] as usize], m.pos[fv[2] as usize], m.pos[fv[3] as usize]);
+            let (d12, d13, d14) = (sub3(v2, v1), sub3(v3, v1), sub3(v4, v1));
+            let flip = dot3(cross3(d12, d13), cross3(d14, d13)) < 0.0;
+            if flip {
+                t.push((f, [fv[0], fv[1], fv[3]]));
+                t.push((f, [fv[1], fv[2], fv[3]]));
+            } else {
+                t.push((f, [fv[0], fv[1], fv[2]]));
+                t.push((f, [fv[0], fv[2], fv[3]]));
+            }
         } else if fv.len() > 4 {
             let co: Vec<[f32; 3]> = fv.iter().map(|&i| m.pos[i as usize]).collect();
             for tr in crate::polyfill::triangulate_ngon(&co) {

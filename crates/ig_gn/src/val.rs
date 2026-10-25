@@ -177,12 +177,12 @@ impl Val {
     }
 }
 
-/// Blender's float -> int implicit conversion (round to nearest, ties away; saturating)
+/// Blender's float -> int implicit conversion (truncation toward zero, checked in Blender 4.2: 12.6 -> 12; saturating)
 pub fn float_to_int(x: f32) -> i32 {
     if x.is_nan() {
         return 0;
     }
-    x.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    x as i32
 }
 
 pub fn rgb_to_grayscale(c: &[f32; 4]) -> f32 {

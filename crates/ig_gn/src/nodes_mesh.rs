@@ -1295,9 +1295,10 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                     let ec = eval_on(&ev.field(ni, "Edge Crease")?, comp, Dom::Edge);
                     let mut mp = crate::dhash::HashMap::default();
                     for (i, e) in m.edges.iter().enumerate() {
-                        let c = ec[i].f() as f64;
+                        let c = (ec[i].f() as f64).min(1.0);
                         if c > 0.0 {
-                            mp.insert((e[0].min(e[1]), e[0].max(e[1])), c.min(1.0));
+                            // BKE_subdiv_crease_to_sharpness_f: crease 0..1 -> OpenSubdiv sharpness 10 * crease^2 (measured in Blender 4.2)
+                            mp.insert((e[0].min(e[1]), e[0].max(e[1])), (c as f32 * c as f32 * 10.0f32) as f64);
                         }
                     }
                     if !mp.is_empty() {

@@ -14,7 +14,9 @@ fn len3(a: [f32; 3]) -> f32 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
 }
 
-fn handle_calc(bezt: &mut Bez, prev: Option<&Bez>, next: Option<&Bez>, vector: bool) {
+/// kind: 0 AUTO, 1 VECTOR, 2 AUTO_CLAMPED (HD_AUTO_ANIM)
+fn handle_calc(bezt: &mut Bez, prev: Option<&Bez>, next: Option<&Bez>, kind: u8) {
+    let vector = kind == 1;
     let p2 = bezt.v[1];
     let p1 = match prev {
         Some(p) => p.v[1],
@@ -55,6 +57,31 @@ fn handle_calc(bezt: &mut Bez, prev: Option<&Bez>, next: Option<&Bez>, vector: b
         len_b /= len;
         for k in 0..3 {
             bezt.v[2][k] = p2[k] + tvec[k] * len_b;
+        }
+        if kind == 2 {
+            if let (Some(pv), Some(nx)) = (prev, next) {
+                // HD_AUTO_ANIM: keep horizontal at extrema, otherwise the handles do not go beyond the y of the neighbours
+                let (ydiff1, ydiff2) = (pv.v[1][1] - p2[1], nx.v[1][1] - p2[1]);
+                if (ydiff1 <= 0.0 && ydiff2 <= 0.0) || (ydiff1 >= 0.0 && ydiff2 >= 0.0) {
+                    bezt.v[0][1] = p2[1];
+                    bezt.v[2][1] = p2[1];
+                } else {
+                    if ydiff1 <= 0.0 {
+                        if pv.v[1][1] > bezt.v[0][1] {
+                            bezt.v[0][1] = pv.v[1][1];
+                        }
+                    } else if pv.v[1][1] < bezt.v[0][1] {
+                        bezt.v[0][1] = pv.v[1][1];
+                    }
+                    if ydiff2 <= 0.0 {
+                        if nx.v[1][1] > bezt.v[2][1] {
+                            bezt.v[2][1] = nx.v[1][1];
+                        }
+                    } else if nx.v[1][1] < bezt.v[2][1] {
+                        bezt.v[2][1] = nx.v[1][1];
+                    }
+                }
+            }
         }
     }
 }
@@ -120,6 +147,13 @@ impl FloatCurve {
 
     /// `extrapolate`: CUMA_EXTEND_EXTRAPOLATE (false = horizontal extension)
     pub fn new_full(pts: &[(f64, f64)], vector: &[bool], xmin: f32, xmax: f32, extrapolate: bool) -> FloatCurve {
+        let kinds: Vec<u8> = (0..pts.len()).map(|i| vector.get(i).copied().unwrap_or(false) as u8).collect();
+        FloatCurve::new_kinds(pts, &kinds, xmin, xmax, extrapolate)
+    }
+
+    /// handle kinds per point: 0 AUTO, 1 VECTOR, 2 AUTO_CLAMPED
+    pub fn new_kinds(pts: &[(f64, f64)], kinds: &[u8], xmin: f32, xmax: f32, extrapolate: bool) -> FloatCurve {
+        let vector: Vec<bool> = kinds.iter().map(|&k| k == 1).collect();
         let n = pts.len();
         let table_range = xmax - xmin;
         let mut mintable = xmin;
@@ -135,7 +169,7 @@ impl FloatCurve {
             let prev = if a > 0 { Some(bezt[a - 1]) } else { None };
             let next = if a + 1 < n { Some(bezt[a + 1]) } else { None };
             let mut b = bezt[a];
-            handle_calc(&mut b, prev.as_ref(), next.as_ref(), vector.get(a).copied().unwrap_or(false));
+            handle_calc(&mut b, prev.as_ref(), next.as_ref(), kinds.get(a).copied().unwrap_or(0));
             bezt[a] = b;
         }
         if n > 2 && !vector.get(0).copied().unwrap_or(false) {

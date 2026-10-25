@@ -20,6 +20,7 @@ pub use ig_shared::*;
 pub use ig_storage::*;
 pub use ig_decor::*;
 pub mod cactus;
+pub mod creature;
 pub mod fern;
 pub mod mollusk;
 pub mod monocot;

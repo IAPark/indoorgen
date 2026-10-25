@@ -273,9 +273,9 @@ pub fn set_corner_fixed(b: bool) -> bool {
     CORNER_FIXED.with(|c| c.replace(b))
 }
 /// Blender SUBSURF modifier semantics (Catmull-Clark, `use_limit_surface` off, boundary 'smooth').
-/// `crease`: per-edge sharpness in [0,1] keyed by sorted (u,v); 1.0 = fully sharp. Sharpness is
-/// kept unchanged on the child edges at every level (so 1.0 stays sharp, fractional values blend
-/// between the smooth and the sharp rule). Open boundaries use the boundary rule.
+/// `crease`: per-edge OpenSubdiv sharpness keyed by sorted (u,v) (Blender: 10 * crease^2, so 0..10; use a large value for "sharp at every level").
+/// Uniform creasing like OpenSubdiv: an edge with sharpness s >= 1 is fully sharp, 0 < s < 1 blends the smooth and the sharp rule by s, and the
+/// child edges get max(s - 1, 0). Open boundaries use the boundary rule.
 pub fn catmull_clark(
     m: &QMesh,
     levels: usize,
@@ -286,7 +286,7 @@ pub fn catmull_clark(
     if let Some(c) = crease {
         for (&(a, b), &s) in c {
             if s > 0.0 {
-                cr.insert(ekey(a, b), s.min(1.0));
+                cr.insert(ekey(a, b), s);
             }
         }
     }
@@ -370,7 +370,7 @@ fn cc_once(m: &QMesh, cr: &HashMap<(u32, u32), f64>, simple: bool) -> (QMesh, Ha
         let s = if ecount[e] != 2 {
             1.0
         } else {
-            cr.get(&(a, b)).copied().unwrap_or(0.0).clamp(0.0, 1.0)
+            cr.get(&(a, b)).copied().unwrap_or(0.0).min(1.0)
         };
         esharp[e] = s;
         if ecount[e] == 2 {
@@ -483,10 +483,12 @@ fn cc_once(m: &QMesh, cr: &HashMap<(u32, u32), f64>, simple: bool) -> (QMesh, Ha
     for e in 0..ne {
         if ecount[e] == 2 {
             if let Some(&s) = cr.get(&ev[e]) {
-                if s > 0.0 {
+                // uniform creasing: the sharpness drops by one per level
+                let child = if s > 1.0 { s - 1.0 } else { 0.0 };
+                if child > 0.0 {
                     let id = (nv + e) as u32;
-                    ncr.insert(ekey(ev[e].0, id), s);
-                    ncr.insert(ekey(ev[e].1, id), s);
+                    ncr.insert(ekey(ev[e].0, id), child);
+                    ncr.insert(ekey(ev[e].1, id), child);
                 }
             }
         }
@@ -1243,7 +1245,7 @@ mod tests {
         let cube = unit_cube();
         // crease a single edge (0,1): edge point is the midpoint, uncreased is pulled off the line
         let mut cr = HashMap::default();
-        cr.insert((0u32, 1u32), 1.0);
+        cr.insert((0u32, 1u32), 10.0);
         let a = catmull_clark(&cube, 1, Some(&cr));
         let b = catmull_clark(&cube, 1, None);
         let nv = 8;
@@ -1258,7 +1260,7 @@ mod tests {
         // crease the whole top loop: top vertices stay in the plane z=1 at every level
         let mut cr = HashMap::default();
         for e in [(4u32, 5u32), (5, 7), (6, 7), (4, 6)] {
-            cr.insert(e, 1.0);
+            cr.insert(e, 10.0);
         }
         let c = catmull_clark(&cube, 3, Some(&cr));
         check_solid(&c, 2);
@@ -1269,12 +1271,33 @@ mod tests {
         // a fully creased cube (all 12 edges) is the cube itself
         let mut all = HashMap::default();
         for e in cube.edges() {
-            all.insert(e, 1.0);
+            all.insert(e, 10.0);
         }
         let c = catmull_clark(&cube, 2, Some(&all));
         let (lo, hi) = bbox(&c);
         assert!(lo.iter().all(|x| x.abs() < 1e-12) && hi.iter().all(|x| (x - 1.0).abs() < 1e-12));
         assert!((volume(&c) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cc_semi_sharp_creases_decay_per_level() {
+        // measured in Blender 4.2 (cube size 1, every edge crease c, one level): sharpness = 10 c^2; edge point y = -0.375 - 0.125 * min(s, 1)
+        let cube = unit_cube();
+        let mut all = HashMap::default();
+        for e in cube.edges() {
+            all.insert(e, 10.0 * 0.19f64 * 0.19);
+        }
+        let c = catmull_clark(&cube, 1, Some(&all));
+        let w = 10.0 * 0.19f64 * 0.19;
+        // unit cube [0,1]^3: edge (0,1) midpoint (0.5,0,0); smooth edge point (0.5, 0.125, 0.125) -> blended towards the midpoint
+        let want = [0.5, 0.125 * (1.0 - w), 0.125 * (1.0 - w)];
+        assert!(c.pos[8..].iter().any(|p| (0..3).all(|k| (p[k] - want[k]).abs() < 1e-12)), "{:?}", &c.pos[8..20]);
+        // sharpness 0.36 < 1 is spent after the first level: level 2 equals subdividing the level-1 mesh without creases
+        let c2 = catmull_clark(&cube, 2, Some(&all));
+        let c1_then = catmull_clark(&c, 1, None);
+        for (a, b) in c2.pos.iter().zip(c1_then.pos.iter()) {
+            assert!((0..3).all(|k| (a[k] - b[k]).abs() < 1e-12));
+        }
     }
 
     #[test]

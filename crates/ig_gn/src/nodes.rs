@@ -564,13 +564,13 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
         "ShaderNodeFloatCurve" => {
             let c = node.pj("curve").ok_or("curve missing")?;
             let pts: Vec<(f64, f64)> = c["pts"].as_array().unwrap().iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
-            let vecs: Vec<bool> = c["pts"].as_array().unwrap().iter().map(|p| p[2].as_str() == Some("VECTOR")).collect();
+            let vecs: Vec<u8> = c["pts"].as_array().unwrap().iter().map(|p| handle_kind(p[2].as_str())).collect();
             let clip = c["clip"].as_array().cloned().unwrap_or_default();
             let (cmin, cmax) = (clip.get(2).and_then(|x| x.as_f64()).unwrap_or(0.0), clip.get(4).and_then(|x| x.as_f64()).unwrap_or(1.0));
             let (xmin, xmax) = (clip.get(1).and_then(|x| x.as_f64()).unwrap_or(0.0), clip.get(3).and_then(|x| x.as_f64()).unwrap_or(1.0));
             let extrap = c["ext"].as_str().map_or(true, |e| e != "HORIZONTAL");
             let use_clip = clip.get(0).and_then(|x| x.as_bool()).unwrap_or(true);
-            let fc = crate::curvekit::FloatCurve::new_full(&pts, &vecs, xmin as f32, xmax as f32, extrap);
+            let fc = crate::curvekit::FloatCurve::new_kinds(&pts, &vecs, xmin as f32, xmax as f32, extrap);
             let (fac, v) = (ev.field(ni, "Factor")?, ev.field(ni, "Value")?);
             let k = kern(move |x, n| {
                 vec![(0..n)
@@ -596,8 +596,8 @@ fn fn_nodes(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             for k in 0..3 {
                 let arr = c["pts"][k].as_array().cloned().unwrap_or_default();
                 let pts: Vec<(f64, f64)> = arr.iter().map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
-                let vecs: Vec<bool> = arr.iter().map(|p| p[2].as_str() == Some("VECTOR")).collect();
-                fcs.push(crate::curvekit::FloatCurve::new_full(&pts, &vecs, xmin, xmax, extrap));
+                let vecs: Vec<u8> = arr.iter().map(|p| handle_kind(p[2].as_str())).collect();
+                fcs.push(crate::curvekit::FloatCurve::new_kinds(&pts, &vecs, xmin, xmax, extrap));
             }
             let (fac, v) = (ev.field(ni, "Fac")?, ev.field(ni, "Vector")?);
             let k = kern(move |x, n| {
@@ -895,4 +895,13 @@ fn m4_invert(m: &[[f32; 4]; 4]) -> ([[f32; 4]; 4], bool) {
         }
     }
     (o, true)
+}
+
+/// CurveMapping point handle type: 0 AUTO, 1 VECTOR, 2 AUTO_CLAMPED
+fn handle_kind(t: Option<&str>) -> u8 {
+    match t {
+        Some("VECTOR") => 1,
+        Some("AUTO_CLAMPED") => 2,
+        _ => 0,
+    }
 }

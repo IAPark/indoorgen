@@ -109,6 +109,13 @@ def random_inputs(ng, rnd):
             lo, hi = max(i.min_value, -3.0), min(i.max_value, 3.0)
             base = list(i.default_value)
             d[i.identifier] = [float(np.float32(rnd.choice([b, rnd.uniform(lo, hi)]))) for b in base]
+    # GN_INPUTS=file.json : {input name: value} overrides (e.g. the params an asset factory really passes)
+    if os.environ.get("GN_INPUTS"):
+        ov = json.load(open(os.environ["GN_INPUTS"]))
+        for i in ng.interface.items_tree:
+            if i.item_type == "SOCKET" and i.in_out == "INPUT" and i.name in ov:
+                v = ov[i.name]
+                d[i.identifier] = [float(x) for x in v] if isinstance(v, list) else (int(v) if i.socket_type == "NodeSocketInt" else (bool(v) if i.socket_type == "NodeSocketBool" else float(v)))
     return d
 
 
@@ -294,7 +301,7 @@ def check_export(exp, group, n, seed=0):
     rnd = random.Random(seed)
     cases = []
     for k in range(n):
-        ins = {} if k == 0 else random_inputs(ng, rnd)
+        ins = {} if (k == 0 and not os.environ.get("GN_INPUTS")) else random_inputs(ng, rnd)
         cases.append({"name": f"{group}#{k}", "group": group, "inputs": ins, "expect": eval_blender(ng, ins)})
     return cases
 
@@ -375,6 +382,17 @@ def main():
     elif mode == "group":
         stub = GX.stub_materials
         out = GX.export_function(a[1], [])
+        if os.environ.get("GN_OUTPUT"):
+            # GN_OUTPUT=name : check that geometry output instead of the first one (both sides get it moved to the front of the interface)
+            nm = os.environ["GN_OUTPUT"]
+            ngm = bpy.data.node_groups[out["main"]]
+            it = [i for i in ngm.interface.items_tree if i.item_type == "SOCKET" and i.in_out == "OUTPUT" and i.name == nm][0]
+            first = [i for i in ngm.interface.items_tree if i.item_type == "SOCKET" and i.in_out == "OUTPUT"][0]
+            ngm.interface.move(it, 0)
+            gj = out["groups"][out["main"]]
+            oj = gj["outputs"]
+            k = [o["name"] for o in oj].index(nm)
+            oj.insert(0, oj.pop(k))
         out["cases"] = check_export(out, out["main"], int(opt(a, "--n", 3)))
         dump_cases(out, casefile)
         res = finish(casefile, a, keep or "--bisect" in a)

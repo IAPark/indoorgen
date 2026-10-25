@@ -211,8 +211,36 @@ pub fn geo_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
                                 eprintln!("ROT {:?} piv {:?} local {:?} xf {:?}", rot[i], p, local[i].b(), inst.xf[i]);
                             }
                             let rm = m4_from_quat(rot[i].q());
-                            let op = m4_mul(&m4_mul(&m4_translate(p), &rm), &m4_translate([-p[0], -p[1], -p[2]]));
-                            inst.xf[i] = instance_rotation_apply(&inst.xf[i], &op, local[i].b());
+                            if local[i].b() {
+                                // local space (node_geo_rotate_instances.cc): rotate about the instance's own (normalised) axes, keeping the scale last:
+                                // M' = T(M p) * O R O^T * T(-M p) * M with O the normalised rotation part of M
+                                let x = inst.xf[i];
+                                let col = |c: usize| {
+                                    let v = [x[c][0], x[c][1], x[c][2]];
+                                    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                                    if l > 0.0 { [v[0] / l, v[1] / l, v[2] / l] } else { v }
+                                };
+                                let mut o4 = M4_ID;
+                                for c in 0..3 {
+                                    let v = col(c);
+                                    o4[c][0] = v[0];
+                                    o4[c][1] = v[1];
+                                    o4[c][2] = v[2];
+                                }
+                                let mut ot = M4_ID;
+                                for r in 0..3 {
+                                    for c in 0..3 {
+                                        ot[r][c] = o4[c][r];
+                                    }
+                                }
+                                let rg = m4_mul(&m4_mul(&o4, &rm), &ot);
+                                let pu = m4_point(&x, p);
+                                let op = m4_mul(&m4_mul(&m4_translate(pu), &rg), &m4_translate([-pu[0], -pu[1], -pu[2]]));
+                                inst.xf[i] = m4_mul(&op, &x);
+                            } else {
+                                let op = m4_mul(&m4_mul(&m4_translate(p), &rm), &m4_translate([-p[0], -p[1], -p[2]]));
+                                inst.xf[i] = instance_rotation_apply(&inst.xf[i], &op, false);
+                            }
                         }
                     }
                     "GeometryNodeScaleInstances" => {

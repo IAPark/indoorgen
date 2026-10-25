@@ -1082,6 +1082,96 @@ fn fill_curve_legacy(c: &Curves, ngons: bool) -> Mesh {
     mm
 }
 
+/// Subdivide Curve on a Bezier spline (subdivide_curves.cc): every segment is split into equal parameter spans; new points lie on the cubic and get aligned
+/// handles of the shape-preserving tangent length ((p4 - p3) * delta of the de Casteljau split at t); the handles of the original points facing the segment are
+/// pulled in to delta. Point attributes are interpolated linearly; the curve keeps its resolution.
+fn subdivide_bezier(c: &Curves, k: usize, cuts: &[Val], o: &mut Curves) {
+    let r = c.range(k);
+    let n = r.len();
+    let cyc = c.cyclic[k];
+    let nseg = if cyc { n } else { n - 1 };
+    let anames: Vec<(&String, &Attr)> = c.attrs.iter().filter(|(_, a)| a.dom == Dom::Point).collect();
+    let mut pos = vec![];
+    let mut hl = vec![];
+    let mut hr = vec![];
+    let mut htl = vec![];
+    let mut htr = vec![];
+    let mut rad = vec![];
+    let mut til = vec![];
+    let mut at: Vec<Vec<Val>> = anames.iter().map(|_| vec![]).collect();
+    let mut pending: Option<V3> = None;
+    for i in 0..n {
+        let p = r.start + i;
+        pos.push(c.pos[p]);
+        hl.push(pending.take().unwrap_or(c.hl[p]));
+        hr.push(c.hr[p]);
+        htl.push(c.htl[p]);
+        htr.push(c.htr[p]);
+        rad.push(c.radius[p]);
+        til.push(c.tilt[p]);
+        for (ai, (_, a)) in anames.iter().enumerate() {
+            at[ai].push(a.data[p].clone());
+        }
+        if i < nseg {
+            let jn = (i + 1) % n;
+            let q = r.start + jn;
+            let nc = cuts[p].i().max(0);
+            if nc == 0 {
+                continue;
+            }
+            // iterative de Casteljau splitting (bezier::insert) of the remaining piece at 1 / (cuts left + 1): bit-identical to Blender's handles
+            let (mut pp, mut hp, mut hn, pn) = (c.pos[p], c.hr[p], c.hl[q], c.pos[q]);
+            for j in 0..nc {
+                let t = 1.0f32 / (nc + 1 - j) as f32;
+                let center = lerp3(hp, hn, t);
+                let hprev = lerp3(pp, hp, t);
+                let hnext = lerp3(hn, pn, t);
+                let lh = lerp3(hprev, center, t);
+                let rh = lerp3(center, hnext, t);
+                let pt = lerp3(lh, rh, t);
+                // the previous point's right handle is the (rescaled) handle_prev of this split
+                let prev_idx = hr.len() - 1;
+                hr[prev_idx] = hprev;
+                pos.push(pt);
+                hl.push(lh);
+                hr.push(rh);
+                htl.push(3);
+                htr.push(3);
+                let fr = (j + 1) as f32 / (nc + 1) as f32;
+                rad.push(c.radius[p] * (1.0 - fr) + c.radius[q] * fr);
+                til.push(c.tilt[p] * (1.0 - fr) + c.tilt[q] * fr);
+                for (ai, (_, a)) in anames.iter().enumerate() {
+                    at[ai].push(mix_val(&a.data[p], &a.data[q], fr, a.ty));
+                }
+                pp = pt;
+                hp = rh;
+                hn = hnext;
+            }
+            let lh = hn;
+            if jn == 0 {
+                hl[0] = lh;
+            } else {
+                pending = Some(lh);
+            }
+        }
+    }
+    o.kind.push(CKind::Bezier);
+    o.cyclic.push(cyc);
+    o.res.push(c.res[k]);
+    o.pos.extend(pos.iter().copied());
+    o.hl.extend(hl.iter().copied());
+    o.hr.extend(hr.iter().copied());
+    o.htl.extend(htl.iter().copied());
+    o.htr.extend(htr.iter().copied());
+    o.radius.extend(rad.iter().copied());
+    o.tilt.extend(til.iter().copied());
+    o.off.push(o.pos.len() as u32);
+    for (ai, (name, a)) in anames.iter().enumerate() {
+        let e = o.attrs.entry((*name).clone()).or_insert_with(|| Attr { dom: Dom::Point, ty: a.ty, data: vec![] });
+        e.data.extend(at[ai].drain(..));
+    }
+}
+
 pub fn subdivide_curve(c: &Curves, cuts: &[Val]) -> Curves {
     let mut o = Curves::new();
     o.has_radius = c.has_radius;
@@ -1089,6 +1179,10 @@ pub fn subdivide_curve(c: &Curves, cuts: &[Val]) -> Curves {
         let r = c.range(k);
         let n = r.len();
         let nseg = if c.cyclic[k] { n } else { n.saturating_sub(1) };
+        if c.kind[k] == CKind::Bezier && n > 1 {
+            subdivide_bezier(c, k, cuts, &mut o);
+            continue;
+        }
         let mut pts = vec![];
         let mut rad = vec![];
         let mut til = vec![];

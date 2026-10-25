@@ -556,6 +556,21 @@ def inst_cases():
     case("BoundingBox.instances.rot", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=(b.n("GeometryNodeBoundBox", Geometry=iop(b, (0.1, 0.2, 0.3))), "Bounding Box"), Rotation=(0.2, 0.4, 0.6), Pivot__Point=(0.3, 0.1, 0.2))))
     case("RotateInstances.global", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=iop(b), Rotation=(0.2, 0.4, 0.6), Pivot__Point=(0.3, 0.1, 0.2), Local__Space=False)))
     case("RotateInstances.local", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=iop(b, (0.1, 0.2, 0.3)), Rotation=(0.2, 0.4, 0.6), Pivot__Point=(0.3, 0.1, 0.2), Local__Space=True)))
+    def teeth_like(b, rv=False):
+        si = b.n("GeometryNodeScaleInstances", Instances=iop(b, (0.0, -1.5708, 0.0)), Scale=(1.5, 0.7, 2.0))
+        rot = (0.05, -0.04, 0.03)
+        if rv:
+            r = b.n("FunctionNodeRandomValue", {"data_type": "FLOAT_VECTOR"}, Min=(-0.1, -0.1, -0.1), Max=(0.1, 0.1, 0.1))
+            rot = (r, "Value")
+        return realize(b, b.n("GeometryNodeRotateInstances", Instances=si, Rotation=rot))
+    case("ScaleInstances.default.center", lambda b: realize(b, b.n("GeometryNodeScaleInstances", Instances=iop(b, (0.0, -1.5708, 0.0)), Scale=(1.5, 0.7, 2.0))))
+    case("ScaleInstances.default.center.norot", lambda b: realize(b, b.n("GeometryNodeScaleInstances", Instances=iop(b), Scale=(1.5, 0.7, 2.0))))
+    case("RotateInstances.default.pivot", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=iop(b, (0.0, -1.5708, 0.0)), Rotation=(0.05, -0.04, 0.03))))
+    case("RotateInstances.iopscale.local", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=iop(b, (0.0, 0.0, 0.0), (1.5, 0.7, 2.0)), Rotation=(0.05, -0.04, 0.03))))
+    case("RotateInstances.iopscale.rot.local", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=iop(b, (0.0, -1.5708, 0.0), (1.5, 0.7, 2.0)), Rotation=(0.05, -0.04, 0.03))))
+    case("RotateInstances.iopscale.global", lambda b: realize(b, b.n("GeometryNodeRotateInstances", Instances=iop(b, (0.0, -1.5708, 0.0), (1.5, 0.7, 2.0)), Rotation=(0.05, -0.04, 0.03), Local__Space=False)))
+    case("RotateInstances.scaled.local", teeth_like)
+    case("RotateInstances.scaled.local.rv", lambda b: teeth_like(b, True))
     case("ScaleInstances.global", lambda b: realize(b, b.n("GeometryNodeScaleInstances", Instances=iop(b, (0.1, 0.2, 0.3)), Scale=(1.5, 0.7, 2.0), Center=(0.3, 0.1, 0.2), Local__Space=False)))
     case("ScaleInstances.local", lambda b: realize(b, b.n("GeometryNodeScaleInstances", Instances=iop(b, (0.1, 0.2, 0.3)), Scale=(1.5, 0.7, 2.0), Center=(0.3, 0.1, 0.2), Local__Space=True)))
     case("TranslateInstances.global", lambda b: realize(b, b.n("GeometryNodeTranslateInstances", Instances=iop(b, (0.1, 0.2, 0.3)), Translation=(1.5, 0.7, 2.0), Local__Space=False)))
@@ -773,6 +788,10 @@ def curve2_cases():
     case("CurveArc", lambda b: wire(b, (b.n("GeometryNodeCurveArc", {"mode": "RADIUS"}, Resolution=7, Radius=1.3, Start__Angle=0.3, Sweep__Angle=4.0), "Curve"), False))
     case("CurveSpiral", lambda b: wire(b, (b.n("GeometryNodeCurveSpiral", Resolution=8, Rotations=2.0, Start__Radius=1.0, End__Radius=2.0, Height=3.0), "Curve"), False))
     case("CurveBezierSegment", lambda b: wire(b, (b.n("GeometryNodeCurvePrimitiveBezierSegment", Resolution=6, Start=(0, 0, 0), Start__Handle=(1, 0, 0), End__Handle=(-1, 1, 0), End=(2, 2, 1)), "Curve"), False))
+    for cuts_, res_ in ((3, 1), (3, 4), (12, 2)):
+        case(f"SubdivideCurve.bezier.{cuts_}.{res_}", lambda b, cuts_=cuts_, res_=res_: wire(b, (b.n("GeometryNodeSubdivideCurve", Curve=(b.n("GeometryNodeCurvePrimitiveBezierSegment", Resolution=res_, Start=(0, 0, 0), Start__Handle=(1, 2, 0), End__Handle=(3, -1, 1), End=(4, 0, 0)), "Curve"), Cuts=cuts_), "Curve"), False))
+    for fv_ in (12.4, 12.6, 3.5):
+        case(f"ImplicitFloatToInt.{fv_}", lambda b, fv_=fv_: wire(b, (b.n("GeometryNodeMeshLine", {"mode": "OFFSET"}, Count=(b.math("ADD", fv_, 0.0), "Value"), Offset=(0, 0, 0.5)), "Mesh"), False))
     case("ReverseCurve", lambda b: wire(b, (b.n("GeometryNodeReverseCurve", Curve=radius_curve(b)), "Curve")))
     for st in ("CATMULL_ROM", "BEZIER", "POLY", "NURBS"):
         for src in ("bezier", "circle"):
@@ -1490,6 +1509,30 @@ def tex_cases():
         n.mapping.update()
         return b.store((g, "Mesh"), n, "r", "POINT", "FLOAT")
     case("FloatCurve.mixed_auto_vector_end", mixed)
+    JAWY = ([(-1.0, 0.12), (-0.7745, 0.06), (-0.6509, -0.44), (-0.3673, -0.4), (-0.0545, -0.01), (0.1055, 0.02), (0.5273, 0.5), (0.7964, 0.64), (1.0, 1.0)],
+            ["AUTO", "AUTO", "AUTO", "AUTO_CLAMPED", "AUTO", "AUTO", "VECTOR", "AUTO", "AUTO"], -1.0, 1.0)
+    JAWF = ([(0.0, 0.955), (0.4255, 0.785), (0.6545, 0.535), (0.9491, 0.75), (1.0, 0.595)], ["AUTO", "AUTO", "AUTO", "AUTO_CLAMPED", "AUTO"], 0.0, 1.0)
+    CLAMP2 = ([(0.0, 0.0), (0.2, 0.5), (0.4, 0.2), (0.6, 0.9), (0.8, 0.85), (1.0, 0.1)], ["AUTO"] + ["AUTO_CLAMPED"] * 4 + ["AUTO"], 0.0, 1.0)
+    for nm_, (pts_, hts_, lo_, hi_) in (("jawy", JAWY), ("jawf", JAWF), ("allclamped", CLAMP2)):
+        def acl(b, pts_=pts_, hts_=hts_, lo_=lo_, hi_=hi_):
+            g = base_grid(b)
+            x, y, z = noisy_xyz(b)
+            xs = b.math("MULTIPLY_ADD", x, (hi_ - lo_) / 3.7, (hi_ + lo_) / 2)
+            n = b.n("ShaderNodeFloatCurve", Value=xs)
+            c = n.mapping.curves[0]
+            n.mapping.clip_min_x = lo_; n.mapping.clip_max_x = hi_
+            n.mapping.clip_min_y = min(-1.0, lo_); n.mapping.clip_max_y = 1.0
+            n.mapping.use_clip = False
+            for i, p in enumerate(pts_):
+                if i < 2:
+                    c.points[i].location = p
+                else:
+                    c.points.new(*p)
+            for i, pt in enumerate(c.points):
+                pt.handle_type = hts_[i]
+            n.mapping.update()
+            return b.store((g, "Mesh"), n, "r", "POINT", "FLOAT")
+        case(f"FloatCurve.clamped.{nm_}", acl)
     def vc(b):
         g = base_grid(b)
         n = b.n("ShaderNodeVectorCurve", Vector=(b.pos(), "Position"), Fac=0.8)
@@ -1498,6 +1541,25 @@ def tex_cases():
         n.mapping.update()
         return b.store((g, "Mesh"), n, "r", "POINT", "FLOAT_VECTOR")
     case("VectorCurve", vc)
+    def vc_jaw(b):
+        g = b.n("GeometryNodeMeshLine", {"mode": "OFFSET"}, Count=240, Offset=(0.0107, 0.0107, 0.0107), Start__Location=(-1.28, -1.28, -1.28))
+        n = b.n("ShaderNodeVectorCurve", Vector=(b.pos(), "Position"))
+        specs = [([(-1.0, -1.0), (0.0036, 0.0), (0.2436, 0.21), (1.0, 1.0)], None),
+                 ([(-1.0, 0.12), (-0.7745, 0.06), (-0.6509, -0.44), (-0.3673, -0.4), (-0.0545, -0.01), (0.1055, 0.02), (0.5273, 0.5), (0.7964, 0.64), (1.0, 1.0)],
+                  ["AUTO", "AUTO", "AUTO", "AUTO_CLAMPED", "AUTO", "AUTO", "VECTOR", "AUTO", "AUTO"]),
+                 ([(-1.0, -1.0), (1.0, 1.0)], None)]
+        for ci, (pts_, hts_) in enumerate(specs):
+            c = n.mapping.curves[ci]
+            for i, p in enumerate(pts_):
+                if i < 2:
+                    c.points[i].location = p
+                else:
+                    c.points.new(*p)
+                if hts_:
+                    c.points[i].handle_type = hts_[i]
+        n.mapping.update()
+        return b.store((g, "Mesh"), n, "r", "POINT", "FLOAT_VECTOR")
+    case("VectorCurve.jaw", vc_jaw)
     for ft in ("F1", "F2", "SMOOTH_F1", "DISTANCE_TO_EDGE", "N_SPHERE_RADIUS"):
         for dm in ("EUCLIDEAN", "MANHATTAN", "CHEBYCHEV", "MINKOWSKI"):
             if ft in ("DISTANCE_TO_EDGE", "N_SPHERE_RADIUS") and dm != "EUCLIDEAN":
@@ -1538,6 +1600,8 @@ def tex_cases():
         sd_attr_case(f"SubsurfAttrs.grid.{lv}", lambda b: b.n("GeometryNodeMeshGrid", Size__X=2.0, Size__Y=1.5, Vertices__X=4, Vertices__Y=3), lv, "GeometryNodeSubdivisionSurface")
         sd_attr_case(f"SubsurfAttrs.cyl.{lv}", lambda b: b.n("GeometryNodeMeshCylinder", Vertices=5), lv, "GeometryNodeSubdivisionSurface")
     case("Subsurf.crease", lambda b: b.n("GeometryNodeSubdivisionSurface", Mesh=(b.n("GeometryNodeMeshCube", Size=(1, 2, 3), Vertices__X=3, Vertices__Y=3, Vertices__Z=3), "Mesh"), Level=2, Edge__Crease=(b.n("FunctionNodeCompare", {"data_type": "INT", "operation": "LESS_THAN"}, A=(b.index(), "Index"), B=20) if False else 1.0)))
+    for c_, l_ in ((0.19, 1), (0.19, 3), (0.5, 4), (0.3, 4), (1.0, 4)):
+        case(f"Subsurf.crease.{c_}.L{l_}", lambda b, c_=c_, l_=l_: b.n("GeometryNodeSubdivisionSurface", Mesh=(b.n("GeometryNodeMeshCube", Size=(1.0, 1.0, 1.0)), "Mesh"), Level=l_, Edge__Crease=c_))
     def mat_case(name, f):
         def mk(b):
             g = base_grid(b)
