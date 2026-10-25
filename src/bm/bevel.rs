@@ -1455,24 +1455,23 @@ impl<'a> Bp<'a> {
 
 /// dense normal-equations least squares (stands in for Eigen's SparseLU on A^T A)
 fn solve_least_squares(nrows: usize, ncols: usize, entries: &[(usize, usize, f64)], rhs: &[f64]) -> Vec<f64> {
-    let mut a = vec![vec![0.0f64; ncols]; nrows];
+    // sparse A: rows[k] = (col, value) pairs (duplicates summed in entry order), so A^T A and A^T rhs are accumulated over the non-zero
+    // rows only, in ascending row order: bit-identical to the dense sums (the skipped terms are exact zeros)
+    let mut rows: Vec<Vec<(usize, f64)>> = vec![vec![]; nrows];
     for &(r, c, v) in entries {
-        a[r][c] += v;
+        match rows[r].iter_mut().find(|e| e.0 == c) {
+            Some(e) => e.1 += v,
+            None => rows[r].push((c, v)),
+        }
     }
     let mut ata = vec![vec![0.0f64; ncols + 1]; ncols];
-    for i in 0..ncols {
-        for j in 0..ncols {
-            let mut s = 0.0;
-            for k in 0..nrows {
-                s += a[k][i] * a[k][j];
+    for k in 0..nrows {
+        for &(i, vi) in &rows[k] {
+            for &(j, vj) in &rows[k] {
+                ata[i][j] += vi * vj;
             }
-            ata[i][j] = s;
+            ata[i][ncols] += vi * rhs[k];
         }
-        let mut s = 0.0;
-        for k in 0..nrows {
-            s += a[k][i] * rhs[k];
-        }
-        ata[i][ncols] = s;
     }
     // gaussian elimination with partial pivoting
     for col in 0..ncols {
@@ -1489,6 +1488,9 @@ fn solve_least_squares(nrows: usize, ncols: usize, entries: &[(usize, usize, f64
         }
         for r in col + 1..ncols {
             let f = ata[r][col] / d;
+            if f == 0.0 {
+                continue;
+            }
             for c in col..=ncols {
                 let t = ata[col][c];
                 ata[r][c] -= f * t;

@@ -702,7 +702,8 @@ fn poly_find_doubles_w(corner_verts: &[i32], corner_edges: &[i32], medge_len: us
 // ---------------------------------------------------------------------------------------------------------------
 
 fn osd_mode() -> u32 {
-    std::env::var("OSDV").ok().and_then(|s| s.parse().ok()).unwrap_or(9)
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("OSDV").ok().and_then(|s| s.parse().ok()).unwrap_or(9))
 }
 
 /// OpenSubdiv bilinear (uniform level 1, simple scheme) limit evaluation of a ptex face with control corners a,b,c,d at (u,v):

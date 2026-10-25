@@ -482,6 +482,46 @@ pub fn plane_frame(n: V3) -> (V3, V3) {
 
 /// trimesh.path.polygons.projected: union of the (front side) triangles projected onto the plane (origin, normal)
 pub fn projected(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
+    // memo on the exact input bits: the solver projects the same (static parent / unchanged child) triangles again and again
+    thread_local! {
+        static MEMO: std::cell::RefCell<(std::collections::HashMap<u64, Vec<(Vec<u64>, Option<shp::G>)>>, usize)> = std::cell::RefCell::new((Default::default(), 0));
+    }
+    let mut key: Vec<u64> = Vec::with_capacity(6 + tris.len() * 9);
+    for k in 0..3 {
+        key.push(normal[k].to_bits());
+    }
+    for k in 0..3 {
+        key.push(origin[k].to_bits());
+    }
+    for t in tris {
+        for p in t {
+            for k in 0..3 {
+                key.push(p[k].to_bits());
+            }
+        }
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for w in &key {
+        h = (h ^ w).wrapping_mul(0x100000001b3);
+        h ^= h >> 29;
+    }
+    if let Some(r) = MEMO.with(|m| m.borrow().0.get(&h).and_then(|b| b.iter().find(|e| e.0 == key).map(|e| e.1.clone()))) {
+        return r;
+    }
+    let r = projected_raw(tris, normal, origin);
+    MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.1 > 2500 {
+            m.0.clear();
+            m.1 = 0;
+        }
+        m.1 += 1;
+        m.0.entry(h).or_default().push((key, r.clone()));
+    });
+    r
+}
+
+fn projected_raw(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     let n = unit(normal);
     let (u, v) = plane_frame(n);
     let mut front = vec![];

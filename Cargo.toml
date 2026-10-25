@@ -19,6 +19,7 @@ num-rational = "0.4"
 num-traits = "0.2"
 num-integer = "0.1"
 robust = "1.2"
+mimalloc = { version = "0.1", default-features = false }
 
 [build-dependencies]
 cc = "1"

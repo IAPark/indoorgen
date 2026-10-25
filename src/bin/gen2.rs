@@ -13,7 +13,7 @@ fn main() {
     let assets = infinigen::assets::RealAssets { fallback };
     let t = std::time::Instant::now();
     let g = generate(&Options { seed, restrict_room: room, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
-    eprintln!("total {:?}  stages {:?}", t.elapsed(), g.timings);
+    eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, infinigen::assets::thread_cpu());
     if std::env::var("EVAL").is_ok() {
         let (prog, _) = infinigen::pipeline::load_program(seed, &prog);
         let mut memo = infinigen::furn::eval::Memo::new(&prog, None);
@@ -23,6 +23,7 @@ fn main() {
         eprintln!("terms {:?}", r.loss_vals.iter().filter(|x| x.1.abs() > 0.01).map(|x| (x.0.clone(), (x.1 * 100.0).round() / 100.0)).collect::<Vec<_>>());
         eprintln!("viol {:?}", r.violations.iter().filter(|x| x.1 > 0.0).collect::<Vec<_>>());
     }
+    let t_scene = std::time::Instant::now();
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
     let mut mrng = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "room_materials"]));
@@ -57,6 +58,21 @@ fn main() {
             }
         }
     }
+    // build the final assets of all generated objects in parallel (each build is independent and deterministic; results are consumed in
+    // the original order below)
+    let visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
+        use rayon::prelude::*;
+        let items: Vec<(&String, &infinigen::furn::state::GenRef)> = g.state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen))).collect();
+        items
+            .par_iter()
+            .map(|(k, gen)| {
+                infinigen::assets::set_unseeded(gen.unseeded.clone());
+                let a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+                infinigen::assets::set_unseeded(None);
+                ((*k).clone(), a)
+            })
+            .collect()
+    };
     let mut counts = std::collections::BTreeMap::new();
     for (k, o) in &g.state.objs {
         let Some(gen) = &o.generator else { continue };
@@ -86,9 +102,7 @@ fn main() {
                 scene.lights.push(infinigen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() });
             }
         }
-        infinigen::assets::set_unseeded(gen.unseeded.clone());
-        let asset = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
-        infinigen::assets::set_unseeded(None);
+        let asset = &visuals[k];
         let _ = obj;
         let pose_m = Mat4([
             [o.pose.r[0][0], o.pose.r[0][1], o.pose.r[0][2], o.pose.t[0]],
@@ -104,6 +118,11 @@ fn main() {
             scene.add(&format!("{k}#{pi}"), &gen.class, m, mi);
         }
     }
-    eprintln!("objects: {counts:?}");
+    eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
+    let tw = std::time::Instant::now();
     scene.write_glb(&out).unwrap();
+    if infinigen::assets::prof_on() {
+        eprintln!("write_glb {:?}", tw.elapsed());
+        infinigen::assets::prof_report();
+    }
 }

@@ -1,3 +1,5 @@
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod dhash;
 pub mod pyhash;
 pub mod bl32;
