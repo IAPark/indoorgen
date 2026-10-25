@@ -35,6 +35,8 @@ pub struct Placement {
     /// body collision boxes in the local frame (lo, hi): the occupied space of the person
     pub boxes: Vec<(V3, V3)>,
     pub info: PlaceInfo,
+    /// seat height above the floor the legs were solved for (sitting poses): pass to `build_person_seat`
+    pub seat_z: Option<f64>,
 }
 
 impl Placement {
@@ -177,15 +179,26 @@ impl Planner<'_> {
     /// pose + collision check of one slot with one avatar; None when it does not fit
     fn fit(&self, s: &Slot, avatar: usize, seed: u64, tol: f64) -> Option<Placement> {
         use PoseKind::*;
-        let pi = pose_info(avatar, s.kind);
-        let yaw = yaw_of(s.face);
         let fl = self.w.floor_z;
+        let sitting = matches!(s.kind, SitUpright | SitRelaxed | SitBedEdge);
+        let sink = if s.soft { 0.04 } else { 0.0 };
+        let seat_rel = s.top - fl - sink;
+        if sitting && !(0.30..=0.70).contains(&seat_rel) {
+            return self.no(11);
+        }
+        let seat_z = if sitting { Some(seat_rel) } else { None };
+        let pi = match seat_z {
+            Some(z) => crate::pose_info_seat(avatar, s.kind, z),
+            None => pose_info(avatar, s.kind),
+        };
+        // lying: slot.face is the head direction, the avatar's head is towards -y
+        let yaw = if matches!(s.kind, LieBed | LieSofa) { yaw_of([-s.face[0], -s.face[1]]) } else { yaw_of(s.face) };
         let mut hand_err = 0.0;
         let (origin, z, seat_gap);
         match s.kind {
             SitUpright | SitRelaxed | SitBedEdge => {
                 let Some(seat) = pi.seat else { return self.no(90) };
-                let back = (seat[1] - pi.lo[1]) + 0.02;
+                let back = (seat[1] - pi.lo[1]) - if s.soft { 0.03 } else { 0.04 };
                 if s.has_back && s.depth < back + 0.12 {
                     return self.no(1);
                 }
@@ -193,18 +206,8 @@ impl Planner<'_> {
                 let hip = [s.anchor[0] + s.face[0] * off, s.anchor[1] + s.face[1] * off];
                 let o = rot2([seat[0], seat[1]], yaw);
                 origin = [hip[0] - o[0], hip[1] - o[1]];
-                let feet_z = pi.feet.map(|f| f[0][2].min(f[1][2])).unwrap_or(0.0);
-                let dz_seat = s.top - seat[2];
-                let dz_feet = fl - feet_z;
-                let sink = if s.soft { 0.05 } else { 0.01 };
-                z = (dz_seat - sink).max(dz_feet);
-                seat_gap = z + seat[2] - s.top;
-                if seat_gap > 0.10 {
-                    return self.no(2);
-                }
-                if pi.feet.is_some() && z - dz_feet > if s.kind == SitBedEdge { 0.25 } else { 0.15 } {
-                    return self.no(3);
-                }
+                z = fl;
+                seat_gap = seat[2] + fl - s.top;
             }
             LieBed | LieSofa => {
                 let Some(seat) = pi.seat else { return self.no(90) };
@@ -226,12 +229,14 @@ impl Planner<'_> {
                 seat_gap = 0.0;
             }
             Reach => {
-                origin = [s.anchor[0] - s.face[0] * 0.5, s.anchor[1] - s.face[1] * 0.5];
+                let d = pi.hands.map(|h| (h[0][1] + h[1][1]) / 2.0 - 0.1).unwrap_or(0.5);
+                origin = [s.anchor[0] - s.face[0] * d, s.anchor[1] - s.face[1] * d];
                 z = fl;
                 seat_gap = 0.0;
             }
             Crouch => {
-                origin = [s.anchor[0] - s.face[0] * 0.6, s.anchor[1] - s.face[1] * 0.6];
+                let d = pi.hi[1] + 0.12;
+                origin = [s.anchor[0] - s.face[0] * d, s.anchor[1] - s.face[1] * d];
                 z = fl;
                 seat_gap = 0.0;
             }
@@ -242,7 +247,8 @@ impl Planner<'_> {
             }
         }
         let pose = pose_mat(origin, z, yaw);
-        let boxes = body_boxes(&pi);
+        let asset = crate::build_person_seat(avatar, s.kind, seed, seat_z);
+        let boxes = body_slabs(&asset, &pi);
         let wb = world_boxes(&boxes, &pose);
         let room = &self.w.rooms[s.room];
         if !in_poly(origin, &room.poly) {
@@ -285,7 +291,7 @@ impl Planner<'_> {
             _ => 0.0,
         };
         let info = PlaceInfo { room: room.name.clone(), support: s.support.map(|i| self.w.objs[i].key.clone()), pen_furn, pen_wall, pen_people, feet_err, seat_gap, hand_err };
-        Some(Placement { avatar, kind: s.kind, pose, seed, boxes, info })
+        Some(Placement { avatar, kind: s.kind, pose, seed, boxes, info, seat_z })
     }
 }
 
@@ -293,8 +299,58 @@ fn sit_tol() -> f64 {
     std::env::var("PEOPLE_SIT_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.07)
 }
 
+/// the posed body as slab boxes (local frame): 8 slices of the real mesh along z (along y for lying poses). Hands that reach for the
+/// support (work surface, shelf) are cut off the slabs so that only the body itself is tested.
+pub fn body_slabs(a: &ig_kit::api::Asset, pi: &PoseInfo) -> Vec<(V3, V3)> {
+    use PoseKind::*;
+    let lying = matches!(pi.kind, LieBed | LieSofa);
+    let ax = if lying { 1 } else { 2 };
+    let mut pts: Vec<V3> = vec![];
+    for p in &a.parts {
+        pts.extend(p.mesh.pos.iter().copied());
+    }
+    if pts.is_empty() {
+        return body_boxes(pi);
+    }
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for p in &pts {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    let nb = 8;
+    let step = (hi[ax] - lo[ax]) / nb as f64;
+    let reach = pi.hands.map(|h| ((h[0][1] + h[1][1]) / 2.0, (h[0][2] + h[1][2]) / 2.0));
+    let mut out = vec![];
+    for b in 0..nb {
+        let (z0, z1) = (lo[ax] + b as f64 * step, lo[ax] + (b + 1) as f64 * step);
+        let (mut l, mut h) = ([f64::MAX; 3], [f64::MIN; 3]);
+        let mut any = false;
+        for p in &pts {
+            if p[ax] < z0 || p[ax] > z1 {
+                continue;
+            }
+            if let Some((hy, hz)) = reach {
+                if p[1] > hy - 0.12 && p[2] > hz - 0.3 && !lying {
+                    continue;
+                }
+            }
+            any = true;
+            for k in 0..3 {
+                l[k] = l[k].min(p[k]);
+                h[k] = h[k].max(p[k]);
+            }
+        }
+        if any {
+            out.push((l, h));
+        }
+    }
+    out
+}
+
 fn hand_tol() -> f64 {
-    std::env::var("PEOPLE_HAND_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.30)
+    std::env::var("PEOPLE_HAND_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.15)
 }
 
 fn norm(v: [f64; 2]) -> [f64; 2] {
@@ -355,7 +411,7 @@ fn make_slots(w: &World, rng: &mut Rng) -> Vec<Slot> {
                 let a = o.w([seat.x0, ly, 0.0]);
                 let kind = if is_chair || rng.f64() >= 0.7 { SitUpright } else { SitRelaxed };
                 let base = match rty {
-                    "dining-room" => 1.4,
+                    "dining-room" => 3.0,
                     "living-room" => 1.0,
                     "kitchen" => 0.6,
                     _ => 0.8,

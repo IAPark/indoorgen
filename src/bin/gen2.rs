@@ -244,7 +244,7 @@ fn main() {
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
     let people = infinigen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &infinigen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness });
     for (pi, pl) in people.iter().enumerate() {
-        let mut a = infinigen::people::build_person(pl.avatar, pl.kind, pl.seed);
+        let mut a = infinigen::people::build_person_seat(pl.avatar, pl.kind, pl.seed, pl.seat_z);
         if a.parts.is_empty() && std::env::var_os("PEOPLE_PROXY").is_some() {
             a = pl.proxy();
         }
