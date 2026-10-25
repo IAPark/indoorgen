@@ -251,6 +251,11 @@ fn env_f(k: &str, d: f64) -> f64 {
 /// Settle the avatar in the key pose `g_key` (local contract frame) placed in the world by `pose` against the static colliders.
 /// `lift`: start this far above the key pose (the body then falls onto the supports). Returns None when the model is incomplete.
 pub fn settle(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[StaticTris], floor_z: f64, lift: f64) -> Option<Settled> {
+    settle_k(av, m, g_key, pose, statics, floor_z, lift, 1.0)
+}
+
+/// `soft` scales the allowed joint deviation (larger = looser motors)
+pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[StaticTris], floor_z: f64, lift: f64, soft: f64) -> Option<Settled> {
     let t0 = std::time::Instant::now();
     let rig = Rig::new(av);
     let segs = &m.segs;
@@ -263,7 +268,7 @@ pub fn settle(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[Stat
     let mut w = PhysicsWorld::default();
     w.gravity = Vector::new(0.0, 0.0, -9.81 * env_f("RAGDOLL_G", 1.0));
     w.integration_parameters.dt = 1.0 / 60.0;
-    w.integration_parameters.normalized_max_corrective_velocity = 0.8;
+    w.integration_parameters.normalized_max_corrective_velocity = env_f("RAGDOLL_CORR", 0.8);
     w.integration_parameters.normalized_max_linear_velocity = 4.0;
     w.integration_parameters.num_solver_iterations = env_f("RAGDOLL_ITERS", 12.0) as usize;
     let g_static = InteractionGroups::new(Group::GROUP_2, Group::GROUP_1, InteractionTestMode::And);
@@ -381,7 +386,7 @@ pub fn settle(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[Stat
         }
     }
     // (sub_c holds the mass-weighted sum of the subtree COMs; children were folded into parents above)
-    let kscale = env_f("RAGDOLL_K", 25.0);
+    let kscale = env_f("RAGDOLL_K", 25.0) / soft;
     let kl = env_f("RAGDOLL_KL", 4.0);
     let gains = |si: usize, dev: f64, piv: V| -> (f64, f64) {
         let trunk = matches!(segs[si].name, "Bip01 Spine" | "Bip01 Spine1" | "Bip01 Spine2" | "Bip01 Neck" | "Bip01 Head");
@@ -458,15 +463,21 @@ pub fn settle(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[Stat
     w.integration_parameters.dt = 1e-4;
     w.step();
     w.integration_parameters.dt = 1.0 / 60.0;
+    let mut raised = 0.0;
     for _ in 0..4 {
+        if raised > 0.12 {
+            break;
+        }
         let worst = handles.iter().map(|&h| pen_of(&w, h)).fold(0.0f64, f64::max);
         if worst < 0.004 {
             break;
         }
+        raised += worst + 0.004;
         for &h in &handles {
             let b = &mut w.bodies[h];
             let mut t = b.translation();
             t.z += worst + 0.004;
+            raised += 0.0;
             b.set_translation(t, true);
         }
         w.integration_parameters.dt = 1e-4;

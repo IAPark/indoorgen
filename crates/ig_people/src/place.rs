@@ -800,7 +800,19 @@ fn ragdoll_person(w: &World, p: &mut Placement) {
         statics.push(StaticTris { tris, dz: if is_support { p.sink } else { 0.0 } });
     }
     let model = model_of(p.avatar, &av);
-    let Some(st) = settle(&av, &model, &g, &p.pose, &statics, w.floor_z, 0.03) else { return };
+    // a body that is flung away (> 0.45 m) or deeply stuck is retried with looser motors; then the key pose stays
+    let mut res = None;
+    for soft in [1.0, 2.0] {
+        if let Some(st) = settle_k(&av, &model, &g, &p.pose, &statics, w.floor_z, 0.03, soft) {
+            let ok = st.moved < 0.45 && st.pen < 0.05;
+            res = Some(st);
+            if ok {
+                break;
+            }
+            res = None;
+        }
+    }
+    let Some(st) = res else { return };
     let asset = crate::body::build_person_g(p.avatar, p.kind, p.seed, p.seat_z, Some(&st.g));
     let pi = match p.seat_z {
         Some(z) => crate::pose_info_seat(p.avatar, p.kind, z),
