@@ -169,29 +169,6 @@ impl MushroomFactory {
         }
     }
 
-    /// draw.remesh_fill with ig_kit's dual contouring port; its missing hole patching can leave quads that reference non-existent vertices
-    /// (thin tips of the gill sheet), those quads are dropped
-    fn remesh_fill_safe(m: &LMesh, resolution: f64) -> LMesh {
-        let n = m.v.len();
-        let s = super::leafkit::solidify(m, 0.1);
-        let top: Vec<f32> = (0..s.v.len()).map(|i| if i >= n { 1.0 } else { 0.0 }).collect();
-        let dims = s.dimensions();
-        let maxd = dims[0].max(dims[1]).max(dims[2]) as f64;
-        let depth = (((maxd + 0.01) / resolution).log2()).ceil() as i32;
-        let (rv, rq) = super::dualcon::dualcon(&s.v, &s.f, 2, depth, 0.9, 1.0);
-        let nv = rv.len() as i32;
-        let rf: Vec<Vec<u32>> = rq.iter().filter(|q| q.iter().all(|&i| i >= 0 && i < nv)).map(|q| q.iter().map(|&i| i as u32).collect()).collect();
-        let mut r = LMesh { v: rv, f: rf, e: vec![] };
-        r.ensure_face_edges();
-        let samp = super::leafkit::sample_nearest_surface_ex(&s, &top, &r.v, true);
-        let tv: Vec<f32> = samp.iter().map(|x| x.0).collect();
-        for (i, x) in samp.iter().enumerate() {
-            r.v[i] = x.1;
-        }
-        let del: Vec<bool> = tv.iter().map(|&t| t > 1e-3).collect();
-        r.delete_verts(&del)
-    }
-
     fn cap_mesh(&self, i: u64, face_size: f64) -> Mesh {
         let mut r = inst_rng(self.fs, i);
         let mut obj = self.spin(&self.cap.x, &self.cap.z, &self.cap.vec);
@@ -233,6 +210,7 @@ impl MushroomFactory {
         }
         if let Some(g) = &self.gill {
             let steps = r.randint(8, 20) as usize;
+            if std::env::var("MUDBG").is_ok() { eprintln!("gill steps {steps}"); }
             let pts: Vec<[f64; 3]> = (0..g.x.len()).map(|k| [g.x[k], 0.0, g.z[k]]).collect();
             let prof = super::blops::bezier_curve_points(&pts, &g.vec);
             let w = super::blops::weld_polyline(&prof, 1e-3);
@@ -242,7 +220,7 @@ impl MushroomFactory {
             let filled = super::leafkit::fill_outline(&outline);
             Self::dump("g012", &Self::from_lm(&filled));
             Self::dump("g013", &Self::from_lm(&super::leafkit::solidify(&filled, 0.1)));
-            let sheet = Self::remesh_fill_safe(&filled, 0.005);
+            let sheet = super::leafkit::remesh_fill(&filled, 0.005);
             let sheet = Self::from_lm(&sheet);
             Self::dump("g017", &sheet);
             // bpy.ops.mesh.spin(dupli=True): copy k+1 = R * copy k (float32), then remove_doubles
@@ -250,7 +228,7 @@ impl MushroomFactory {
             let (c, sn) = ((a as f64).cos() as f32, (a as f64).sin() as f32);
             let mut cur: Vec<[f32; 3]> = sheet.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
             let mut gm = Mesh::new();
-            for k in 0..steps {
+            for k in 0..=steps {
                 let off = gm.pos.len() as u32;
                 for p in &cur {
                     gm.pos.push([p[0] as f64, p[1] as f64, p[2] as f64]);
@@ -262,6 +240,19 @@ impl MushroomFactory {
             }
             Self::dump("g018", &gm);
             let mut gill = super::blops::remove_doubles(&gm, 1e-3);
+            {
+                // the merged last copy duplicates the first one: BMesh weld drops faces that end up with the same vertices
+                let mut seen: crate::dhash::HashSet<Vec<u32>> = crate::dhash::HashSet::default();
+                let mut keep: Vec<Vec<u32>> = vec![];
+                for f in &gill.faces {
+                    let mut k = f.clone();
+                    k.sort();
+                    if seen.insert(k) {
+                        keep.push(f.clone());
+                    }
+                }
+                gill.faces = keep;
+            }
             Self::dump("g019", &gill);
             gill = Self::subsurf2face(&gill, face_size);
             Self::dump("g019b", &gill);
