@@ -42,6 +42,10 @@ fn main() {
         let gopt = if fitted.is_some() { fitted } else { assets.placeholder(&class, fs, inst, kind) };
         if let (true, Some(g)) = (real, gopt) {
             let d = (0..3).map(|k| (g.lo[k] - lo[k]).abs().max((g.hi[k] - hi[k]).abs())).fold(0.0, f64::max);
+            if std::env::var_os("PHVERT").is_some() {
+                let ok = match &g.convex { Some(c) => c.len() == verts.len() && c.iter().zip(verts.iter()).all(|(a, b)| (0..3).all(|k| a[k] == b[k])), None => false };
+                if !ok { eprintln!("VERTDIFF {} fs {} inst {} rust {:?} py {:?}", class, fs, inst, g.convex.as_ref().map(|c| c.iter().take(3).cloned().collect::<Vec<_>>()), &verts[..3.min(verts.len())]); }
+            }
             if std::env::var_os("PHTAGS").is_some() {
                 let names = j["face_names"].as_array().cloned().unwrap_or_default();
                 let polys = j["polys"].as_array().unwrap();

@@ -550,6 +550,11 @@ fn quad_grid_pillow(w: f64, s: f64, pressure_h: f64, n: usize) -> Mesh {
 }
 
 impl Factory for Bed {
+    fn placeholder_exact(&self, _i: u64) -> Option<super::cabnodes::ExactMesh> {
+        let c = &self.s.c;
+        Some(super::chair::rotated_bbox_exact(-c.width / 2.0, c.width / 2.0, -c.size - c.leg_thickness * 0.5, 0.0, -c.leg_height, c.back_height * 1.2))
+    }
+
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let c = &self.s.c;
         let (y0, y1) = (-c.size - c.leg_thickness * 0.5, 0.0);

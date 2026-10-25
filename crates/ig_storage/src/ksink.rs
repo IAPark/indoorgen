@@ -51,6 +51,12 @@ impl KSink {
 }
 
 impl Factory for KSink {
+    /// create_placeholder: bbox_from_mesh.box_from_corners of the sink bounds with z-min = z-max - ProtrudeAboveCounter
+    fn placeholder_exact(&self, _i: u64) -> Option<cabnodes::ExactMesh> {
+        let (mut lo, hi) = self.geo_bounds();
+        lo[2] = (hi[2] as f32 - self.protrude as f32) as f64;
+        Some(super::api::box_from_corners_exact(lo, hi))
+    }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let (mut lo, hi) = self.geo_bounds();
         lo[2] = (hi[2] as f32 - self.protrude as f32) as f64;
