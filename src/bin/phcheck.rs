@@ -23,7 +23,24 @@ fn main() {
         let e = stats.entry(class.clone()).or_default();
         e.0 += 1;
         let real = infinigen::assets::make_factory(&class, fs).is_some();
-        if let (true, Some(g)) = (real, assets.placeholder(&class, fs, inst, kind)) {
+        // Side/Coffee tables take their dimensions from constructor draws on the global stream (not in the oracle): fit them to the python bounds
+        let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2]];
+        let fitted = if real && (class == "SideTableFactory" || class == "CoffeeTableFactory") {
+            let side = class == "SideTableFactory";
+            let mut u = if side { vec![1.0, 1.0] } else { vec![1.2, 0.7, 0.45] };
+            for _ in 0..40 {
+                infinigen::assets::set_unseeded(Some(u.clone()));
+                let Some(g) = assets.placeholder(&class, fs, inst, kind) else { break };
+                let e = [g.hi[0] - g.lo[0], g.hi[1] - g.lo[1], g.hi[2]];
+                if side { u[0] *= ext[0] / e[0]; u[1] *= ext[2] / e[2]; } else { for k in 0..3 { u[k] *= ext[k] / e[k]; } }
+            }
+            infinigen::assets::set_unseeded(Some(u));
+            let g = assets.placeholder(&class, fs, inst, kind);
+            infinigen::assets::set_unseeded(None);
+            g
+        } else { None };
+        let gopt = if fitted.is_some() { fitted } else { assets.placeholder(&class, fs, inst, kind) };
+        if let (true, Some(g)) = (real, gopt) {
             let d = (0..3).map(|k| (g.lo[k] - lo[k]).abs().max((g.hi[k] - hi[k]).abs())).fold(0.0, f64::max);
             if std::env::var_os("PHTAGS").is_some() {
                 let names = j["face_names"].as_array().cloned().unwrap_or_default();

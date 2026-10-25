@@ -261,6 +261,12 @@ impl Asset {
         let (lo, hi) = self.bounds();
         crate::furn::geom::cuboid_py(lo, hi, 0, 0)
     }
+
+    /// bbox_mesh_from_hipoly(use_pholder=True): box_from_corners (the node-group cube; vertex/face layout variant 1)
+    pub fn bbox_geom_corners(&self) -> ObjGeom {
+        let (lo, hi) = self.bounds();
+        crate::furn::geom::cuboid_py(lo, hi, 1, 0)
+    }
 }
 
 pub trait Factory {
@@ -539,7 +545,7 @@ impl RealAssets {
                 },
                 PlaceholderKind::AssetAsPlaceholder => f.asset(inst_seed).solver_geom(),
                 PlaceholderKind::BboxOfPlaceholder => match f.placeholder(inst_seed) {
-                    Some(p) => p.bbox_geom(),
+                    Some(p) => p.bbox_geom_corners(),
                     None => match self.fallback.placeholder(class, factory_seed, inst_seed, kind) {
                         Some(g) => g,
                         None => bbox_of_asset(&*f, inst_seed),
