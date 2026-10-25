@@ -32,6 +32,8 @@ pub struct GnOut {
     pub names: Vec<String>,
     pub meshes: Vec<CMesh>,
     pub curve_pts: Vec<Vec<[f32; 3]>>,
+    /// edge lists of the meshes (Blender edge order)
+    pub edges: Vec<Vec<[u32; 2]>>,
 }
 
 impl GnOut {
@@ -73,7 +75,7 @@ pub fn run_group(top: &str, params: &J) -> GnOut {
     }
     let objects = gn::Objects::default();
     let outs = gn::eval(gs, top, &inputs, &objects).unwrap_or_else(|e| panic!("{top}: {e}"));
-    let mut r = GnOut { names: vec![], meshes: vec![], curve_pts: vec![] };
+    let mut r = GnOut { names: vec![], meshes: vec![], curve_pts: vec![], edges: vec![] };
     for (o, (_, v)) in g.outputs.iter().zip(outs.iter()) {
         if o.ty != Ty::Geo {
             continue;
@@ -82,6 +84,7 @@ pub fn run_group(top: &str, params: &J) -> GnOut {
             let real = gn::meshops::realize_instances(geo, 1000);
             r.names.push(o.name.clone());
             r.meshes.push(real.mesh.as_ref().map(CMesh::from_gn).unwrap_or_default());
+            r.edges.push(real.mesh.as_ref().map(|m| m.edges.clone()).unwrap_or_default());
             let mut pts = vec![];
             if let Some(c) = &real.curves {
                 for k in 0..c.nc() {

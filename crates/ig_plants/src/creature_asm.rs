@@ -141,9 +141,9 @@ fn from_mesh(m: &crate::mesh::Mesh) -> CMesh {
 }
 
 /// SUBSURF modifier levels=2 (apply) then optional uniform scale
-fn subsurf2(m: &CMesh, scale: f32) -> CMesh {
+fn subsurf2(m: &CMesh, scale: f32, gedges: Option<&[[u32; 2]]>) -> CMesh {
     let mm = to_mesh(m);
-    let edges = crate::bathkit::edge_list(&mm.faces).into_iter().map(|(a, b)| [a, b]).collect::<Vec<_>>();
+    let edges = match gedges { Some(e) => e.to_vec(), None => crate::bathkit::edge_list(&mm.faces).into_iter().map(|(a, b)| [a, b]).collect::<Vec<_>>() };
     let s = crate::subsurf::subsurf_osd(&mm, 2, false, Some(&edges)).unwrap_or_else(|| crate::subsurf::subsurf(&mm, 2, false));
     let mut o = from_mesh(&s);
     if scale != 1.0 {
@@ -169,6 +169,7 @@ pub fn make_part(fac: &Fac, rng: &mut Rng) -> PartData {
         k => {
             let out = run_group(top_group(k), &fac.params);
             let geo = out.mesh("Geometry").cloned();
+            let geo_edges = out.names.iter().position(|n| n == "Geometry").map(|i| out.edges[i].clone());
             let mut skin = geo.clone().unwrap_or_else(vert_mesh);
             let skeleton = out.skeleton().unwrap_or_else(|| infer_skeleton(&skin));
             let base = out.mesh("Base Mesh").cloned();
@@ -191,12 +192,12 @@ pub fn make_part(fac: &Fac, rng: &mut Rng) -> PartData {
                     skin = vert_mesh();
                 }
                 Kind::Horn => {
-                    let h = subsurf2(&skin, 1.0);
+                    let h = subsurf2(&skin, 1.0, geo_edges.as_deref());
                     extras.push(("Horn".into(), h));
                     skin = vert_mesh();
                 }
                 Kind::HoofAnkle => {
-                    skin = subsurf2(&skin, 0.8);
+                    skin = subsurf2(&skin, 0.8, geo_edges.as_deref());
                 }
                 _ => {}
             }
@@ -225,8 +226,10 @@ fn ray_cast(m: &CMesh, origin: [f32; 3], dir: [f32; 3]) -> Option<([f32; 3], [f3
     let dl = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
     let d = [dir[0] / dl, dir[1] / dl, dir[2] / dl];
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    let cr = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    let dt = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let fma = std::env::var("CRFMA").is_ok();
+    let fm2 = std::env::var("CRFMA").as_deref() == Ok("2");
+    let cr = |a: [f32; 3], b: [f32; 3]| if fm2 { [(-a[2]).mul_add(b[1], a[1] * b[2]), (-a[0]).mul_add(b[2], a[2] * b[0]), (-a[1]).mul_add(b[0], a[0] * b[1])] } else if fma { [a[1].mul_add(b[2], -(a[2] * b[1])), a[2].mul_add(b[0], -(a[0] * b[2])), a[0].mul_add(b[1], -(a[1] * b[0]))] } else { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] };
+    let dt = |a: [f32; 3], b: [f32; 3]| if fm2 { a[0].mul_add(b[0], a[1].mul_add(b[1], a[2] * b[2])) } else if fma { a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0])) } else { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] };
     let mut best: Option<(f32, [u32; 3])> = None;
     for t in &tris {
         let (v0, v1, v2) = (m.pos[t[0] as usize], m.pos[t[1] as usize], m.pos[t[2] as usize]);
@@ -313,6 +316,7 @@ fn attach_local(target: &PartData, att: &Att, bvh_mesh: &CMesh) -> M4 {
     let dir_rot = qmul(euler_deg(180.0 * v, 0.0, 0.0), euler_deg(0.0, 90.0, 0.0));
     let direction = qrot(qmul(basis, dir_rot), [1.0, 0.0, 0.0]);
     let hit = ray_cast(bvh_mesh, origin, [direction[0] as f32, direction[1] as f32, direction[2] as f32]);
+    if std::env::var("CRDBG").is_ok() { eprintln!("attach u {u} v {v} rad {rad}: origin {:?} dir {:?} hit {:?}", origin, direction, hit); }
     let (location, normal) = match hit {
         Some((l, nrm)) => (l, [nrm[0] as f64, nrm[1] as f64, nrm[2] as f64]),
         None => (origin, [1.0, 0.0, 0.0]),
