@@ -626,6 +626,18 @@ mod tests {
         Some((pos, faces))
     }
     #[test]
+    fn placeholder_dump() {
+        std::env::remove_var("REFSTUB");
+        let mut out = serde_json::Map::new();
+        for s in 0..6u64 {
+            let b = Balloon::new(s);
+            let a = b.placeholder(0).unwrap();
+            let v: Vec<_> = a.parts[0].mesh.pos.iter().map(|p| serde_json::json!(p)).collect();
+            out.insert(s.to_string(), serde_json::Value::Array(v));
+        }
+        std::fs::write("../../tmp/ph_rs.json", serde_json::Value::Object(out).to_string()).unwrap();
+    }
+    #[test]
     fn text_stage() {
         let dir = std::env::var("SD").unwrap_or("../../tmp/sd".into());
         let Some((rp, rf)) = load(&format!("{dir}/000_mesh_primitive_cube_add.json")) else { return };
