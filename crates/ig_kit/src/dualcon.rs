@@ -321,20 +321,23 @@ impl Octree {
         let mask = [0usize, 4, 8];
         let lf = &mut self.leaves[leaf as usize];
         let mut oldc = 0;
-        let mut newo: Vec<[f32; 4]> = vec![];
+        let mut newo = [[0f32; 4]; 3];
+        let mut nn = 0usize;
         for i in 0..3 {
             if (lf.edge_parity >> mask[i]) & 1 == 0 {
                 if p.is_intersecting_primary(i) {
                     lf.edge_parity |= 1 << mask[i];
-                    newo.push([p.intersection_primary(i), p.norm[0] as f32, p.norm[1] as f32, p.norm[2] as f32]);
+                    newo[nn] = [p.intersection_primary(i), p.norm[0] as f32, p.norm[1] as f32, p.norm[2] as f32];
+                    nn += 1;
                 }
             } else {
-                newo.push(lf.offs[oldc]);
+                newo[nn] = lf.offs[oldc];
+                nn += 1;
                 oldc += 1;
             }
         }
-        if newo.len() > oldc {
-            lf.offs = newo;
+        if nn > oldc {
+            lf.offs = newo[..nn].to_vec();
         }
     }
 
@@ -656,7 +659,7 @@ impl Octree {
                         ata[3] += n[1] * n[1];
                         ata[4] += n[1] * n[2];
                         ata[5] += n[2] * n[2];
-                        let fq: u32 = std::env::var("FMAQ").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let fq: u32 = { static Q: std::sync::OnceLock<u32> = std::sync::OnceLock::new(); *Q.get_or_init(|| std::env::var("FMAQ").ok().and_then(|s| s.parse().ok()).unwrap_or(0)) };
                         let pn = if fq & 1 != 0 { p[2].mul_add(n[2], p[1].mul_add(n[1], p[0] * n[0])) } else { p[0] * n[0] + p[1] * n[1] + p[2] * n[2] };
                         if fq & 2 != 0 {
                             atb[0] = n[0].mul_add(pn, atb[0]);
@@ -692,13 +695,13 @@ impl Octree {
 
     fn generate_minimizer(&mut self, node: u32, st: [i64; 3], len: i64, height: i32, offset: &mut i32) {
         if height == 0 {
-            let lf = self.leaves[node as usize].clone();
-            let mut r = self.compute_minimizer(&lf, st, len);
+            let lf = &self.leaves[node as usize];
+            let mut r = self.compute_minimizer(lf, st, len);
+            let smask = lf.signs;
             let dimen = self.dimen as f32;
             for j in 0..3 {
                 r[j] = r[j] * self.range / dimen + self.origin[j];
             }
-            let smask = lf.signs;
             let mult = if smask > 0 && smask < 255 { 1 } else { 0 };
             for _ in 0..mult {
                 self.verts.push(r);
@@ -881,7 +884,7 @@ fn jacobi_svd3(a: &M3) -> (M3, [f32; 3], M3) {
 /// result = pinv(A, tol 0.1) * (b - A mp) + mp
 fn solve_least_squares(half_a: &[f32; 6], b: &[f32; 3], mp: &[f32; 3]) -> [f32; 3] {
     let a: M3 = [[half_a[0], half_a[1], half_a[2]], [half_a[1], half_a[3], half_a[4]], [half_a[2], half_a[4], half_a[5]]];
-    let fs: u32 = std::env::var("FMAS").ok().and_then(|s| s.parse().ok()).unwrap_or(7);
+    let fs: u32 = { static S: std::sync::OnceLock<u32> = std::sync::OnceLock::new(); *S.get_or_init(|| std::env::var("FMAS").ok().and_then(|s| s.parse().ok()).unwrap_or(7)) };
     let (u, sv, v) = jacobi_svd3(&a);
     // V * diag(select(|s| > 0.1, 1/s, 0)) * U^T
     let d: [f32; 3] = [0, 1, 2].map(|i| if sv[i].abs() > 0.1 { 1.0 / sv[i] } else { 0.0 });
