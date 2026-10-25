@@ -127,6 +127,11 @@ pub struct DoorParams {
 
 /// geometry_door_nodes (+ mid board, knob), result before the Object Info placement of the cabinet.
 pub fn door_gmesh(p: &DoorParams, o: RampedOpts) -> GMesh {
+    door_gmesh_t(p, o, None)
+}
+
+/// door_gmesh with per-face material tags: `tags` = [frame (edges + knob), lower panel, upper panel] (written into GMesh::tag; None keeps all 0)
+pub fn door_gmesh_t(p: &DoorParams, o: RampedOpts, tags: Option<[u8; 3]>) -> GMesh {
     let f = |x: f64| x as f32;
     let (h, w, e1, ew, e2, ang) = (f(p.height), f(p.width), f(p.e1), f(p.ew), f(p.e2), f(p.ang));
     let z3 = [0f32; 3];
@@ -161,6 +166,11 @@ pub fn door_gmesh(p: &DoorParams, o: RampedOpts) -> GMesh {
         let t4 = cube.translated([0.0, add_k, multiply_1]);
         let multiply_2 = multiply * 1.5;
         let t7 = cube.translated([0.0, add_k, multiply_2]);
+        let (mut t4, mut t7) = (t4, t7);
+        if let Some(t) = tags {
+            set_tag(&mut t4, t[1]);
+            set_tag(&mut t7, t[2]);
+        }
         (GMesh::join(&[t4, t7]), multiply)
     } else {
         let add = w + -0.0001;
@@ -171,7 +181,11 @@ pub fn door_gmesh(p: &DoorParams, o: RampedOpts) -> GMesh {
         let add_2 = multiply + -0.0001;
         let cube = gcube([add, add_1, add_2], [5, 5, 5]);
         let multiply_1 = multiply * 0.5;
-        (cube.translated([0.0, add_k, multiply_1]), multiply)
+        let mut c = cube.translated([0.0, add_k, multiply_1]);
+        if let Some(t) = tags {
+            set_tag(&mut c, t[1]);
+        }
+        (c, multiply)
     };
     let mut frame = vec![frame_geo];
     if p.has_mid {
@@ -193,7 +207,10 @@ pub fn door_gmesh(p: &DoorParams, o: RampedOpts) -> GMesh {
         cyl.transformed([add_2, multiply_1, knob_mid], [A90, 0.0, 0.0], one)
     };
     frame.push(knob);
-    let join1 = GMesh::join(&frame);
+    let mut join1 = GMesh::join(&frame);
+    if let Some(t) = tags {
+        set_tag(&mut join1, t[0]);
+    }
     let geos = GMesh::join(&[join1, mid]);
     let multiply = w * -0.5;
     let tr = geos.translated([multiply, 0.0, 0.0]);
@@ -206,6 +223,81 @@ pub fn door_gmesh(p: &DoorParams, o: RampedOpts) -> GMesh {
         }
     }
     t1.transformed(z3, [0.0, 0.0, -A90], one)
+}
+
+/// shelf_gmesh(p, true) with per-face material tags: frame parts (sides, back, bottom boards) get `frame_t`, division boards + screws `board_t` (| support bit)
+pub fn shelf_gmesh_slots(p: &ShelfParams, frame_t: u8, board_t: u8) -> GMesh {
+    let tag_support = true;
+    let f = |x: f64| x as f32;
+    let (st, d, h) = (f(p.side_t), f(p.shelf_depth), f(p.shelf_height));
+    let sw = f(p.shelf_width);
+    let bt = f(p.back_t);
+    let z3 = [0f32; 3];
+    let one = [1f32; 3];
+    // side boards
+    let hh = h + 0.002f32;
+    let dd = d + 0.004f32;
+    let mut sides = vec![];
+    for &x in &p.side_x {
+        sides.push(gcube([st, dd, hh], [2, 2, 2]).translated([f(x), 0.0, hh * 0.5]));
+    }
+    // back board
+    let width = sw + f(p.side_t * 2.0);
+    let bh = h + -0.001f32;
+    let back = {
+        let ma = d.mul_add(-0.5, bt * -0.5);
+        gcube([width, bt, bh], [2, 2, 2]).translated([0.0, ma, bh * 0.5])
+    };
+    let mut bottoms = vec![];
+    let bhgt = f(p.bottom_h);
+    for i in 0..p.cell_w.len() {
+        let sub = d * 0.5 - f(p.y_gap);
+        bottoms.push(gcube([f(p.cell_w[i]), st, bhgt], [2, 2, 2]).translated([f(p.div_x[i]), sub, bhgt * 0.5]));
+    }
+    let mut frame_in = vec![back];
+    frame_in.extend(sides);
+    frame_in.extend(bottoms);
+    let mut frame = GMesh::join(&frame_in);
+    set_tag(&mut frame, frame_t);
+    // division boards
+    let dt = f(p.div_t);
+    let mut boards = vec![];
+    for i in 0..p.cell_w.len() {
+        for j in 0..p.div_z.len() {
+            let w = f(p.cell_w[i]);
+            let cube = if tag_support { gcube_tagged([w, d, dt]) } else { gcube([w, d, dt], [2, 2, 2]) };
+            // screw head group
+            let sx = w * 0.5 - f(p.screw_wgap);
+            let m1 = d * 0.5;
+            let gap = f(p.screw_wgap) + 0.0;
+            let s1 = m1 - gap;
+            let m2 = s1 * -1.0;
+            let m3 = dt * -0.5;
+            let cyl = gcylinder(32, f(p.screw_r), f(p.screw_depth), 2);
+            let t1 = cyl.translated([sx, m2, m3]);
+            let t6 = cyl.translated([sx, s1, m3]);
+            let j2 = GMesh::join(&[t1, t6]);
+            let t4 = j2.transformed(z3, z3, [-1.0, 1.0, 1.0]);
+            let screws = GMesh::join(&[t4, j2]);
+            let joined = GMesh::join(&[cube, screws]);
+            boards.push(joined.translated([f(p.div_x[i]), 0.0, f(p.div_z[j])]));
+        }
+    }
+    let mut boards = GMesh::join(&boards);
+    for t in boards.tag.iter_mut() {
+        *t |= board_t;
+    }
+    let all = GMesh::join(&[frame, boards]);
+    let tri = all.triangulated();
+    let _ = one;
+    tri.transformed(z3, [0.0, 0.0, -1.5708f32], one)
+}
+
+/// all faces of `g` get tag `t`
+pub fn set_tag(g: &mut GMesh, t: u8) {
+    for x in g.tag.iter_mut() {
+        *x = t;
+    }
 }
 
 pub struct DrawerParams {
@@ -273,7 +365,14 @@ pub fn drawer_gmesh(p: &DrawerParams) -> GMesh {
 
 /// get_shelf_material(<Material object>) -> default branch: choice(p) + the shader function's own draws
 pub fn shelf_material_draws(r: &mut Rng) {
+    shelf_material_pick(r);
+}
+
+/// Same, returning the choice (0 shader_shelves_white, 1 shader_rough_plastic, 2 shader_shelves_black_wood, 3 shader_wood, 4 shader_shelves_wood)
+/// and the generator state right after the choice (= where the chosen shader function's own draws start).
+pub fn shelf_material_pick(r: &mut Rng) -> (usize, Rng) {
     let i = r.choice_p(&[0.3, 0.2, 0.3, 0.1, 0.1]);
+    let after = r.clone();
     match i {
         1 => {
             for _ in 0..5 {
@@ -288,6 +387,14 @@ pub fn shelf_material_draws(r: &mut Rng) {
         }
         _ => {}
     }
+    (i, after)
+}
+
+/// a drawer's material choice (drawer_material; the knob_material draws are replayed but unused: the drawer node graph sets one material)
+#[derive(Clone)]
+pub struct DrawerPick {
+    pub idx: usize,
+    pub after: Rng,
 }
 
 pub struct KcSpec {
@@ -305,7 +412,14 @@ pub fn kitchen_cabinet_gmesh(r: &mut Rng, spec: &KcSpec, o: RampedOpts) -> GMesh
 /// Same, for a factory object that already built an instance: the frame's random parameters (`frame_rnd`, filled into the python
 /// factory's `frame_params` by its first cabinet) persist and are not drawn again. Returns the parameters in use.
 pub fn kitchen_cabinet_gmesh_ex(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd: Option<(f64, f64, f64, f64)>) -> (GMesh, (f64, f64, f64, f64)) {
+    kitchen_cabinet_core(r, spec, o, frame_rnd, None)
+}
+
+/// Same geometry with per-face material slots in `tag >> 1` (when `picks` is given): 0 frame + doors (K_z), 1 division boards (K), 2 + n = the
+/// n-th drawer (its choice is pushed to `picks`). The polygon order is identical to the untagged call.
+pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd: Option<(f64, f64, f64, f64)>, mut picks: Option<&mut Vec<DrawerPick>>) -> (GMesh, (f64, f64, f64, f64)) {
     use super::cabnodes::*;
+    let tagged = picks.is_some();
     let f = |x: f64| x as f32;
     let (dx, _dy, dz) = (spec.dims[0], spec.dims[1], spec.dims[2]);
     let depth = dx - 0.01;
@@ -342,7 +456,7 @@ pub fn kitchen_cabinet_gmesh_ex(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame
         let (y_gap, sd, sr, sw) = rnd.unwrap();
         let mut sp = ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap, bottom_h, div_t, screw_depth: sd, screw_r: sr, screw_wgap: sw, cell_w: vec![w], cell_h: cell_h.clone(), ..Default::default() };
         sp.derive();
-        frames.push(shelf_gmesh(&sp, true));
+        frames.push(if tagged { shelf_gmesh_slots(&sp, 0, 2) } else { shelf_gmesh(&sp, true) });
         // attach type
         let kind = if spec.drawer_only { r.choice_p(&[0.5, 0.5]) } else { r.choice_p(&[0.4, 0.4, 0.2]) }; // 0 drawer, 1 door, 2 none
         let shelf_w = sp.shelf_width + side_t * 2.0;
@@ -384,10 +498,14 @@ pub fn kitchen_cabinet_gmesh_ex(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame
                     let _tilt = r.uniform(0.02, 0.03);
                     let kr = r.uniform(0.003, 0.006);
                     let kl = r.uniform(0.018, 0.035);
-                    shelf_material_draws(r);
+                    let (idx, after) = shelf_material_pick(r);
                     shelf_material_draws(r);
                     let dpar = DrawerParams { board_t, board_w: sp.shelf_width, board_h: drawer_h, depth, side_h, width: dwid, knob_r: kr, knob_len: kl };
-                    let d = drawer_gmesh(&dpar);
+                    let mut d = drawer_gmesh(&dpar);
+                    if let Some(pk) = picks.as_deref_mut() {
+                        set_tag(&mut d, ((2 + pk.len()) << 1) as u8);
+                        pk.push(DrawerPick { idx, after });
+                    }
                     let hinge = [depth / 2.0, 0.0, div_t / 2.0 + sp.div_z[i]];
                     att.push(d.translated([f(hinge[0]), f(hinge[1]), f(hinge[2])]));
                 }
@@ -424,6 +542,21 @@ fn clip_(x: f64, lo: f64, hi: f64) -> f64 {
 
 /// SingleCabinetBaseFactory.create_asset(i): shelf frame + doors + hinge attachments (instance stream `r`)
 pub fn single_cabinet_gmesh(r: &mut Rng, dims: [f64; 3], o: RampedOpts) -> GMesh {
+    single_cabinet_core(r, dims, o, None)
+}
+
+/// door panels of a SingleCabinet (door nodegroup mid boards): lower / upper glass flags (`has_mid` false: one panel = lower)
+#[derive(Clone, Copy, Default, Debug)]
+pub struct SinglePanels {
+    pub has_mid: bool,
+    pub lower_glass: bool,
+    pub upper_glass: bool,
+}
+
+/// Same with per-face material slots in `tag >> 1` when `panels` is given: 0 shelf frame, 1 division boards, 2 door frame + knob, 3 lower panel,
+/// 4 upper panel (hinge plates: 0, python gives them no material = material index 0 = the first slot).
+pub fn single_cabinet_core(r: &mut Rng, dims: [f64; 3], o: RampedOpts, mut panels: Option<&mut SinglePanels>) -> GMesh {
+    let tagged = panels.is_some();
     let f = |x: f64| x as f32;
     let depth = dims[0] - 0.01;
     let bottom_h = 0.083;
@@ -441,7 +574,7 @@ pub fn single_cabinet_gmesh(r: &mut Rng, dims: [f64; 3], o: RampedOpts) -> GMesh
     }
     let mut sp = ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap, bottom_h, div_t, screw_depth: sd, screw_r: sr, screw_wgap: sw, cell_w: vec![dims[1]], cell_h, ..Default::default() };
     sp.derive();
-    let shelf = shelf_gmesh(&sp, true);
+    let shelf = if tagged { shelf_gmesh_slots(&sp, 0, 2) } else { shelf_gmesh(&sp, true) };
     // door params
     let shelf_w = sp.shelf_width + side_t * 2.0;
     let (door_w, num_door) = if shelf_w < 0.55 { (shelf_w, 1) } else { (shelf_w / 2.0 - 0.0005, 2) };
@@ -457,15 +590,20 @@ pub fn single_cabinet_gmesh(r: &mut Rng, dims: [f64; 3], o: RampedOpts) -> GMesh
     let kl = r.uniform(0.018, 0.035);
     let gap = r.uniform(0.05, 0.15);
     let has_mid = r.choice_p(&[0.6, 0.4]) == 0;
+    let (mut lower_glass, mut upper_glass) = (false, false);
     if has_mid {
-        let lower_glass = r.choice_p(&[0.7, 0.3]) == 1;
-        let _ = lower_glass;
-        r.choice_p(&[0.6, 0.4]);
+        lower_glass = r.choice_p(&[0.7, 0.3]) == 1;
+        // upper = choice([lower, "glass"], p=[0.6, 0.4])
+        upper_glass = r.choice_p(&[0.6, 0.4]) == 1 || lower_glass;
+    }
+    if let Some(p) = panels.as_deref_mut() {
+        *p = SinglePanels { has_mid, lower_glass, upper_glass };
     }
     let mut dp = DoorParams { height: door_h, width: door_w, e1, ew, e2, ang, knob_r: kr, knob_len: kl, has_mid, left: false };
-    let right = door_gmesh(&dp, o);
+    let dtags = if tagged { Some([4u8, 6, 8]) } else { None };
+    let right = door_gmesh_t(&dp, o, dtags);
     dp.left = true;
-    let left = door_gmesh(&dp, o);
+    let left = door_gmesh_t(&dp, o, dtags);
     let attach_height = [gap, door_h - gap];
     let (hinges, attach_pos): (Vec<[f64; 3]>, Vec<[f64; 3]>) = if num_door == 1 {
         (vec![[depth / 2.0 + 0.0025, -shelf_w / 2.0, bottom_h]], attach_height.iter().map(|z| [depth / 2.0, -sp.shelf_width / 2.0, bottom_h + z]).collect())
