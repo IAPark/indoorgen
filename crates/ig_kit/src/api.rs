@@ -159,14 +159,34 @@ impl Asset {
 
     pub fn bbox_geom(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
-        crate::geom::cuboid_py(lo, hi, 0, 0)
+        crate::geom::cuboid_py(f32v(lo), f32v(hi), 0, 0)
     }
 
     /// bbox_mesh_from_hipoly(use_pholder=True): box_from_corners (the node-group cube; vertex/face layout variant 1)
     pub fn bbox_geom_corners(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
-        crate::geom::cuboid_py(lo, hi, 1, 0)
+        box_from_corners_geom(lo, hi)
     }
+}
+
+fn f32v(v: V3) -> V3 {
+    [v[0] as f32 as f64, v[1] as f32 as f64, v[2] as f32 as f64]
+}
+
+/// python bbox_from_mesh.box_from_corners in float32: cube of size (max-min), translated by mix(min, max, 0.5); vertex order x fastest
+pub fn box_from_corners_verts(lo: V3, hi: V3) -> [V3; 8] {
+    let (lo, hi) = ([lo[0] as f32, lo[1] as f32, lo[2] as f32], [hi[0] as f32, hi[1] as f32, hi[2] as f32]);
+    let size: [f32; 3] = std::array::from_fn(|k| hi[k] - lo[k]);
+    let half: [f32; 3] = std::array::from_fn(|k| size[k] * 0.5);
+    let c: [f32; 3] = std::array::from_fn(|k| lo[k] * 0.5 + hi[k] * 0.5);
+    std::array::from_fn(|i| std::array::from_fn(|k| {
+        let s = if (i >> k) & 1 == 0 { -half[k] } else { half[k] };
+        (s + c[k]) as f64
+    }))
+}
+
+pub fn box_from_corners_geom(lo: V3, hi: V3) -> ObjGeom {
+    crate::geom::cuboid_py_verts(box_from_corners_verts(lo, hi), 1, 0)
 }
 
 pub trait Factory {
@@ -193,7 +213,7 @@ pub trait Factory {
 /// bounding box placeholder of the final asset (uses the float32 exact mesh when the class is ported at topology level)
 pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
     if let Some((lo, hi)) = f.bounds_hint(inst) {
-        return crate::geom::cuboid_py(lo, hi, 1, 0);
+        return box_from_corners_geom(lo, hi);
     }
     if let Some(e) = f.exact(inst) {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -203,10 +223,10 @@ pub fn bbox_of_asset(f: &dyn Factory, inst: u64) -> ObjGeom {
                 hi[k] = hi[k].max(v[k]);
             }
         }
-        return crate::geom::cuboid_py(lo, hi, 1, 0);
+        return box_from_corners_geom(lo, hi);
     }
     let (lo, hi) = f.asset(inst).bounds();
-    crate::geom::cuboid_py(lo, hi, 1, 0)
+    box_from_corners_geom(lo, hi)
 }
 
 /// The asset scenes should use: the exact (python-matching) geometry when the class has one behind `Factory::exact`,
