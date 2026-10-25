@@ -301,7 +301,7 @@ pub fn remesh_fill(text: &Mesh, res: f64) -> Mesh {
         }
     }
     for f in &q {
-        if f.iter().all(|&i| keep[i as usize]) {
+        if f.iter().all(|&i| (i as usize) < keep.len() && keep[i as usize]) {
             out.faces.push(f.iter().map(|&i| map[i as usize]).collect());
         }
     }
@@ -351,6 +351,7 @@ pub fn subdivide_vertical(m: &Mesh, cuts: usize) -> Mesh {
                     let mut lc = vec![c];
                     lc.extend(&v2);
                     lc.push(d);
+                    lc.reverse();
                     for i in 0..=cuts {
                         faces.push(vec![la[i], la[i + 1], lc[i + 1], lc[i]]);
                     }
@@ -521,8 +522,7 @@ impl Balloon {
     fn new(fs: u64) -> Balloon {
         let mut r = Rng::seeded(fs);
         let thickness = r.uniform(0.06, 0.1);
-        let mat = matdraw::sample_init(&mut r, matdraw::DECORATIVE_METAL);
-        matdraw::call(&mut r, mat);
+        let mat = matdraw::sample_call(&mut r, matdraw::DECORATIVE_METAL);
         let rel_scale = r.uniform(0.2, 0.3) * 4.0;
         let displace = r.uniform(0.02, 0.04);
         Balloon { thickness, rel_scale, displace, mat, fs }
@@ -600,6 +600,7 @@ mod tests {
         }
         if let (Some((cp, cf)), Some((fp, ff))) = (load(&format!("{dir}/007_object_modifier_apply_CLOTH.json")), load(&format!("{dir}/final.json"))) {
             let mm = Mesh { pos: cp, faces: cf, uv: vec![] };
+            std::env::set_var("REFSTUB", "2");
             let bl = Balloon::new(0);
             eprintln!("rel_scale {} displace {} thickness {}", bl.rel_scale, bl.displace, bl.thickness);
             let bz = |p: &Vec<V3>| Mesh { pos: p.clone(), faces: vec![], uv: vec![] }.bounds();
@@ -616,6 +617,17 @@ mod tests {
             let o = post_cloth(&mm, rs, 0.03089766390621662);
             let (a, b, c) = ig_kit::cloth::surface_distance(&o.pos, &o.faces, &fp, &ff);
             eprintln!("post_cloth(blender cloth) vs final: verts {} ({}) mean {a} p95 {b} max {c}", o.pos.len(), fp.len());
+        }
+        {
+            use crate::dhash::HashMap;
+            let mut c: HashMap<(u32, u32), u32> = HashMap::default();
+            let mut tri = 0;
+            for f in &sub.faces {
+                if f.len() != 4 { tri += 1; }
+                for i in 0..f.len() { let (a, b) = (f[i], f[(i + 1) % f.len()]); *c.entry((a.min(b), a.max(b))).or_insert(0) += 1; }
+            }
+            let used: std::collections::HashSet<u32> = sub.faces.iter().flatten().copied().collect();
+            eprintln!("pre edges {} boundary {} nonmanifold {} nonquad {} used verts {}", c.len(), c.values().filter(|&&x| x == 1).count(), c.values().filter(|&&x| x > 2).count(), tri, used.len());
         }
         eprintln!("remesh_fill verts {} faces {}", rm.pos.len(), rm.faces.len());
         if let Some((sp, sf)) = load(&format!("{dir}/006_object_modifier_apply_SOLIDIFY.case.json")) {
