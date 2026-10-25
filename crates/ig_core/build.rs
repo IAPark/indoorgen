@@ -22,14 +22,35 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OSD_FLAGS");
     // OpenSubdiv
     let mut files = vec![];
+    let ext = std::env::var("OSD_EXTERNAL").unwrap_or_default();
+    println!("cargo:rerun-if-env-changed=OSD_EXTERNAL");
     collect(Path::new("csrc/opensubdiv"), &mut files);
-    files.push("csrc/osd_shim.cpp".into());
-    let mut b = cc::Build::new();
-    b.cpp(true).std("c++14").include("csrc").warnings(false).files(&files);
-    for x in std::env::var("OSD_FLAGS").unwrap_or_default().split_whitespace() {
-        b.flag(x);
+    if !ext.is_empty() {
+        let keep = std::env::var("OSD_EXT_KEEP").unwrap_or_default(); // comma list of path substrings still compiled from our sources
+        println!("cargo:rerun-if-env-changed=OSD_EXT_KEEP");
+        files.retain(|f| keep.split(',').any(|k| !k.is_empty() && f.to_string_lossy().contains(k)));
+        println!("cargo:rustc-link-search=native={ext}");
+        println!("cargo:rustc-link-lib=dylib=osdCPU");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{ext}");
     }
-    b.compile("osdshim");
+    files.push("csrc/osd_shim.cpp".into());
+    let nofma: Vec<String> = std::env::var("OSD_NOFMA").unwrap_or_default().split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect();
+    println!("cargo:rerun-if-env-changed=OSD_NOFMA");
+    let (off, on): (Vec<_>, Vec<_>) = files.iter().cloned().partition(|f| nofma.iter().any(|n| f.to_string_lossy().contains(n.as_str())));
+    for (name, set, contract) in [("osdshim", on, false), ("osdshim_off", off, true)] {
+        if set.is_empty() {
+            continue;
+        }
+        let mut b = cc::Build::new();
+        b.cpp(true).std("c++14").include("csrc").warnings(false).files(&set);
+        for x in std::env::var("OSD_FLAGS").unwrap_or_default().split_whitespace() {
+            b.flag(x);
+        }
+        if contract {
+            b.flag("-ffp-contract=off");
+        }
+        b.compile(name);
+    }
     // OpenVDB
     let brew = ["/opt/homebrew", "/usr/local"].iter().find(|p| Path::new(&format!("{p}/opt/openvdb")).exists()).copied();
     let Some(brew) = brew else {
