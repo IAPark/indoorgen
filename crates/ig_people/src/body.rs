@@ -51,6 +51,11 @@ pub fn pose_avatar(av: &Avatar, kind: PoseKind, seed: u64) -> Posed {
 /// like `pose_avatar`; with `seat_z` (sitting poses only) the legs are solved by IK so that the seat contact lies at that height with the
 /// feet flat on the floor (chairs / beds / sofas of different heights)
 pub fn pose_avatar_seat(av: &Avatar, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> Posed {
+    pose_avatar_seat_g(av, kind, seed, seat_z).0
+}
+
+/// like `pose_avatar_seat`, plus the global bone transforms of the key pose in the contract frame (rest point -> contract frame)
+pub fn pose_avatar_seat_g(av: &Avatar, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> (Posed, Vec<Xf>) {
     use PoseKind::*;
     // default seat heights: dining/office chair, sofa, bed edge
     let seat_z = match kind {
@@ -63,7 +68,7 @@ pub fn pose_avatar_seat(av: &Avatar, kind: PoseKind, seed: u64, seat_z: Option<f
     let mut r = 0.0;
     let mut p = pose_once(av, kind, seed, Some(r));
     for _ in 0..4 {
-        let err = target - p.info.seat.map(|s| s[2]).unwrap_or(target);
+        let err = target - p.0.info.seat.map(|s| s[2]).unwrap_or(target);
         if err.abs() < 2e-3 {
             break;
         }
@@ -73,7 +78,7 @@ pub fn pose_avatar_seat(av: &Avatar, kind: PoseKind, seed: u64, seat_z: Option<f
     p
 }
 
-fn pose_once(av: &Avatar, kind: PoseKind, seed: u64, root_z: Option<f64>) -> Posed {
+fn pose_once(av: &Avatar, kind: PoseKind, seed: u64, root_z: Option<f64>) -> (Posed, Vec<Xf>) {
     let rig = Rig::new(av);
     let mut org = [0.0; 3];
     let mut out = None;
@@ -113,7 +118,8 @@ fn pose_once(av: &Avatar, kind: PoseKind, seed: u64, root_z: Option<f64>) -> Pos
             .into_iter()
             .map(|(p, n)| (p.into_iter().map(|q| [(q[0] as f64 - ox) as f32, (q[1] as f64 - oy) as f32, (q[2] as f64 - oz) as f32]).collect(), n))
             .collect();
-        out = Some(Posed { info, parts });
+        let gl: Vec<Xf> = g.iter().map(|x| Xf { r: x.r, t: [x.t[0] - ox, x.t[1] - oy, x.t[2] - oz] }).collect();
+        out = Some((Posed { info, parts }, gl));
         break;
     }
     out.expect("pose converged")
@@ -175,6 +181,11 @@ fn spec(cls: &str, av: &Avatar, p: &avatar::AvPart) -> serde_json::Value {
     serde_json::json!({"cls": cls, "kwargs": {"color": tex(&p.color), "normal": tex(&p.normal), "spec": tex(&p.spec), "avatar": av.name}})
 }
 
+/// skinned parts of an avatar for explicit global bone transforms (contract frame)
+pub fn skin_parts(av: &Avatar, g: &[Xf]) -> Vec<(Vec<[f32; 3]>, Vec<[f32; 3]>)> {
+    av.parts.iter().map(|p| skin_part(p, g)).collect()
+}
+
 /// Full posed, textured avatar mesh in the contract frame. Parts: body (skin + clothes), head, hair/opacity cards.
 pub fn build_person(avatar: usize, kind: PoseKind, seed: u64) -> ig_kit::api::Asset {
     build_person_seat(avatar, kind, seed, None)
@@ -182,9 +193,17 @@ pub fn build_person(avatar: usize, kind: PoseKind, seed: u64) -> ig_kit::api::As
 
 /// `build_person` with the seat height adapted (sitting poses; None = natural pose)
 pub fn build_person_seat(avatar: usize, kind: PoseKind, seed: u64, seat_z: Option<f64>) -> ig_kit::api::Asset {
+    build_person_g(avatar, kind, seed, seat_z, None)
+}
+
+/// `build_person_seat` with explicit (settled) global bone transforms instead of the key pose
+pub fn build_person_g(avatar: usize, kind: PoseKind, seed: u64, seat_z: Option<f64>, g: Option<&[Xf]>) -> ig_kit::api::Asset {
     let mut asset = ig_kit::api::Asset::default();
     let Some(av) = avatar_of(avatar) else { return asset };
-    let posed = pose_avatar_seat(&av, kind, seed, seat_z);
+    let mut posed = pose_avatar_seat(&av, kind, seed, seat_z);
+    if let Some(g) = g {
+        posed.parts = skin_parts(&av, g);
+    }
     for (pi, p) in av.parts.iter().enumerate() {
         let cls = match p.kind {
             PartKind::Body => "people.cloth",

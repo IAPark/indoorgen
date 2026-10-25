@@ -13,3 +13,4 @@ ig_kit = { path = "../ig_kit" }
 ig_furn = { path = "../ig_furn" }
 ig_rooms = { path = "../ig_rooms" }
 russimp = { version = "3.2.1", default-features = false }
+rapier3d-f64 = "0.36"
