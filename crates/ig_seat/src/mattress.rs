@@ -55,7 +55,12 @@ impl MattressSpec {
             }
             let ru = r.uniform(0.06, 0.08);
             let sf = r.uniform(0.5, 1.0);
-            (make_coiled(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf), None)
+            let out = if std::env::var("COIL_F64").is_err() {
+                super::coilx::make_coiled_f32(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf, None)
+            } else {
+                None
+            };
+            (out.unwrap_or_else(|| make_coiled(&m, self.dot_distance, self.dot_depth, self.dot_size, ru, sf)), None)
         } else {
             let wd = 0.05;
             for (i, d) in [w, s, t].iter().enumerate() {

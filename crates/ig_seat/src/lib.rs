@@ -19,6 +19,7 @@ pub use ig_rooms as rooms;
 pub use ig_shared::*;
 pub mod bed;
 pub mod chair;
+pub mod coilx;
 pub mod mattress;
 pub mod officechair;
 pub mod pillow;

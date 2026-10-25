@@ -397,7 +397,27 @@ pub fn join_triangles(bm: &mut BMesh, faces: &[usize], angle_face: f32, angle_sh
         let c = vs.map(|v| bm.verts[v].co);
         jedges.push((e, quad_calc_error(c[0], c[1], c[2], c[3])));
     }
-    qsort(&mut jedges, &|a: &(usize, f32), b: &(usize, f32)| if a.1 < b.1 { -1 } else if a.1 > b.1 { 1 } else { 0 });
+    if std::env::var("JT_LIBC").is_ok() {
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct Sp {
+            data: usize,
+            w: f32,
+            pad: u32,
+        }
+        extern "C" {
+            fn qsort(base: *mut std::os::raw::c_void, n: usize, size: usize, cmp: extern "C" fn(*const std::os::raw::c_void, *const std::os::raw::c_void) -> std::os::raw::c_int);
+        }
+        extern "C" fn cmp(x: *const std::os::raw::c_void, y: *const std::os::raw::c_void) -> std::os::raw::c_int {
+            let (x, y) = unsafe { (&*(x as *const Sp), &*(y as *const Sp)) };
+            if x.w > y.w { 1 } else if x.w < y.w { -1 } else { 0 }
+        }
+        let mut a: Vec<Sp> = jedges.iter().map(|&(e, w)| Sp { data: e, w, pad: 0 }).collect();
+        unsafe { qsort(a.as_mut_ptr() as *mut _, a.len(), std::mem::size_of::<Sp>(), cmp) };
+        jedges = a.iter().map(|s| (s.data, s.w)).collect();
+    } else {
+        qsort(&mut jedges, &|a: &(usize, f32), b: &(usize, f32)| if a.1 < b.1 { -1 } else if a.1 > b.1 { 1 } else { 0 });
+    }
     if std::env::var("JTDBG").is_ok() {
         for &(e, w) in &jedges {
             eprintln!("JT {} {} {:e} {:08x}", bm.edges[e].v1, bm.edges[e].v2, w, w.to_bits());

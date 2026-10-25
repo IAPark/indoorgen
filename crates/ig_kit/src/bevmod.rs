@@ -84,10 +84,13 @@ pub fn bevel_modifier_edges(m: &Mesh, width: f64, segments: i32, angle: Option<f
     Ok((out, e))
 }
 
+/// blender::math::safe_acos_approx with Blender's exact f32 constants (the previous abbreviated literals were different floats; SOLIDIFY of a
+/// garbled hull is bit-exact only with these).
 pub fn safe_acos_approx(x: f32) -> f32 {
     let f = x.abs();
     let m = if f < 1.0 { 1.0 - (1.0 - f) } else { 1.0 };
-    let a = (1.0 - m).sqrt() * (1.570_796_3 + m * (-0.213_300_99 + m * (0.077_980_48 + m * -0.021_640_95)));
+    let p = 1.5707963267f32 + m * (-0.213300989f32 + m * (0.077980478f32 + m * -0.02164095f32));
+    let a = (1.0 - m).sqrt() * p;
     if x < 0.0 {
         std::f32::consts::PI - a
     } else {
