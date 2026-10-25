@@ -644,3 +644,21 @@ pub fn cuboid_py(lo: V3, hi: V3, variant: u8, extra: u32) -> ObjGeom {
     )
     .with_mesh_verts(verts)
 }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PlaceholderKind {
+    Real,
+    AssetAsPlaceholder,
+    BboxOfPlaceholder,
+    BboxOfAsset,
+}
+
+/// Source of placeholder geometry (the asset factories).
+pub trait Assets {
+    fn placeholder(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom>;
+    /// real asset geometry for solver purposes (shelves populated before small objects are placed)
+    fn solver_asset(&self, _class: &str, _factory_seed: u64, _inst_seed: u64) -> Option<ObjGeom> {
+        None
+    }
+}
+

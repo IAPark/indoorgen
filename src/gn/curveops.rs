@@ -2,7 +2,7 @@
 use super::geom::*;
 use super::math::*;
 use super::val::*;
-use crate::assets::gn as g32;
+use crate::assets::gnlite as g32;
 
 /// evaluated representation of one curve
 pub struct EvalCurve {

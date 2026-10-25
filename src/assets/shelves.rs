@@ -144,23 +144,7 @@ impl SimpleBookcase {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct BookParams {
-    pub d: f64,
-    pub w: f64,
-    pub h: f64,
-    pub st: f64,
-    pub dt: f64,
-    pub gap: f64,
-    pub bt: f64,
-    pub screw_depth: f64,
-    pub screw_r: f64,
-    pub screw_gap: f64,
-    pub at: f64,
-    pub aw: f64,
-    pub atl: f64,
-    pub abl: f64,
-}
+pub use super::cabnodes::BookParams;
 
 impl SimpleBookcase {
     fn params(&self, i: u64) -> BookParams {

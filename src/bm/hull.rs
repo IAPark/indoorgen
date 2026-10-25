@@ -81,7 +81,7 @@ pub fn convex_hull(bm: &mut BMesh, p: &HullParams) -> bool {
 
     // hull_from_bullet
     let coords: Vec<V3> = in_verts.iter().map(|&v| bm.verts[v].co).collect();
-    let h = crate::gn::bullet_hull::convex_hull_compute(&coords);
+    let h = crate::bm::bullet_hull::convex_hull_compute(&coords);
     let hull_verts: Vec<usize> = h.original_vertex_index.iter().map(|&i| in_verts[i as usize]).collect();
     // face vertex indices (walk next_edge_of_face; vertex = source of the edge)
     let mut tris: Vec<([usize; 3], bool)> = vec![];

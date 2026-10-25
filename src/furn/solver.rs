@@ -51,22 +51,7 @@ impl Usage {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum PlaceholderKind {
-    Real,
-    AssetAsPlaceholder,
-    BboxOfPlaceholder,
-    BboxOfAsset,
-}
-
-/// Source of placeholder geometry (the asset factories).
-pub trait Assets {
-    fn placeholder(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom>;
-    /// real asset geometry for solver purposes (shelves populated before small objects are placed)
-    fn solver_asset(&self, _class: &str, _factory_seed: u64, _inst_seed: u64) -> Option<ObjGeom> {
-        None
-    }
-}
+pub use super::geom::{Assets, PlaceholderKind};
 
 pub struct Ctx<'a> {
     pub prog: &'a Program,
@@ -166,7 +151,7 @@ impl Move {
 
 /// draws a factory's __init__ makes on the global numpy stream (outside its FixedSeed); see assets/ctor_draws.rs
 fn unseeded_init_draws(class: &str, rng: &mut Rng) {
-    crate::assets::set_unseeded(crate::assets::ctor_draws::ctor_draws(class, rng));
+    crate::assets::ctor_draws::set_unseeded(crate::assets::ctor_draws::ctor_draws(class, rng));
 }
 
 pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
@@ -207,7 +192,7 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
                 unseeded_init_draws(class, rng);
             } else {
                 // BedFactory: the sheet / fold / cover choices are needed by the final asset (same words as skipped below)
-                crate::assets::set_unseeded(if class == "BedFactory" { crate::assets::ctor_draws::ctor_draws(class, &mut rng.clone()) } else { None });
+                crate::assets::ctor_draws::set_unseeded(if class == "BedFactory" { crate::assets::ctor_draws::ctor_draws(class, &mut rng.clone()) } else { None });
                 for _ in 0..k {
                     rng.next_u32();
                 }
@@ -237,7 +222,7 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
         }
     };
     if std::env::var_os("PHDBG").is_some() { eprintln!("PHDBG {class} {fac_seed} {inst_seed} lo {:?} hi {:?}", geom.lo, geom.hi); }
-    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::assets::unseeded() } else { None } }))
+    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::assets::ctor_draws::unseeded() } else { None } }))
 }
 
 pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng) -> bool {

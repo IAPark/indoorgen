@@ -525,7 +525,7 @@ pub fn new_bbox_exact(lo: V3, hi: V3) -> ExactMesh {
 }
 
 /// simple_bookcase.py geometry_nodes (float32, vertex order exact).
-pub fn bookcase_gmesh(q: &super::shelves::BookParams) -> GMesh {
+pub fn bookcase_gmesh(q: &BookParams) -> GMesh {
     let f = |x: f64| x as f32;
     let (d, w, h) = (f(q.d), f(q.w), f(q.h));
     let (st, dt, gap, bt) = (f(q.st), f(q.dt), f(q.gap), f(q.bt));
@@ -829,4 +829,22 @@ impl ExactMesh {
         let t = g.triangulated_m(true);
         ExactMesh { verts: self.verts.clone(), polys: t.p, names: t.tag.iter().map(|&x| if x == TAG_SUPPORT { "support".to_string() } else { String::new() }).collect() }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct BookParams {
+    pub d: f64,
+    pub w: f64,
+    pub h: f64,
+    pub st: f64,
+    pub dt: f64,
+    pub gap: f64,
+    pub bt: f64,
+    pub screw_depth: f64,
+    pub screw_r: f64,
+    pub screw_gap: f64,
+    pub at: f64,
+    pub aw: f64,
+    pub atl: f64,
+    pub abl: f64,
 }

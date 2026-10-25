@@ -3,7 +3,7 @@ use super::geom::*;
 use super::meshops::*;
 use super::val::*;
 use crate::assets::cabnodes::gcube;
-use crate::assets::gn as g32;
+use crate::assets::gnlite as g32;
 
 pub fn mesh_cube(size: V3, n: [i32; 3]) -> Mesh {
     let n = [n[0].max(1) as usize, n[1].max(1) as usize, n[2].max(1) as usize];

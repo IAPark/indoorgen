@@ -1,5 +1,5 @@
 //! tableware/can.py CanFactory: exact port (shapely/GEOS outline, solidify, geo_cap extrude / scale / extrude, wrap strip)
-use super::gn::{self, F3};
+use super::gnlite::{self, F3};
 use super::*;
 use crate::materials::*;
 use geos::{Geom, Geometry};
@@ -84,7 +84,7 @@ fn newell(p: &[F3]) -> F3 {
         n[2] += (prev[0] - cur[0]) * (prev[1] + cur[1]);
         prev = cur;
     }
-    gn::normalize(n)
+    gnlite::normalize(n)
 }
 
 fn to_f3(v: [f64; 3]) -> F3 {

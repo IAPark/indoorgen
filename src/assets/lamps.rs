@@ -1,5 +1,5 @@
 //! lamp/ceiling_lights.py: CeilingLightFactory (black housing + translucent bulb cover; the point light sits at z=-0.03)
-use super::gn::{self, F3};
+use super::gnlite::{self, F3};
 use super::*;
 use crate::materials::*;
 use serde_json::json;
@@ -154,7 +154,7 @@ fn sample_poly(pts: &[F3], cyclic: bool, factor: f32) -> F3 {
     let mut lengths = Vec::with_capacity(nseg);
     let mut acc = 0.0f32;
     for i in 0..nseg {
-        acc += gn::dist(pts[i], pts[(i + 1) % n]);
+        acc += gnlite::dist(pts[i], pts[(i + 1) % n]);
         lengths.push(acc);
     }
     let total = *lengths.last().unwrap();
@@ -169,7 +169,7 @@ fn sample_poly(pts: &[F3], cyclic: bool, factor: f32) -> F3 {
 
 /// nodegroup_lamp_geometry -> parts in python's vertex order: shade (lampshade material), rack, stand, base
 pub fn lamp_parts(p: &LampParams) -> [Mesh; 4] {
-    use gn::*;
+    use gnlite::*;
     let f = |x: f64| x as f32;
     let (sr, br, bh, sh, top, bot, rt) = (f(p.stand_radius), f(p.base_radius), f(p.base_height), f(p.shade_height), f(p.top_radius), f(p.bot_radius), f(p.rack_t));
     let cp = |k: usize| [f(p.cp[k][0]), f(p.cp[k][1]), f(p.cp[k][2])];

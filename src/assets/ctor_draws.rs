@@ -530,3 +530,14 @@ pub fn pillow_ctor(rng: &mut Rng) -> [f64; 8] {
 pub fn towel_material_draw(rng: &mut Rng) -> usize {
     pick_and_generate_idx(rng, &fabrics_plus(&[(Mat::ArtRug, 2.0), (Mat::Rug, 5.0)]))
 }
+
+thread_local! {
+    static UNSEEDED: std::cell::RefCell<Option<Vec<f64>>> = std::cell::RefCell::new(None);
+}
+/// values the python factory constructor drew from the global stream (outside its FixedSeed) for the factory about to be built
+pub fn set_unseeded(v: Option<Vec<f64>>) {
+    UNSEEDED.with(|u| *u.borrow_mut() = v);
+}
+pub fn unseeded() -> Option<Vec<f64>> {
+    UNSEEDED.with(|u| u.borrow().clone())
+}
