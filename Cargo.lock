@@ -427,11 +427,13 @@ dependencies = [
 name = "ig_mess"
 version = "0.1.0"
 dependencies = [
+ "geos",
  "ig_assets",
  "ig_core",
  "ig_furn",
  "ig_kit",
  "ig_rooms",
+ "ig_storage",
  "indexmap",
  "parry3d-f64",
  "rayon",

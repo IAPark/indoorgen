@@ -416,6 +416,20 @@ pub fn kitchen_cabinet_gmesh_ex(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame
 }
 
 /// Same geometry with per-face material slots in `tag >> 1` (when `picks` is given): 0 frame + doors (K_z), 1 division boards (K), 2 + n = the
+thread_local! {
+    /// mess pass: (level, seed, max pull in m) -> each kitchen-cabinet drawer is pulled out along the front by a deterministic random amount; None (default) = closed
+    static DRAWER_PULL: std::cell::Cell<Option<(f64, u64, f64)>> = std::cell::Cell::new(None);
+}
+pub fn set_drawer_pull(v: Option<(f64, u64, f64)>) {
+    DRAWER_PULL.with(|c| c.set(v));
+}
+fn drawer_pull_for(k: usize, i: usize, dims: &[f64; 3]) -> f64 {
+    let Some((lvl, seed, maxp)) = DRAWER_PULL.with(|c| c.get()) else { return 0.0 };
+    let mut pr = Rng::seeded(crate::int_hash(&[&seed.to_string(), "drawer", &k.to_string(), &i.to_string(), &format!("{:.4}", dims[1])]));
+    let (hit, amt) = (pr.f64(), pr.f64());
+    if hit < 0.2 + 0.6 * lvl { (lvl * (0.03 + 0.25 * amt)).min(maxp) } else { 0.0 }
+}
+
 /// n-th drawer (its choice is pushed to `picks`). The polygon order is identical to the untagged call.
 pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd: Option<(f64, f64, f64, f64)>, mut picks: Option<&mut Vec<DrawerPick>>) -> (GMesh, (f64, f64, f64, f64)) {
     use super::cabnodes::*;
@@ -506,7 +520,7 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
                         set_tag(&mut d, ((2 + pk.len()) << 1) as u8);
                         pk.push(DrawerPick { idx, after });
                     }
-                    let hinge = [depth / 2.0, 0.0, div_t / 2.0 + sp.div_z[i]];
+                    let hinge = [depth / 2.0 + drawer_pull_for(k, i, &spec.dims), 0.0, div_t / 2.0 + sp.div_z[i]];
                     att.push(d.translated([f(hinge[0]), f(hinge[1]), f(hinge[2])]));
                 }
                 let join = GMesh::join(&att);

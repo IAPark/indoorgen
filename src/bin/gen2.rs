@@ -83,7 +83,17 @@ fn main() {
             scene.add(nm, "skirting", sk.mesh, mi);
         }
     }
-    for p in infinigen::openings::make_openings(&g.c, &g.cutters, seed) {
+    // mess pass, part 1 (before openings, whose doors avoid the moved furniture): furniture states on the solved layout (no-op at --mess 0)
+    infinigen::mess::states::apply(&mut g.state, &mess);
+    let mut opening_pieces = infinigen::openings::make_openings(&g.c, &g.cutters, seed);
+    if mess.on() {
+        // mess pass: room door open angles varied
+        let mut it: Vec<(&str, &mut infinigen::mesh::Mesh)> = opening_pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
+        let (n, tot) = infinigen::mess::doors::open_doors(&mut it, &g.cutters, g.c.door_width, g.c.door_size, g.c.wall_thickness, &g.state, &mess);
+        let (cn, ctot) = infinigen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
+        eprintln!("MESS doors changed {n} of {tot}; curtains changed {cn} of {ctot}");
+    }
+    for p in opening_pieces {
         let m = scene.material(p.mat);
         scene.add(&p.name, &p.class, p.mesh, m);
     }
@@ -114,11 +124,9 @@ fn main() {
             }
         }
     }
-    // mess pass, part 1: furniture states on the solved layout (no-op at --mess 0)
-    infinigen::mess::states::apply(&mut g.state, &mess);
     // build the final assets of all generated objects in parallel (each build is independent and deterministic; results are consumed in
     // the original order below)
-    let visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
+    let mut visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
         use rayon::prelude::*;
         let items: Vec<(&String, &infinigen::furn::state::GenRef)> = g.state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen))).collect();
         items
@@ -131,6 +139,8 @@ fn main() {
             })
             .collect()
     };
+    // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
+    infinigen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
     // python apply_cutter: the world-space cutter of each object is boolean-differenced from every part of its relation targets
     let mut cutters: std::collections::HashMap<String, Vec<infinigen::mesh::Mesh>> = Default::default();
     for (k, o) in &g.state.objs {
