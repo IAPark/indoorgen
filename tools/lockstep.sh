@@ -9,5 +9,8 @@ unset STATE0 PHDUMP CTORWORDS CTOREMU
 [[ $O == *ph* ]] && export PHDUMP=${P}_ph.jsonl
 [[ $O == *ctor* ]] && export CTORWORDS=${P}_ctor.json
 [[ $O == *emu* ]] && export CTOREMU=1
-RNGTR=200 ${GEN2:-./target/fast/gen2} $S $R /tmp/x_$R$S.glb > /dev/null 2> /tmp/rs_trace_$R$S.txt
-python3 ~/work/ref/scripts/cmp_fast.py $P.trace /tmp/rs_trace_$R$S.txt
+W=$(mktemp -d /tmp/lockstep.XXXXXX)
+RNGTR=200 ${GEN2:-./target/fast/gen2} $S $R $W/x.glb > /dev/null 2> $W/trace.txt
+python3 ~/work/ref/scripts/cmp_fast.py $P.trace $W/trace.txt
+[ -n "$KEEPTRACE" ] && cp $W/trace.txt /tmp/rs_trace_$R$S.txt
+rm -rf $W
