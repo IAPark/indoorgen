@@ -93,3 +93,21 @@ pub fn run_group(top: &str, params: &J) -> GnOut {
     }
     r
 }
+
+// ------------------------------------------------------------------------------------------------ nurbs parts
+
+use super::creature_nurbs::{nurbs_mesh, part_skeleton, recompose, NurbsParams};
+
+/// NurbsPart.make_part: loft mesh (geomdl, face_size 0.07); skeleton from nurbs_to_part. (python's select_all() toggles a fully selected mesh OFF,
+/// so its remove_doubles / normals_make_consistent are no-ops: measured, 2162 raw vertices stay 2162)
+pub fn make_nurbs_part(p: &NurbsParams) -> (CMesh, Vec<[f64; 3]>) {
+    let handles = recompose(p);
+    let (pts, faces) = nurbs_mesh(&handles, 0.07);
+    let m = crate::mesh::Mesh {
+        pos: pts.iter().map(|q| [q[0] as f32 as f64, q[1] as f32 as f64, q[2] as f32 as f64]).collect(),
+        faces,
+        uv: vec![],
+    };
+    let cm = CMesh { pos: m.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect(), faces: m.faces };
+    (cm, part_skeleton(&handles))
+}

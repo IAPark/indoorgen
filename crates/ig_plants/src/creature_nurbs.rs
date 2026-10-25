@@ -466,14 +466,28 @@ pub fn part_skeleton(handles: &[Vec<V3>]) -> Vec<V3> {
         })
         .collect();
     let sk = &sk[1..n - 1];
-    let mut fine: Vec<V3> = vec![];
-    for i in 0..sk.len() - 1 {
-        for q in 0..4 {
-            let t = q as f32 / 4.0;
-            fine.push([0, 1, 2].map(|c| ((sk[i][c] as f32) * (1.0 - t) + (sk[i + 1][c] as f32) * t) as f64));
+    // SUBSURF levels=2 on a wire mesh with use_limit_surface: boundary-curve Catmull-Clark (corner ends) twice, then the limit mask (P- + 4P + P+) / 6
+    let cc = |p: &[V3]| -> Vec<V3> {
+        let n = p.len();
+        let mut out = vec![];
+        for i in 0..n {
+            if i == 0 || i == n - 1 {
+                out.push(p[i]);
+            } else {
+                out.push([0, 1, 2].map(|c| (6.0 * p[i][c] + p[i - 1][c] + p[i + 1][c]) / 8.0));
+            }
+            if i < n - 1 {
+                out.push([0, 1, 2].map(|c| (p[i][c] + p[i + 1][c]) / 2.0));
+            }
         }
+        out
+    };
+    let r = cc(&cc(sk));
+    let mut fine = r.clone();
+    for j in 1..r.len() - 1 {
+        fine[j] = [0, 1, 2].map(|c| (r[j - 1][c] + 4.0 * r[j][c] + r[j + 1][c]) / 6.0);
     }
-    fine.push(sk[sk.len() - 1]);
+    let fine: Vec<V3> = fine.iter().map(|p| [p[0] as f32 as f64, p[1] as f32 as f64, p[2] as f32 as f64]).collect();
     // first point repeated, last dropped
     let mut out = vec![fine[0]];
     out.extend_from_slice(&fine[..fine.len() - 1]);

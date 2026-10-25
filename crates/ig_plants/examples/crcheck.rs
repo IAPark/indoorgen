@@ -116,6 +116,22 @@ fn genome_check(dir: &str, fs: u64, herb: bool) {
                 amx = 99.0;
             }
         }
+        if let Kind::NurbsBody(np) | Kind::NurbsHead(np) = &fac.kind {
+            let t0 = std::time::Instant::now();
+            let (m, sk) = ig_plants::creature::make_nurbs_part(np);
+            let pm = &pj["mesh"];
+            let sizes: Vec<i64> = pm["sizes"].as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect();
+            let idx: Vec<i64> = pm["idx"].as_array().unwrap().iter().map(|x| x.as_i64().unwrap()).collect();
+            cmp(&format!("   nurbs mesh"), &m, &arr_f32(&pm["co"]), &sizes, &idx);
+            let psk = pj["skeleton"].as_array().unwrap();
+            let mut mx = 0f64;
+            for (a, b) in sk.iter().zip(psk.iter()) {
+                for c in 0..3 {
+                    mx = mx.max((a[c] - b[c].as_f64().unwrap()).abs());
+                }
+            }
+            println!("   skeleton rs {} py {} maxerr {:.2e} ({:?})", sk.len(), psk.len(), mx, t0.elapsed());
+        }
         let ok = cls.starts_with(&pcls[..3.min(pcls.len())]) || cls == pcls;
         println!("  {k:2} {cls:14} py {pcls:18} params n {}/{} maxrel {:.1e}  att coord maxerr {:.1e} {}", a.len(), b.len(), mx, amx, if ok { "" } else { "CLASS?" });
     }
