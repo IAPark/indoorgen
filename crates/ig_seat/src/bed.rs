@@ -290,11 +290,22 @@ fn coil(g: &Mesh, s: &BedSpec, r: &mut Rng) -> Mesh {
     }
     let ru = r.uniform(0.06, 0.08);
     let sf = r.uniform(0.5, 1.0);
+    if std::env::var("COIL_F64").is_err() {
+        if let Some(m) = super::coilx::make_coiled_f32(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf, None) {
+            return m;
+        }
+    }
     super::coil::make_coiled(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf)
 }
 
 /// butil.modify_mesh(obj, "BEVEL", segments=4): width 0.1, angle limit 30 degrees
 fn pad_bevel(m: &Mesh) -> Mesh {
+    if std::env::var("PAD_OLD").is_err() {
+        match super::bevmod::bevel_modifier(m, 0.1, 4, Some(30f64.to_radians() as f32), true, 0.5) {
+            Ok(r) => return r,
+            Err(e) => eprintln!("pad bevmod failed: {e}"),
+        }
+    }
     bevel_angle_ex(m, 0.1, 4, 30f64.to_radians(), false, None).unwrap_or_else(|e| {
         eprintln!("pad bevel failed: {e}");
         m.clone()
