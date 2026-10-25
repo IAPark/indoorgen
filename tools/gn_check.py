@@ -112,6 +112,7 @@ def random_inputs(ng, rnd):
     # GN_INPUTS=file.json : {input name: value} overrides (e.g. the params an asset factory really passes)
     if os.environ.get("GN_INPUTS"):
         ov = json.load(open(os.environ["GN_INPUTS"]))
+        d = {}   # only the given inputs; everything else keeps the interface default
         for i in ng.interface.items_tree:
             if i.item_type == "SOCKET" and i.in_out == "INPUT" and i.name in ov:
                 v = ov[i.name]

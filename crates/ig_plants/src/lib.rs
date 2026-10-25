@@ -21,6 +21,7 @@ pub use ig_storage::*;
 pub use ig_decor::*;
 pub mod cactus;
 pub mod creature;
+pub mod creature_asm;
 pub mod creature_gen;
 pub mod creature_nurbs;
 pub mod creature_rng;

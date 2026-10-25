@@ -110,3 +110,5 @@ remesh_voxel_lshape|remesh|lshape|{"mode":"VOXEL","voxel_size":0.06}|none
 remesh_voxel_ring|remesh|ring|{"mode":"VOXEL","voxel_size":0.05}|none
 remesh_voxel_sheared|remesh|sheared|{"mode":"VOXEL","voxel_size":0.043}|surface
 remesh_sharp_gill|remesh|gillsheet|{"mode":"SHARP","octree_depth":6,"use_remove_disconnected":false}|exact
+rmdoubles_tail|remove_doubles|creature_tail|{"threshold":0.01}
+rmdoubles_ear|remove_doubles|creature_ear|{"threshold":0.01}

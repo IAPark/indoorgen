@@ -1346,6 +1346,7 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             }
             // the multi-input is processed in reverse link order, like Join Geometry
             geos.reverse();
+            if std::env::var_os("GNBOOL_ORDER").is_some() { eprintln!("boolean operands: {:?}", geos.iter().map(|g| g.mesh.as_ref().map(|m| m.nv())).collect::<Vec<_>>()); }
             // operands: Mesh 1 (mesh only), then for each Mesh 2 geometry its mesh followed by the meshes of its instances
             let mut operands: Vec<(&Mesh, M4)> = vec![];
             if let Some(g) = &first_geo {

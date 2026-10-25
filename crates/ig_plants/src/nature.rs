@@ -277,7 +277,13 @@ pub fn rows_to_euler(r: [[f64; 3]; 3]) -> [f32; 3] {
 }
 
 /// the tail of create_asset: pose, fit into the cube of side `size`, place the bottom at -size/2
-pub fn finish_trinket(mut pos: Vec<[f32; 3]>, tris: &[[usize; 3]], size: f64) -> Vec<[f32; 3]> {
+pub fn finish_trinket(pos: Vec<[f32; 3]>, tris: &[[usize; 3]], size: f64) -> Vec<[f32; 3]> {
+    finish_trinket_ex(pos, Some(tris), size)
+}
+
+/// `tris` None = no stable pose (creatures keep their pose)
+pub fn finish_trinket_ex(mut pos: Vec<[f32; 3]>, tris: Option<&[[usize; 3]]>, size: f64) -> Vec<[f32; 3]> {
+    if let Some(tris) = tris {
     let pv: Vec<P3> = pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
     let rows = stable_pose(&pv, tris);
     let eul = rows_to_euler(rows);
@@ -285,6 +291,7 @@ pub fn finish_trinket(mut pos: Vec<[f32; 3]>, tris: &[[usize; 3]], size: f64) ->
     for p in pos.iter_mut() {
         let (x, y, z) = (p[0], p[1], p[2]);
         *p = [x * m[0][0] + y * m[1][0] + z * m[2][0], x * m[0][1] + y * m[1][1] + z * m[2][1], x * m[0][2] + y * m[1][2] + z * m[2][2]];
+    }
     }
     let bounds = |pos: &Vec<[f32; 3]>| {
         let mut lo = [f32::INFINITY; 3];

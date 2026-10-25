@@ -130,7 +130,10 @@ pub fn remove_doubles_targets(co: &[F3], range: f32) -> Vec<u32> {
         .collect()
 }
 
-/// bpy.ops.mesh.remove_doubles(threshold): survivors keep their relative order; faces are remapped, consecutive duplicates dropped, faces with < 3 vertices removed
+/// bpy.ops.mesh.remove_doubles(threshold): survivors keep their relative order. Faces follow bmo_weld_verts_exec / remdoubles_createface:
+/// faces stay in place (measured on Blender 4.2); a face with a merged vertex is rebuilt from its UNIQUE mapped edges (a repeated edge is dropped, so bowties and
+/// spikes disappear), needs > 2 edges forming one closed loop (bm_edges_sort_winding) and is dropped when an identical vertex set already exists
+/// (BM_CREATE_NO_DOUBLE; untouched faces anywhere count as existing).
 pub fn remove_doubles(m: &Mesh, th: f32) -> Mesh {
     let co: Vec<F3> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
     let tgt = remove_doubles_targets(&co, th);
@@ -143,24 +146,88 @@ pub fn remove_doubles(m: &Mesh, th: f32) -> Mesh {
             out.pos.push(m.pos[i]);
         }
     }
-    for f in &m.faces {
-        let mut u: Vec<u32> = vec![];
-        for &v in f {
-            let t = tgt[v as usize];
-            if u.last() != Some(&t) {
-                u.push(t);
+    let touched = |f: &Vec<u32>| f.iter().any(|&v| tgt[v as usize] != v);
+    let mut exists: crate::dhash::HashSet<Vec<u32>> = crate::dhash::HashSet::default();
+    // BM_face_exists: same vertices in the same cyclic order (either winding)
+    let key = |vs: &[u32]| {
+        let n = vs.len();
+        let mut best: Option<Vec<u32>> = None;
+        for dir in [1i64, -1] {
+            for s0 in 0..n {
+                let k: Vec<u32> = (0..n).map(|i| vs[((s0 as i64 + dir * i as i64).rem_euclid(n as i64)) as usize]).collect();
+                if best.as_ref().map_or(true, |b| k < *b) {
+                    best = Some(k);
+                }
             }
         }
-        if u.len() > 1 && u[0] == *u.last().unwrap() {
-            u.pop();
+        best.unwrap()
+    };
+    for f in &m.faces {
+        if !touched(f) {
+            exists.insert(key(f));
         }
-        let mut uniq = u.clone();
-        uniq.sort();
-        uniq.dedup();
-        if u.len() < 3 || uniq.len() < 3 {
+    }
+    for f in &m.faces {
+        if !touched(f) {
+            out.faces.push(f.iter().map(|&v| newidx[v as usize]).collect());
             continue;
         }
-        out.faces.push(u.iter().map(|&v| newidx[v as usize]).collect());
+        let nf = f.len();
+        // unique mapped edges in loop order, remembering the loop that produced the first one
+        let mut edges: Vec<(u32, u32)> = vec![];
+        let mut first_loop: Option<usize> = None;
+        for i in 0..nf {
+            let (a, b) = (tgt[f[i] as usize], tgt[f[(i + 1) % nf] as usize]);
+            if a == b {
+                continue;
+            }
+            let k = (a.min(b), a.max(b));
+            if edges.iter().any(|e| (e.0.min(e.1), e.0.max(e.1)) == k) {
+                continue;
+            }
+            if first_loop.is_none() {
+                first_loop = Some(i);
+            }
+            edges.push((a, b));
+        }
+        if edges.len() <= 2 {
+            continue;
+        }
+        let l0 = first_loop.unwrap();
+        // v1, v2 from the first loop: when that loop's own vertex is not an end of edge[0] (it was merged away) the direction is reversed
+        let (lv, lnv) = (f[l0], f[(l0 + 1) % nf]);
+        let in_edge = lv == edges[0].0 || lv == edges[0].1;
+        let _ = in_edge;
+        let (v1, v2) = (tgt[lv as usize], tgt[lnv as usize]);
+        // bm_edges_sort_winding: start with the edge (v1, v2), then follow the first remaining edge touching the current vertex
+        let mut rest: Vec<(u32, u32)> = edges.clone();
+        let Some(p0) = rest.iter().position(|e| (e.0 == v1 && e.1 == v2) || (e.0 == v2 && e.1 == v1)) else { continue };
+        rest.remove(p0);
+        let mut verts = vec![v1];
+        let mut cur = v2;
+        let mut ok = true;
+        while !rest.is_empty() {
+            verts.push(cur);
+            match rest.iter().position(|e| e.0 == cur || e.1 == cur) {
+                Some(k) => {
+                    let e = rest.remove(k);
+                    cur = if e.0 == cur { e.1 } else { e.0 };
+                }
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok || cur != v1 || verts.len() != edges.len() {
+            continue;
+        }
+        let k = key(&verts);
+        if exists.contains(&k) {
+            continue;
+        }
+        exists.insert(k);
+        out.faces.push(verts.iter().map(|&v| newidx[v as usize]).collect());
     }
     out
 }

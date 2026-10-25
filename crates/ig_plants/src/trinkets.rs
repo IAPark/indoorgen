@@ -54,6 +54,8 @@ enum Base {
     /// MolluskFactory: base factory chosen at construction
     MolluskShell(ShellKind),
     MolluskSnail(Maker),
+    /// CarnivoreFactory (false) / HerbivoreFactory (true)
+    Creature(bool),
     Other,
 }
 
@@ -82,7 +84,7 @@ impl Trinkets {
         Some(match self.base {
             Base::Shell(k) | Base::MolluskShell(k) => shell_asset(k, &mut r, 0.003),
             Base::Snail(m) | Base::MolluskSnail(m) => snail_final(m, &mut r),
-            Base::Other => return None,
+            Base::Creature(_) | Base::Other => return None,
         })
     }
 }
@@ -129,6 +131,19 @@ impl Factory for Trinkets {
         let mut r = inst_rng(self.fs, i);
         let size = inst_rng(self.fs, i).uniform(0.1, 0.15);
         let i2 = r.randint(0, 10_000_000) as u64;
+        if let Base::Creature(herb) = self.base {
+            // create_asset of Carnivore/Herbivore (hair off): the asset keeps its pose, only the fit into the placeholder cube applies
+            let mut rc = inst_rng(self.fs, i2);
+            let cm = crate::creature_asm::build_creature(herb, &mut rc);
+            let pos = super::nature::finish_trinket_ex(cm.pos.clone(), None, (size as f32) as f64);
+            let mut o = Mesh::new();
+            o.pos = pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+            o.faces = cm.faces.clone();
+            let b = o.bounds();
+            let mut a = Asset::default();
+            a.mesh(o, &mollusk_mat("elements.nature_shelf_trinkets.generate.NatureShelfTrinketsFactory", "base_factory.material", self.fs), Some(b));
+            return a;
+        }
         let t0 = std::time::Instant::now();
         let m = self.base_mesh(i2).unwrap();
         if std::env::var("TRDBG").is_ok() { eprintln!("i2 {} base mesh {} verts {:?}", i2, m.pos.len(), t0.elapsed()); }
@@ -162,6 +177,8 @@ pub fn make(c: &str, rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
         8 => Base::Shell(ShellKind::Mussel),
         9 => Base::Shell(ShellKind::Scallop),
         10 => Base::Snail(Maker::Volute),
+        11 => Base::Creature(false),
+        12 => Base::Creature(true),
         _ => Base::Other,
     };
     let fallback = ig_decor::decor::make(c, rng, fs)?;
