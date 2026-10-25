@@ -57,6 +57,22 @@ fn main() {
     }
     // lights_off stage: chance 0.2 (python: stage runs when uniform() <= chance)
     let lights_off = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "lights_off", "0"])).f64() <= 0.2;
+    if std::env::var("TILTCHECK").is_ok() {
+        // every placed object must only be rotated about the vertical axis (python's solver never tilts furniture)
+        let mut tilted = 0;
+        for (k, o) in &g.state.objs {
+            if let Some(gen) = &o.generator {
+                let r = o.pose.r;
+                // python itself leaves up to ~0.02 rad of tilt on objects stable against slightly sloped room planes (e.g. DiningRoom_0 Chair 26163);
+                // the tilted-oven bug was far larger, so flag > 0.05 rad (~3 degrees)
+                if r[2][0].abs() > 0.05 || r[2][1].abs() > 0.05 || r[0][2].abs() > 0.05 || r[1][2].abs() > 0.05 {
+                    tilted += 1;
+                    eprintln!("TILTED {k} {} r={:?}", gen.class, r);
+                }
+            }
+        }
+        eprintln!("TILTCHECK {} objects tilted", tilted);
+    }
     if std::env::var("POSES").is_ok() {
         for (k, o) in &g.state.objs {
             if let Some(gen) = &o.generator {

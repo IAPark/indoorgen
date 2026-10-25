@@ -157,9 +157,17 @@ impl Asset {
         cabnodes::box_exact(lo, hi)
     }
 
-    pub fn bbox_geom(&self) -> ObjGeom {
+    /// placeholder box whose python bounds are plain float32 of the bounds (not built by new_bbox): Mirror, WallArt, PlantContainer, ...
+    pub fn bbox_geom_plain(&self) -> ObjGeom {
         let (lo, hi) = self.bounds();
         crate::geom::cuboid_py(f32v(lo), f32v(hi), 0, 0)
+    }
+
+    pub fn bbox_geom(&self) -> ObjGeom {
+        let (lo, hi) = self.bounds();
+        // python create_placeholder overrides build their box with assets.utils.object.new_bbox (float32 object scale / location, applied)
+        let (lo, hi) = crate::geomkit::new_bbox_f32(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
+        crate::geom::cuboid_py(lo, hi, 0, 0)
     }
 
     /// bbox_mesh_from_hipoly(use_pholder=True): box_from_corners (the node-group cube; vertex/face layout variant 1)
