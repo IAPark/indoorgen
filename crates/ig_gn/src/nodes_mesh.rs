@@ -1080,6 +1080,181 @@ pub fn convex_hull(points: &[V3]) -> Mesh {
     m
 }
 
+#[derive(Clone)]
+struct KdN {
+    co: [f32; 3],
+    index: usize,
+    left: i64,
+    right: i64,
+    d: usize,
+}
+
+fn kd_balance(nodes: &mut [KdN], lo: usize, cnt: usize, axis: usize) -> i64 {
+    if cnt == 0 {
+        return -1;
+    }
+    if cnt == 1 {
+        nodes[lo].d = axis;
+        nodes[lo].left = -1;
+        nodes[lo].right = -1;
+        return lo as i64;
+    }
+    let median = cnt / 2;
+    let (mut left, mut right) = (0i64, cnt as i64 - 1);
+    let base = lo as i64;
+    while right > left {
+        let co = nodes[(base + right) as usize].co[axis];
+        let mut i = left - 1;
+        let mut j = right;
+        loop {
+            i += 1;
+            while nodes[(base + i) as usize].co[axis] < co {
+                i += 1;
+            }
+            j -= 1;
+            while nodes[(base + j) as usize].co[axis] > co && j > left {
+                j -= 1;
+            }
+            if i >= j {
+                break;
+            }
+            nodes.swap((base + i) as usize, (base + j) as usize);
+        }
+        nodes.swap((base + i) as usize, (base + right) as usize);
+        if i >= median as i64 {
+            right = i - 1;
+        }
+        if i <= median as i64 {
+            left = i + 1;
+        }
+    }
+    let m = lo + median;
+    nodes[m].d = axis;
+    let ax = (axis + 1) % 3;
+    let l = kd_balance(nodes, lo, median, ax);
+    let r = kd_balance(nodes, m + 1, cnt - (median + 1), ax);
+    nodes[m].left = l;
+    nodes[m].right = r;
+    m as i64
+}
+
+/// BLI_kdtree_3d_calc_duplicates_fast(tree, range, use_index_order = false): merge target (selection position) per point, -1 = none; kept points that absorbed others point to themselves
+fn kd_duplicates_fast(co: &[[f32; 3]], range: f32) -> Vec<i32> {
+    let n = co.len();
+    let mut nodes: Vec<KdN> = (0..n).map(|i| KdN { co: co[i], index: i, left: -1, right: -1, d: 0 }).collect();
+    let root = kd_balance(&mut nodes, 0, n, 0);
+    let mut dup = vec![-1i32; n];
+    let mut found = 0usize;
+    let range_sq = range * range;
+    fn rec(nodes: &[KdN], i: usize, q: [f32; 3], search: usize, range: f32, range_sq: f32, dup: &mut Vec<i32>, found: &mut usize) {
+        let node = &nodes[i];
+        let d = node.d;
+        if q[d] + range <= node.co[d] {
+            if node.left != -1 {
+                rec(nodes, node.left as usize, q, search, range, range_sq, dup, found);
+            }
+        } else if q[d] - range >= node.co[d] {
+            if node.right != -1 {
+                rec(nodes, node.right as usize, q, search, range, range_sq, dup, found);
+            }
+        } else {
+            if search != node.index && dup[node.index] == -1 {
+                let dx = node.co[0] - q[0];
+                let dy = node.co[1] - q[1];
+                let dz = node.co[2] - q[2];
+                if dx * dx + dy * dy + dz * dz <= range_sq {
+                    dup[node.index] = search as i32;
+                    *found += 1;
+                }
+            }
+            if node.left != -1 {
+                rec(nodes, node.left as usize, q, search, range, range_sq, dup, found);
+            }
+            if node.right != -1 {
+                rec(nodes, node.right as usize, q, search, range, range_sq, dup, found);
+            }
+        }
+    }
+    if root >= 0 {
+        for ni in 0..n {
+            let index = nodes[ni].index;
+            if dup[index] == -1 || dup[index] == index as i32 {
+                let prev = found;
+                let q = nodes[ni].co;
+                rec(&nodes, root as usize, q, index, range, range_sq, &mut dup, &mut found);
+                if found != prev {
+                    dup[index] = index as i32;
+                }
+            }
+        }
+    }
+    dup
+}
+
+/// geometry::point_merge_by_distance: KD-tree duplicates (use_index_order = false) over the selected points, each result point is the mean of its merge group
+pub fn merge_points_by_distance(pt: &Points, sel: &[bool], dist: f32) -> Points {
+    let src_size = pt.pos.len();
+    let selected: Vec<usize> = (0..src_size).filter(|&i| sel.get(i).copied().unwrap_or(true)).collect();
+    if selected.is_empty() {
+        return pt.clone();
+    }
+    let co: Vec<[f32; 3]> = selected.iter().map(|&i| pt.pos[i]).collect();
+    let targets = kd_duplicates_fast(&co, dist);
+    let mut merge_indices: Vec<usize> = (0..src_size).collect();
+    for (pos, &i) in selected.iter().enumerate() {
+        if targets[pos] != -1 {
+            merge_indices[i] = selected[targets[pos] as usize];
+        }
+    }
+    let mut src_to_dst = vec![0usize; src_size];
+    let mut merged = 0;
+    for i in 0..src_size {
+        src_to_dst[i] = i - merged;
+        if merge_indices[i] != i {
+            merged += 1;
+        }
+    }
+    let dst_size = src_size - merged;
+    let mut groups: Vec<Vec<usize>> = vec![vec![]; dst_size];
+    for i in 0..src_size {
+        groups[src_to_dst[merge_indices[i]]].push(i);
+    }
+    let mix = |vals: &[Val], ty: Ty, g: &[usize]| -> Val {
+        match ty {
+            Ty::F => {
+                let mut acc = 0.0f32;
+                for &i in g {
+                    acc += vals[i].f();
+                }
+                Val::F(acc * (1.0f32 / g.len() as f32))
+            }
+            Ty::V => {
+                let mut acc = [0.0f32; 3];
+                for &i in g {
+                    let v = vals[i].v();
+                    for k in 0..3 {
+                        acc[k] += v[k];
+                    }
+                }
+                let w = 1.0f32 / g.len() as f32;
+                Val::V([acc[0] * w, acc[1] * w, acc[2] * w])
+            }
+            _ => vals[g[0]].clone(),
+        }
+    };
+    let posv: Vec<Val> = pt.pos.iter().map(|p| Val::V(*p)).collect();
+    let mut o = Points::default();
+    o.pos = groups.iter().map(|g| mix(&posv, Ty::V, g).v()).collect();
+    for (name, a) in pt.attrs.iter() {
+        if a.dom != Dom::Point || a.data.len() != src_size {
+            continue;
+        }
+        let data: Vec<Val> = groups.iter().map(|g| mix(&a.data, a.ty, g)).collect();
+        o.attrs.insert(name.clone(), Attr { dom: a.dom, ty: a.ty, data });
+    }
+    o
+}
+
 pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
     let ty = node.ty.as_str();
     let r: Outs = match ty {
@@ -1087,6 +1262,10 @@ pub fn mesh_nodes2(ev: &Ev, ni: usize, node: &Node) -> Res<Option<Outs>> {
             let g = ev.geo(ni, "Geometry")?;
             let d = ev.cf(ni, "Distance")?;
             let mut o = (*g).clone();
+            if let Some(pt) = &g.points {
+                let sel = selection(ev, ni, Comp::Points(pt), Dom::Point)?;
+                o.points = Some(merge_points_by_distance(pt, &sel, d));
+            }
             if let Some(m) = &g.mesh {
                 let sel = selection(ev, ni, Comp::Mesh(m), Dom::Point)?;
                 if sel.iter().all(|&s| s) {
@@ -2007,4 +2186,20 @@ pub fn hull_mesh(pts: &[V3]) -> Mesh {
     }
     super::prim::set_sharp_all(&mut m);
     m
+}
+
+#[cfg(test)]
+mod point_merge_tests {
+    use super::*;
+
+    /// two close points merge into their mean (the survivor keeps the first slot), the far point is kept
+    #[test]
+    fn merge_points_mean() {
+        let mut pt = Points::default();
+        pt.pos = vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.5, 0.0, 0.0]];
+        let o = merge_points_by_distance(&pt, &[true, true, true], 1.0);
+        assert_eq!(o.pos.len(), 2);
+        assert_eq!(o.pos[0], [0.25, 0.0, 0.0]);
+        assert_eq!(o.pos[1], [10.0, 0.0, 0.0]);
+    }
 }
