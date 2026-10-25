@@ -106,17 +106,161 @@ fn r32(x: f64) -> f64 {
     x as f32 as f64
 }
 
+type F3 = [f32; 3];
+fn sub3(a: F3, b: F3) -> F3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
+fn dot3(a: F3, b: F3) -> f32 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
+fn cross_tri(v1: F3, v2: F3, v3: F3) -> F3 {
+    let (n1, n2) = (sub3(v1, v2), sub3(v2, v3));
+    [n1[1] * n2[2] - n1[2] * n2[1], n1[2] * n2[0] - n1[0] * n2[2], n1[0] * n2[1] - n1[1] * n2[0]]
+}
+fn normalize3(a: F3) -> (F3, f32) {
+    let d = dot3(a, a);
+    if d > 1.0e-35f32 {
+        let d = d.sqrt();
+        let f = 1.0f32 / d;
+        ([a[0] * f, a[1] * f, a[2] * f], d)
+    } else {
+        ([0.0; 3], 0.0)
+    }
+}
+fn edges_to_normal(a1: F3, a2: F3, b1: F3, b2: F3) -> F3 {
+    let da = normalize3(sub3(a2, a1)).0;
+    let db = normalize3(sub3(b2, b1)).0;
+    normalize3([da[0] + db[0], da[1] + db[1], da[2] + db[2]]).0
+}
+/// bmo_fill_grid.cc quad_verts_to_barycentric_tri
+fn quad_to_tri(a: F3, b: F3, an: F3, bn: F3, prev: Option<(F3, F3)>, flip: bool) -> [F3; 3] {
+    let mut no = edges_to_normal(a, an, b, bn);
+    if let Some((ap, bp)) = prev {
+        let nt = edges_to_normal(ap, a, bp, b);
+        no = normalize3([no[0] + nt[0], no[1] + nt[1], no[2] + nt[2]]).0;
+    }
+    if flip {
+        no = [-no[0], -no[1], -no[2]];
+    }
+    let d = sub3(a, b);
+    let l = dot3(d, d).sqrt();
+    let no = [no[0] * l, no[1] * l, no[2] * l];
+    let mid = [(a[0] + b[0]) * 0.5f32, (a[1] + b[1]) * 0.5f32, (a[2] + b[2]) * 0.5f32];
+    [a, b, [mid[0] + no[0], mid[1] + no[1], mid[2] + no[2]]]
+}
+/// BLI transform_point_by_tri_v3
+fn transform_by_tri(pt: F3, tar: &[F3; 3], src: &[F3; 3]) -> F3 {
+    let no_tar = normalize3(cross_tri(tar[0], tar[1], tar[2])).0;
+    let no_src = normalize3(cross_tri(src[0], src[1], src[2])).0;
+    // axis_dominant_v3_to_m3 (rows n1, n2, n after ortho_basis_v3v3_v3)
+    let f = no_src[0] * no_src[0] + no_src[1] * no_src[1];
+    let (n1, n2) = if f > f32::EPSILON {
+        let d = 1.0f32 / f.sqrt();
+        let r1 = [no_src[1] * d, -no_src[0] * d, 0.0f32];
+        let r2 = [-no_src[2] * r1[1], no_src[2] * r1[0], no_src[0] * r1[1] - no_src[1] * r1[0]];
+        (r1, r2)
+    } else {
+        ([if no_src[2] < 0.0 { -1.0 } else { 1.0 }, 0.0, 0.0], [0.0, 1.0, 0.0])
+    };
+    let mul = |a: F3| -> F3 {
+        [n1[0] * a[0] + n1[1] * a[1] + n1[2] * a[2], n2[0] * a[0] + n2[1] * a[1] + n2[2] * a[2], no_src[0] * a[0] + no_src[1] * a[1] + no_src[2] * a[2]]
+    };
+    let p = mul(pt);
+    let t: Vec<F3> = src.iter().map(|&v| mul(v)).collect();
+    let cross2 = |v1: F3, v2: F3, v3: F3| (v1[0] - v2[0]) * (v2[1] - v3[1]) + (v1[1] - v2[1]) * (v3[0] - v2[0]);
+    let mut w = [cross2(t[1], t[2], p), cross2(t[2], t[0], p), cross2(t[0], t[1], p)];
+    let wtot = w[0] + w[1] + w[2];
+    let ok = wtot != 0.0 && {
+        let r = 1.0f32 / wtot;
+        for x in w.iter_mut() {
+            *x *= r;
+        }
+        w.iter().all(|x| x.is_finite())
+    };
+    if !ok {
+        w = [1.0 / 3.0; 3];
+    }
+    let mut out = [
+        tar[0][0] * w[0] + tar[1][0] * w[1] + tar[2][0] * w[2],
+        tar[0][1] * w[0] + tar[1][1] * w[1] + tar[2][1] * w[2],
+        tar[0][2] * w[0] + tar[1][2] * w[1] + tar[2][2] * w[2],
+    ];
+    let cr = cross_tri(tar[0], tar[1], tar[2]);
+    let area_tar = (dot3(cr, cr).sqrt() * 0.5f32).sqrt();
+    let area_src = ((0.5f32 * ((t[0][0] - t[1][0]) * (t[1][1] - t[2][1]) + (t[0][1] - t[1][1]) * (t[2][0] - t[1][0]))).abs()).sqrt();
+    let z = p[2] - t[0][2];
+    let k = (z / area_src) * area_tar;
+    for c in 0..3 {
+        out[c] += no_tar[c] * k;
+    }
+    out
+}
+
+/// bpy.ops.mesh.fill_grid() (use_interp_simple=False, BARYCENTRIC_INTERP) on the 1024-vertex circle of ShellBaseFactory.build_ellipse.
+/// Blender picks circle vertex 892 as the grid corner (f32 angle noise; the circle is the same for every shell). Grid x runs along
+/// increasing circle index, y along decreasing index; boundary vertices keep their circle index, interior vertices follow row by row.
+fn fill_grid_circle(lp: &[[f64; 3]]) -> Mesh {
+    const BEST: usize = 892;
+    let n = lp.len();
+    let (xt, yt) = (n / 4 + 1, n / 4 + 1);
+    let (xm, ym) = (xt - 1, yt - 1);
+    let c = |i: usize| -> F3 { let p = lp[i % n]; [p[0] as f32, p[1] as f32, p[2] as f32] };
+    let bidx = |px: usize, py: usize| -> usize {
+        if py == 0 {
+            (BEST + px) % n
+        } else if px == 0 {
+            (BEST + n - py) % n
+        } else if py == ym {
+            (BEST + 2 * n - n / 4 - px) % n
+        } else {
+            (BEST + n / 4 + py) % n
+        }
+    };
+    let xy = |x: usize, y: usize| x + y * xt;
+    let mut g: Vec<F3> = vec![[0.0; 3]; xt * yt];
+    for py in 0..yt {
+        for px in 0..xt {
+            if px == 0 || py == 0 || px == xm || py == ym {
+                g[xy(px, py)] = c(bidx(px, py));
+            }
+        }
+    }
+    let tri_a = quad_to_tri(g[xy(0, 0)], g[xy(xm, 0)], g[xy(0, 1)], g[xy(xm, 1)], None, false);
+    let tri_b = quad_to_tri(g[xy(0, ym)], g[xy(xm, ym)], g[xy(0, ym - 1)], g[xy(xm, ym - 1)], None, true);
+    for y in 1..ym {
+        let tri_t = quad_to_tri(g[xy(0, y)], g[xy(xm, y)], g[xy(0, y + 1)], g[xy(xm, y + 1)], Some((g[xy(0, y - 1)], g[xy(xm, y - 1)])), false);
+        for x in 1..xm {
+            let ca = transform_by_tri(g[xy(x, 0)], &tri_t, &tri_a);
+            let cb = transform_by_tri(g[xy(x, ym)], &tri_t, &tri_b);
+            let t = y as f32 / (yt as f32 - 1.0f32);
+            let s = 1.0f32 - t;
+            g[xy(x, y)] = [s * ca[0] + t * cb[0], s * ca[1] + t * cb[1], s * ca[2] + t * cb[2]];
+        }
+    }
+    let pidx = |px: usize, py: usize| -> usize {
+        if px == 0 || py == 0 || px == xm || py == ym { bidx(px, py) } else { n + (px - 1) + (py - 1) * (xt - 2) }
+    };
+    let mut m = Mesh::new();
+    m.pos = vec![[0.0; 3]; xt * yt];
+    for py in 0..yt {
+        for px in 0..xt {
+            let q = g[xy(px, py)];
+            m.pos[pidx(px, py)] = [q[0] as f64, q[1] as f64, q[2] as f64];
+        }
+    }
+    for px in 0..xt - 1 {
+        for py in 0..yt - 1 {
+            m.faces.push(vec![pidx(px + 1, py) as u32, pidx(px + 1, py + 1) as u32, pidx(px, py + 1) as u32, pidx(px, py) as u32]);
+        }
+    }
+    m
+}
+
 fn build_ellipse(softness: f64) -> Mesh {
     // new_circle(vertices=1024) at x = 1: vertices cos/sin accumulated in float32
     let n = 1024usize;
-    let phid = (2.0f32 * std::f32::consts::PI) / n as f32;
-    let mut phi = 0.0f32;
     let mut lp: Vec<[f64; 3]> = vec![];
-    for _ in 0..n {
-        lp.push([(phi.cos() * 1.0 + 1.0f32) as f64, (phi.sin() * 1.0) as f64, 0.0]);
-        phi += phid;
+    for k in 0..n {
+        let (sn, cs) = super::cabnodes::sin_cos_from_fraction(k, n);
+        lp.push([((sn * -1.0f32) + 1.0f32) as f64, (cs * 1.0f32) as f64, 0.0]);
     }
-    let mut m = super::bpyops::fill_grid_loop(&lp);
+    let mut m = fill_grid_circle(&lp);
     tr("geo_geo_shader_vector", &m);
     // displace: viewpoint (0, 0, 1)
     let vp = [0.0, 0.0, 1.0];
