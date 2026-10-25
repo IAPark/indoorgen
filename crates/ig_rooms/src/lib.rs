@@ -18,6 +18,7 @@ pub mod state;
 pub mod solidify;
 pub mod shell;
 pub mod skirting;
+pub mod walldeco;
 pub mod pyroom;
 pub mod pysolid;
 
