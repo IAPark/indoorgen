@@ -308,6 +308,66 @@ pub fn remesh_fill(text: &Mesh, res: f64) -> Mesh {
     out
 }
 
+/// decorate.subdivide_edge_ring(obj, cuts, z): every vertical edge (|dz| > 1-1e-3 after normalisation) gets `cuts` new vertices (linear: the
+/// ring between the two solidify shells is straight), the rim quads become cuts+1 strips
+pub fn subdivide_vertical(m: &Mesh, cuts: usize) -> Mesh {
+    use crate::dhash::HashMap;
+    let mut out = m.clone();
+    let mut cut: HashMap<(u32, u32), Vec<u32>> = HashMap::default();
+    let mut sel = |out: &mut Mesh, a: u32, b: u32| -> Option<Vec<u32>> {
+        let k = (a.min(b), a.max(b));
+        if let Some(v) = cut.get(&k) {
+            return Some(if a < b { v.clone() } else { v.iter().rev().copied().collect() });
+        }
+        let (pa, pb) = (m.pos[k.0 as usize], m.pos[k.1 as usize]);
+        let d = [(pb[0] as f32 - pa[0] as f32) as f64, (pb[1] as f32 - pa[1] as f32) as f64, (pb[2] as f32 - pa[2] as f32) as f64];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if l == 0.0 || (d[2] / l).abs() <= 1.0 - 1e-3 {
+            return None;
+        }
+        let mut ids = vec![];
+        for i in 1..=cuts {
+            let t = i as f64 / (cuts + 1) as f64;
+            ids.push(out.pos.len() as u32);
+            out.pos.push([pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t]);
+        }
+        cut.insert(k, ids.clone());
+        Some(if a < b { ids } else { ids.iter().rev().copied().collect() })
+    };
+    let mut faces = vec![];
+    for f in &m.faces {
+        if f.len() == 4 {
+            // quad with two opposite vertical edges: (f0,f1) and (f2,f3)
+            for r in 0..2 {
+                let (a, b, c, d) = (f[r], f[(r + 1) % 4], f[(r + 2) % 4], f[(r + 3) % 4]);
+                // edges (a,b) and (c,d) vertical?
+                let e1 = sel(&mut out, a, b);
+                let e2 = sel(&mut out, c, d);
+                if let (Some(v1), Some(v2)) = (e1, e2) {
+                    // a -> b along v1, c -> d along v2
+                    let mut la = vec![a];
+                    la.extend(&v1);
+                    la.push(b);
+                    let mut lc = vec![c];
+                    lc.extend(&v2);
+                    lc.push(d);
+                    for i in 0..=cuts {
+                        faces.push(vec![la[i], la[i + 1], lc[i + 1], lc[i]]);
+                    }
+                    break;
+                }
+                if r == 1 {
+                    faces.push(f.clone());
+                }
+            }
+        } else {
+            faces.push(f.clone());
+        }
+    }
+    out.faces = faces;
+    out
+}
+
 /// generate_text(): the letters (random draws after the length draw), uppercased
 fn gen_text(r: &mut Rng) -> String {
     let n = text_len_rng(r);
@@ -437,6 +497,12 @@ mod tests {
         let (a, b, c) = ig_kit::cloth::surface_distance(&m.pos, &m.faces, &rp, &rf);
         eprintln!("surface dist mean {a} p95 {b} max {c}");
         let rm = remesh_fill(&m, 0.02);
+        let sub = subdivide_vertical(&bpyops::solidify(&rm, 0.0819525420665741, 0.5), 8);
+        eprintln!("pre-cloth verts {} faces {}", sub.pos.len(), sub.faces.len());
+        if let Some((sp, sf)) = load(&format!("{dir}/007_object_modifier_apply_CLOTH.case.json")) {
+            let (a, b, c) = ig_kit::cloth::surface_distance(&sub.pos, &sub.faces, &sp, &sf);
+            eprintln!("pre-cloth vs stage007 input ({} verts {} faces): mean {a} p95 {b} max {c}", sp.len(), sf.len());
+        }
         eprintln!("remesh_fill verts {} faces {}", rm.pos.len(), rm.faces.len());
         if let Some((sp, sf)) = load(&format!("{dir}/006_object_modifier_apply_SOLIDIFY.case.json")) {
             let (a, b, c) = ig_kit::cloth::surface_distance(&rm.pos, &rm.faces, &sp, &sf);
