@@ -260,15 +260,17 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             // coarse ray grid (stricter near-occluder test first, the spec's 0.6 m / 15% after 350 failed tries)
             let (near_d, near_f) = if cam_tries < 350 { (0.9, 0.08) } else { (0.6, 0.15) };
             let (gw, gh) = (16, 9);
-            let (mut near, mut close, mut tot, mut dsum) = (0, 0, 0, 0.0f64);
+            let (mut near, mut close, mut tot, mut dsum, mut mid, mut wall) = (0, 0, 0, 0.0f64, 0, 0);
             for iy in 0..gh {
                 for ix in 0..gw {
                     let nx = ((ix as f64 + 0.5) / gw as f64) * 2.0 - 1.0;
                     let ny = 1.0 - ((iy as f64 + 0.5) / gh as f64) * 2.0;
                     let d = unit([f[0] + r[0] * nx * tan_h + u[0] * ny * tan_v, f[1] + r[1] * nx * tan_h + u[1] * ny * tan_v, f[2] + u[2] * ny * tan_v]);
                     tot += 1;
-                    if let Some((t, _)) = w.cast(o, d, 6.0) {
+                    if let Some((t, ti)) = w.cast(o, d, 6.0) {
                         dsum += t;
+                        if t < 1.8 { mid += 1 }
+                        if t < 3.0 && w.keys[w.owner[ti] as usize].contains(".wall") { wall += 1 }
                         if t < 1.2 { close += 1 }
                         if t < near_d { near += 1 }
                     } else {
@@ -277,6 +279,14 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                 }
             }
             if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { continue }
+            let strict = cam_tries < 350;
+            if strict && (mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { continue }
+            // the subject box should be mostly inside the frame
+            let inf = (0..8).filter(|k| {
+                let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
+                matches!(proj(q), Some((px, py)) if px.abs() < 1.02 && py.abs() < 1.02)
+            }).count();
+            if strict && inf < 5 { continue }
             // subject visibility: 3x3x3 sample points
             let (mut vis, mut n) = (0, 0);
             for ix in 0..3 {
@@ -303,7 +313,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                 let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
                 dd < 1.2 || (*sk == s.key && ang < 40.0) || ang < 20.0
             }) { continue }
-            let score = dsum / tot as f64 / 6.0 + 0.8 * vis as f64 / n as f64 + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64();
+            let score = dsum / tot as f64 / 6.0 + 0.3 * inf as f64 / 8.0 - 0.5 * wall as f64 / tot as f64 + 0.8 * vis as f64 / n as f64 + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64();
             nvalid += 1;
             if best.as_ref().map_or(true, |b| score > b.0) { best = Some((score, si, o, f, lens, s.key.clone())) }
         }
