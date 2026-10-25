@@ -71,6 +71,49 @@ fn fixed_kind(fseed: u64, p: &[f64]) -> &'static str {
     ["white", "black_wood", "wood"][Rng::seeded(fseed).choice_p(p).min(2)]
 }
 
+/// words a fresh `Rng::seeded(seed)` has consumed when its state equals `st` (the instance stream position of a material draw); the render side
+/// replays it as np.random.seed(seed) + burning that many 32-bit words
+fn words_consumed(seed: u64, st: &Rng) -> u64 {
+    let mut t = st.clone();
+    let want = [t.next_u32(), t.next_u32(), t.next_u32()];
+    let mut r = Rng::seeded(seed);
+    let mut win = [r.next_u32(), r.next_u32(), r.next_u32()];
+    for n in 0..200_000u64 {
+        if win == want {
+            return n;
+        }
+        win = [win[1], win[2], r.next_u32()];
+    }
+    0
+}
+
+fn inst_seed(fseed: u64, inst: u64) -> u64 {
+    int_hash(&[&fseed.to_string(), &inst.to_string()])
+}
+
+/// material of a drawer from its get_shelf_material(<Material>) choice: 0 shader_shelves_white, 1 shader_rough_plastic, 2 shader_shelves_black_wood,
+/// 3 shader_wood, 4 shader_shelves_wood. The sampled shaders (plastic, wood) draw their parameters from the instance stream: spec seed + `skip`.
+fn drawer_material(p: &cabdoor::DrawerPick, seed: u64) -> Material {
+    let skipped = |shader: &str, name: &str, rgb: [f32; 3]| {
+        let skip = words_consumed(seed, &p.after);
+        spec_material(name, serde_json::json!({"cls": format!("shader.{shader}"), "kwargs": {}, "seed": seed, "skip": skip}), rgb)
+    };
+    match p.idx {
+        0 => plywood("white", false, 0),
+        1 => skipped("plastic.plastic_rough.shader_rough_plastic", "drawer_plastic", [0.5, 0.5, 0.5]),
+        2 => plywood("black_wood", false, 0),
+        3 => skipped("wood.wood.shader_wood", "drawer_wood", [0.45, 0.3, 0.17]),
+        _ => plywood("wood", false, 0),
+    }
+}
+
+/// slot materials of a kitchen cabinet row: [frame + doors (K_z), division boards (K), drawers...]
+fn kitchen_slot_mats(kind: &str, picks: &[cabdoor::DrawerPick], seed: u64) -> Vec<Material> {
+    let mut v = vec![plywood(kind, true, 0), plywood(kind, false, 0)];
+    v.extend(picks.iter().map(|p| drawer_material(p, seed)));
+    v
+}
+
 /// Frame of boards: shared by LargeShelf / SingleCabinet / KitchenCabinet
 struct Frame {
     depth: f64,
@@ -144,7 +187,7 @@ impl LargeShelf {
 }
 
 impl LargeShelf {
-    fn params(&self, inst: u64) -> (cabnodes::ShelfParams, Material) {
+    fn params(&self, inst: u64) -> (cabnodes::ShelfParams, &'static str) {
         let mut r = inst_rng(self.fseed, inst);
         // sample_params()
         let dims = [r.uniform(0.25, 0.35), r.uniform(0.3, 2.0), r.uniform(0.9, 2.0)];
@@ -164,18 +207,18 @@ impl LargeShelf {
         for (lo, hi) in [(0.025, 0.06), (0.05, 0.1), (0.01, 0.025), (0.002, 0.005), (0.0, 0.05)] {
             r.uniform(lo, hi);
         }
-        let mat = shelf_mat(&mut r, &[0.4, 0.3, 0.3]);
-        let mat = respec(&mat, self.fseed * 1000 + inst);
+        let kind = ["white", "black_wood", "wood"][r.choice_p(&[0.4, 0.3, 0.3]).min(2)];
         let mut p = cabnodes::ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap, bottom_h, div_t, screw_depth, screw_r, screw_wgap, cell_w, cell_h, ..Default::default() };
         p.derive();
-        (p, mat)
+        (p, kind)
     }
 }
 
 impl Factory for LargeShelf {
     fn asset(&self, inst: u64) -> Asset {
-        let (p, mat) = self.params(inst);
-        cabnodes::shelf_frame(&p, &mat, &mat)
+        // large_shelf.py get_material_func: frame_material = shader_shelves_<kind>[_z] (z texture), board_material = the plain variant
+        let (p, kind) = self.params(inst);
+        cabnodes::shelf_frame(&p, &plywood(kind, true, 0), &plywood(kind, false, 0))
     }
     fn exact(&self, inst: u64) -> Option<cabnodes::ExactMesh> {
         let (p, _) = self.params(inst);
@@ -479,6 +522,18 @@ impl Factory for SingleCabinet {
         let mut r = inst_rng(self.fseed, inst);
         Some(cabdoor::single_cabinet_gmesh(&mut r, self.dims, Default::default()).to_exact())
     }
+    fn exact_slots(&self, inst: u64) -> Option<(Vec<u16>, Vec<Material>)> {
+        let mut r = inst_rng(self.fseed, inst);
+        let mut pan = cabdoor::SinglePanels::default();
+        let g = cabdoor::single_cabinet_core(&mut r, self.dims, Default::default(), Some(&mut pan));
+        let kind = fixed_kind(self.fseed, &[0.5, 0.2, 0.3]);
+        // doors get the kind as a string: frame white / black_wood_z / wood (NOT z, doors.py get_material_func); panels white / black_wood_z / wood_z or glass
+        let door_frame = plywood(kind, kind == "black_wood", 0);
+        let glass = shader_spec("door_glass", "ceramic.glass.shader_glass", 0, [0.1, 0.1, 0.12]);
+        let panel = |glass_on: bool| if glass_on { glass.clone() } else { plywood(kind, true, 0) };
+        let mats = vec![plywood(kind, true, 0), plywood(kind, false, 0), door_frame, panel(pan.lower_glass), panel(pan.upper_glass)];
+        Some((g.tag.iter().map(|&t| (t >> 1) as u16).collect(), mats))
+    }
     fn asset(&self, inst: u64) -> Asset {
         let dims = self.dims;
         let num_h = (((dims[2] - 0.083) / 0.3) as usize).max(1);
@@ -574,6 +629,15 @@ impl Factory for KitchenCabinet {
         let spec = cabdoor::KcSpec { dims: self.dims, widths: self.widths.clone(), drawer_only: false };
         Some(cabdoor::kitchen_cabinet_gmesh(&mut r, &spec, Default::default()).to_exact())
     }
+    fn exact_slots(&self, i: u64) -> Option<(Vec<u16>, Vec<Material>)> {
+        let fs = self.fseed?;
+        let mut r = inst_rng(fs, i);
+        let spec = cabdoor::KcSpec { dims: self.dims, widths: self.widths.clone(), drawer_only: false };
+        let mut picks = vec![];
+        let (g, _) = cabdoor::kitchen_cabinet_core(&mut r, &spec, Default::default(), None, Some(&mut picks));
+        let kind = fixed_kind(fs, &[0.4, 0.3, 0.3]);
+        Some((g.tag.iter().map(|&t| (t >> 1) as u16).collect(), kitchen_slot_mats(kind, &picks, inst_seed(fs, i))))
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
         if let Some(fs) = self.fseed {
@@ -620,6 +684,9 @@ impl KitchenSpace {
 impl KitchenSpace {
     /// KitchenCabinetFactory(fseed, dimensions=(x, y - 0.15, bottom_h), drawer_only=True)(i=0)
     fn bottom_cabinet(&self) -> cabnodes::GMesh {
+        self.bottom_cabinet_t(None)
+    }
+    fn bottom_cabinet_t(&self, picks: Option<&mut Vec<cabdoor::DrawerPick>>) -> cabnodes::GMesh {
         let [x, y, _z] = self.dims;
         let dims = [x, y - 0.15, self.bottom_h];
         let mut r = Rng::seeded(self.factory_seed);
@@ -629,12 +696,15 @@ impl KitchenSpace {
         let widths: Vec<f64> = ws.iter().map(|w| w / s * dims[1]).collect();
         let mut ri = inst_rng(self.factory_seed, 0);
         let spec = cabdoor::KcSpec { dims, widths, drawer_only: true };
-        cabdoor::kitchen_cabinet_gmesh(&mut ri, &spec, Default::default())
+        cabdoor::kitchen_cabinet_core(&mut ri, &spec, Default::default(), None, picks).0
     }
 }
 
 impl KitchenSpace {
     fn cabinet(&self, dims: [f64; 3], drawer_only: bool, inst: u64, prev: Option<(f64, f64, f64, f64)>) -> (cabnodes::GMesh, (f64, f64, f64, f64)) {
+        self.cabinet_t(dims, drawer_only, inst, prev, None)
+    }
+    fn cabinet_t(&self, dims: [f64; 3], drawer_only: bool, inst: u64, prev: Option<(f64, f64, f64, f64)>, picks: Option<&mut Vec<cabdoor::DrawerPick>>) -> (cabnodes::GMesh, (f64, f64, f64, f64)) {
         let mut r = Rng::seeded(self.factory_seed);
         let n = ((dims[1] / 0.45) as usize).max(1);
         let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
@@ -642,7 +712,7 @@ impl KitchenSpace {
         let widths: Vec<f64> = ws.iter().map(|w| w / s * dims[1]).collect();
         let mut ri = inst_rng(self.factory_seed, inst);
         let spec = cabdoor::KcSpec { dims, widths, drawer_only };
-        cabdoor::kitchen_cabinet_gmesh_ex(&mut ri, &spec, Default::default(), prev)
+        cabdoor::kitchen_cabinet_core(&mut ri, &spec, Default::default(), prev, picks)
     }
 
     fn translated(mut g: cabnodes::GMesh, t: [f64; 3]) -> cabnodes::GMesh {
@@ -689,8 +759,27 @@ impl KitchenSpace {
 
     /// [bottom cabinet, countertop, (top left, top right, top mid)] before the final scaling
     fn raw_parts(&self, inst: u64) -> Vec<cabnodes::GMesh> {
+        self.raw_parts_t(inst, None)
+    }
+
+    /// raw_parts; with `slots` the faces carry material slots in `tag >> 1`: 0 frame/doors (K_z), 1 boards (K), 2 countertop, 3.. drawers
+    /// (their picks and instance seeds are appended to `slots`)
+    fn raw_parts_t(&self, inst: u64, mut slots: Option<&mut Vec<(cabdoor::DrawerPick, u64)>>) -> Vec<cabnodes::GMesh> {
         let [x, y, z] = self.dims;
-        let bottom = self.bottom_cabinet();
+        // remap a cabinet's local slots (0 frame, 1 board, 2+n drawer n) into the global numbering
+        let mut remap = |g: &mut cabnodes::GMesh, pk: Vec<cabdoor::DrawerPick>, seed: u64, slots: &mut Option<&mut Vec<(cabdoor::DrawerPick, u64)>>| {
+            let Some(sl) = slots.as_deref_mut() else { return };
+            let base = sl.len();
+            for t in g.tag.iter_mut() {
+                let s = (*t >> 1) as usize;
+                let ns = if s >= 2 { (3 + base + s - 2).min(127) } else { s };
+                *t = ((ns << 1) as u8) | (*t & 1);
+            }
+            sl.extend(pk.into_iter().map(|p| (p, seed)));
+        };
+        let mut pk0 = vec![];
+        let mut bottom = self.bottom_cabinet_t(slots.is_some().then_some(&mut pk0));
+        remap(&mut bottom, pk0, inst_seed(self.factory_seed, 0), &mut slots);
         let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
         for v in &bottom.v {
             for k in 0..3 {
@@ -703,7 +792,7 @@ impl KitchenSpace {
         let mut slab = cabnodes::GMesh::new();
         slab.v = top.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
         slab.p = top.faces.clone();
-        slab.tag = vec![0; slab.p.len()];
+        slab.tag = vec![if slots.is_some() { 4 } else { 0 }; slab.p.len()];
         let slab = Self::translated(slab, [0.0, ((lo[1] + hi[1]) / 2.0) as f64, hi[2] as f64]);
         let mut parts = vec![bottom, slab];
         if !self.island {
@@ -712,9 +801,14 @@ impl KitchenSpace {
             let ctw = (y - tmw) / 2.0 - 0.05;
             let th = self.top_h;
             // left and right share one KitchenCabinetFactory object: the second instance reuses the first one's frame parameters
-            let (left, rnd) = self.cabinet([x / 2.0, ctw, th], false, 0, None);
-            let (right, _) = self.cabinet([x / 2.0, ctw, th], false, 1, Some(rnd));
-            let (mid, _) = self.cabinet([x * 0.66, tmw, th * 0.8], false, 0, None);
+            let (mut pl, mut pr, mut pm) = (vec![], vec![], vec![]);
+            let on = slots.is_some();
+            let (mut left, rnd) = self.cabinet_t([x / 2.0, ctw, th], false, 0, None, on.then_some(&mut pl));
+            remap(&mut left, pl, inst_seed(self.factory_seed, 0), &mut slots);
+            let (mut right, _) = self.cabinet_t([x / 2.0, ctw, th], false, 1, Some(rnd), on.then_some(&mut pr));
+            remap(&mut right, pr, inst_seed(self.factory_seed, 1), &mut slots);
+            let (mut mid, _) = self.cabinet_t([x * 0.66, tmw, th * 0.8], false, 0, None, on.then_some(&mut pm));
+            remap(&mut mid, pm, inst_seed(self.factory_seed, 0), &mut slots);
             parts.push(Self::translated(left, [-x / 4.0, 0.0, z - th]));
             parts.push(Self::translated(right, [-x / 4.0, y - ctw, z - th]));
             parts.push(Self::translated(mid, [-x / 6.0, y / 2.0 - tmw / 2.0, z - th * 0.8]));
@@ -811,6 +905,15 @@ impl Factory for KitchenSpace {
     }
     fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
         Some(self.assemble(i).to_exact())
+    }
+    fn exact_slots(&self, i: u64) -> Option<(Vec<u16>, Vec<Material>)> {
+        let mut dr = vec![];
+        let parts = self.raw_parts_t(i, Some(&mut dr));
+        let g = hwexact::join_fwd(&parts);
+        let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
+        let mut mats = vec![plywood(kind, true, 0), plywood(kind, false, 0), cls_spec("counter_marble", "ceramic.Marble", self.factory_seed + 7, [0.85, 0.85, 0.85])];
+        mats.extend(dr.iter().map(|(p, seed)| drawer_material(p, *seed)));
+        Some((g.tag.iter().map(|&t| ((t >> 1) as u16).min(mats.len() as u16 - 1)).collect(), mats))
     }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
