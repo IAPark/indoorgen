@@ -9,6 +9,8 @@ pub mod poses;
 pub mod rig;
 pub mod place;
 pub mod pworld;
+pub mod ragdoll;
+pub mod cover;
 
 pub use ig_core::*;
 pub use ig_core::mesh::V3;

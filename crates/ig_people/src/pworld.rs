@@ -14,6 +14,10 @@ pub struct Obj {
     pub class: String,
     pub pose: ig_furn::geom::Pose,
     pub tris: Vec<Tri>,
+    /// triangle index ranges of the bed cover parts (cloth jobs that collide with other parts: comforter, blanket)
+    pub cover: Vec<(usize, usize)>,
+    /// (first tri, end tri, part index) of the parts that rest on the cloth (pillows, towels: cloth followers)
+    pub pillows: Vec<(usize, usize, usize)>,
     /// world AABB of the triangles
     pub lo: V3,
     pub hi: V3,
@@ -49,6 +53,46 @@ impl Obj {
                 TriMesh::new(v, ix).ok()
             })
             .as_ref()
+    }
+    /// the triangles without the cover parts
+    pub fn tris_nocover(&self) -> Vec<Tri> {
+        if self.cover.is_empty() {
+            return self.tris.clone();
+        }
+        self.tris.iter().enumerate().filter(|(i, _)| !self.cover.iter().any(|&(a, b)| *i >= a && *i < b)).map(|(_, t)| *t).collect()
+    }
+    /// triangles with the cover parts optionally dropped and pillow parts translated by `moves` (part index, world offset)
+    pub fn tris_with(&self, skip_cover: bool, moves: &[(usize, V3)]) -> Vec<Tri> {
+        let mut out = Vec::with_capacity(self.tris.len());
+        for (i, t) in self.tris.iter().enumerate() {
+            if skip_cover && self.cover.iter().any(|&(a, b)| i >= a && i < b) {
+                continue;
+            }
+            let mv = self.pillows.iter().find(|&&(a, b, _)| i >= a && i < b).and_then(|&(_, _, pi)| moves.iter().find(|m| m.0 == pi));
+            match mv {
+                Some((_, d)) => out.push([0, 1, 2].map(|k| [t[k][0] + d[0], t[k][1] + d[1], t[k][2] + d[2]])),
+                None => out.push(*t),
+            }
+        }
+        out
+    }
+    /// world xy bounding box (lo, hi) and z range of one pillow part
+    pub fn part_bounds(&self, a: usize, b: usize) -> (V3, V3) {
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for t in &self.tris[a..b] {
+            for q in t {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(q[k]);
+                    hi[k] = hi[k].max(q[k]);
+                }
+            }
+        }
+        (lo, hi)
+    }
+    /// highest crossing of the vertical line at world (x, y) that is <= zmax, ignoring the cover parts (the mattress / pillows top)
+    pub fn top_xy_nocover(&self, x: f64, y: f64, zmax: f64) -> Option<f64> {
+        let o = Obj { key: String::new(), class: String::new(), pose: self.pose, tris: self.tris_nocover(), cover: vec![], pillows: vec![], lo: self.lo, hi: self.hi, room: self.room, tm: OnceCell::new() };
+        o.column(x, y).into_iter().filter(|z| *z <= zmax).last()
     }
     /// z values where the vertical line (x, y) crosses the triangles, ascending
     pub fn column(&self, x: f64, y: f64) -> Vec<f64> {
@@ -216,10 +260,25 @@ impl World {
                 continue;
             };
             let mut tris: Vec<Tri> = vec![];
+            let mut cover: Vec<(usize, usize)> = vec![];
+            let mut pillows: Vec<(usize, usize, usize)> = vec![];
             if let Some(v) = visuals.and_then(|v| v.get(k)) {
-                for p in &v.parts {
+                for (pi, p) in v.parts.iter().enumerate() {
+                    let a0 = tris.len();
+                    if v.cloth.iter().any(|j| j.target == pi && !j.collide.is_empty()) {
+                        // (range filled after the part is appended)
+                        cover.push((a0, usize::MAX));
+                    }
                     for t in p.mesh.triangles() {
                         tris.push([o.pose.apply(p.mesh.pos[t[0] as usize]), o.pose.apply(p.mesh.pos[t[1] as usize]), o.pose.apply(p.mesh.pos[t[2] as usize])]);
+                    }
+                    if let Some(c) = cover.last_mut() {
+                        if c.1 == usize::MAX {
+                            c.1 = tris.len();
+                        }
+                    }
+                    if v.followers.iter().any(|f| f.part == pi) {
+                        pillows.push((a0, tris.len(), pi));
                     }
                 }
             }
@@ -243,9 +302,14 @@ impl World {
             if !ignored(&gen.class) {
                 rooms[room].n_furn += 1;
             }
-            objs.push(Obj { key: k.clone(), class: gen.class.clone(), pose: o.pose, tris, lo, hi, room, tm: OnceCell::new() });
+            objs.push(Obj { key: k.clone(), class: gen.class.clone(), pose: o.pose, tris, cover, pillows, lo, hi, room, tm: OnceCell::new() });
         }
         World { objs, rooms, floor_z, wall_in: wall_t / 2.0 }
+    }
+
+    /// objects the physics of a person must respect (everything solid except ceiling lights, wall art, curtains; rugs count)
+    pub fn blocks_phys(&self, o: &Obj) -> bool {
+        !(o.class.contains("CeilingLight") || o.class.contains("WallArt") || o.class.contains("Curtain")) && o.hi[2] - self.floor_z > 0.005
     }
 
     pub fn blocks(&self, i: usize) -> bool {

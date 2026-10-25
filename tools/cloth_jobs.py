@@ -73,7 +73,7 @@ def _build_blanket(b, z, pose=None):
         obj.rotation_euler[-1] = -theta
         butil.apply_transform(obj)
     # mess pass (unmade bed): optional sideways offset / yaw of the throw, absent = unchanged
-    obj.location = b["x"], b.get("dy", 0.0), z - (pose[2][3] if pose else 0.0)
+    obj.location = b["x"], b.get("dy", 0.0), z + b.get("dz", 0.0) - (pose[2][3] if pose else 0.0)
     obj.rotation_euler[-1] = math.pi / 2 + b.get("yaw", 0.0)
     butil.apply_transform(obj, True)
     if pose:
@@ -90,8 +90,12 @@ def run_jobs(jobs, world_mesh, set_mesh, verbose=True):
     for j in jobs:
         if j["kind"] == "cloth":
             if j.get("build"):
-                pv, _ = world_mesh(j["z_from"]["part"])
-                obj = _build_blanket(j["build"], float(pv[:, 2].max()), j.get("pose"))
+                if "z" in j["build"]:
+                    z0 = float(j["build"]["z"])  # absolute start height (throw blankets over people)
+                else:
+                    pv, _ = world_mesh(j["z_from"]["part"])
+                    z0 = float(pv[:, 2].max())
+                obj = _build_blanket(j["build"], z0, j.get("pose"))
                 verts = np.array([tuple(v.co) for v in obj.data.vertices])
             else:
                 verts = np.array(j["verts"], dtype=float).reshape(-1, 3)

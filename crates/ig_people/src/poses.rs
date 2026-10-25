@@ -240,10 +240,22 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
                 b.side(-top, "UpperArm", Op::Aim { dir: d(fx * 0.9, -0.25, 0.05), twist: 0.0 });
                 b.side(-top, "Forearm", Op::Aim { dir: d(fx * 0.85, -0.35, 0.25), twist: 0.0 });
             } else {
+                // seed bit 20: arms out above the cover (beside the head) for a person under a bed cover
+                let arms_up = kind == LieBed && seed & (1 << 20) != 0;
                 for s in [-1.0, 1.0] {
                     b.side(s, "Thigh", Op::Rel([0.0, 0.0, s * (5.0 + v.v(2.0))]));
-                    b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.14, 1.0, -0.12), twist: 0.0 });
-                    b.side(s, "Forearm", Op::Aim { dir: d(s * 0.05, 1.0, 0.05), twist: 0.0 });
+                    if kind == LieSofa && seed & (1 << 21) != 0 {
+                        // short sofa: knees up, feet on the cushion
+                        b.side(s, "Thigh", Op::Rel([38.0 + v.v(6.0), 0.0, s * (6.0 + v.v(3.0))]));
+                        b.side(s, "Calf", Op::Rel([-68.0 + v.v(6.0), 0.0, 0.0]));
+                    }
+                    if arms_up {
+                        b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.95, -0.25 + v.v(0.1), 0.05), twist: 0.0 });
+                        b.side(s, "Forearm", Op::Aim { dir: d(s * 0.12, -1.0, 0.25), twist: 0.0 });
+                    } else {
+                        b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.14, 1.0, -0.12), twist: 0.0 });
+                        b.side(s, "Forearm", Op::Aim { dir: d(s * 0.05, 1.0, 0.05), twist: 0.0 });
+                    }
                 }
             }
             b.rel("Neck", [-8.0 + v.v(3.0), 0.0, v.v(6.0)]);

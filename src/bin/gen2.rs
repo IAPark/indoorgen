@@ -244,7 +244,7 @@ fn main() {
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
     let people = infinigen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &infinigen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness });
     for (pi, pl) in people.iter().enumerate() {
-        let mut a = infinigen::people::build_person_seat(pl.avatar, pl.kind, pl.seed, pl.seat_z);
+        let mut a = pl.build();
         if a.parts.is_empty() && std::env::var_os("PEOPLE_PROXY").is_some() {
             a = pl.proxy();
         }
@@ -255,6 +255,7 @@ fn main() {
             scene.add_posed(&format!("person{pi}_{:?}#{k}", pl.kind), "Person", m, mi, pl.pose.0);
         }
     }
+    infinigen::people::cover::apply(&people, &mut scene, g.c.wall_thickness / 2.0);
     // the clutter pass keeps off the people (their occupied boxes, padded 4 cm)
     let keepout: Vec<infinigen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
     // mess pass, part 2: clutter (no-op at --mess 0)

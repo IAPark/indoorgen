@@ -37,9 +37,35 @@ pub struct Placement {
     pub info: PlaceInfo,
     /// seat height above the floor the legs were solved for (sitting poses): pass to `build_person_seat`
     pub seat_z: Option<f64>,
+    /// how far the support (soft seat / mattress) was lowered for the physics (the body sinks in)
+    pub sink: f64,
+    /// cloth interaction (bed cover variants, throw blanket)
+    pub cover: Cover,
+    /// world height of the support surface under the hips the person was placed on (mattress top for `Under`, cover top for `On`)
+    pub support_top: f64,
+    /// ragdoll result (None = key pose)
+    pub settled: Option<crate::ragdoll::Settled>,
+    /// pillows (part of the support object) pushed aside / under the head: (support key, part index, world offset)
+    pub pillow_moves: Vec<(String, usize, V3)>,
+}
+
+/// How a person interacts with cloth (decided at placement; applied by `crate::cover`)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cover {
+    None,
+    /// lying on a bed under the comforter: the cover is re-simulated above the body (arms out, head out)
+    Under,
+    /// lying on top of the (rumpled) cover
+    On,
+    /// a throw blanket draped over the legs / body (sofa)
+    Throw,
 }
 
 impl Placement {
+    /// the posed, textured person in the local frame (settled ragdoll when present, else the key pose)
+    pub fn build(&self) -> ig_kit::api::Asset {
+        crate::body::build_person_g(self.avatar, self.kind, self.seed, self.seat_z, self.settled.as_ref().map(|s| &s.g[..]))
+    }
     pub fn world_boxes(&self) -> Vec<WBox> {
         world_boxes(&self.boxes, &self.pose)
     }
@@ -176,6 +202,45 @@ impl Planner<'_> {
         None
     }
 
+    /// cloth variant of a slot and the support top height it implies (bed: mattress top when the person goes under the cover)
+    fn cover_variant(&self, s: &Slot, seed: u64) -> (Cover, f64) {
+        use PoseKind::*;
+        let force = std::env::var("PEOPLE_COVER").ok();
+        let h = (seed.wrapping_mul(0x9E3779B97F4A7C15) >> 40) % 100;
+        match s.kind {
+            LieBed => {
+                if let Some(oi) = s.support {
+                    let o = &self.w.objs[oi];
+                    if !o.cover.is_empty() && force.as_deref() != Some("none") {
+                        let under = match force.as_deref() {
+                            Some("under") => true,
+                            Some("on") => false,
+                            _ => h < 50,
+                        };
+                        if under {
+                            if let Some(t) = o.top_xy_nocover(s.anchor[0], s.anchor[1], self.w.floor_z + 1.0) {
+                                return (Cover::Under, t);
+                            }
+                        } else {
+                            let t = o.column(s.anchor[0], s.anchor[1]).into_iter().filter(|z| *z <= self.w.floor_z + 1.0).last().unwrap_or(s.top);
+                            return (Cover::On, t);
+                        }
+                    }
+                }
+                (Cover::None, s.top)
+            }
+            LieSofa | SitRelaxed => {
+                let want = match force.as_deref() {
+                    Some("throw") => true,
+                    Some(_) => false,
+                    None => h < if s.kind == LieSofa { 70 } else { 35 },
+                };
+                (if want && s.soft { Cover::Throw } else { Cover::None }, s.top)
+            }
+            _ => (Cover::None, s.top),
+        }
+    }
+
     /// pose + collision check of one slot with one avatar; None when it does not fit
     fn fit(&self, s: &Slot, avatar: usize, seed: u64, tol: f64) -> Option<Placement> {
         use PoseKind::*;
@@ -187,6 +252,18 @@ impl Planner<'_> {
             return self.no(11);
         }
         let seat_z = if sitting { Some(seat_rel) } else { None };
+        let (cover, top) = self.cover_variant(s, seed);
+        // arms-out variant of the lying pose (flag bit read by the pose library)
+        let mut seed = if cover == Cover::Under { seed | (1 << 20) } else { seed };
+        if s.kind == LieSofa {
+            // sofa shorter than a stretched-out person: knees up (seed bit 21 read by the pose library)
+            if let Some(oi) = s.support {
+                let (llo, lhi) = local_extents(&self.w.objs[oi]);
+                if lhi[1] - llo[1] < 2.05 && seed % 4 != 3 {
+                    seed |= 1 << 21;
+                }
+            }
+        }
         let pi = match seat_z {
             Some(z) => crate::pose_info_seat(avatar, s.kind, z),
             None => pose_info(avatar, s.kind),
@@ -213,7 +290,7 @@ impl Planner<'_> {
                 let Some(seat) = pi.seat else { return self.no(90) };
                 let o = rot2([seat[0], seat[1]], yaw);
                 origin = [s.anchor[0] - o[0], s.anchor[1] - o[1]];
-                z = s.top - seat[2] - 0.02;
+                z = top - seat[2] - 0.02;
                 seat_gap = -0.02;
             }
             LeanCounter | StandAtSink | StandAtDesk => {
@@ -291,7 +368,8 @@ impl Planner<'_> {
             _ => 0.0,
         };
         let info = PlaceInfo { room: room.name.clone(), support: s.support.map(|i| self.w.objs[i].key.clone()), pen_furn, pen_wall, pen_people, feet_err, seat_gap, hand_err };
-        Some(Placement { avatar, kind: s.kind, pose, seed, boxes, info, seat_z })
+        let sink = if s.soft { 0.04 } else { 0.0 };
+        Some(Placement { avatar, kind: s.kind, pose, seed, boxes, info, seat_z, sink: if matches!(s.kind, LieBed | LieSofa) { 0.02 } else { sink }, cover, support_top: top, settled: None, pillow_moves: vec![] })
     }
 }
 
@@ -558,6 +636,11 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
     }
     let mut rng = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "people_place", &n.to_string()]));
     let mut slots = make_slots(&world, &mut rng);
+    // testing: PEOPLE_FORCE=LieBed,SitRelaxed keeps only slots of those pose kinds
+    if let Ok(f) = std::env::var("PEOPLE_FORCE") {
+        let want: Vec<&str> = f.split(',').collect();
+        slots.retain(|s| want.contains(&format!("{:?}", s.kind).as_str()));
+    }
     let dbg = std::env::var_os("PEOPLE_DEBUG").is_some();
     if dbg {
         let mut cnt: std::collections::BTreeMap<String, usize> = Default::default();
@@ -627,10 +710,123 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
             eprintln!("PEOPLE fail {:?} support {:?} code {}", s.kind, s.support.map(|i| &world.objs[i].key), pl.why.get());
         }
     }
+    if crate::ragdoll::enabled() {
+        let tr = std::time::Instant::now();
+        let mut pl_placed = std::mem::take(&mut pl.placed);
+        for p in pl_placed.iter_mut() {
+            if crate::ragdoll::wants(p.kind) {
+                ragdoll_person(&world, p);
+            }
+        }
+        pl.placed = pl_placed;
+        if dbg {
+            eprintln!("PEOPLE ragdoll pass {:?}", tr.elapsed());
+        }
+    }
     if std::env::var_os("PEOPLE_REPORT").is_some() {
         report(&pl.placed, &world, n, t0.elapsed());
     }
     pl.placed
+}
+
+/// Pillows of a bed that overlap a lying person: the one nearest to the head slides under the head, the others move to the side.
+/// Returns (part index, world offset). `bb` = world AABB of the person, `head` / `hd` = head position and head direction (xy).
+fn pillow_plan(o: &Obj, bb: [V3; 2], head: V3, hd: [f64; 2]) -> Vec<(usize, V3)> {
+    let n = [-hd[1], hd[0]];
+    let mut cand: Vec<(f64, usize, V3, V3)> = vec![];
+    for &(a, b, pi) in &o.pillows {
+        let (plo, phi) = o.part_bounds(a, b);
+        let ov = |k: usize| plo[k] < bb[1][k] - 0.03 && phi[k] > bb[0][k] + 0.03;
+        if !(ov(0) && ov(1)) {
+            continue;
+        }
+        let c = [(plo[0] + phi[0]) / 2.0, (plo[1] + phi[1]) / 2.0];
+        cand.push((((c[0] - head[0]).hypot(c[1] - head[1])), pi, plo, phi));
+    }
+    cand.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap().then(x.1.cmp(&y.1)));
+    let mut out = vec![];
+    for (i, (d, pi, plo, phi)) in cand.iter().enumerate() {
+        let c = [(plo[0] + phi[0]) / 2.0, (plo[1] + phi[1]) / 2.0];
+        if i == 0 && *d < 0.6 {
+            // under the head (a little towards the headboard)
+            out.push((*pi, [head[0] + hd[0] * 0.30 - c[0], head[1] + hd[1] * 0.30 - c[1], -0.05]));
+            continue;
+        }
+        let half = [(phi[0] - plo[0]) / 2.0, (phi[1] - plo[1]) / 2.0];
+        let hl = n[0].abs() * half[0] + n[1].abs() * half[1];
+        let lat = (c[0] - head[0]) * n[0] + (c[1] - head[1]) * n[1];
+        let sgn = if lat < 0.0 { -1.0 } else { 1.0 };
+        let target = sgn * (0.34 + hl);
+        out.push((*pi, [n[0] * (target - lat), n[1] * (target - lat), 0.0]));
+    }
+    out
+}
+
+/// Settle one placed person with the ragdoll against the furniture around it; updates the body boxes.
+fn ragdoll_person(w: &World, p: &mut Placement) {
+    use crate::ragdoll::*;
+    let Some(av) = crate::body::avatar_of(p.avatar) else { return };
+    let (posed, g) = crate::body::pose_avatar_seat_g(&av, p.kind, p.seed, p.seat_z);
+    // world AABB of the key pose
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for part in &posed.parts {
+        for q in &part.0 {
+            let wq = p.pose.apply([q[0] as f64, q[1] as f64, q[2] as f64]);
+            for k in 0..3 {
+                lo[k] = lo[k].min(wq[k]);
+                hi[k] = hi[k].max(wq[k]);
+            }
+        }
+    }
+    let pad = 0.5;
+    let support = p.info.support.clone();
+    // key-pose head position and lying direction (world)
+    let rig = crate::rig::Rig::new(&av);
+    let hb = rig.id("Bip01 Head");
+    let hpos = p.pose.apply(g[hb].apply(rig.rest(hb)));
+    let hd = { let v = [-p.pose.0[0][1], -p.pose.0[1][1], 0.0]; let l = v[0].hypot(v[1]).max(1e-9); [v[0] / l, v[1] / l] };
+    let mut statics: Vec<StaticTris> = vec![];
+    for o in &w.objs {
+        if !w.blocks_phys(o) || (0..3).any(|k| o.lo[k] > hi[k] + pad || o.hi[k] < lo[k] - pad) {
+            continue;
+        }
+        let is_support = support.as_deref() == Some(o.key.as_str());
+        let mut moves: Vec<(usize, V3)> = vec![];
+        if is_support && p.kind == PoseKind::LieBed {
+            moves = pillow_plan(o, [lo, hi], hpos, hd);
+            p.pillow_moves = moves.iter().map(|(pi, d)| (o.key.clone(), *pi, *d)).collect();
+        }
+        let tris = if is_support { o.tris_with(p.cover == Cover::Under, &moves) } else { o.tris.clone() };
+        statics.push(StaticTris { tris, dz: if is_support { p.sink } else { 0.0 } });
+    }
+    let model = model_of(p.avatar, &av);
+    // a body that is flung away (> 0.45 m) or deeply stuck is retried with looser motors; then the key pose stays
+    let mut res = None;
+    for soft in [1.0, 2.0] {
+        let base = if std::env::var_os("RAGDOLL_BASE").is_some() { Opts::default() } else { Opts::for_kind(p.kind) };
+        let opt = Opts { soft, ..base };
+        if let Some(st) = settle_k(&av, &model, &g, &p.pose, &statics, w.floor_z, 0.03, &opt) {
+            // reject: flung away, deeply stuck, torso rotated more than ~30 degrees, hips left the seat / mattress footprint
+            if std::env::var_os("RAGDOLL_DBG").is_some() {
+                eprintln!("RAGDOLL {:?} soft {} tilt {:.2} drift {:.2} moved {:.2} pen {:.3}", p.kind, soft, st.tilt, st.drift, st.moved, st.pen);
+            }
+            let ok = st.moved < 0.6 && st.pen < 0.05 && st.tilt < 0.53 && st.drift < 0.25;
+            res = Some(st);
+            if ok {
+                break;
+            }
+            res = None;
+        }
+    }
+    let Some(st) = res else { return };
+    let asset = crate::body::build_person_g(p.avatar, p.kind, p.seed, p.seat_z, Some(&st.g));
+    let pi = match p.seat_z {
+        Some(z) => crate::pose_info_seat(p.avatar, p.kind, z),
+        None => pose_info(p.avatar, p.kind),
+    };
+    p.boxes = body_slabs(&asset, &pi);
+    p.info.pen_furn = p.info.pen_furn.max(st.pen);
+    p.settled = Some(st);
 }
 
 /// one line per person + a summary, recomputed from scratch on the final placements
