@@ -119,6 +119,28 @@ fn main() {
             })
             .collect()
     };
+    // python apply_cutter: the world-space cutter of each object is boolean-differenced from every part of its relation targets
+    let mut cutters: std::collections::HashMap<String, Vec<infinigen::mesh::Mesh>> = Default::default();
+    for (k, o) in &g.state.objs {
+        let Some(a) = visuals.get(k) else { continue };
+        if a.cutters.is_empty() { continue }
+        let pm = Mat4([
+            [o.pose.r[0][0], o.pose.r[0][1], o.pose.r[0][2], o.pose.t[0]],
+            [o.pose.r[1][0], o.pose.r[1][1], o.pose.r[1][2], o.pose.t[1]],
+            [o.pose.r[2][0], o.pose.r[2][1], o.pose.r[2][2], o.pose.t[2]],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        let mut seen: Vec<&String> = vec![];
+        for rs in &o.relations {
+            if seen.contains(&&rs.target) { continue }
+            seen.push(&rs.target);
+            for c in &a.cutters {
+                let mut w = c.clone();
+                w.transform(&pm);
+                cutters.entry(rs.target.clone()).or_default().push(w);
+            }
+        }
+    }
     let mut counts = std::collections::BTreeMap::new();
     for (k, o) in &g.state.objs {
         let Some(gen) = &o.generator else { continue };
@@ -170,6 +192,18 @@ fn main() {
         for (pi, part) in asset.parts.iter().enumerate() {
             let mut m = part.mesh.clone();
             m.transform(&pose_m);
+            if let Some(cs) = cutters.get(k) {
+                for c in cs {
+                    let (mlo, mhi) = m.bounds();
+                    let (clo, chi) = c.bounds();
+                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) {
+                        let tb = std::time::Instant::now();
+                        let nv0 = m.pos.len();
+                        m = mesh_diff(&m, c);
+                        if std::env::var_os("CUTLOG").is_some() { eprintln!("CUT {k}#{pi} nv {nv0} -> {} cutter nv {} {:?}", m.pos.len(), c.pos.len(), tb.elapsed()); }
+                    }
+                }
+            }
             let mi = scene.material(part.mat.clone());
             scene.add_posed(&format!("{k}#{pi}"), &gen.class, m, mi, pose_m.0);
         }
@@ -181,4 +215,40 @@ fn main() {
         eprintln!("write_glb {:?}", tw.elapsed());
         infinigen::assets::prof_report();
     }
+}
+
+/// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through
+/// the boolean; the others are copied unchanged (keeps big counter tops cheap).
+fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
+    use infinigen::gn::geom::Mesh as GM;
+    let (blo, bhi) = b.bounds();
+    let e = 1e-3;
+    let near: Vec<bool> = a.faces.iter().map(|f| {
+        (0..3).all(|d| {
+            let (mn, mx) = f.iter().fold((f64::MAX, f64::MIN), |(mn, mx), &i| (mn.min(a.pos[i as usize][d]), mx.max(a.pos[i as usize][d])));
+            mn <= bhi[d] + e && mx >= blo[d] - e
+        })
+    }).collect();
+    let mut sub = Mesh::new();
+    let mut map = vec![u32::MAX; a.pos.len()];
+    let mut o = Mesh::new();
+    o.pos = a.pos.clone();
+    for (fi, f) in a.faces.iter().enumerate() {
+        if near[fi] {
+            let mut nf = vec![];
+            for &i in f {
+                if map[i as usize] == u32::MAX { map[i as usize] = sub.pos.len() as u32; sub.pos.push(a.pos[i as usize]); }
+                nf.push(map[i as usize]);
+            }
+            sub.faces.push(nf);
+        } else {
+            o.faces.push(f.clone());
+        }
+    }
+    let conv = |m: &Mesh| GM::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[]);
+    let r = infinigen::gn::csg::mesh_boolean("DIFFERENCE", &conv(&sub), &[&conv(b)]);
+    let base = o.pos.len() as u32;
+    o.pos.extend(r.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]));
+    o.faces.extend(r.faces_vec().into_iter().map(|f| f.into_iter().map(|x| x + base).collect::<Vec<u32>>()));
+    o
 }
