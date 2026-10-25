@@ -259,9 +259,7 @@ pub fn shell_asset(kind: ShellKind, r: &mut Rng, face_size: f64) -> Mesh {
     for p in lower.pos.iter_mut() {
         p[2] = -p[2];
     }
-    for f in lower.faces.iter_mut() {
-        f[1..].reverse();
-    }
+    // python's apply_transform with scale z=-1 leaves the winding unchanged (lower valve normals face inward)
     let base = r.uniform(0.0, PI / 4.0);
     let delta = r.uniform(PI / 6.0, PI / 3.0);
     // join: the lower valve keeps its mesh coordinates, the upper one is rotated by -delta about y relative to it
@@ -289,7 +287,7 @@ pub fn shell_asset(kind: ShellKind, r: &mut Rng, face_size: f64) -> Mesh {
         let v: Vec<[f32; 3]> = obj.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
         super::stagefile::write(&f, &v, &obj.faces, &[]);
     }
-    obj = books::solidify_simple(&obj, 0.005, None);
+    obj = solidify_exact(&obj, 0.005);
     tr("SOLIDIFY", &obj);
     let marble = r.choice_idx(2) == 1;
     let scale = r.log_uniform(0.1, 0.2);
@@ -297,6 +295,32 @@ pub fn shell_asset(kind: ShellKind, r: &mut Rng, face_size: f64) -> Mesh {
     displace(&mut obj, &Tex::new(kind, scale), 0.02, 0.0);
     tr("DISPLACE", &obj);
     obj
+}
+
+/// Blender SOLIDIFY (simple/extrude mode, offset -1): exact port solidx::solidify_extrude; edges numbered in first-seen face order
+fn solidify_exact(m: &Mesh, th: f64) -> Mesh {
+    let mut emap: crate::dhash::HashMap<(u32, u32), u32> = crate::dhash::HashMap::default();
+    let mut edges: Vec<[u32; 2]> = vec![];
+    let mut ce = vec![];
+    for f in &m.faces {
+        let mut fe = vec![];
+        for c in 0..f.len() {
+            let (a, b) = (f[c], f[(c + 1) % f.len()]);
+            let k = (a.min(b), a.max(b));
+            let id = *emap.entry(k).or_insert_with(|| {
+                edges.push([k.0, k.1]);
+                (edges.len() - 1) as u32
+            });
+            fe.push(id);
+        }
+        ce.push(fe);
+    }
+    let pos: Vec<[f32; 3]> = m.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
+    let s = super::solidx::solidify_extrude(&pos, &edges, &m.faces, &ce, th as f32, -1.0, true);
+    let mut o = Mesh::new();
+    o.pos = s.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
+    o.faces = s.faces;
+    o
 }
 
 fn face_area(m: &Mesh, f: &[u32]) -> f64 {
