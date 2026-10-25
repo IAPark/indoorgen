@@ -5,6 +5,7 @@
 //! The contract between them is `PoseKind`, `PoseInfo`, `pose_info` and `build_person` below.
 pub mod body;
 pub mod place;
+pub mod pworld;
 
 pub use ig_core::*;
 pub use ig_core::mesh::V3;

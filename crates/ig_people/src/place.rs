@@ -1,20 +1,620 @@
 //! Choosing spots and poses for people in the solved scene (owner: people-place worker).
-use crate::PoseKind;
+//!
+//! `place_ctx` builds a `World` (furniture colliders from the visual meshes, room polygons, doors), enumerates *slots* (a seat, a mattress,
+//! the front of a desk / sink / counter / shelf, free floor), picks them with room-type weights and social bonuses, and validates every pick
+//! with a collision test of the posed body (oriented boxes derived from `PoseInfo`) against furniture, walls and the people placed before.
+use crate::pworld::*;
+use crate::{pose_info, PoseInfo, PoseKind};
+use ig_core::mesh::{Mat4, Mesh, V3};
+use ig_core::rng::Rng;
 use ig_furn::state::State;
+
+/// what the checks measured for one person (metres)
+#[derive(Clone, Debug, Default)]
+pub struct PlaceInfo {
+    pub room: String,
+    pub support: Option<String>,
+    pub pen_furn: f64,
+    pub pen_wall: f64,
+    pub pen_people: f64,
+    /// lowest foot sole above (+) / below (-) the floor, for poses with feet on the floor
+    pub feet_err: f64,
+    /// hip above (+) / sunk into (-) the seat or mattress top
+    pub seat_gap: f64,
+    /// hand height minus work surface height
+    pub hand_err: f64,
+}
 
 #[derive(Clone, Debug)]
 pub struct Placement {
     pub avatar: usize,
     pub kind: PoseKind,
     /// local -> world (z rotation + translation)
-    pub pose: ig_core::mesh::Mat4,
+    pub pose: Mat4,
     pub seed: u64,
+    /// body collision boxes in the local frame (lo, hi): the occupied space of the person
+    pub boxes: Vec<(V3, V3)>,
+    pub info: PlaceInfo,
 }
 
-/// Up to `n` people for the scene (0 -> empty). Deterministic per seed.
-pub fn place(_state: &State, _room_polys: &[(String, ig_core::shp::G)], n: usize, _seed: u64) -> Vec<Placement> {
+impl Placement {
+    pub fn world_boxes(&self) -> Vec<WBox> {
+        world_boxes(&self.boxes, &self.pose)
+    }
+    /// world-space meshes of the occupied boxes inflated by `pad`: keep-out volumes for the clutter pass
+    pub fn keepout(&self, pad: f64) -> Vec<Mesh> {
+        self.boxes
+            .iter()
+            .map(|(lo, hi)| {
+                let mut m = Mesh::cuboid([lo[0] - pad, lo[1] - pad, lo[2] - pad], [hi[0] + pad, hi[1] + pad, hi[2] + pad]);
+                m.transform(&self.pose);
+                m
+            })
+            .collect()
+    }
+    /// simple stand-in mesh in the local frame (PEOPLE_PROXY=1): the body boxes plus a head
+    pub fn proxy(&self) -> ig_kit::api::Asset {
+        let mut a = ig_kit::api::Asset::default();
+        let mut body = Mesh::new();
+        for (lo, hi) in &self.boxes {
+            body.append(&Mesh::cuboid(*lo, *hi));
+        }
+        let rgb = match self.kind {
+            PoseKind::SitUpright | PoseKind::SitRelaxed | PoseKind::SitBedEdge => [0.2, 0.35, 0.7],
+            PoseKind::LieBed | PoseKind::LieSofa => [0.6, 0.3, 0.55],
+            PoseKind::StandAtDesk | PoseKind::StandAtSink | PoseKind::LeanCounter => [0.75, 0.5, 0.2],
+            _ => [0.3, 0.6, 0.35],
+        };
+        a.parts.push(ig_kit::api::Part { mesh: body, mat: ig_core::mesh::Material::diffuse("person_proxy_body", rgb, 0.8), col: None });
+        // head: a small box on top of the highest box, towards the front
+        if let Some((lo, hi)) = self.boxes.iter().max_by(|a, b| a.1[2].partial_cmp(&b.1[2]).unwrap()) {
+            let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2]];
+            let head = Mesh::cuboid([c[0] - 0.09, c[1] - 0.1, c[2]], [c[0] + 0.09, c[1] + 0.1, c[2] + 0.22]);
+            a.parts.push(ig_kit::api::Part { mesh: head, mat: ig_core::mesh::Material::diffuse("person_proxy_head", [0.85, 0.65, 0.5], 0.7), col: None });
+        }
+        a
+    }
+}
+
+pub struct Ctx<'a> {
+    pub visuals: Option<&'a std::collections::HashMap<String, ig_kit::api::Asset>>,
+    pub floor_z: f64,
+    pub wall_t: f64,
+}
+
+/// Up to `n` people for the scene (0 -> empty). Deterministic per seed. Without visuals the solver placeholders are the colliders.
+pub fn place(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usize, seed: u64) -> Vec<Placement> {
+    place_ctx(state, room_polys, n, seed, &Ctx { visuals: None, floor_z: 0.135, wall_t: 0.27 })
+}
+
+fn yaw_of(f: [f64; 2]) -> f64 {
+    (-f[0]).atan2(f[1])
+}
+
+fn rot2(v: [f64; 2], yaw: f64) -> [f64; 2] {
+    let (s, c) = yaw.sin_cos();
+    [c * v[0] - s * v[1], s * v[0] + c * v[1]]
+}
+
+fn pose_mat(origin: [f64; 2], z: f64, yaw: f64) -> Mat4 {
+    let (s, c) = yaw.sin_cos();
+    Mat4([[c, -s, 0.0, origin[0]], [s, c, 0.0, origin[1]], [0.0, 0.0, 1.0, z], [0.0, 0.0, 0.0, 1.0]])
+}
+
+fn world_boxes(boxes: &[(V3, V3)], pose: &Mat4) -> Vec<WBox> {
+    let yaw = pose.0[1][0].atan2(pose.0[0][0]);
+    boxes
+        .iter()
+        .map(|(lo, hi)| {
+            let c = pose.apply([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0]);
+            WBox { c, h: [(hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0], yaw }
+        })
+        .collect()
+}
+
+/// the body as a few boxes (local frame), leaving out the regions that touch the support (seat, work surface)
+pub fn body_boxes(pi: &PoseInfo) -> Vec<(V3, V3)> {
+    use PoseKind::*;
+    let (lo, hi) = (pi.lo, pi.hi);
+    match pi.kind {
+        SitUpright | SitRelaxed | SitBedEdge => {
+            let s = pi.seat.unwrap_or([0.0, 0.0, 0.46]);
+            let mut v = vec![
+                ([lo[0], lo[1], s[2] + 0.10], [hi[0], s[1] + 0.09, hi[2]]),
+                ([lo[0] * 0.7, s[1] - 0.1, s[2] + 0.03], [hi[0] * 0.7, pi.feet.map(|f| (f[0][1] + f[1][1]) / 2.0 + 0.05).unwrap_or(hi[1]).min(hi[1]), s[2] + 0.15]),
+            ];
+            if let Some(f) = pi.feet {
+                let fy = (f[0][1] + f[1][1]) / 2.0;
+                v.push(([-0.26_f64.max(lo[0]), fy - 0.09, 0.04], [0.26_f64.min(hi[0]), fy + 0.09, s[2] - 0.02]));
+            }
+            v
+        }
+        LieBed | LieSofa => {
+            let s = pi.seat.map(|s| s[2]).unwrap_or(0.1);
+            vec![([lo[0], lo[1], (s - 0.06).max(lo[2]) + 0.03], hi)]
+        }
+        LeanCounter | StandAtSink | StandAtDesk => {
+            let hy = pi.hands.map(|h| (h[0][1] + h[1][1]) / 2.0).unwrap_or(hi[1]);
+            vec![([lo[0], lo[1], lo[2] + 0.04], [hi[0], hi[1].min(hy - 0.12), hi[2]])]
+        }
+        _ => vec![([lo[0], lo[1], lo[2] + 0.04], hi)],
+    }
+}
+
+#[derive(Clone)]
+struct Slot {
+    kind: PoseKind,
+    room: usize,
+    /// sits: point on the backrest front face (backless: seat centre); lies: hip target; hand poses: surface edge; others: origin
+    anchor: [f64; 2],
+    /// sits: seat front direction; lies: direction of the head; hand poses: towards the surface; others: facing
+    face: [f64; 2],
+    support: Option<usize>,
+    /// seat / mattress top, or work surface height
+    top: f64,
+    w: f64,
+    /// sits: seat depth (backrest face to front edge)
+    depth: f64,
+    soft: bool,
+    has_back: bool,
+    group: usize,
+}
+
+struct Planner<'a> {
+    w: &'a World,
+    placed: Vec<Placement>,
+    placed_boxes: Vec<Vec<WBox>>,
+    placed_slot: Vec<Slot>,
+    why: std::cell::Cell<u32>,
+}
+
+impl Planner<'_> {
+    fn no(&self, code: u32) -> Option<Placement> {
+        self.why.set(code);
+        None
+    }
+
+    /// pose + collision check of one slot with one avatar; None when it does not fit
+    fn fit(&self, s: &Slot, avatar: usize, seed: u64, tol: f64) -> Option<Placement> {
+        use PoseKind::*;
+        let pi = pose_info(avatar, s.kind);
+        let yaw = yaw_of(s.face);
+        let fl = self.w.floor_z;
+        let mut hand_err = 0.0;
+        let (origin, z, seat_gap);
+        match s.kind {
+            SitUpright | SitRelaxed | SitBedEdge => {
+                let Some(seat) = pi.seat else { return self.no(90) };
+                let back = (seat[1] - pi.lo[1]) + 0.02;
+                if s.has_back && s.depth < back + 0.12 {
+                    return self.no(1);
+                }
+                let off = if s.has_back { back } else { 0.0 };
+                let hip = [s.anchor[0] + s.face[0] * off, s.anchor[1] + s.face[1] * off];
+                let o = rot2([seat[0], seat[1]], yaw);
+                origin = [hip[0] - o[0], hip[1] - o[1]];
+                let feet_z = pi.feet.map(|f| f[0][2].min(f[1][2])).unwrap_or(0.0);
+                let dz_seat = s.top - seat[2];
+                let dz_feet = fl - feet_z;
+                let sink = if s.soft { 0.05 } else { 0.01 };
+                z = (dz_seat - sink).max(dz_feet);
+                seat_gap = z + seat[2] - s.top;
+                if seat_gap > 0.10 {
+                    return self.no(2);
+                }
+                if pi.feet.is_some() && z - dz_feet > if s.kind == SitBedEdge { 0.25 } else { 0.15 } {
+                    return self.no(3);
+                }
+            }
+            LieBed | LieSofa => {
+                let Some(seat) = pi.seat else { return self.no(90) };
+                let o = rot2([seat[0], seat[1]], yaw);
+                origin = [s.anchor[0] - o[0], s.anchor[1] - o[1]];
+                z = s.top - seat[2] - 0.02;
+                seat_gap = -0.02;
+            }
+            LeanCounter | StandAtSink | StandAtDesk => {
+                let Some(h) = pi.hands else { return self.no(91) };
+                let hy = (h[0][1] + h[1][1]) / 2.0;
+                let hz = (h[0][2] + h[1][2]) / 2.0;
+                hand_err = hz - (s.top - fl);
+                if hand_err.abs() > hand_tol() {
+                    return self.no(4);
+                }
+                origin = [s.anchor[0] - s.face[0] * (hy - 0.08), s.anchor[1] - s.face[1] * (hy - 0.08)];
+                z = fl;
+                seat_gap = 0.0;
+            }
+            Reach => {
+                origin = [s.anchor[0] - s.face[0] * 0.5, s.anchor[1] - s.face[1] * 0.5];
+                z = fl;
+                seat_gap = 0.0;
+            }
+            Crouch => {
+                origin = [s.anchor[0] - s.face[0] * 0.6, s.anchor[1] - s.face[1] * 0.6];
+                z = fl;
+                seat_gap = 0.0;
+            }
+            _ => {
+                origin = s.anchor;
+                z = fl;
+                seat_gap = 0.0;
+            }
+        }
+        let pose = pose_mat(origin, z, yaw);
+        let boxes = body_boxes(&pi);
+        let wb = world_boxes(&boxes, &pose);
+        let room = &self.w.rooms[s.room];
+        if !in_poly(origin, &room.poly) {
+            return self.no(5);
+        }
+        // doors stay clear
+        if room.doors.iter().any(|d| (d[0] - origin[0]).hypot(d[1] - origin[1]) < 1.0) {
+            return self.no(6);
+        }
+        let pen_wall = self.w.pen_wall(&wb, s.room);
+        if pen_wall > tol {
+            return self.no(7);
+        }
+        let skip = match s.kind {
+            SitUpright | SitRelaxed | SitBedEdge | LieBed | LieSofa => s.support,
+            _ => None,
+        };
+        let pen_furn = self.w.pen_furniture(&wb, skip);
+        // crude proxy boxes of the legs overlap table rails / legs a little: sitters get a looser bound until the real meshes are checked
+        let tol_f = if matches!(s.kind, SitUpright | SitRelaxed) { tol.max(sit_tol()) } else { tol };
+        if pen_furn > tol_f {
+            return self.no(8);
+        }
+        let mut pen_people = 0.0f64;
+        for (i, other) in self.placed_boxes.iter().enumerate() {
+            pen_people = pen_people.max(pen_boxes(&wb, other));
+            // personal space: body origins keep 0.4 m apart (people on one sofa excepted)
+            let o = &self.placed[i].pose.0;
+            let lie = |k: PoseKind| matches!(k, LieBed | LieSofa);
+            let close = (o[0][3] - origin[0]).hypot(o[1][3] - origin[1]) < 0.4;
+            if !lie(s.kind) && !lie(self.placed[i].kind) && close && !(s.group == self.placed_slot[i].group && matches!(s.kind, SitUpright | SitRelaxed)) {
+                return self.no(9);
+            }
+        }
+        if pen_people > tol.min(0.01) {
+            return self.no(10);
+        }
+        let feet_err = match pi.feet {
+            Some(f) if !matches!(s.kind, LieBed | LieSofa) => f[0][2].min(f[1][2]) + z - fl,
+            _ => 0.0,
+        };
+        let info = PlaceInfo { room: room.name.clone(), support: s.support.map(|i| self.w.objs[i].key.clone()), pen_furn, pen_wall, pen_people, feet_err, seat_gap, hand_err };
+        Some(Placement { avatar, kind: s.kind, pose, seed, boxes, info })
+    }
+}
+
+fn sit_tol() -> f64 {
+    std::env::var("PEOPLE_SIT_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.07)
+}
+
+fn hand_tol() -> f64 {
+    std::env::var("PEOPLE_HAND_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.30)
+}
+
+fn norm(v: [f64; 2]) -> [f64; 2] {
+    let l = v[0].hypot(v[1]).max(1e-9);
+    [v[0] / l, v[1] / l]
+}
+
+/// object extents in its own frame, from the world triangles (pose = z rotation + translation)
+fn local_extents(o: &Obj) -> (V3, V3) {
+    let mut lo = [f64::MAX; 3];
+    let mut hi = [f64::MIN; 3];
+    for t in &o.tris {
+        for p in t {
+            let d = [p[0] - o.pose.t[0], p[1] - o.pose.t[1], p[2] - o.pose.t[2]];
+            let r = &o.pose.r;
+            let q = [r[0][0] * d[0] + r[1][0] * d[1] + r[2][0] * d[2], r[0][1] * d[0] + r[1][1] * d[1] + r[2][1] * d[2], r[0][2] * d[0] + r[1][2] * d[1] + r[2][2] * d[2]];
+            for k in 0..3 {
+                lo[k] = lo[k].min(q[k]);
+                hi[k] = hi[k].max(q[k]);
+            }
+        }
+    }
+    (lo, hi)
+}
+
+/// all slots of the scene (before the social weighting)
+fn make_slots(w: &World, rng: &mut Rng) -> Vec<Slot> {
+    use PoseKind::*;
+    let fl = w.floor_z;
+    let mut out: Vec<Slot> = vec![];
+    for (oi, o) in w.objs.iter().enumerate() {
+        let room = o.room;
+        let rty = w.rooms[room].ty.as_str();
+        let c = o.class.as_str();
+        if !w.blocks(oi) {
+            continue;
+        }
+        let (llo, lhi) = local_extents(o);
+        let height = o.hi[2] - fl;
+        let front = o.dir([1.0, 0.0]);
+        let side = o.dir([0.0, 1.0]);
+        let is_arm = c.contains("ArmChair");
+        let is_sofa = c.contains("Sofa");
+        let is_chair = !is_arm && (c.contains("Chair") || c.contains("Stool"));
+        if is_chair || is_arm || is_sofa {
+            let Some(seat) = analyze_seat(o, llo, lhi, fl) else { continue };
+            if seat.top - fl < 0.28 || seat.top - fl > 0.85 || seat.x1 - seat.x0 < 0.3 {
+                continue;
+            }
+            let (ya, yb) = (seat.ya, seat.yb);
+            let span = yb - ya;
+            if span < 0.4 {
+                continue;
+            }
+            let nseat = if is_sofa { ((span / 0.62).round() as usize).clamp(1, 4) } else { 1 };
+            for i in 0..nseat {
+                let ly = ya + (i as f64 + 0.5) * span / nseat as f64;
+                let a = o.w([seat.x0, ly, 0.0]);
+                let kind = if is_chair || rng.f64() >= 0.7 { SitUpright } else { SitRelaxed };
+                let base = match rty {
+                    "dining-room" => 1.4,
+                    "living-room" => 1.0,
+                    "kitchen" => 0.6,
+                    _ => 0.8,
+                };
+                out.push(Slot { kind, room, anchor: [a[0], a[1]], face: front, support: Some(oi), top: seat.top, w: base, depth: seat.x1 - seat.x0, soft: !is_chair, has_back: seat.has_back, group: oi });
+            }
+            // lying on a sofa: wide enough for a person, along the sofa
+            if is_sofa && lhi[1] - llo[1] > 1.75 {
+                let ly = 0.5 * (llo[1] + lhi[1]);
+                let a = o.w([0.5 * (seat.x0 + seat.x1), ly, 0.0]);
+                let head = if rng.f64() < 0.5 { side } else { [-side[0], -side[1]] };
+                out.push(Slot { kind: LieSofa, room, anchor: [a[0], a[1]], face: head, support: Some(oi), top: seat.top, w: 0.35, depth: 0.0, soft: true, has_back: false, group: oi });
+            }
+            continue;
+        }
+        if c == "BedFactory" {
+            let len = lhi[0] - llo[0];
+            let wid = lhi[1] - llo[1];
+            let Some(top) = o.top_at(0.5 * len, 0.0, fl + 1.0) else { continue };
+            let head_dir = o.dir([-1.0, 0.0]);
+            // lying along the bed, head near the pillows
+            let nl = if wid > 1.5 { 2 } else { 1 };
+            for i in 0..nl {
+                let ly = if nl == 1 { 0.0 } else if i == 0 { -0.36 } else { 0.36 };
+                let a = o.w([llo[0] + 1.15, ly, 0.0]);
+                out.push(Slot { kind: LieBed, room, anchor: [a[0], a[1]], face: head_dir, support: Some(oi), top, w: if nl == 1 { 1.3 } else { 0.9 }, depth: 0.0, soft: true, has_back: false, group: oi });
+            }
+            // sitting on the bed edge, both sides
+            for sgn in [-1.0, 1.0] {
+                let lx = llo[0] + 0.62 * len;
+                let mut y: f64 = 0.0;
+                while y.abs() < wid {
+                    let ny = y + sgn * 0.02;
+                    match o.top_at(lx, ny, fl + 1.0) {
+                        Some(t) if (t - top).abs() < 0.12 => y = ny,
+                        _ => break,
+                    }
+                }
+                let a = o.w([lx, y - sgn * 0.12, 0.0]);
+                let face = norm([side[0] * sgn, side[1] * sgn]);
+                if top - fl <= 0.66 {
+                    out.push(Slot { kind: SitBedEdge, room, anchor: [a[0], a[1]], face, support: Some(oi), top, w: 0.8, depth: 0.0, soft: true, has_back: false, group: oi });
+                }
+            }
+            continue;
+        }
+        // work surfaces: front sides, a few positions along the long axis
+        let top = o.top_at(0.5 * (llo[0] + lhi[0]), 0.5 * (llo[1] + lhi[1]), fl + 1.4).unwrap_or(o.hi[2]);
+        let kind_surface = if c.ends_with("DeskFactory") {
+            Some((StandAtDesk, 1.0))
+        } else if c.contains("Sink") {
+            Some((StandAtSink, 2.5))
+        } else if c == "KitchenSpaceFactory" {
+            Some((StandAtSink, 2.0))
+        } else if c.contains("Cabinet") || c.contains("Oven") || c.contains("Dishwasher") || c.contains("Counter") {
+            Some((LeanCounter, if rty == "kitchen" { 1.5 } else { 0.4 }))
+        } else {
+            None
+        };
+        if let Some((kind, wt)) = kind_surface {
+            let t = top - fl;
+            if !(0.6..=1.2).contains(&t) {
+                continue;
+            }
+            let len = lhi[1] - llo[1];
+            let np = if len > 1.6 { 3 } else if len > 0.9 { 2 } else { 1 };
+            for i in 0..np {
+                let ly = if np == 1 { 0.5 * (llo[1] + lhi[1]) } else { llo[1] + 0.3 + (len - 0.6) * (i as f64 + rng.uniform(0.2, 0.8)) / np as f64 };
+                for (sgn, wmul) in [(1.0, 1.0), (-1.0, 0.35)] {
+                    let lx = if sgn > 0.0 { lhi[0] } else { llo[0] };
+                    let a = o.w([lx, ly, 0.0]);
+                    let face = norm([-front[0] * sgn, -front[1] * sgn]);
+                    out.push(Slot { kind, room, anchor: [a[0], a[1]], face, support: Some(oi), top, w: wt * wmul / np as f64, depth: 0.0, soft: false, has_back: false, group: oi });
+                }
+            }
+            continue;
+        }
+        // shelves: reach up or crouch down
+        if (c.contains("Bookcase") || c.contains("Shelf") || c.contains("TVStand") || c.contains("Dresser") || c.contains("Wardrobe")) && !c.contains("Trinket") {
+            let len = lhi[1] - llo[1];
+            if len < 0.3 {
+                continue;
+            }
+            let kind = if height > 0.9 {
+                Reach
+            } else if height > 0.3 && height < 0.85 {
+                Crouch
+            } else {
+                continue;
+            };
+            let ly = 0.5 * (llo[1] + lhi[1]) + rng.uniform(-0.2, 0.2) * len;
+            for (sgn, wmul) in [(1.0, 1.0), (-1.0, 0.2)] {
+                let lx = if sgn > 0.0 { lhi[0] } else { llo[0] };
+                let a = o.w([lx, ly, 0.0]);
+                let face = norm([-front[0] * sgn, -front[1] * sgn]);
+                out.push(Slot { kind, room, anchor: [a[0], a[1]], face, support: Some(oi), top, w: if kind == Reach { 0.9 } else { 0.35 } * wmul, depth: 0.0, soft: false, has_back: false, group: oi });
+            }
+        }
+    }
+    // free floor: scattered candidates per furnished room
+    for (ri, r) in w.rooms.iter().enumerate() {
+        if r.n_furn < 2 {
+            continue;
+        }
+        let rw = match r.ty.as_str() {
+            "living-room" => 1.4,
+            "kitchen" => 0.9,
+            "dining-room" => 0.8,
+            "bedroom" => 0.8,
+            "bathroom" => 0.3,
+            _ => 0.6,
+        };
+        let pts: Vec<usize> = w.objs.iter().enumerate().filter(|(_, o)| o.room == ri && !o.class.contains("Light") && o.hi[2] - fl > 0.4).map(|(i, _)| i).collect();
+        let nsamp = 24;
+        for _ in 0..nsamp {
+            let x = rng.uniform(r.bbox[0], r.bbox[2]);
+            let y = rng.uniform(r.bbox[1], r.bbox[3]);
+            if !in_poly([x, y], &r.poly) || inside_dist([x, y], &r.poly) < 0.55 {
+                continue;
+            }
+            let look = if !pts.is_empty() && rng.f64() < 0.7 {
+                let o = &w.objs[pts[rng.choice_idx(pts.len())]];
+                [0.5 * (o.lo[0] + o.hi[0]) - x, 0.5 * (o.lo[1] + o.hi[1]) - y]
+            } else {
+                let a = rng.uniform(0.0, std::f64::consts::TAU);
+                [a.cos(), a.sin()]
+            };
+            let kind = if rng.f64() < 0.65 { Stand } else { Walk };
+            out.push(Slot { kind, room: ri, anchor: [x, y], face: norm(look), support: None, top: fl, w: rw / nsamp as f64 * 2.0, depth: 0.0, soft: false, has_back: false, group: usize::MAX });
+        }
+    }
+    out
+}
+
+/// Up to `n` people for the scene using the visual meshes / floor height / wall thickness in `ctx`.
+pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usize, seed: u64, ctx: &Ctx) -> Vec<Placement> {
     if n == 0 {
         return vec![];
     }
-    vec![]
+    let t0 = std::time::Instant::now();
+    let world = World::new(state, room_polys, ctx.visuals, ctx.floor_z, ctx.wall_t);
+    if world.rooms.is_empty() {
+        return vec![];
+    }
+    let mut rng = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "people_place", &n.to_string()]));
+    let mut slots = make_slots(&world, &mut rng);
+    let dbg = std::env::var_os("PEOPLE_DEBUG").is_some();
+    if dbg {
+        let mut cnt: std::collections::BTreeMap<String, usize> = Default::default();
+        for s in &slots {
+            *cnt.entry(format!("{:?}", s.kind)).or_default() += 1;
+        }
+        eprintln!("PEOPLE slots {cnt:?}");
+    }
+    let navatar = crate::avatar_count().max(1);
+    let mut pl = Planner { w: &world, placed: vec![], placed_boxes: vec![], placed_slot: vec![], why: Default::default() };
+    let mut tries = 0;
+    while pl.placed.len() < n && !slots.is_empty() && tries < 400 {
+        tries += 1;
+        // weights with the social layer
+        let mut ws: Vec<f64> = Vec::with_capacity(slots.len());
+        for s in &slots {
+            let mut wgt = s.w;
+            for ps in pl.placed_slot.iter() {
+                let same_room = ps.room == s.room;
+                wgt *= if same_room { 2.2 } else { 0.5 };
+                if ps.kind == s.kind {
+                    wgt *= 0.7;
+                }
+                let sitting = |k: PoseKind| matches!(k, PoseKind::SitUpright | PoseKind::SitRelaxed);
+                if same_room && sitting(s.kind) && sitting(ps.kind) {
+                    let d = [ps.anchor[0] - s.anchor[0], ps.anchor[1] - s.anchor[1]];
+                    let dist = d[0].hypot(d[1]);
+                    if dist < 3.0 {
+                        let u = norm(d);
+                        let a = s.face[0] * u[0] + s.face[1] * u[1];
+                        let b = -(ps.face[0] * u[0] + ps.face[1] * u[1]);
+                        if (a > 0.3 && b > 0.3) || dist < 1.8 {
+                            wgt *= 3.5; // facing each other (sofa + armchair, across a table) or side by side
+                        }
+                    }
+                }
+                if s.group == ps.group && s.group != usize::MAX {
+                    wgt *= 1.6;
+                }
+            }
+            ws.push(wgt * rng.uniform(0.6, 1.0));
+        }
+        let tot: f64 = ws.iter().sum();
+        if tot <= 0.0 {
+            break;
+        }
+        let mut u = rng.f64() * tot;
+        let mut idx = ws.len() - 1;
+        for (i, w) in ws.iter().enumerate() {
+            if u < *w {
+                idx = i;
+                break;
+            }
+            u -= w;
+        }
+        let s = slots.remove(idx);
+        let avatar = rng.randint(0, navatar as i64) as usize;
+        let pseed = rng.next_u64() % 1_000_000;
+        if let Some(p) = pl.fit(&s, avatar, pseed, 0.012) {
+            if dbg {
+                eprintln!("PEOPLE pick {:?} room {} support {:?}", s.kind, p.info.room, p.info.support);
+            }
+            pl.placed_boxes.push(p.world_boxes());
+            pl.placed.push(p);
+            pl.placed_slot.push(s);
+        } else if dbg {
+            eprintln!("PEOPLE fail {:?} support {:?} code {}", s.kind, s.support.map(|i| &world.objs[i].key), pl.why.get());
+        }
+    }
+    if std::env::var_os("PEOPLE_REPORT").is_some() {
+        report(&pl.placed, &world, n, t0.elapsed());
+    }
+    pl.placed
+}
+
+/// one line per person + a summary, recomputed from scratch on the final placements
+fn report(placed: &[Placement], w: &World, n: usize, dt: std::time::Duration) {
+    use PoseKind::*;
+    let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+    let (mut mf, mut mw, mut mp, mut mfe, mut mh) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let boxes: Vec<Vec<WBox>> = placed.iter().map(|p| p.world_boxes()).collect();
+    for (i, p) in placed.iter().enumerate() {
+        let skip = match p.kind {
+            SitUpright | SitRelaxed | SitBedEdge | LieBed | LieSofa => p.info.support.as_ref().and_then(|k| w.objs.iter().position(|o| &o.key == k)),
+            _ => None,
+        };
+        let room = w.rooms.iter().position(|r| r.name == p.info.room).unwrap_or(0);
+        let pf = w.pen_furniture(&boxes[i], skip);
+        let pw = w.pen_wall(&boxes[i], room).max(0.0);
+        let mut pp = 0.0f64;
+        for (j, b) in boxes.iter().enumerate() {
+            if j != i {
+                pp = pp.max(pen_boxes(&boxes[i], b));
+            }
+        }
+        *kinds.entry(format!("{:?}", p.kind)).or_default() += 1;
+        mf = mf.max(pf);
+        mw = mw.max(pw);
+        mp = mp.max(pp);
+        mfe = mfe.max(p.info.feet_err.abs());
+        mh = mh.max(p.info.hand_err.abs());
+        eprintln!(
+            "PEOPLE  {:?} room={} support={} pen_furn={:.3} pen_wall={:.3} pen_people={:.3} feet_err={:+.3} seat_gap={:+.3} hand_err={:+.3}",
+            p.kind,
+            p.info.room,
+            p.info.support.as_deref().unwrap_or("-"),
+            pf,
+            pw,
+            pp,
+            p.info.feet_err,
+            p.info.seat_gap,
+            p.info.hand_err
+        );
+    }
+    eprintln!("PEOPLE_SUMMARY requested={n} placed={} kinds={kinds:?} max_pen_furn={mf:.3} max_pen_wall={mw:.3} max_pen_people={mp:.3} max_feet_err={mfe:.3} max_hand_err={mh:.3} time={dt:?}", placed.len());
 }

@@ -305,7 +305,12 @@ fn build_item(rng: &mut Rng, spec: &'static Spec, cup_handle: Option<bool>) -> O
     Some(Item { class: spec.class, asset, hulls, lo, hi, body, floor: false, garment: false, drop_t: [0.0; 3], drop_yaw: 0.0, head })
 }
 
-pub fn apply(scene: &mut Scene, state: &State, _visuals: &std::collections::HashMap<String, Asset>, rooms: &[(String, ig_core::shp::G)], cfg: &MessCfg) {
+pub fn apply(scene: &mut Scene, state: &State, visuals: &std::collections::HashMap<String, Asset>, rooms: &[(String, ig_core::shp::G)], cfg: &MessCfg) {
+    apply_keepout(scene, state, visuals, rooms, cfg, &[]);
+}
+
+/// `keepout`: world-space meshes of the volumes occupied by people (static colliders for the placement and the settling)
+pub fn apply_keepout(scene: &mut Scene, state: &State, _visuals: &std::collections::HashMap<String, Asset>, rooms: &[(String, ig_core::shp::G)], cfg: &MessCfg, keepout: &[Mesh]) {
     if !cfg.on() {
         return;
     }
@@ -317,7 +322,7 @@ pub fn apply(scene: &mut Scene, state: &State, _visuals: &std::collections::Hash
             continue;
         }
         let rt = rname.split('_').next().unwrap_or("").to_string();
-        let st = clutter_room(scene, state, rname, &rt, &poly, cfg);
+        let st = clutter_room(scene, state, rname, &rt, &poly, cfg, keepout);
         tot.floor += st.floor;
         tot.surface += st.surface;
         tot.tried += st.tried;
@@ -506,7 +511,7 @@ fn find_spec(specs: &'static [Spec], class: &str) -> &'static Spec {
     specs.iter().find(|s| s.class == class).unwrap()
 }
 
-fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &Poly, cfg: &MessCfg) -> Stats {
+fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &Poly, cfg: &MessCfg, keepout: &[Mesh]) -> Stats {
     let t_room = std::time::Instant::now();
     let dbg = std::env::var_os("MESSDBG").is_some();
     let mut stats = Stats::default();
@@ -586,6 +591,15 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
                     surf_tris.push(([a, b, c], area));
                 }
             }
+        }
+    }
+    for k in keepout {
+        let (lo, hi) = k.bounds();
+        if hi[0] < bx0 - pad || lo[0] > bx1 + pad || hi[1] < by0 - pad || lo[1] > by1 + pad {
+            continue;
+        }
+        if let Some(s) = Static::from_mesh(k, 20000) {
+            statics.push(s);
         }
     }
     let world = RoomWorld::new(&statics);
