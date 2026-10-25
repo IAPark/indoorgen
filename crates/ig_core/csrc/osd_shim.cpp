@@ -16,9 +16,12 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 using namespace OpenSubdiv;
+
+static int ev(const char *n, int d) { const char *s = getenv(n); return s ? atoi(s) : d; }
 
 namespace {
 
@@ -28,6 +31,8 @@ struct MeshData {
   const int *face_sizes;
   const int *face_verts;
   bool simple;
+  const int *fvar = nullptr;  // optional face-varying (UV) value index per face corner; null = no UV layer
+  int num_fvar = 0;
 };
 
 }  // namespace
@@ -74,8 +79,19 @@ template<> inline bool TopologyRefinerFactory<MeshData>::assignComponentTags(Top
   return true;
 }
 
-template<> inline bool TopologyRefinerFactory<MeshData>::assignFaceVaryingTopology(TopologyRefiner &, const MeshData &)
+template<> inline bool TopologyRefinerFactory<MeshData>::assignFaceVaryingTopology(TopologyRefiner &refiner, const MeshData &m)
 {
+  if (m.fvar) {
+    int ch = createBaseFVarChannel(refiner, m.num_fvar);
+    int off = 0;
+    for (int f = 0; f < m.num_faces; ++f) {
+      IndexArray dst = getBaseFaceFVarValues(refiner, f, ch);
+      for (int i = 0; i < m.face_sizes[f]; ++i) {
+        dst[i] = m.fvar[off + i];
+      }
+      off += m.face_sizes[f];
+    }
+  }
   return true;
 }
 
@@ -125,11 +141,22 @@ extern "C" {
 void *osd_create(int num_verts, const float *positions, int num_faces, const int *face_sizes, const int *face_verts, int level, int adaptive, int simple,
                  int boundary_corner)
 {
+  adaptive = ev("OSD_ADAPT", adaptive);
+  level = ev("OSD_LEVEL", level);
   MeshData md{num_verts, num_faces, face_sizes, face_verts, simple != 0};
+  std::vector<int> fv;
+  if (const char *fp = getenv("OSD_FVAR")) {  // experiment: file of per-corner uv value ids
+    FILE *fh = fopen(fp, "r");
+    int x;
+    while (fh && fscanf(fh, "%d", &x) == 1) fv.push_back(x);
+    if (fh) fclose(fh);
+    md.fvar = fv.data();
+    md.num_fvar = 1 + *std::max_element(fv.begin(), fv.end());
+  }
   Sdc::Options sdc;
   sdc.SetVtxBoundaryInterpolation(boundary_corner ? Sdc::Options::VTX_BOUNDARY_EDGE_AND_CORNER : Sdc::Options::VTX_BOUNDARY_EDGE_ONLY);
   sdc.SetCreasingMethod(Sdc::Options::CREASE_UNIFORM);
-  sdc.SetFVarLinearInterpolation(Sdc::Options::FVAR_LINEAR_ALL);
+  sdc.SetFVarLinearInterpolation((Sdc::Options::FVarLinearInterpolation)ev("OSD_FVLIN", md.fvar ? Sdc::Options::FVAR_LINEAR_BOUNDARIES : Sdc::Options::FVAR_LINEAR_ALL));
   Far::TopologyRefinerFactory<MeshData>::Options opts(Sdc::SCHEME_CATMARK, sdc);
   opts.validateFullTopology = false;
   Far::TopologyRefiner *refiner = Far::TopologyRefinerFactory<MeshData>::Create(md, opts);
@@ -137,9 +164,10 @@ void *osd_create(int num_verts, const float *positions, int num_faces, const int
     return nullptr;
   }
   if (adaptive) {
-    Far::TopologyRefiner::AdaptiveOptions ao(level);
-    ao.considerFVarChannels = false;
-    ao.useInfSharpPatch = true;
+    Far::TopologyRefiner::AdaptiveOptions ao(getenv("OSD_ISO") ? atoi(getenv("OSD_ISO")) : level);
+    ao.considerFVarChannels = ev("OSD_CONSIDER", md.fvar != nullptr);
+    ao.useInfSharpPatch = ev("OSD_INFSHARP", 1);
+    ao.useSingleCreasePatch = ev("OSD_SINGLECREASE", 0);
     refiner->RefineAdaptive(ao);
   }
   else {
@@ -149,12 +177,16 @@ void *osd_create(int num_verts, const float *positions, int num_faces, const int
 
   Far::StencilTableFactory::Options so;
   so.generateOffsets = true;
-  so.generateIntermediateLevels = adaptive != 0;
+  so.generateIntermediateLevels = ev("OSD_INTER", adaptive != 0);
   Far::StencilTable const *stencils = Far::StencilTableFactory::Create(*refiner, so);
 
   Far::PatchTableFactory::Options po(level);
-  po.SetEndCapType(Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS);
-  po.useInfSharpPatch = true;
+  po.SetEndCapType((Far::PatchTableFactory::Options::EndCapType)ev("OSD_ENDCAP", Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS));
+  po.useInfSharpPatch = ev("OSD_INFSHARP", 1);
+  po.useSingleCreasePatch = ev("OSD_SINGLECREASE", 0);
+  po.generateLegacySharpCornerPatches = ev("OSD_LEGACYCORNER", 1);
+  po.triangulateQuads = ev("OSD_TRI", 0);
+  po.shareEndCapPatchPoints = ev("OSD_SHARE", 1);
   po.generateFVarTables = false;
   po.generateFVarLegacyLinearPatches = false;
   Far::PatchTable *pt = Far::PatchTableFactory::Create(*refiner, po);
@@ -196,7 +228,10 @@ void osd_eval(void *h, int n, const int *ptex, const float *u, const float *v, f
     RawBuf<float> P(out + 3 * i);
     Osd::BufferDescriptor P_desc(0, 3, 3);
     PatchCoordBuf pcb(&pcs[i], 1);
-    Osd::CpuEvaluator::EvalPatches(ev->src, ev->src_desc, &P, P_desc, 1, &pcb, ev->cpu_patch_table);
+    float dud[3], dvd[3];
+    RawBuf<float> DU(dud), DV(dvd);
+    if (getenv("OSD_NODERIV")) Osd::CpuEvaluator::EvalPatches(ev->src, ev->src_desc, &P, P_desc, 1, &pcb, ev->cpu_patch_table);
+    else Osd::CpuEvaluator::EvalPatches(ev->src, ev->src_desc, &P, P_desc, &DU, P_desc, &DV, P_desc, 1, &pcb, ev->cpu_patch_table);
   }
 }
 
