@@ -274,11 +274,27 @@ pub fn orient_outward(m: &mut Mesh) {
     }
 }
 
-/// `find_hole`: up-facing face centre closest to (x, y) in L1. On mirror-symmetric meshes (centred hole of sinks, freestanding tubs)
-/// the winners tie in exact arithmetic and float32 rounding of Blender's subdivision decides which one python gets; that cannot be
-/// reproduced without bit-exact OpenSubdiv, so the side is a fixed empirical choice (about half of the cases match).
-pub fn find_hole(obj: &Mesh, x: f64, y: f64, extent: (f64, f64)) -> V3 {
-    let (co, nor) = centers_normals(obj);
+/// `find_hole`: python `argmin(|center.xy - (x, y)|.sum(1) - up_facing)` with Blender's float32 face centres (`face_center_calc`: float32 sum in corner
+/// order times 1/n) and float64 scores, first minimum wins. With bit-exact vertices the mirror-symmetric candidates of sinks / freestanding tubs
+/// no longer tie (float32 rounding decides, exactly as in Blender). Candidates whose scores are still bit-equal come from face order, which is
+/// not Blender's here: an empirical side is chosen then (about half of such cases match).
+pub fn find_hole(obj: &Mesh, x: f64, y: f64, extent: (f64, f64), exact: bool) -> V3 {
+    let p32: Vec<[f32; 3]> = obj.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+    let co: Vec<V3> = obj
+        .faces
+        .iter()
+        .map(|f| {
+            let mut s = [0f32; 3];
+            for &v in f {
+                for k in 0..3 {
+                    s[k] += p32[v as usize][k];
+                }
+            }
+            let inv = 1.0f32 / f.len() as f32;
+            [(s[0] * inv) as f64, (s[1] * inv) as f64, (s[2] * inv) as f64]
+        })
+        .collect();
+    let nor = super::bpyx::face_normals(obj);
     let score: Vec<f64> = (0..co.len())
         .map(|i| {
             let up = if nor[i][2] > 0.0 { 1.0 } else { 0.0 };
@@ -286,12 +302,12 @@ pub fn find_hole(obj: &Mesh, x: f64, y: f64, extent: (f64, f64)) -> V3 {
         })
         .collect();
     let m = score.iter().cloned().fold(f64::INFINITY, f64::min);
-    // best empirical choice (float noise decides in Blender): tubs lower x, sinks higher x
     let low_x = !extent.0.is_nan() && extent.0 > 1.2;
     let low_y = true;
     let mut best = usize::MAX;
     for i in 0..co.len() {
-        if score[i] > m + 1e-6 {
+        // exact: only bit-equal scores tie; otherwise (vertices not bit-exact, float noise unreproducible) near-equal scores tie and an empirical side wins
+        if (exact && score[i] != m) || (!exact && score[i] > m + 1e-6) {
             continue;
         }
         if best == usize::MAX {
@@ -307,20 +323,20 @@ pub fn find_hole(obj: &Mesh, x: f64, y: f64, extent: (f64, f64)) -> V3 {
         }
     }
     if std::env::var("HOLEDBG").is_ok() {
-        let cands: Vec<_> = (0..co.len()).filter(|&i| score[i] <= m + 1e-6).map(|i| (co[i][0], co[i][1], score[i])).collect();
-        eprintln!("HOLE target ({x:.6},{y:.6}) extent {:?} f32-above {} {} chosen ({:.6},{:.6}) cands {:?}", extent, low_x, low_y, co[best][0], co[best][1], cands);
+        let cands: Vec<_> = (0..co.len()).filter(|&i| score[i] <= m + 1e-6).map(|i| (co[i][0], co[i][1], score[i] - m)).collect();
+        eprintln!("HOLE target ({x:.6},{y:.6}) extent {:?} chosen ({:.9},{:.9}) cands(score-min) {:?}", extent, co[best][0], co[best][1], cands);
     }
     co[best]
 }
 
-pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool) -> Mesh {
+pub fn add_hole(t: &Bathtub, obj: &Mesh, r: &mut Rng, centered: bool, exact: bool) -> Mesh {
     let mut loc = if t.alcove {
-        find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size))
+        find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size), exact)
     } else {
-        find_hole(obj, r.uniform(0.35, 0.4) * t.width, t.size / 2.0, (t.width, t.size))
+        find_hole(obj, r.uniform(0.35, 0.4) * t.width, t.size / 2.0, (t.width, t.size), exact)
     };
     if centered {
-        loc = find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size));
+        loc = find_hole(obj, t.width / 2.0, t.size / 2.0, (t.width, t.size), exact);
     }
     let mut g = super::hwexact::bpy_cylinder();
     for p in g.v.iter_mut() {
@@ -341,9 +357,11 @@ pub fn alcove_body(t: &Bathtub, stages: &mut Vec<(String, String, Mesh)>) -> Mes
         cage.pos.push([a[0], a[1], t.thickness]);
         cage.pos.push([b[0], b[1], d * 2.0 - t.thickness]);
     }
-    cage.faces = bathfree::cylinder_topology(n);
-    let cage = super::subsurf::subsurf_bl(&cage, t.alcove_levels, true);
-    let cutter = super::subsurf::subsurf_bl(&cage, 5 - t.alcove_levels, false);
+    // the bpy cylinder carries a UV map: Blender subdivides it with a face-varying channel, which decides the last float32 bits (uvlab.rs)
+    let (cf, cl) = super::uvlab::cylinder_bpy(n);
+    cage.faces = cf;
+    let (cage, cl) = super::uvlab::subsurf_uv(&cage, &cl, t.alcove_levels, true, None).expect("osd");
+    let (cutter, _) = super::uvlab::subsurf_uv(&cage, &cl, 5 - t.alcove_levels, false, None).expect("osd");
     // cavity = cutter faces below the box top, normals into the cavity
     let tol = 1e-6;
     let keep: Vec<bool> = cutter.faces.iter().map(|f| f.iter().all(|&v| cutter.pos[v as usize][2] <= d + tol)).collect();
@@ -436,7 +454,7 @@ pub fn alcove_body(t: &Bathtub, stages: &mut Vec<(String, String, Mesh)>) -> Mes
 pub fn build_alcove(t: &Bathtub, r: &mut Rng) -> Built {
     let mut stages = vec![];
     let obj = alcove_body(t, &mut stages);
-    let hole = add_hole(t, &obj, r, false);
+    let hole = add_hole(t, &obj, r, false, t.alcove);
     stage(&mut stages, "hole", "hole", &hole);
     let rot = |m: &Mesh| -> Mesh {
         let mut o = m.clone();
@@ -483,7 +501,7 @@ pub fn build(t: &Bathtub, r: &mut Rng) -> Built {
     let joined = join(&all);
     let n_main = if t.has_legs { st.side.pos.len() } else { joined.pos.len() };
     stage(&mut stages, "prehole", "prehole", &joined);
-    let hole = add_hole(t, &joined, r, false);
+    let hole = add_hole(t, &joined, r, false, false);
     stage(&mut stages, "hole", "hole", &hole);
     let body = super::subsurf::subsurf_bl(&joined, 1, false);
     let hole_s = super::subsurf::subsurf_bl(&hole, 1, false);

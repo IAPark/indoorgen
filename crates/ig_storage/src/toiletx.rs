@@ -2,7 +2,7 @@
 //! bridge / solidify stages). Stage dumps: ~/work/agents/storage/toistages.py, compared by src/bin/toicmp.rs.
 use super::bathroom::Toilet;
 use super::blops::align_bezier_points;
-use super::bridge::bridge_two_loops_surface;
+use super::bridge::{bridge_bm_ex, bridge_two_loops_surface, Interp};
 use crate::mesh::Mesh;
 use crate::rng::Rng;
 
@@ -45,6 +45,8 @@ pub struct Stages {
     pub lower: Vec<V3>,
     pub bottom: Vec<V3>,
     pub bridged: Mesh,
+    /// Blender edge list of `bridged` (BMesh order after bridge_edge_loops), the SOLIDIFY NON_MANIFOLD plane order depends on it
+    pub bridged_edges: Vec<[u32; 2]>,
 }
 
 /// upper / lower / bottom rings and the bridged tube (before SOLIDIFY)
@@ -59,15 +61,38 @@ pub fn tube_bridge(t: &Toilet, r: &mut Rng) -> Stages {
     let shape = r.uniform(0.1, 0.2);
     let la: Vec<u32> = ring.order.clone();
     let lb: Vec<u32> = ring.order.iter().map(|&i| i + n).collect();
-    bridge_two_loops_surface(&mut m, la, lb, 64, shape);
-    Stages { upper, lower, bottom, bridged: m }
+    // the wire input of bpy.ops.mesh.bridge_edge_loops: two copies of the welded / mirrored ring, edges in the order the modifiers leave them
+    // (half curve 0..n-1 sequential, then the mirrored points 0 - n - ... - (n_half - 1) closing at the last half point)
+    let total = n as usize;
+    let half = (total + 2) / 2;
+    let mut edges: Vec<[u32; 2]> = vec![];
+    for k in 0..2u32 {
+        let o = k * n;
+        for i in 0..half as u32 - 1 {
+            edges.push([o + i, o + i + 1]);
+        }
+        edges.push([o, o + half as u32]);
+        for i in half as u32..n - 1 {
+            edges.push([o + i, o + i + 1]);
+        }
+        edges.push([o + n - 1, o + half as u32 - 1]);
+    }
+    let (bridged, bridged_edges) = match bridge_bm_ex(&m, &la, &lb, 64, shape, Interp::Surface, 1.0, "SMOOTH", Some(&edges)) {
+        Ok(r) => r,
+        Err(_) => {
+            bridge_two_loops_surface(&mut m, la, lb, 64, shape);
+            let e = super::bathkit::edge_list(&m.faces).into_iter().map(|(a, b)| [a, b]).collect();
+            (m, e)
+        }
+    };
+    Stages { upper, lower, bottom, bridged, bridged_edges }
 }
 
 /// SOLIDIFY(NON_MANIFOLD, thickness, offset=1, boundary FLAT) of the bridged surface
-pub fn solidify_tube(t: &Toilet, bridged: &Mesh) -> Mesh {
+pub fn solidify_tube(t: &Toilet, bridged: &Mesh, edges: &[[u32; 2]]) -> Mesh {
     use super::solidnm::*;
     let pos: Vec<[f32; 3]> = bridged.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
-    let out = solidify_nonmanifold(&pos, &bridged.faces, t.thickness as f32, 1.0, Boundary::Flat).expect("solidify");
+    let out = solidify_nonmanifold_ex(&pos, &bridged.faces, Some(edges), t.thickness as f32, 1.0, Boundary::Flat).expect("solidify");
     let mut m = Mesh::new();
     m.pos = out.pos.iter().map(|p| f32v(*p)).collect();
     m.faces = out.faces;
@@ -320,7 +345,7 @@ pub fn make_hardware(t: &Toilet, r: &mut Rng) -> Mesh {
 pub fn build(t: &Toilet, r: &mut Rng) -> Parts {
     let st = tube_bridge(t, r);
     let order: Vec<u32> = build_curve(t).order;
-    let sol = solidify_tube(t, &st.bridged);
+    let sol = solidify_tube(t, &st.bridged, &st.bridged_edges);
     let tube = extrude_top(t, &sol);
     let plane = make_plane(t, &tube);
     let (seat, cover) = make_seat(t, &plane);
