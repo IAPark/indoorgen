@@ -84,9 +84,34 @@ fn main() {
     }
     let wt = g.c.wall_thickness;
     let polys: Vec<_> = g.room_polys.iter().map(|x| infinigen::shp::buffer_mitre(&x.1, -wt / 2.0)).collect();
+    // floor boards: python's contour is the union of the floor faces, which include the floor strip through every doorway;
+    // the ring is then split at door-jamb (wall thickness) and opening (door width) segments, so no board runs across doors
+    let mut floor_polys = polys.clone();
+    for ct in &g.cutters {
+        if !matches!(ct.kind, infinigen::rooms::solidify::CutKind::Door | infinigen::rooms::solidify::CutKind::Entrance) {
+            continue;
+        }
+        let (hw, hd) = (g.c.door_width / 2.0, wt / 2.0 + 1e-4);
+        let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
+        let pt = |x: f64, y: f64| [ct.loc[0] + c * x - s_ * y, ct.loc[1] + s_ * x + c * y];
+        floor_polys.push(infinigen::shp::polygon(&[pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd), pt(-hw, -hd)], &[]).unwrap());
+    }
     for (nm, ceil, z) in [("skirting_floor", false, wt / 2.0), ("skirting_ceiling", true, g.c.wall_height - wt / 2.0)] {
         let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), nm]));
-        if let Some(sk) = infinigen::rooms::skirting::make(&polys, z, ceil, &mut r) {
+        let sk = if ceil { infinigen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { infinigen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &[wt, g.c.door_width]) };
+        if let (Some(sk), true) = (&sk, std::env::var("SKIRTDBG").is_ok()) {
+            for ct in &g.cutters {
+                if !matches!(ct.kind, infinigen::rooms::solidify::CutKind::Door | infinigen::rooms::solidify::CutKind::Entrance) { continue }
+                let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
+                let inside = sk.mesh.pos.iter().filter(|p| {
+                    let (dx, dy) = (p[0] - ct.loc[0], p[1] - ct.loc[1]);
+                    let (lx, ly) = (c * dx + s_ * dy, -s_ * dx + c * dy);
+                    lx.abs() < g.c.door_width / 2.0 - 0.02 && ly.abs() < wt / 2.0 + 0.06
+                }).count();
+                eprintln!("SKIRT {nm} door {:?} at ({:.2},{:.2}) verts inside opening: {inside}", ct.kind, ct.loc[0], ct.loc[1]);
+            }
+        }
+        if let Some(sk) = sk {
             // skirting_board.py: shader_rough_plastic(base_color=hsv2rgba(white_hsv()), roughness=uniform(0.5, 1)) from the same FixedSeed stream
             // (thickness, height, white_hsv = (0, U(0, .1), U(.8, 1)), roughness)
             let mut pr = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), nm]));
