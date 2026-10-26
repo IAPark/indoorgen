@@ -7,7 +7,7 @@ G=$IG_ROOT/target/fast/gen2
 while read -r seed room flags; do
   [[ -z $seed || $seed == \#* ]] && continue
   tag=${seed}_${room}${flags:+_${${flags// /}//--/}}
-  ${=G} $seed $room $OUT/x.glb --no-glb --qc $OUT/$tag.json ${=flags} >$OUT/$tag.log 2>&1; rc=$?
+  ${=G} $seed $room $OUT/x.glb --no-glb --rust-cloth --qc $OUT/$tag.json ${=flags} >$OUT/$tag.log 2>&1; rc=$?
   [[ $rc -ne 0 ]] && echo "FAIL rc=$rc $tag"
   grep -E "^QC .* objects=" $OUT/$tag.log
 done < $IG_TOOLS/qc_scenes.txt

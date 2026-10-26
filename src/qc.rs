@@ -339,7 +339,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     m.insert("support".into(), json!(sname));
                     m.insert("support_tilt_deg".into(), json!((nrm[2].clamp(-1.0, 1.0).acos().to_degrees() * 10.0).round() / 10.0));
                 }
-                let cut = cut_keys.contains(&o.key);
+                let cut = cut_keys.contains(&o.key) || o.class == "Throw";
                 let near_floor = o.lo[2] < wall_t / 2.0 + 0.10;
                 let on_rug = support.map_or(false, |(ni, _)| nodes[ni].name.contains("Rug") || nodes[ni].class.contains("Rug"));
                 if cut {
@@ -548,7 +548,12 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
         }
     }
     let rep = json!({"scene": label, "objects": results.len(), "counts": counts, "door_swing_limited": swing, "results": results, "qc_secs": t0.elapsed().as_secs_f64()});
-    std::fs::write(out, serde_json::to_vec_pretty(&rep).unwrap()).unwrap();
+    if !out.as_os_str().is_empty() {
+        std::fs::write(out, serde_json::to_vec_pretty(&rep).unwrap()).unwrap();
+    }
+    if label.is_empty() {
+        return rep;
+    }
     for r in &results {
         for i in r["issues"].as_array().into_iter().flatten() {
             eprintln!("QC {label} {} {} [{}]: {}", r["key"].as_str().unwrap_or(""), r["class"].as_str().unwrap_or(""), r["room"].as_str().unwrap_or("?"), i.as_str().unwrap());
@@ -556,4 +561,36 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
     }
     eprintln!("QC {label} objects={} counts={:?} swing_limited={} in {:?}", results.len(), counts, swing.len(), t0.elapsed());
     rep
+}
+
+/// Remove clutter ("mess_*") items the audit found interpenetrating another object (a garment inside a monitor, a bottle standing half
+/// inside a TV): the clutter placement works on convex hulls and lets thin or soft items slip through. `rep` is the audit of `scene`.
+pub fn prune_clutter(scene: &mut Scene, rep: &serde_json::Value) -> Vec<String> {
+    let soft = |c: &str| ["Pants", "Shirt", "Towel", "Cloth", "Blanket", "Garment"].iter().any(|k| c.contains(k));
+    let mut gone: Vec<String> = vec![];
+    for r in rep["results"].as_array().into_iter().flatten() {
+        let key = r["key"].as_str().unwrap_or("");
+        let class = r["class"].as_str().unwrap_or("");
+        for i in r["issues"].as_array().into_iter().flatten() {
+            let s = i.as_str().unwrap_or("");
+            let Some(rest) = s.strip_prefix("penetrates ").map(|r| (r, true)).or_else(|| s.strip_prefix("overlaps ").map(|r| (r, false))) else { continue };
+            let other = rest.0.split(' ').next().unwrap_or("");
+            // true penetration removes the clutter item; a mere box overlap only a rigid one
+            let victim = if key.starts_with("mess_") && (rest.0 .len() > 0) && (rest.1 || !soft(class)) {
+                Some(key)
+            } else if other.starts_with("mess_") && (rest.1 || !soft(r["class"].as_str().unwrap_or(""))) {
+                Some(other)
+            } else {
+                None
+            };
+            if let Some(v) = victim {
+                if !gone.iter().any(|g| g == v) {
+                    gone.push(v.to_string());
+                }
+            }
+        }
+    }
+    let pre: Vec<String> = gone.iter().map(|g| format!("{g}#")).collect();
+    scene.nodes.retain(|n| !pre.iter().any(|p| n.name.starts_with(p.as_str())));
+    gone
 }

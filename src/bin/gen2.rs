@@ -424,10 +424,17 @@ fn main() {
     }
     // mess pass, part 2: clutter (no-op at --mess 0)
     indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
+    let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+    fn qcin<'a>(scene: &'a Scene, g: &'a indoorgen::pipeline::Generated, door_infos: &'a [indoorgen::qc::DoorInfo], cut_keys: &'a [String]) -> indoorgen::qc::QcIn<'a> { indoorgen::qc::QcIn { scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: door_infos, wall_t: g.c.wall_thickness, cut_keys } }
+    // clutter that ended up inside furniture / other clutter is removed (the placement works on convex hulls)
+    if mess.on() && std::env::var_os("NO_SNAP").is_none() {
+        let rep = indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(""), "");
+        let gone = indoorgen::qc::prune_clutter(&mut scene, &rep);
+        eprintln!("PRUNE {} clutter items removed for interpenetration", gone.len());
+    }
     if let Some(qp) = &qc_out {
-        let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
         let label = format!("{}_{}_p{}_m{}", seed, args.get(2).map(|s| s.as_str()).unwrap_or("all"), people_n, mess_level);
-        indoorgen::qc::run(&indoorgen::qc::QcIn { scene: &scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: &door_infos, wall_t: g.c.wall_thickness, cut_keys: &cut_keys }, std::path::Path::new(qp), &label);
+        indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(qp), &label);
     }
     if no_glb { return; }
     scene.write_glb(&out).unwrap();
