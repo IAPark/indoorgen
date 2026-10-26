@@ -244,7 +244,11 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
                 let folded = kind == LieBed && seed & 0x80 != 0;
                 let arms_up = kind == LieBed && seed & (1 << 20) != 0 && !folded;
                 for s in [-1.0, 1.0] {
-                    b.side(s, "Thigh", Op::Rel([0.0, 0.0, s * (5.0 + v.v(2.0))]));
+                    // relaxed legs: feet fall apart a little, knees slightly flexed (heels rest on the mattress)
+                    b.side(s, "Thigh", Op::Rel([0.0, 0.0, s * (9.0 + v.v(3.0))]));
+                    if kind == LieBed {
+                        b.side(s, "Calf", Op::Rel([std::env::var("LIE_KNEE").ok().and_then(|x| x.parse().ok()).unwrap_or(4.0) + v.v(3.0), 0.0, 0.0]));
+                    }
                     if kind == LieSofa && seed & (1 << 21) != 0 {
                         // short sofa: knees up, feet on the cushion
                         b.side(s, "Thigh", Op::Rel([38.0 + v.v(6.0), 0.0, s * (6.0 + v.v(3.0))]));

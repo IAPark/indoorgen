@@ -272,10 +272,12 @@ pub struct Opts {
     pub trunk: f64,
     /// multiplier on the arm joint stiffness
     pub arms: f64,
+    /// multiplier on the leg joint stiffness (hips, knees, ankles)
+    pub legs: f64,
 }
 impl Default for Opts {
     fn default() -> Opts {
-        Opts { soft: 1.0, kp: 0.0, gc: 0.0, trunk: 1.0, arms: 1.0 }
+        Opts { soft: 1.0, kp: 0.0, gc: 0.0, trunk: 1.0, arms: 1.0, legs: 1.0 }
     }
 }
 impl Opts {
@@ -284,9 +286,10 @@ impl Opts {
         use crate::PoseKind::*;
         let (kpm, tm) = (env_f("RAGDOLL_KPM", 1.0), env_f("RAGDOLL_TRUNKM", 1.0));
         let mut o = match kind {
-            SitUpright | SitBedEdge => Opts { soft: 1.0, kp: 220.0, gc: 0.9, trunk: 3.0, arms: 1.0 },
-            SitRelaxed => Opts { soft: 1.0, kp: 80.0, gc: 0.6, trunk: 2.0, arms: 1.0 },
-            LieBed => Opts { arms: 3.0, ..Opts::default() },
+            SitUpright | SitBedEdge => Opts { soft: 1.0, kp: 220.0, gc: 0.9, trunk: 3.0, arms: 1.0, legs: 1.0 },
+            SitRelaxed => Opts { soft: 1.0, kp: 80.0, gc: 0.6, trunk: 2.0, arms: 1.0, legs: 1.0 },
+            // lying people are relaxed: soft limb motors let arms and legs (heels) sink onto the mattress instead of holding a stiff key pose
+            LieBed | LieSofa => Opts { arms: env_f("RAGDOLL_LIE_ARMS", 0.7), legs: env_f("RAGDOLL_LIE_LEGS", 0.25), ..Opts::default() },
             _ => Opts::default(),
         };
         o.kp *= kpm;
@@ -442,7 +445,7 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     let gains = |si: usize, dev: f64, piv: V| -> (f64, f64) {
         let trunk = matches!(segs[si].name, "Bip01 Spine" | "Bip01 Spine1" | "Bip01 Spine2" | "Bip01 Neck" | "Bip01 Head");
         let arm = segs[si].name.contains("Arm") || segs[si].name.contains("Hand");
-        let kscale = if trunk { kscale * opt.trunk } else if arm { kl * opt.arms } else { kl };
+        let kscale = if trunk { kscale * opt.trunk } else if arm { kl * opt.arms } else { kl * opt.legs };
         let cm = scale(sub_c[si], 1.0 / sub_m[si].max(1e-6));
         let d = len(sub(cm, piv)).max(0.06);
         let kk = sub_m[si] * 9.81 * d / dev * kscale;
