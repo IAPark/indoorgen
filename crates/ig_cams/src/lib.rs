@@ -13,6 +13,8 @@ pub struct Cfg {
     pub k: usize,
     pub seed: u64,
     pub wall_t: f64,
+    /// target room type (e.g. "Bedroom", "LivingRoom"): its rooms get `k` cameras, every other furnished room (k + 1) / 2
+    pub target: Option<String>,
 }
 
 #[derive(Clone)]
@@ -222,7 +224,9 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         let mut best: Option<(f64, usize, V3, V3, f64, String)> = None;
         let mut nvalid = 0;
         let mut cam_tries = 0;
-        while got.len() < cfg.k && tries < 6000 {
+        let norm = |x: &str| x.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+        let k_room = match &cfg.target { Some(t) if norm(t) != norm(rtype) => (cfg.k + 1) / 2, _ => cfg.k };
+        while got.len() < k_room && tries < 6000 {
             if nvalid >= 10 || cam_tries >= 900 {
                 cam_tries = 0;
                 nvalid = 0;

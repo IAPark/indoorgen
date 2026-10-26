@@ -1,5 +1,6 @@
 #!/bin/zsh
 IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
+export ONLY_TARGET=1  # these gates compare/measure a single room (gen2 default is now the whole house)
 # selfcheck.sh: post-merge gate (~2 min): build, determinism, lockstep placement, placeholders
 export PATH=$HOME/.cargo/bin:$PATH
 cd "$(git rev-parse --show-toplevel)" || exit 1

@@ -35,7 +35,10 @@ fn sem_room_tag(rt: &str) -> Tag {
 
 pub struct Options {
     pub seed: u64,
-    pub restrict_room: Option<String>, // e.g. "Bedroom"
+    pub restrict_room: Option<String>, // e.g. "Bedroom": furnish only the first room of this type (old behaviour, `--only-target`)
+    /// furnish every room of the house (each room solved independently with its own rng stream, in parallel); `restrict_room` then only
+    /// names the target room type whose first room keeps the single-room rng stream
+    pub whole_house: bool,
     pub steps_large: usize,
     pub steps_medium: usize,
     pub steps_small: usize,
@@ -227,15 +230,39 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 
     // --- stages ---
     let mut stages: IndexMap<String, Domain> = program_json["stages"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), parse_domain(v, &HashMap::default()))).collect();
-    if let Some(room) = &opt.restrict_room {
+    if let (Some(room), false) = (&opt.restrict_room, opt.whole_house) {
         let rt = Domain::new(TagSet::from([Tag::sem(room)])).with_tags(&TagSet::from([Tag::var("room")]));
         for d in stages.values_mut() {
             *d = domain_tag_substitute(d, Tag::var("room"), &rt).0;
         }
     }
-    let mut limits = HashMap::default();
-    limits.insert("room".to_string(), 1usize);
-    let mut ctx = Ctx { prog: &prog, usage: &usage, assets, bounds: vec![], singletons: HashMap::default(), oracle: Default::default(), populated: Default::default(), ctor_words: Default::default() };
+    if opt.whole_house {
+        let (tl, tm, ts) = solve_whole_house(opt, assets, &prog, &usage, &stages, &mut state);
+        timings.push(("solve_large".into(), tl));
+        timings.push(("solve_medium".into(), tm));
+        timings.push(("solve_small".into(), ts));
+    } else {
+        let mut limits = HashMap::default();
+        limits.insert("room".to_string(), 1usize);
+        let (tl, tm, ts) = solve_stages(opt, assets, &prog, &usage, &stages, &mut state, &limits, None, None);
+        timings.push(("solve_large".into(), tl));
+        timings.push(("solve_medium".into(), tm));
+        timings.push(("solve_small".into(), ts));
+    }
+    Generated { c, shells, cutters: res.cutters, state, timings, room_polys }
+}
+
+/// rooms + cutters only (no furniture): used for validation against reference dumps
+pub fn generate_rooms_only(seed: u64) -> State {
+    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
+    let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
+    generate(&Options { seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0 }, &assets, &prog).state
+}
+
+/// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives
+/// a separate rng stream per room (None = the single global stream of the python)
+fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usage, stages: &IndexMap<String, Domain>, state: &mut State, limits: &HashMap<String, usize>, only_room: Option<&str>, tag: Option<&str>) -> (f64, f64, f64) {
+    let mut ctx = Ctx { prog, usage, assets, bounds: vec![], singletons: HashMap::default(), oracle: Default::default(), populated: Default::default(), ctor_words: Default::default() };
     if let Ok(p) = std::env::var("CTORWORDS") {
         let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
         for e in j.as_array().unwrap() {
@@ -250,18 +277,23 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     let cfg = || AnnealCfg { initial_temp: 3.0, final_temp: 0.001, finetune_pct: 0.15, max_invalid_candidates: 5 };
     let mut run_stage = |name: &str, group: &str, steps: usize, restrict: Option<Vec<MoveKind>>, add: f64, state: &mut State, rng: &mut Rng, ctx: &mut Ctx| {
         let dom = stages[name].clone();
-        let assigns = iterate_assignments(&dom, state, &["room", "obj"], &limits);
+        let assigns = iterate_assignments(&dom, state, &["room", "obj"], limits);
         for asg in assigns {
+            if let Some(r) = only_room {
+                if asg.get("room").map_or(false, |x| x != r) { continue }
+            }
             solve_objects(ctx, state, &dom, &asg, &StageParams { n_steps: steps, restrict_moves: restrict.clone(), addition_scalar: add }, cfg(), rng);
         }
         let _ = group;
     };
+    let seed = opt.seed;
     let seed_s = seed.to_string();
+    let hs = |what: &str| -> u64 { match tag { None => int_hash(&[&seed_s, what]), Some(t) => int_hash(&[&seed_s, what, t]) } };
     let t = Instant::now();
-    let mut rng = Rng::seeded(int_hash(&[&seed_s, "solve_large"]));
-    run_stage("on_floor_and_wall", "large", opt.steps_large, None, 3.0, &mut state, &mut rng, &mut ctx);
-    run_stage("on_floor_freestanding", "large", opt.steps_large, None, 3.0, &mut state, &mut rng, &mut ctx);
-    timings.push(("solve_large".into(), t.elapsed().as_secs_f64()));
+    let mut rng = Rng::seeded(hs("solve_large"));
+    run_stage("on_floor_and_wall", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
+    run_stage("on_floor_freestanding", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
+    let tl = t.elapsed().as_secs_f64();
     // populate_intermediate_pholders: shelves etc. become real assets so children can use their support surfaces
     for (k, o) in state.objs.iter_mut() {
         let Some(g) = o.generator.clone() else { continue };
@@ -287,22 +319,65 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         state.touch(&k);
     }
     let t = Instant::now();
-    let mut rng = Rng::seeded(int_hash(&[&seed_s, "solve_medium"]));
-    run_stage("on_wall", "medium", opt.steps_medium, None, 3.0, &mut state, &mut rng, &mut ctx);
-    run_stage("on_ceiling", "medium", opt.steps_medium, None, 3.0, &mut state, &mut rng, &mut ctx);
-    run_stage("side_obj", "medium", opt.steps_medium, None, 3.0, &mut state, &mut rng, &mut ctx);
-    timings.push(("solve_medium".into(), t.elapsed().as_secs_f64()));
+    let mut rng = Rng::seeded(hs("solve_medium"));
+    run_stage("on_wall", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
+    run_stage("on_ceiling", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
+    run_stage("side_obj", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
+    let tm = t.elapsed().as_secs_f64();
     let t = Instant::now();
-    let mut rng = Rng::seeded(int_hash(&[&seed_s, "solve_small"]));
-    run_stage("obj_ontop_obj", "small", opt.steps_small, None, 3.0, &mut state, &mut rng, &mut ctx);
-    run_stage("obj_on_support", "small", opt.steps_small, Some(vec![MoveKind::Addition]), 1.0, &mut state, &mut rng, &mut ctx);
-    timings.push(("solve_small".into(), t.elapsed().as_secs_f64()));
-    Generated { c, shells, cutters: res.cutters, state, timings, room_polys }
+    let mut rng = Rng::seeded(hs("solve_small"));
+    run_stage("obj_ontop_obj", "small", opt.steps_small, None, 3.0, state, &mut rng, &mut ctx);
+    run_stage("obj_on_support", "small", opt.steps_small, Some(vec![MoveKind::Addition]), 1.0, state, &mut rng, &mut ctx);
+    let ts = t.elapsed().as_secs_f64();
+    (tl, tm, ts)
 }
 
-/// rooms + cutters only (no furniture): used for validation against reference dumps
-pub fn generate_rooms_only(seed: u64) -> State {
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
-    let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, restrict_room: None, steps_large: 0, steps_medium: 0, steps_small: 0 }, &assets, &prog).state
+fn clone_state(s: &State) -> State {
+    State { objs: s.objs.clone(), caches: Default::default(), next_version: s.next_version }
+}
+
+/// Furnish every room: rooms are independent in the constraint program (the solver only looks at the active room's objects), so each
+/// room is solved on its own copy of the room state with its own rng stream and the results are merged in room-key order.
+/// The first room of the target room type keeps the single-room rng stream (same furniture as `--only-target`).
+fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usage, stages: &IndexMap<String, Domain>, state: &mut State) -> (f64, f64, f64) {
+    use rayon::prelude::*;
+    let no_limits = HashMap::default();
+    let mut rooms: Vec<String> = iterate_assignments(&stages["on_floor_and_wall"], state, &["room"], &no_limits).into_iter().filter_map(|a| a.get("room").cloned()).collect();
+    rooms.sort();
+    let target: Option<String> = opt.restrict_room.as_ref().and_then(|rt| {
+        let want = Tag::sem(rt);
+        rooms.iter().find(|r| state.objs[r.as_str()].tags.contains(want)).cloned()
+    });
+    let base_keys: std::collections::HashSet<String> = state.objs.keys().cloned().collect();
+    let serial = std::env::var_os("SERIAL_ROOMS").is_some();
+    // SAFETY: the only Assets implementations used here (RealAssets, TableAssets) are read-only tables plus Mutex-guarded memo caches
+    // (gen2 already shares RealAssets between rayon workers for the visual builds)
+    struct SyncAssets<'a>(&'a dyn Assets);
+    unsafe impl Sync for SyncAssets<'_> {}
+    impl SyncAssets<'_> { fn get(&self) -> &dyn Assets { self.0 } }
+    let sa = SyncAssets(assets);
+    let work = |(r, mut st): (&String, State)| -> (State, (f64, f64, f64)) {
+        let tag = if target.as_ref() == Some(r) { None } else { Some(r.as_str()) };
+        let t = solve_stages(opt, sa.get(), prog, usage, stages, &mut st, &no_limits, Some(r), tag);
+        if std::env::var_os("ROOMTIMES").is_some() { eprintln!("ROOMTIME {r} large {:.2} medium {:.2} small {:.2} objs {}", t.0, t.1, t.2, st.objs.len()); }
+        (st, t)
+    };
+    let jobs: Vec<(&String, State)> = rooms.iter().map(|r| (r, clone_state(state))).collect();
+    let results: Vec<(State, (f64, f64, f64))> = if serial { jobs.into_iter().map(work).collect() } else { jobs.into_par_iter().map(work).collect() };
+    let mut tot = (0.0, 0.0, 0.0);
+    for (r, (st, t)) in rooms.iter().zip(results) {
+        tot = (tot.0 + t.0, tot.1 + t.1, tot.2 + t.2);
+        for (k, o) in st.objs {
+            if base_keys.contains(&k) { continue }
+            if state.objs.contains_key(&k) {
+                eprintln!("NAME COLLISION across rooms: {k} ({r}) dropped");
+                continue;
+            }
+            state.objs.insert(k, o);
+        }
+    }
+    for o in state.objs.values_mut() { o.active = true; }
+    let keys: Vec<String> = state.objs.keys().cloned().collect();
+    for k in keys { state.touch(&k); }
+    tot
 }
