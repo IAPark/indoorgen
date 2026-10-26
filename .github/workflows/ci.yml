@@ -1,0 +1,69 @@
+name: ci
+on: [push, pull_request]
+
+env:
+  GEOS_VERSION: 3.11.4
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple silicon (the tested platform)
+          - os: ubuntu-22.04      # best effort, see README "Status"
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: System packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake pkg-config assimp
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libassimp-dev clang
+
+      # the geos crate (v11) needs GEOS 3.11.x exactly; distro/brew versions are newer
+      - name: Cache GEOS
+        id: geos-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/geos
+          key: geos-${{ env.GEOS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Build GEOS ${{ env.GEOS_VERSION }}
+        if: steps.geos-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL https://download.osgeo.org/geos/geos-${GEOS_VERSION}.tar.bz2 | tar xj
+          cmake -S geos-${GEOS_VERSION} -B geos-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/geos \
+                -DBUILD_TESTING=OFF -DBUILD_DOCUMENTATION=OFF
+          cmake --build geos-build -j4 && cmake --install geos-build
+      - name: Point cargo at GEOS
+        run: |
+          echo "PKG_CONFIG_PATH=$HOME/geos/lib/pkgconfig" >> $GITHUB_ENV
+          echo "GEOS_LIB_DIR=$HOME/geos/lib" >> $GITHUB_ENV
+          echo "GEOS_VERSION=${GEOS_VERSION}" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$HOME/geos/lib" >> $GITHUB_ENV
+
+      - name: Build (generator only; dev/ tools are not built by default)
+        run: cargo build --profile fast --bin indoorgen --bin gen2
+      - name: Unit tests (crates that need neither Python nor Blender)
+        run: cargo test --profile fast --lib --tests -p ig_core -p ig_exbool -p ig_gn -p ig_decor -p ig_mess -p ig_storage -p indoorgen
+      - name: Smoke run (one small room, determinism + glb/sidecar invariants)
+        run: tools/ci/smoke.sh target/fast/indoorgen
+
+  licenses:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+
+# Local only (need the Python Infinigen reference and/or Blender, see README): tools/selfcheck.sh (lockstep vs Python traces,
+# placeholder oracles), tools/opsuite.sh, tools/refcache.py + refcmp, and the Cycles render scripts in tools/render/.
+# Golden md5 for the smoke scene: INDOORGEN_GOLDEN=1 tools/ci/smoke.sh (valid only for builds with OpenVDB installed).
