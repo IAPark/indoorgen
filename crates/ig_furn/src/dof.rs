@@ -22,7 +22,14 @@ fn plane_normal32(state: &State, name: &str, ti: usize, rev: bool) -> ([f32; 3],
     let t = &o.geom.tris[ti];
     let m = o.pose.o.matrix_world();
     let ln = crate::bl32::poly_normal(f32v(t.v[0]), f32v(t.v[1]), f32v(t.v[2]));
-    (crate::bl32::global_polygon_normal(&m, ln, rev), crate::bl32::mat4_mul_point(&m, f32v(t.v[0])))
+    let mut n = crate::bl32::global_polygon_normal(&m, ln, rev);
+    // dense mode: the exact Blender even-thickness solidify port leaves room floor/ceiling vertices at angled corners up to ~2 cm off
+    // the plane, so triangles there slope by 3-4 degrees and everything stable against them came out tilted. Planes within 10 degrees of
+    // horizontal are taken as horizontal (python-parity mode keeps the raw normal).
+    if crate::state::dense_mode() && n[2].abs() > 0.985 && n[2].abs() < 1.0 {
+        n = [0.0, 0.0, n[2].signum()];
+    }
+    (n, crate::bl32::mat4_mul_point(&m, f32v(t.v[0])))
 }
 
 fn plane_normal(state: &State, name: &str, ti: usize, rev: bool) -> (V3, V3) {
