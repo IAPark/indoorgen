@@ -794,6 +794,30 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
                 collide.push(n.name.clone());
             }
             collide.truncate(8);
+            if std::env::var_os("GARMENT_HF").is_none() {
+                // default mesh: the garment falls onto the floor / furniture in the Rust cloth solver (soft folds, thickness kept)
+                let mut cpos: Vec<V3> = vec![];
+                let mut cfaces: Vec<Vec<u32>> = vec![];
+                for nm in &collide {
+                    if let Some(n) = scene.nodes.iter().find(|n| &n.name == nm) {
+                        let o = cpos.len() as u32;
+                        cpos.extend_from_slice(&n.mesh.pos);
+                        cfaces.extend(n.mesh.faces.iter().map(|f| f.iter().map(|i| i + o).collect::<Vec<u32>>()));
+                    }
+                }
+                let col = ig_kit::cloth::Collider::new(&cpos, &cfaces);
+                let mut cp = ig_kit::cloth::ClothParams::default();
+                cp.mass = 0.05;
+                cp.tension = 2.0;
+                cp.distance_min = 0.002;
+                cp.end_frame = 40;
+                let mut cal = ig_kit::cloth::Calib::default();
+                cal.col_thickness = 0.006;
+                let out = ig_kit::cloth::simulate(&pre.pos, &pre.faces, &cp, &[&col], &cal);
+                let mut sim = pre.clone();
+                sim.pos = out;
+                draped = ig_shared::subsurf::subsurf(&sim, 1, false);
+            }
             let name = format!("{nm_base}#0");
             let faces = pre.faces.clone();
             scene.cloth.push(serde_json::json!({
