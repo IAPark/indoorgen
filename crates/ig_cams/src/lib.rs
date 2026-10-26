@@ -23,6 +23,10 @@ struct Subj {
     w: f64,
     person: bool,
     group: bool,
+    /// people: world facing direction (xy), seated/lying flags
+    face: Option<[f64; 2]>,
+    low: bool,
+    lie: bool,
 }
 
 struct World {
@@ -93,6 +97,17 @@ fn unit(v: V3) -> V3 {
     [v[0] / l, v[1] / l, v[2] / l]
 }
 
+/// nearest of a few random free spots to a wanted position (falls back to the wanted position)
+fn near_valid(valid: &[[f64; 2]], want: [f64; 2], rng: &mut Rng) -> [f64; 2] {
+    if valid.is_empty() { return want }
+    let mut best = valid[rng.choice_idx(valid.len())];
+    for _ in 0..11 {
+        let q = valid[rng.choice_idx(valid.len())];
+        if (q[0] - want[0]).hypot(q[1] - want[1]) < (best[0] - want[0]).hypot(best[1] - want[1]) { best = q }
+    }
+    [best[0] + rng.uniform(-0.1, 0.1), best[1] + rng.uniform(-0.1, 0.1)]
+}
+
 fn key_of(name: &str) -> &str {
     name.split('#').next().unwrap()
 }
@@ -118,11 +133,19 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                 for d in 0..3 { s.lo[d] = s.lo[d].min(lo[d]); s.hi[d] = s.hi[d].max(hi[d]); }
                 continue;
             }
-            subj.push(Subj { key, lo, hi, w: subject_weight(&n.class), person: n.class == "Person", group: false });
+            let person = n.class == "Person";
+            let face = n.pose.filter(|_| person).map(|p| { let v = [-p[0][1], p[1][1]]; let l = v[0].hypot(v[1]).max(1e-9); [v[0] / l, v[1] / l] });
+            let lie = person && key.contains("_Lie");
+            let low = lie || (person && key.contains("_Sit"));
+            subj.push(Subj { key, lo, hi, w: subject_weight(&n.class), person, group: false, face, low, lie });
         }
         subj.retain(|s| in_poly([(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0], &ext));
-        if subj.len() < 3 { continue } // shell only (room not furnished in this run)
-        let cand: Vec<Subj> = subj.iter().filter(|s| s.w > 0.0 && (s.hi[0] - s.lo[0]).max(s.hi[1] - s.lo[1]).max(s.hi[2] - s.lo[2]) >= 0.5).cloned().collect();
+        if subj.len() < 2 { continue } // shell only (room not furnished in this run)
+        let mut cand: Vec<Subj> = subj.iter().filter(|s| s.w > 0.0 && (s.hi[0] - s.lo[0]).max(s.hi[1] - s.lo[1]).max(s.hi[2] - s.lo[2]) >= 0.5).cloned().collect();
+        if cand.is_empty() {
+            // nothing big: any non-trivial object will do
+            cand = subj.iter().filter(|s| s.w > 0.0 && (s.hi[0] - s.lo[0]).max(s.hi[1] - s.lo[1]).max(s.hi[2] - s.lo[2]) >= 0.25).cloned().map(|mut s| { s.w = s.w.max(0.3); s }).collect();
+        }
         if cand.is_empty() { continue }
         // keep the strong subjects (people always): weak ones (appliances, small shelves) make dull photos
         let _maxw = cand.iter().filter(|s| !s.person).map(|s| s.w).fold(0.0, f64::max);
@@ -131,10 +154,12 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         let maxw = cand.iter().filter(|s| !s.person).map(|s| s.w).fold(0.0, f64::max);
         let all = cand.clone();
         let mut cand: Vec<Subj> = cand.into_iter().filter(|s| s.person || s.w >= 0.4 * maxw).collect();
-        // sparse room (no strong subject): add a 'group' subject = all candidates together, shot as an establishing view
-        if maxw < 4.0 && all.iter().filter(|s| !s.person).count() >= 2 {
-            let mut g = Subj { key: "group".into(), lo: [f64::MAX; 3], hi: [f64::MIN; 3], w: 0.9 * maxw, person: false, group: true };
-            for s in all.iter().filter(|s| !s.person) { for d in 0..3 { g.lo[d] = g.lo[d].min(s.lo[d]); g.hi[d] = g.hi[d].max(s.hi[d]); } }
+        // 'group' subject (establishing shots): every candidate together; for the per-slot weights it only counts in sparse rooms
+        let sparse = maxw < 4.0 && all.iter().filter(|s| !s.person).count() >= 2;
+        let gi = cand.len();
+        {
+            let mut g = Subj { key: "group".into(), lo: [f64::MAX; 3], hi: [f64::MIN; 3], w: 0.9 * maxw.max(1.0), person: false, group: true, face: None, low: false, lie: false };
+            for s in all.iter() { for d in 0..3 { g.lo[d] = g.lo[d].min(s.lo[d]); g.hi[d] = g.hi[d].max(s.hi[d]); } }
             cand.push(g);
         }
         // collision world: nodes overlapping the room box (tiny clutter skipped)
@@ -186,8 +211,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         if cz.is_nan() { cz = fz + 2.6 }
         let ntri = idx.len();
         let Ok(tm) = TriMesh::new(verts, idx) else { continue };
-        let w = World { tm, ntri, floor, door, shell, owner, keys };
-        let mut rng = Rng::seeded(ig_core::int_hash(&[&cfg.seed.to_string(), rname, "cams"]));
+        let w = World { tm, ntri, floor, door, shell, owner, keys };        let mut rng = Rng::seeded(ig_core::int_hash(&[&cfg.seed.to_string(), rname, "cams"]));
         // seating/beds/TV stands have a back against a wall: never shoot them from behind
         let backs: Vec<Option<[f64; 2]>> = cand.iter().map(|s| {
             if s.group || s.person || !["Sofa", "ArmChair", "BedFactory", "TVStand"].iter().any(|k| s.key.contains(k)) { return None }
@@ -213,188 +237,387 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             }
             best.map(|b| b.1)
         }).collect();
+        // room centroid / area (polygon)
+        let (mut ar, mut ccx, mut ccy) = (0.0, 0.0, 0.0);
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            let cr = a[0] * b[1] - b[0] * a[1];
+            ar += cr; ccx += (a[0] + b[0]) * cr; ccy += (a[1] + b[1]) * cr;
+        }
+        let area = ar.abs() / 2.0;
+        let cen = if ar.abs() > 1e-9 && in_poly([ccx / (3.0 * ar), ccy / (3.0 * ar)], &poly) { [ccx / (3.0 * ar), ccy / (3.0 * ar)] } else { [(x0 + x1) / 2.0, (y0 + y1) / 2.0] };
+        // vantage pool for establishing shots: room corners pulled inwards, and doorways (just inside / just outside the room)
+        let mut pool: Vec<([f64; 2], bool)> = vec![];
+        for p in &poly {
+            let (dx, dy) = (cen[0] - p[0], cen[1] - p[1]);
+            let l = dx.hypot(dy).max(1e-9);
+            for off in [0.55, 1.0] { pool.push(([p[0] + dx / l * off, p[1] + dy / l * off], false)); }
+        }
+        let mut doors: Vec<[f64; 2]> = vec![];
+        for (i, n) in scene.nodes.iter().enumerate() {
+            if !n.class.contains("Door") { continue }
+            let (lo, hi) = bbs[i];
+            let (ex, ey) = (hi[0] - lo[0], hi[1] - lo[1]);
+            if ex.max(ey) < 0.6 || ex.max(ey) > 2.2 || hi[2] - lo[2] < 1.6 { continue }
+            let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+            // near the room outline?
+            let mut dmin = f64::MAX;
+            for k in 0..ext.len() {
+                let (a, b) = (ext[k], ext[(k + 1) % ext.len()]);
+                let (abx, aby) = (b[0] - a[0], b[1] - a[1]);
+                let t = (((c[0] - a[0]) * abx + (c[1] - a[1]) * aby) / (abx * abx + aby * aby).max(1e-12)).clamp(0.0, 1.0);
+                dmin = dmin.min((c[0] - a[0] - t * abx).hypot(c[1] - a[1] - t * aby));
+            }
+            if dmin > 0.5 || doors.iter().any(|d| (d[0] - c[0]).hypot(d[1] - c[1]) < 0.8) { continue }
+            doors.push(c);
+            let nrm = if ex < ey { [1.0, 0.0] } else { [0.0, 1.0] };
+            for (sg, off) in [(1.0, 0.3), (-1.0, 0.3), (1.0, 0.8), (-1.0, 0.8)] {
+                let pp = [c[0] + sg * nrm[0] * off, c[1] + sg * nrm[1] * off];
+                pool.push((pp, !in_poly(pp, &poly)));
+            }
+        }
+        let small = area < 9.0;
+        // free standing spots on a grid (nothing within 25 cm at knee/chest/eye height, floor below, nothing right above)
+        let mut valid: Vec<[f64; 2]> = vec![];
+        {
+            let step = 0.25;
+            let (mut gx, mut gy);
+            gx = x0 + step / 2.0;
+            while gx < x1 {
+                gy = y0 + step / 2.0;
+                while gy < y1 {
+                    let pp = [gx, gy];
+                    if in_poly(pp, &poly) {
+                        let mut ok = true;
+                        'g: for (hh, cl) in [(fz + 0.5, 0.15), (fz + 0.95, 0.25), (fz + 1.45, 0.25)] {
+                            for k in 0..8 {
+                                let a = k as f64 * std::f64::consts::FRAC_PI_4;
+                                if w.cast([pp[0], pp[1], hh], [a.cos(), a.sin(), 0.0], cl).is_some() { ok = false; break 'g }
+                            }
+                        }
+                        if ok { ok = matches!(w.cast([pp[0], pp[1], fz + 1.45], [0.0, 0.0, -1.0], 1.95), Some((_, ti)) if w.floor[ti]) && w.cast([pp[0], pp[1], fz + 1.45], [0.0, 0.0, 1.0], 0.3).is_none() }
+                        if ok { valid.push(pp) }
+                    }
+                    gy += step;
+                }
+                gx += step;
+            }
+        }
+        // people nobody can see from the front (facing a wall in a tight room): shot only small / incidentally
+        let faceless: Vec<bool> = cand.iter().map(|s| {
+            let Some(fc) = s.face else { return false };
+            if !s.person || s.lie { return false }
+            let sc = [(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0];
+            let head = [sc[0], sc[1], s.lo[2] + 0.85 * (s.hi[2] - s.lo[2])];
+            valid.iter().filter(|p| {
+                let (vx, vy) = (p[0] - sc[0], p[1] - sc[1]);
+                let d = vx.hypot(vy);
+                if !(d > 1.3 && d < 4.5 && (vx * fc[0] + vy * fc[1]) / d > 0.3) { return false }
+                let o = [p[0], p[1], fz + 1.4];
+                let dv = [head[0] - o[0], head[1] - o[1], head[2] - o[2]];
+                let dl = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt();
+                match w.cast(o, unit(dv), dl - 0.05) { None => true, Some((_, ti)) => w.keys[w.owner[ti] as usize] == s.key }
+            }).take(3).count() < 3
+        }).collect();
         let mut got: Vec<(V3, V3, String)> = vec![];
         let mut used = vec![0.0f64; cand.len()];
-        let mut tries = 0;
         let mut rej = [0u32; 24];
         let has_people = cand.iter().any(|s| s.person);
-        // per camera: collect up to NV valid candidates, keep the best-scoring one (open view, subject visible, important subject)
-        let mut best: Option<(f64, usize, V3, V3, f64, String)> = None;
-        let mut nvalid = 0;
-        let mut cam_tries = 0;
-        while got.len() < cfg.k && tries < 6000 {
-            if nvalid >= 10 || cam_tries >= 900 {
-                cam_tries = 0;
-                nvalid = 0;
-                match best.take() {
-                    Some((_, si, o, f, lens, _)) => {
-                        let (r, u) = ([f[1], -f[0], 0.0], {
-                            let h = (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-9);
-                            [-f[0] / h * f[2], -f[1] / h * f[2], h]
-                        });
-                        let rn = (r[0] * r[0] + r[1] * r[1]).sqrt().max(1e-9);
-                        let r = [r[0] / rn, r[1] / rn, 0.0];
-                        used[si] += 1.0;
-                        got.push((o, f, cand[si].key.clone()));
-                        let m = [[r[0], u[0], -f[0], o[0]], [r[1], u[1], -f[1], o[1]], [r[2], u[2], -f[2], o[2]], [0.0, 0.0, 0.0, 1.0]];
-                        out.push(json!({"name": format!("cam{}", out.len()), "matrix": m, "lens": lens, "sensor_width": 36, "subject": cand[si].key, "room": rname}));
-                    }
-                    None => { if tries > 3000 { break } }
-                }
-                continue;
-            }
-            tries += 1;
-            cam_tries += 1;
-            // subject: people first, weights decay with use
-            let ws: Vec<f64> = cand.iter().enumerate().map(|(i, s)| if has_people && got.is_empty() && !s.person && cam_tries < 300 { 0.0 } else { s.w / (1.0 + 6.0 * used[i]) }).collect();
-            let si = rng.choice_p(&ws);
-            let s = &cand[si];
-            let sc = [(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0];
-            let hgt = s.hi[2] - s.lo[2];
-            let cz_s = if s.person { s.lo[2] + 0.8 * hgt } else { s.lo[2] + (0.5 * hgt).min(0.9).max(0.3 * hgt) };
-            let c = [sc[0], sc[1], cz_s];
-            let pu = rng.f64();
-            let pos = if pu < 0.75 {
-                let a = rng.uniform(0.0, std::f64::consts::TAU);
-                let r = if pu < 0.35 { rng.uniform(0.7, 2.8) } else { rng.uniform(1.0, 5.5) };
-                [sc[0] + a.cos() * r, sc[1] + a.sin() * r]
-            } else {
-                [rng.uniform(x0, x1), rng.uniform(y0, y1)]
-            };
-            if !in_poly(pos, &poly) { rej[0] += 1; continue }
-            let eye = fz + rng.uniform(1.0, 1.75).min(cz - fz - 0.3);
-            let o = [pos[0], pos[1], eye];
-            // clearance: 8 horizontal rays at 3 heights, floor below must be floor/rug, nothing right above
-            let mut bad = false;
-            'cl: for hh in [fz + 0.3, fz + 0.8, eye] {
-                for k in 0..8 {
-                    let a = k as f64 * std::f64::consts::FRAC_PI_4;
-                    if w.cast([pos[0], pos[1], hh], [a.cos(), a.sin(), 0.0], if cam_tries < 400 { 0.3 } else { 0.2 }).is_some() { bad = true; break 'cl }
-                }
-            }
-            if bad { rej[1] += 1; continue }
-            match w.cast(o, [0.0, 0.0, -1.0], eye - fz + 0.5) {
-                Some((_, ti)) if w.floor[ti] => {}
-                _ => { rej[2] += 1; continue }
-            }
-            if w.cast(o, [0.0, 0.0, 1.0], 0.3).is_some() { rej[3] += 1; continue }
-            if let Some(bk) = backs[si] {
-                let (vx, vy) = (pos[0] - sc[0], pos[1] - sc[1]);
-                let vl = vx.hypot(vy).max(1e-9);
-                if (vx * bk[0] + vy * bk[1]) / vl > 0.3 { rej[12] += 1; continue }
-            }
-            let dx = (s.lo[0] - pos[0]).max(0.0).max(pos[0] - s.hi[0]);
-            let dy = (s.lo[1] - pos[1]).max(0.0).max(pos[1] - s.hi[1]);
-            if dx.hypot(dy) < if cam_tries < 400 { 1.1 } else { 0.6 } { rej[4] += 1; continue }
-            let bearing = (c[1] - pos[1]).atan2(c[0] - pos[0]);
-            let corners = [[s.lo[0], s.lo[1]], [s.hi[0], s.lo[1]], [s.hi[0], s.hi[1]], [s.lo[0], s.hi[1]]];
-            let (mut amin, mut amax) = (f64::MAX, f64::MIN);
-            for cc in corners {
-                let mut d = (cc[1] - pos[1]).atan2(cc[0] - pos[0]) - bearing;
-                while d > std::f64::consts::PI { d -= std::f64::consts::TAU }
-                while d < -std::f64::consts::PI { d += std::f64::consts::TAU }
-                amin = amin.min(d);
-                amax = amax.max(d);
-            }
-            let span = (amax - amin).max(0.05);
-            let frac = rng.uniform(0.3, 0.7);
-            let lens = (18.0 / ((span / 2.0).tan() / frac)).clamp(16.0, 35.0);
-            let lens = (lens * 2.0).round() / 2.0;
-            let tan_h = 18.0 / lens;
-            let tan_v = tan_h * 9.0 / 16.0;
-            let real_frac = (span / 2.0).tan() / tan_h;
-            if !(0.2..=if s.group { 1.5 } else { 1.0 }).contains(&real_frac) { rej[5] += 1; continue }
-            // rule of thirds
-            let tx = rng.uniform(0.2, 0.45) * if rng.bool(0.5) { 1.0 } else { -1.0 };
-            let ty = rng.uniform(-0.25, 0.2);
-            let yaw = bearing + (tx * tan_h).atan();
-            let dh = (c[0] - pos[0]).hypot(c[1] - pos[1]);
-            let elev = (c[2] - eye).atan2(dh);
-            let pitch = (elev - (ty * tan_v).atan()).clamp(-20f64.to_radians(), 5f64.to_radians());
-            let (sy, cy, sp, cp) = (yaw.sin(), yaw.cos(), pitch.sin(), pitch.cos());
-            let f = [cy * cp, sy * cp, sp];
-            let r = [sy, -cy, 0.0];
-            let u = [-cy * sp, -sy * sp, cp];
-            let proj = |p: V3| -> Option<(f64, f64)> {
-                let d = [p[0] - o[0], p[1] - o[1], p[2] - o[2]];
-                let z = d[0] * f[0] + d[1] * f[1] + d[2] * f[2];
-                if z < 0.1 { return None }
-                Some(((d[0] * r[0] + d[1] * r[1]) / z / tan_h, (d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / z / tan_v))
-            };
-            match proj(c) {
-                Some((px, py)) if px.abs() < 0.75 && py.abs() < 0.75 => {}
-                _ => { rej[6] += 1; continue }
-            }
-            // coarse ray grid (stricter near-occluder test first, the spec's 0.6 m / 15% after 350 failed tries)
-            let (near_d, near_f) = if cam_tries < 400 { (0.9, 0.08) } else { (0.6, 0.15) };
-            let (gw, gh) = (16, 9);
-            let (mut near, mut close, mut tot, mut dsum, mut mid, mut wall, mut doorc) = (0, 0, 0, 0.0f64, 0, 0, 0);
-            let (mut furn, mut sa, mut fg, mut bg, mut blk, mut wallall) = (0, 0, 0, 0, 0, 0);
-            for iy in 0..gh {
-                for ix in 0..gw {
-                    let nx = ((ix as f64 + 0.5) / gw as f64) * 2.0 - 1.0;
-                    let ny = 1.0 - ((iy as f64 + 0.5) / gh as f64) * 2.0;
-                    let d = unit([f[0] + r[0] * nx * tan_h + u[0] * ny * tan_v, f[1] + r[1] * nx * tan_h + u[1] * ny * tan_v, f[2] + u[2] * ny * tan_v]);
-                    tot += 1;
-                    if let Some((t, ti)) = w.cast(o, d, 6.0) {
-                        dsum += t;
-                        if t < 1.8 { mid += 1 }
-                        if t < 4.5 && w.door[ti] { doorc += 1 }
-                        if !w.shell[ti] { furn += 1 }
-                        if s.group { if !w.shell[ti] { sa += 1 } } else if w.keys[w.owner[ti] as usize] == s.key { sa += 1 }
-                        if t < 2.2 && !w.floor[ti] && if s.group { w.shell[ti] } else { w.keys[w.owner[ti] as usize] != s.key } { blk += 1 }
-                        if w.keys[w.owner[ti] as usize].contains(".wall") { wallall += 1 }
-                        if t < 2.0 { fg += 1 } else if t > 3.5 { bg += 1 }
-                        if t < 3.0 && w.keys[w.owner[ti] as usize].contains(".wall") { wall += 1 }
-                        if t < 1.2 { close += 1 }
-                        if t < near_d { near += 1 }
+        let mut lvl_hist = [0usize; 7];
+        let tau = std::f64::consts::TAU;
+        let wrap = |mut d: f64| { while d > std::f64::consts::PI { d -= tau } while d < -std::f64::consts::PI { d += tau } d };
+        for slot in 0..cfg.k {
+            // 0 = establishing wide, 1 = medium (people first), 2 = detail
+            let kind = if slot == 0 { 0 } else if slot % 2 == 1 { 1 } else { 2 };
+            let mut chosen: Option<(f64, usize, V3, V3, f64)> = None;
+            'lv: for lv in 0..6usize {
+                // thresholds per relaxation level
+                let (face_min, near_d, near_f, wall_max, key_max, door_max, blk_max, vis_min, inf_min, dist_min, dist_min_p, sp_d, sp_a, mid_max, furn_min, clr) = match lv {
+                    0 => (0.45, 0.9, 0.08, 0.40, 0.32, 0.03, 0.08, 0.5, 8, 1.2, 1.3, 1.2, 25.0, 0.4, 0.12, 0.3),
+                    1 => (0.0, 0.7, 0.12, 0.50, 0.40, 0.05, 0.12, 0.45, 8, 1.0, 1.15, 1.0, 22.0, 0.5, 0.08, 0.28),
+                    2 => (-0.3, 0.6, 0.15, 0.50, 0.50, 0.08, 0.15, 0.35, 7, 0.8, 1.0, 0.9, 20.0, 0.6, 0.04, 0.2),
+                    3 => (-0.5, 0.45, 0.25, 0.50, 0.60, 0.12, 0.20, 0.25, 7, 0.6, 0.8, 0.8, 18.0, 0.7, 0.02, 0.16),
+                    4 => (-1.1, 0.4, 0.30, 0.55, 0.65, 0.15, 0.25, 0.25, 7, 0.6, 0.8, 0.5, 12.0, 0.8, 0.0, 0.16),
+                    _ => (-1.1, 0.4, 0.30, 0.75, 0.80, 0.20, 0.40, 0.2, 0, 0.5, 0.7, 0.4, 5.0, 0.8, 0.0, 0.14),
+                };
+                let (budget, want) = ([260, 170, 170, 130, 130, 130][lv], if lv == 0 { 10 } else { 6 });
+                let mut best: Option<(f64, usize, V3, V3, f64)> = None;
+                let mut nvalid = 0;
+                for _ in 0..budget {
+                    if nvalid >= want { break }
+                    // subject
+                    let ws: Vec<f64> = cand.iter().enumerate().map(|(i, s)| {
+                        if s.group {
+                            return if kind == 0 || lv >= 3 || (sparse && kind > 0) { if kind == 0 { 1.0 } else { 0.5 * s.w } } else { 0.0 };
+                        }
+                        if kind == 0 && lv < 3 { return 0.0 }
+                        if lv == 4 && s.person && cand.iter().any(|q| !q.person && !q.group) { return 0.0 }
+                        let mut w0 = s.w;
+                        if kind == 2 && s.person { w0 *= 0.3 }
+                        if kind == 1 && s.person { w0 *= 1.5 }
+                        if faceless[i] { w0 *= 0.12 }
+                        w0 / (1.0 + 6.0 * used[i])
+                    }).collect();
+                    if ws.iter().sum::<f64>() <= 0.0 { rej[13] += 1; break }
+                    let si = rng.choice_p(&ws);
+                    let s = &cand[si];
+                    let sc = [(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0];
+                    let hgt = s.hi[2] - s.lo[2];
+                    let cz_s = if s.group { fz + 0.9 } else if s.person { s.lo[2] + 0.55 * hgt } else { s.lo[2] + (0.5 * hgt).min(0.9).max(0.3 * hgt) };
+                    let c = [if s.group { cen[0] * 0.5 + sc[0] * 0.5 } else { sc[0] }, if s.group { cen[1] * 0.5 + sc[1] * 0.5 } else { sc[1] }, cz_s];
+                    // candidate camera position
+                    let pu = rng.f64();
+                    let mut outside_ok = false;
+                    let pos = if s.group || kind == 0 {
+                        if pu < 0.6 && !pool.is_empty() {
+                            let (p, o) = pool[rng.choice_idx(pool.len())];
+                            outside_ok = o;
+                            p
+                        } else { near_valid(&valid, [rng.uniform(x0, x1), rng.uniform(y0, y1)], &mut rng) }
+                    } else if pu < 0.75 {
+                        // in front of people / the open side of seating; else anywhere around
+                        let base = if let (Some(fc), true) = (s.face, s.person && !s.lie) { Some(fc[1].atan2(fc[0])) } else { backs[si].map(|b| (-b[1]).atan2(-b[0])) };
+                        let a = match base { Some(b) if rng.bool(0.8) => b + rng.uniform(-1.1, 1.1), _ => rng.uniform(0.0, tau) };
+                        let rmax = (0.7 * area.sqrt() + 0.8).clamp(2.0, 4.2);
+                        let r = if s.person { rng.uniform(1.2, rmax) } else if pu < 0.35 { rng.uniform(0.8, 3.0) } else { rng.uniform(1.2, 5.5) };
+                        let want = [sc[0] + a.cos() * r, sc[1] + a.sin() * r];
+                        near_valid(&valid, want, &mut rng)
+                    } else if pu < 0.85 && !pool.is_empty() {
+                        let (p, o) = pool[rng.choice_idx(pool.len())];
+                        outside_ok = o;
+                        p
                     } else {
-                        dsum += 6.0;
+                        near_valid(&valid, [rng.uniform(x0, x1), rng.uniform(y0, y1)], &mut rng)
+                    };
+                    if !outside_ok && !in_poly(pos, &poly) { rej[0] += 1; continue }
+                    // eye height: 1.2-1.6 m standing, lower for seated subjects and low objects
+                    let eye = if kind == 0 { fz + rng.uniform(1.3, 1.6) } else if s.low || (!s.person && hgt < 0.8) { fz + rng.uniform(1.0, 1.35) } else { fz + rng.uniform(1.2, 1.6) };
+                    let eye = eye.min(cz - 0.35);
+                    let o = [pos[0], pos[1], eye];
+                    // clearance: 8 horizontal rays at 3 heights; floor below
+                    let mut bad = false;
+                    'cl: for (hh, cl) in [(fz + 0.5, clr * 0.5), (fz + 0.95, clr), (eye, clr)] {
+                        for k in 0..8 {
+                            let a = k as f64 * std::f64::consts::FRAC_PI_4;
+                            match w.cast([pos[0], pos[1], hh], [a.cos(), a.sin(), 0.0], cl) {
+                                Some((_, ti)) if outside_ok && w.shell[ti] => {}
+                                Some(_) => { bad = true; break 'cl }
+                                None => {}
+                            }
+                        }
                     }
-                }
-            }
-            if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { rej[7] += 1; continue }
-            let strict = cam_tries < 400;
-            let (furn_f, sa_f, doorf, blk_f, wall_f) = (furn as f64 / tot as f64, sa as f64 / tot as f64, doorc as f64 / tot as f64, blk as f64 / tot as f64, wallall as f64 / tot as f64);
-            if strict && (doorf > 0.03 || blk_f > 0.10 || wall_f > 0.45 || (sa_f > 0.5 && !s.person && !s.group) || furn_f < 0.12 || sa_f < if s.person { 0.015 } else { 0.04 } || mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { rej[8] += 1; continue }
-            // the subject box should be mostly inside the frame
-            let inf = (0..8).filter(|k| {
-                let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
-                matches!(proj(q), Some((px, py)) if px.abs() < 1.02 && py.abs() < 1.02)
-            }).count();
-            if strict && inf < 5 && !s.group { rej[9] += 1; continue }
-            // subject visibility: 3x3x3 sample points
-            let (mut vis, mut n) = (0, 0);
-            for ix in 0..3 {
-                for iy in 0..3 {
-                    for iz in 0..3 {
-                        let q = [s.lo[0] + (s.hi[0] - s.lo[0]) * (0.1 + 0.4 * ix as f64), s.lo[1] + (s.hi[1] - s.lo[1]) * (0.1 + 0.4 * iy as f64), s.lo[2] + (s.hi[2] - s.lo[2]) * (0.1 + 0.4 * iz as f64)];
-                        n += 1;
-                        let Some((px, py)) = proj(q) else { continue };
-                        if px.abs() > 1.0 || py.abs() > 1.0 { continue }
-                        let d = [q[0] - o[0], q[1] - o[1], q[2] - o[2]];
-                        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                        let ok = match w.cast(o, unit(d), dist - 0.02) {
-                            None => true,
-                            Some(_) if s.group => true,
-                            Some((_, ti)) => w.keys[w.owner[ti] as usize] == s.key,
-                        };
-                        if ok { vis += 1 }
+                    if bad { rej[1] += 1; continue }
+                    match w.cast(o, [0.0, 0.0, -1.0], eye - fz + 0.5) {
+                        Some((_, ti)) if w.floor[ti] || outside_ok => { let _ = ti; }
+                        _ => { rej[2] += 1; continue }
                     }
+                    if w.cast(o, [0.0, 0.0, 1.0], 0.3).is_some() { rej[3] += 1; continue }
+                    if lv < 4 { if let Some(bk) = backs[si] {
+                        let (vx, vy) = (pos[0] - sc[0], pos[1] - sc[1]);
+                        let vl = vx.hypot(vy).max(1e-9);
+                        if (vx * bk[0] + vy * bk[1]) / vl > if lv == 0 { 0.3 } else { 0.6 } { rej[12] += 1; continue }
+                    } }
+                    // people: face visible (camera in front or 3/4)
+                    let mut face_cos = 1.0;
+                    if let (Some(fc), true) = (s.face, s.person && !s.lie) {
+                        let (vx, vy) = (pos[0] - sc[0], pos[1] - sc[1]);
+                        face_cos = (vx * fc[0] + vy * fc[1]) / vx.hypot(vy).max(1e-9);
+                        if face_cos < face_min { rej[14] += 1; continue }
+                    }
+                    let dx = (s.lo[0] - pos[0]).max(0.0).max(pos[0] - s.hi[0]);
+                    let dy = (s.lo[1] - pos[1]).max(0.0).max(pos[1] - s.hi[1]);
+                    if !s.group && dx.hypot(dy) < if s.person { if faceless[si] && lv < 5 { f64::max(dist_min_p, 2.0) } else { dist_min_p } } else { dist_min } { rej[4] += 1; continue }
+                    let bearing = (c[1] - pos[1]).atan2(c[0] - pos[0]);
+                    // lens: size the subject box to the frame fraction wanted by the shot type
+                    let (flo, fhi) = match (kind, s.group) { (0, _) | (_, true) => (0.6, 1.0), (1, _) => (0.4, 0.72), _ => (0.62, 0.92) };
+                    let frac = rng.uniform(flo, fhi);
+                    let (lmin, lmax) = if kind == 0 || s.group { (if small { 12.0 } else { 16.0 }, if small { 20.0 } else { 24.0 }) } else { (if small { 12.0 } else { 14.0 }, if kind == 1 { 32.0 } else { 40.0 }) };
+                    let lens = if s.group {
+                        rng.uniform(lmin, lmax)
+                    } else {
+                        let corners = [[s.lo[0], s.lo[1]], [s.hi[0], s.lo[1]], [s.hi[0], s.hi[1]], [s.lo[0], s.hi[1]]];
+                        let (mut amin, mut amax) = (f64::MAX, f64::MIN);
+                        let (mut emin, mut emax) = (f64::MAX, f64::MIN);
+                        for cc in corners {
+                            let d = wrap((cc[1] - pos[1]).atan2(cc[0] - pos[0]) - bearing);
+                            amin = amin.min(d); amax = amax.max(d);
+                            let h = (cc[0] - pos[0]).hypot(cc[1] - pos[1]).max(0.05);
+                            for z in [s.lo[2], s.hi[2]] { let e = (z - eye).atan2(h); emin = emin.min(e); emax = emax.max(e); }
+                        }
+                        let th_h = ((amax - amin).max(0.05) / 2.0).tan() / frac;
+                        let th_v = ((emax - emin).max(0.05) / 2.0).tan() / frac * 16.0 / 9.0;
+                        18.0 / th_h.max(th_v)
+                    };
+                    let lens = ((lens.clamp(lmin, lmax)) * 2.0).round() / 2.0;
+                    let tan_h = 18.0 / lens;
+                    let tan_v = tan_h * 9.0 / 16.0;
+                    // rule of thirds, lead room: person looks into the frame
+                    let mut tx = rng.uniform(0.12, 0.38) * if rng.bool(0.5) { 1.0 } else { -1.0 };
+                    if kind == 0 { tx *= 0.5 }
+                    let ty = rng.uniform(-0.12, 0.12);
+                    let yaw = bearing + (tx * tan_h).atan();
+                    let dh = (c[0] - pos[0]).hypot(c[1] - pos[1]);
+                    let elev = (c[2] - eye).atan2(dh);
+                    let pitch = (elev - (ty * tan_v).atan()).clamp(-5f64.to_radians(), 4f64.to_radians());
+                    let (sy, cy, sp, cp) = (yaw.sin(), yaw.cos(), pitch.sin(), pitch.cos());
+                    let f = [cy * cp, sy * cp, sp];
+                    let r = [sy, -cy, 0.0];
+                    let u = [-cy * sp, -sy * sp, cp];
+                    let proj = |p: V3| -> Option<(f64, f64)> {
+                        let d = [p[0] - o[0], p[1] - o[1], p[2] - o[2]];
+                        let z = d[0] * f[0] + d[1] * f[1] + d[2] * f[2];
+                        if z < 0.1 { return None }
+                        Some(((d[0] * r[0] + d[1] * r[1]) / z / tan_h, (d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / z / tan_v))
+                    };
+                    match proj(c) {
+                        Some((px, py)) if px.abs() < 0.8 && py.abs() < 0.8 => {}
+                        _ => { rej[6] += 1; continue }
+                    }
+                    // subject box in the frame: fully inside (people with headroom), size within the shot's range
+                    let (mut inf, mut allp) = (0, 0);
+                    let (mut bx0, mut bx1, mut by0, mut by1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+                    for k in 0..8 {
+                        let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
+                        if let Some((px, py)) = proj(q) {
+                            allp += 1;
+                            bx0 = bx0.min(px); bx1 = bx1.max(px); by0 = by0.min(py); by1 = by1.max(py);
+                            if px.abs() < 0.98 && py.abs() < 0.98 { inf += 1 }
+                        }
+                    }
+                    if !s.group {
+                        if inf < inf_min { rej[9] += 1; continue }
+                        let sz = ((bx1 - bx0) / 2.0).max((by1 - by0) / 2.0 * 1.0);
+                        if lv < 4 && allp == 8 {
+                            let lo_ok = match (kind, lv) { (1, 0) => 0.33, (1, _) => 0.25, (_, 0) => 0.5, _ => 0.35 };
+                            if sz < lo_ok && !(lv > 1) { rej[5] += 1; continue }
+                        }
+                        if s.person && lv < 5 && (by1 > 0.93 || by0 < -0.97 || bx0 < -0.97 || bx1 > 0.97) { rej[15] += 1; continue }
+                        if s.person && lv < 5 && (by1 - by0) / 2.0 < if lv == 0 { 0.42 } else { 0.28 } { rej[16] += 1; continue }
+                    }
+                    // other people must not be cut by the frame edge
+                    if lv < 4 {
+                        let mut cut = false;
+                        for q in cand.iter().filter(|q| q.person && q.key != s.key) {
+                            let (mut ins, mut tot_p) = (0, 0);
+                            for k in 0..8 {
+                                let pq = [if k & 1 == 0 { q.lo[0] } else { q.hi[0] }, if k & 2 == 0 { q.lo[1] } else { q.hi[1] }, if k & 4 == 0 { q.lo[2] } else { q.hi[2] }];
+                                tot_p += 1;
+                                match proj(pq) { Some((px, py)) => if px.abs() < 1.0 && py.abs() < 1.0 { ins += 1 }, None => {} }
+                            }
+                            if ins > 0 && ins < tot_p { cut = true }
+                        }
+                        if cut { rej[23] += 1; continue }
+                    }
+                    // coarse ray grid
+                    let (gw, gh) = (16, 9);
+                    let (mut near, mut close, mut tot, mut dsum, mut mid, mut doorc) = (0, 0, 0, 0.0f64, 0, 0);
+                    let (mut furn, mut sa, mut fg, mut bg, mut blk, mut wallall) = (0, 0, 0, 0, 0, 0);
+                    let mut kc = vec![0u32; w.keys.len()];
+                    for iy in 0..gh {
+                        for ix in 0..gw {
+                            let nx = ((ix as f64 + 0.5) / gw as f64) * 2.0 - 1.0;
+                            let ny = 1.0 - ((iy as f64 + 0.5) / gh as f64) * 2.0;
+                            let d = unit([f[0] + r[0] * nx * tan_h + u[0] * ny * tan_v, f[1] + r[1] * nx * tan_h + u[1] * ny * tan_v, f[2] + u[2] * ny * tan_v]);
+                            tot += 1;
+                            if let Some((t, ti)) = w.cast(o, d, 6.0) {
+                                dsum += t;
+                                let ko = w.owner[ti] as usize;
+                                if t < 1.8 { mid += 1 }
+                                if t < 4.5 && t > 0.7 && w.door[ti] { doorc += 1 }
+                                if !w.shell[ti] { furn += 1; kc[ko] += 1 }
+                                if s.group { if !w.shell[ti] { sa += 1 } } else if w.keys[ko] == s.key { sa += 1 }
+                                if t < 1.8 && !w.floor[ti] && !w.keys[ko].contains(".wall") && !w.keys[ko].contains(".ceiling") && if s.group { w.shell[ti] } else { w.keys[ko] != s.key } { blk += if nx.abs() < 0.6 { 2 } else { 1 } }
+                                if w.keys[ko].contains(".wall") { wallall += 1 }
+                                if t < 2.0 { fg += 1 } else if t > 3.5 { bg += 1 }
+                                if t < 1.2 { close += 1 }
+                                if t < near_d { near += 1 }
+                            } else {
+                                dsum += 6.0;
+                            }
+                        }
+                    }
+                    let tf = tot as f64;
+                    if near as f64 > near_f * tf || close as f64 > 0.6 * tf { rej[7] += 1; continue }
+                    let (furn_f, sa_f, doorf, blk_f, wall_f) = (furn as f64 / tf, sa as f64 / tf, doorc as f64 / tf, blk as f64 / tf, wallall as f64 / tf);
+                    let sa_min = if s.person { 0.015 } else if s.group { 0.12 } else { 0.04 } * [1.0, 0.6, 0.4, 0.3, 0.2][lv.min(4)];
+                    let big_other = w.keys.iter().enumerate().any(|(ki, kk)| kc[ki] as f64 / tf > key_max && !(s.group || *kk == s.key));
+                    let big_subj = !s.group && !s.person && sa_f > [0.5, 0.55, 0.6, 0.7, 0.7, 0.8][lv.min(5)];
+                    let fails = [doorf > door_max, blk_f > blk_max, wall_f > wall_max, big_other, big_subj, furn_f < furn_min, sa_f < sa_min, mid as f64 > mid_max * tf];
+                    if fails.iter().any(|&b| b) { rej[8] += 1; for (i, b) in fails.iter().enumerate() { if *b && i < 6 { rej[17 + i] += 1 } } continue }
+                    // subject visibility: 3x3x3 sample points
+                    let (mut vis, mut n) = (0, 0);
+                    for ix in 0..3 {
+                        for iy in 0..3 {
+                            for iz in 0..3 {
+                                let q = [s.lo[0] + (s.hi[0] - s.lo[0]) * (0.1 + 0.4 * ix as f64), s.lo[1] + (s.hi[1] - s.lo[1]) * (0.1 + 0.4 * iy as f64), s.lo[2] + (s.hi[2] - s.lo[2]) * (0.1 + 0.4 * iz as f64)];
+                                n += 1;
+                                let Some((px, py)) = proj(q) else { continue };
+                                if px.abs() > 1.0 || py.abs() > 1.0 { continue }
+                                let d = [q[0] - o[0], q[1] - o[1], q[2] - o[2]];
+                                let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                                let ok = match w.cast(o, unit(d), dist - 0.02) {
+                                    None => true,
+                                    Some(_) if s.group => true,
+                                    Some((_, ti)) => w.keys[w.owner[ti] as usize] == s.key,
+                                };
+                                if ok { vis += 1 }
+                            }
+                        }
+                    }
+                    if (vis as f64) < vis_min * n as f64 { rej[10] += 1; continue }
+                    // spread against the cameras already chosen
+                    if got.iter().any(|(p, ff, sk)| {
+                        let dd = ((p[0] - o[0]).powi(2) + (p[1] - o[1]).powi(2)).sqrt();
+                        let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
+                        dd < sp_d && ang < sp_a || (*sk == s.key && ang < 1.6 * sp_a && dd < 2.0 * sp_d) || ang < 8.0
+                    }) { rej[11] += 1; continue }
+                    let px = proj(c).map_or(0.0, |p| p.0);
+                    let lead = match s.face { Some(fc) if s.person && !s.lie => if px * (fc[0] * r[0] + fc[1] * r[1]) < 0.0 { 0.3 } else { 0.0 }, _ => 0.0 };
+                    let score = dsum / tf / 6.0 + 0.8 * inf as f64 / 8.0 - 3.0 * doorf - 3.0 * blk_f - 2.0 * (wall_f - 0.2).max(0.0) - 0.8 * pitch.abs() / 0.1 - 1.5 * (sa_f - 0.4).max(0.0) + 1.0 * (sa_f / 0.2).min(1.0)
+                        + 0.8 * (furn_f / 0.4).min(1.0) + if fg as f64 > 0.1 * tf && bg as f64 > 0.1 * tf { 0.3 } else { 0.0 } - 0.5 * mid as f64 / tf + 0.8 * vis as f64 / n as f64
+                        + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64() - 0.6 * lv as f64 + if s.person { 1.2 * face_cos.max(-0.5) + lead } else { 0.0 }
+                        + if kind == 0 { 0.5 * (dsum / tf / 6.0) } else { 0.0 };
+                    nvalid += 1;
+                    if best.as_ref().map_or(true, |b| score > b.0) { best = Some((score, si, o, f, lens)) }
                 }
+                if std::env::var("CAMDBG").map_or(false, |v| v == "2") { eprintln!("  slot{slot} lv{lv} valid={nvalid} rej={:?}", &rej[..24]); }
+                if best.is_some() { chosen = best; lvl_hist[lv] += 1; break 'lv }
             }
-            if (vis as f64) < 0.5 * n as f64 { rej[10] += 1; continue }
-            // spread
-            if got.iter().any(|(p, ff, sk)| {
-                let dd = ((p[0] - o[0]).powi(2) + (p[1] - o[1]).powi(2)).sqrt();
-                let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
-                if strict { dd < 1.2 || (*sk == s.key && ang < 40.0) || ang < 20.0 } else { dd < 0.7 || ang < 10.0 }
-            }) { rej[11] += 1; continue }
-            let score = dsum / tot as f64 / 6.0 + 0.3 * inf as f64 / 8.0 - 0.5 * wall as f64 / tot as f64 - 6.0 * doorf - 3.0 * blk_f - 1.0 * (wall_f - 0.3).max(0.0) - 1.5 * (sa_f - 0.35).max(0.0) + 1.0 * (sa_f / 0.2).min(1.0) + 0.8 * (furn_f / 0.4).min(1.0) + if fg as f64 > 0.1 * tot as f64 && bg as f64 > 0.1 * tot as f64 { 0.3 } else { 0.0 } - 0.5 * mid as f64 / tot as f64 - if strict { 0.0 } else { 1.0 } + 0.8 * vis as f64 / n as f64 + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64();
-            nvalid += 1;
-            if best.as_ref().map_or(true, |b| score > b.0) { best = Some((score, si, o, f, lens, s.key.clone())) }
+            let (si, o, f, lens) = match chosen {
+                Some((_, si, o, f, lens)) => (si, o, f, lens),
+                None => {
+                    // last resort: a corner wide shot from the polygon vertex pulled in, farthest from earlier cameras
+                    lvl_hist[6] += 1;
+                    let mut bestp: Option<(f64, [f64; 2])> = None;
+                    for (p, _) in pool.iter().filter(|(_, o)| !*o) {
+                        let dmin = got.iter().map(|(q, _, _)| (q[0] - p[0]).hypot(q[1] - p[1])).fold(f64::MAX, f64::min);
+                        let sc = dmin.min(5.0) + (cen[0] - p[0]).hypot(cen[1] - p[1]) * 0.5;
+                        if bestp.map_or(true, |b| sc > b.0) { bestp = Some((sc, *p)) }
+                    }
+                    let p = bestp.map_or(cen, |b| b.1);
+                    let o = [p[0], p[1], (fz + 1.4).min(cz - 0.35)];
+                    let g = &cand[gi];
+                    let tgt = [(g.lo[0] + g.hi[0]) / 2.0, (g.lo[1] + g.hi[1]) / 2.0];
+                    let tgt = if (tgt[0] - p[0]).hypot(tgt[1] - p[1]) < 0.5 { cen } else { tgt };
+                    let (dx, dy) = (tgt[0] - p[0], tgt[1] - p[1]);
+                    let dh = dx.hypot(dy).max(1e-6);
+                    let pitch = ((fz + 0.9 - o[2]).atan2(dh)).clamp(-5f64.to_radians(), 4f64.to_radians());
+                    (gi, o, [dx / dh * pitch.cos(), dy / dh * pitch.cos(), pitch.sin()], 14.0)
+                }
+            };
+            let (r, u) = ([f[1], -f[0], 0.0], {
+                let h = (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-9);
+                [-f[0] / h * f[2], -f[1] / h * f[2], h]
+            });
+            let rn = (r[0] * r[0] + r[1] * r[1]).sqrt().max(1e-9);
+            let r = [r[0] / rn, r[1] / rn, 0.0];
+            used[si] += 1.0;
+            got.push((o, f, cand[si].key.clone()));
+            let m = [[r[0], u[0], -f[0], o[0]], [r[1], u[1], -f[1], o[1]], [r[2], u[2], -f[2], o[2]], [0.0, 0.0, 0.0, 1.0]];
+            out.push(json!({"name": format!("cam{}", out.len()), "matrix": m, "lens": lens, "sensor_width": 36, "subject": cand[si].key, "room": rname}));
         }
-        if std::env::var("CAMDBG").is_ok() { eprintln!("CAMDBG {rname} got={} tries={tries} rej={:?}", got.len(), &rej[..13]); }
+        let _ = has_people;
+        if std::env::var("CAMDBG").is_ok() { eprintln!("CAMDBG {rname} area={area:.1} got={} levels={:?} rej={:?}", got.len(), lvl_hist, &rej[..24]); }
     }
     out
 }
