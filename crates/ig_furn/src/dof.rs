@@ -132,7 +132,7 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     let proj_b = projected(&b_tris, nb, origin_b);
     let (Some(proj_a), Some(proj_b)) = (proj_a, proj_b) else { return false };
     let res = if g.check_z {
-        if std::env::var("STAB").is_ok() && name.contains("WallArt") || name.contains("KitchenSpace") { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
+        if std::env::var("STAB").is_ok() && (name.contains("WallArt") || name.contains("KitchenSpace")) { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
         shp::within(&proj_a, &shp::buffer(&proj_b, 1e-2))
     } else {
         // rotate so the projection of +z becomes the x axis; compare extents along y
