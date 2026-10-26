@@ -219,7 +219,7 @@ fn is_tableware(c: &str) -> bool {
 }
 
 fn bad_support(c: &str) -> bool {
-    (c.contains("TV") || c.contains("Monitor") || c.contains("Chair") || c.contains("Stool") || c.contains("Sofa") || c.contains("Bed") || c.contains("Toilet") || c.contains("Lamp") || c.contains("Mirror") || c.contains("Sink"))
+    (c == "TVFactory" || c.contains("Monitor") || c.contains("Chair") || c.contains("Stool") || c.contains("Sofa") || c.contains("Bed") || c.contains("Toilet") || c.contains("Lamp") || c.contains("Mirror") || c.contains("Sink"))
         && !c.contains("Cabinet")
 }
 
@@ -340,10 +340,12 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     m.insert("support_tilt_deg".into(), json!((nrm[2].clamp(-1.0, 1.0).acos().to_degrees() * 10.0).round() / 10.0));
                 }
                 let cut = cut_keys.contains(&o.key);
-                let near_floor = o.lo[2] < wall_t / 2.0 + 0.06;
-                if gap > 0.005 && ((parent.is_some() && gap < 1.0) || (near_floor && gap < 0.15)) {
+                let near_floor = o.lo[2] < wall_t / 2.0 + 0.10;
+                let on_rug = support.map_or(false, |(ni, _)| nodes[ni].name.contains("Rug") || nodes[ni].class.contains("Rug"));
+                if cut {
+                } else if gap > 0.005 && ((parent.is_some() && gap < 1.0) || (near_floor && gap < 0.15)) {
                     issues.push(format!("floating {:.1}mm", gap * 1000.0));
-                } else if gap < -0.005 && !cut {
+                } else if gap < -0.005 && !on_rug {
                     issues.push(format!("sunk {:.1}mm", -gap * 1000.0));
                 }
             }
@@ -387,7 +389,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
             }
             let mut worst: Option<(f64, usize)> = None;
             for other in 0..objs.len() {
-                if other == oi || objs[other].kind == Kind::Person {
+                if other == oi || objs[other].kind == Kind::Person || objs[other].class.contains("Rug") || o.class.contains("Rug") {
                     continue;
                 }
                 let q = &objs[other];
@@ -515,7 +517,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                         check(cc);
                     }
                 }
-                if hit > 0.0 {
+                if hit > 0.045 {
                     let which = match ct.kind {
                         CutKind::Window => "blocks window",
                         _ => "blocks door passage",

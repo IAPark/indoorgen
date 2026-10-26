@@ -240,7 +240,14 @@ fn main() {
     {
         let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
         if std::env::var_os("NO_SNAP").is_none() {
-            let sn = indoorgen::snap::snap_children(&mut g.state, &visuals, &cut_keys, g.c.wall_thickness / 2.0, 0.30, 0.03);
+            // repeated: an item buried in a double board first rests on the inner board, the next pass finds the real top
+            let mut sn = vec![];
+            for _ in 0..3 {
+                let one = indoorgen::snap::snap_children(&mut g.state, &visuals, &cut_keys, g.c.wall_thickness / 2.0, 0.30, 0.03);
+                let moved = one.iter().any(|s| s.removed || s.dz.abs() > 1e-4);
+                sn.extend(one);
+                if !moved { break }
+            }
             if std::env::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm{}", s.key, s.dz * 1000.0, if s.removed { " REMOVED" } else { "" }); } }
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }

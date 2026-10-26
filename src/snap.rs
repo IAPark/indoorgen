@@ -39,7 +39,7 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
         visuals[k].parts.iter().any(|_| true) && {
             let m = mat_of(&state.objs[k].pose);
             let z = visuals[k].parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| m.apply(*q)[2])).fold(f64::MAX, f64::min);
-            z > floor_z - 0.03 && z < floor_z + 0.05
+            z > floor_z - 0.03 && z < floor_z + 0.10
         }
     };
     let floor_keys: Vec<String> = keys.iter().filter(|k| on_floor(k)).cloned().collect();
@@ -136,11 +136,23 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
         let cls = &state.objs[k].generator.as_ref().unwrap().class;
         // small tabletop-style items that end up with nothing plausible under them are removed
         let removable = parent.contains_key(k) && size_max < 0.6 && !(cls.contains("Lamp") || cls.contains("Light") || cls.contains("Mirror"));
-        if !buried {
+        // lift out of a board first when buried; items inside a closed cabinet body (no board above them to lift onto) just drop onto the
+        // surface below like the others
+        let mut buried_lift = f64::MAX;
+        if buried {
+            for c in &contacts {
+                if let Some((z, _, _)) = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.25]) {
+                    if z > c[2] + 0.005 {
+                        buried_lift = buried_lift.min(c[2] - z);
+                    }
+                }
+            }
+        }
+        if !buried || buried_lift == f64::MAX {
             for c in &contacts {
                 let mut best = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.03]).map(|h| h.0);
                 // the floor is a support too for anything standing within a few cm of it
-                if c[2] - floor_z < 0.08 && c[2] - floor_z > -0.03 && best.map_or(true, |z| z < floor_z) {
+                if c[2] - floor_z < 0.12 && c[2] - floor_z > -0.03 && best.map_or(true, |z| z < floor_z) {
                     best = Some(floor_z);
                 }
                 if let Some(z) = best {
@@ -148,6 +160,7 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
                 }
             }
         }
+        if buried && buried_lift != f64::MAX { gap = f64::MAX }
         if gap == f64::MAX {
             // nothing below (or buried in a shelf board / plinth: the placeholder bottom lies below the visible board): lift onto the first
             // surface above its contact points within 25 cm
