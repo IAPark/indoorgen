@@ -749,7 +749,12 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
             u -= w;
         }
         let s = slots.remove(idx);
-        let avatar = rng.randint(0, navatar as i64) as usize;
+        let mut avatar = rng.randint(0, navatar as i64) as usize;
+        // no identical twins: step to the next avatar not already in the scene
+        for _ in 0..navatar {
+            if !pl.placed.iter().any(|p| p.avatar == avatar) { break; }
+            avatar = (avatar + 1) % navatar;
+        }
         let pseed = rng.next_u64() % 1_000_000;
         if let Some(p) = pl.fit(&s, avatar, pseed, 0.012) {
             if dbg {
