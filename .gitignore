@@ -9,3 +9,6 @@ STATUS.txt
 /local-data/
 /assets/
 __pycache__/
+/web/samples/
+/web/pkg/
+/web/dist/

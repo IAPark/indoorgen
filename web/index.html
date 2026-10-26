@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Indoorgen - procedural rooms in your browser</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/" } }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="panel">
+  <h1>Indoorgen</h1>
+  <div class="row">
+    <label>Seed</label>
+    <input id="seed" type="number" min="0" step="1" value="5">
+    <button id="rand" title="random seed">&#x1F3B2;</button>
+  </div>
+  <div class="row">
+    <label>Room</label>
+    <select id="room">
+      <option>Bedroom</option><option>LivingRoom</option><option>Kitchen</option>
+      <option>DiningRoom</option><option>Bathroom</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Clutter</label>
+    <input id="mess" type="range" min="0" max="1" step="0.05" value="0.5">
+    <span id="messv">0.5</span>
+  </div>
+  <div class="row"><label>Cloth</label><input id="cloth" type="checkbox" checked></div>
+  <button id="gen" class="primary">Generate</button>
+  <div id="status">idle</div>
+  <hr>
+  <div class="row">
+    <label>View</label>
+    <select id="cams"></select>
+  </div>
+  <div class="btns">
+    <button id="top">Top-down</button>
+    <button id="walk">Walk (WASD)</button>
+    <button id="ceil">Hide ceiling</button>
+  </div>
+  <hr>
+  <div class="btns">
+    <label class="file">Load .glb<input id="file" type="file" accept=".glb,.gltf,.json" multiple hidden></label>
+    <button id="dl" disabled>Download .glb</button>
+  </div>
+  <div id="info"></div>
+</div>
+<div id="help">drag: orbit / right-drag: pan / wheel: zoom. Walk: click view, WASD + mouse, Esc to leave</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

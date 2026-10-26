@@ -1,0 +1,28 @@
+// Generation worker. Messages in:  {type:'init', wasm?:ArrayBuffer}  {type:'gen', id, seed, room, opts}
+// Messages out: {type:'status', text} {type:'ready'} {type:'initfail', error} {type:'done', id, glb:ArrayBuffer, ms} {type:'fail', id, error}
+let gen = null;
+
+async function init(wasmBytes) {
+  const mod = await import('./pkg/ig_wasm.js');
+  postMessage({ type: 'status', text: 'compiling wasm...' });
+  await mod.default(wasmBytes ? { module_or_path: wasmBytes } : undefined);
+  gen = mod.generate;
+}
+
+self.onmessage = async (e) => {
+  const m = e.data;
+  try {
+    if (m.type === 'init') {
+      await init(m.wasm);
+      postMessage({ type: 'ready' });
+    } else if (m.type === 'gen') {
+      const t0 = performance.now();
+      postMessage({ type: 'status', text: `generating ${m.room} seed ${m.seed}...` });
+      const out = gen(m.seed >>> 0, m.room, JSON.stringify(m.opts));
+      const buf = out.buffer.byteLength === out.byteLength ? out.buffer : out.slice().buffer;
+      postMessage({ type: 'done', id: m.id, glb: buf, ms: performance.now() - t0 }, [buf]);
+    }
+  } catch (err) {
+    postMessage({ type: m.type === 'init' ? 'initfail' : 'fail', id: m.id, error: String(err && err.message || err) });
+  }
+};
