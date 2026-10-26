@@ -237,7 +237,8 @@ fn main() {
             .par_iter()
             .map(|(k, gen)| {
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
-                let a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+                let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+                indoorgen::budget::apply_asset(&mut a);
                 indoorgen::assets::set_unseeded(None);
                 ((*k).clone(), a)
             })
@@ -477,6 +478,7 @@ fn main() {
     }
     if no_glb { return; }
     lap("qc done");
+    { let tb = std::time::Instant::now(); let (a, b, k) = indoorgen::budget::apply(&mut scene); if a > 0 { eprintln!("BUDGET tris {a} -> {b} ({k} nodes simplified) in {:.1}s", tb.elapsed().as_secs_f64()); } }
     scene.write_glb(&out).unwrap();
     lap("glb written");
     if cams_k > 0 { add_cameras(&room, &scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }

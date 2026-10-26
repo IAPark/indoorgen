@@ -8,7 +8,7 @@ repository = "https://github.com/OWNER/indoorgen"
 readme = "README.md"
 
 [workspace]
-members = ["crates/*", "dev"]
+members = ["crates/*", "dev", "tmp/dl"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -30,6 +30,7 @@ robust = "1.2"
 cc = "1"
 
 [dependencies]
+meshopt = "0.7"
 geos = { workspace = true }
 indexmap = { workspace = true }
 nalgebra = { workspace = true }
