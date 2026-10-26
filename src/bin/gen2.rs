@@ -92,6 +92,27 @@ fn main() {
     let t = std::time::Instant::now();
     let mut g = generate(&Options { seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps("STEPS_L", dl), steps_medium: steps("STEPS_M", dm), steps_small: steps("STEPS_S", ds) }, &assets, &prog);
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
+    // dense program: every extra shelf gets filled with NatureShelfTrinkets (~250k triangles each; 120-200 per house took
+    // 1-2 min of build time and most of the glb): at most 3 per shelf piece and 40 per house
+    if !orig_prog {
+        let (per_parent, total) = (steps("TRINKETS_PER_SHELF", 3), steps("TRINKETS_MAX", 40));
+        let mut keys: Vec<String> = g.state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |gg| gg.class == "NatureShelfTrinketsFactory")).map(|(k, _)| k.clone()).collect();
+        keys.sort();
+        let mut per: std::collections::BTreeMap<String, usize> = Default::default();
+        let (mut kept, mut gone) = (0usize, 0usize);
+        for k in keys {
+            let parent = g.state.objs[&k].relations.iter().map(|r| r.target.clone()).find(|t| g.state.objs.get(t).map_or(false, |o| o.generator.is_some())).unwrap_or_default();
+            let n = per.entry(parent).or_default();
+            if *n >= per_parent || kept >= total {
+                g.state.objs.shift_remove(&k);
+                gone += 1;
+            } else {
+                *n += 1;
+                kept += 1;
+            }
+        }
+        if gone > 0 { eprintln!("TRINKETS kept {kept}, removed {gone}"); }
+    }
     if std::env::var("EVAL").is_ok() {
         let (prog, _) = indoorgen::pipeline::load_program(seed, &prog);
         let mut memo = indoorgen::furn::eval::Memo::new(&prog, None);
