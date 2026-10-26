@@ -382,3 +382,93 @@ pub fn remove_overlapping_rugs(state: &mut State, visuals: &HashMap<String, crat
     for k in &dead { state.objs.shift_remove(k); }
     dead
 }
+
+/// Furniture whose VISIBLE mesh pokes through a wall (the solver placed the python placeholder flush with the wall, the real asset is
+/// deeper, e.g. a bed headboard): move it back into its room along the wall normals, at most `max_push`, unless the move makes it
+/// overlap other furniture. Objects resting on it move along. `rooms` = inner room polygons (wall faces). Returns (key, dx, dy).
+pub fn push_out_of_walls(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, rooms: &[Vec<[f64; 2]>], max_push: f64) -> Vec<(String, f64, f64)> {
+    let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
+    let wall_bound = |c: &str| ["Rug", "Door", "Window", "Curtain", "WallArt", "Mirror", "Light", "Lamp", "Shelf", "Cabinet", "KitchenSpace", "Bookcase"].iter().any(|e| c.contains(e));
+    let in_poly = |p: [f64; 2], poly: &[[f64; 2]]| -> bool {
+        let (mut c, n) = (false, poly.len());
+        let mut j = n - 1;
+        for i in 0..n {
+            let (a, b) = (poly[i], poly[j]);
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] { c = !c; }
+            j = i;
+        }
+        c
+    };
+    let mut keys: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.is_some() && visuals.contains_key(*k)).map(|(k, _)| k.clone()).collect();
+    keys.sort();
+    let parent: HashMap<String, String> = keys.iter().filter_map(|k| state.objs[k].relations.iter().find(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some()) && r.target != *k).map(|r| (k.clone(), r.target.clone()))).collect();
+    let world_box = |state: &State, k: &str| -> ([f64; 3], [f64; 3]) {
+        let m = mat_of(&state.objs[k].pose);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for p in &visuals[k].parts { for q in &p.mesh.pos { let w = m.apply(*q); for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); } } }
+        (lo, hi)
+    };
+    let mut out = vec![];
+    for k in &keys {
+        let cls = state.objs[k].generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
+        if parent.contains_key(k) || wall_bound(&cls) { continue }
+        let m = mat_of(&state.objs[k].pose);
+        let verts: Vec<[f64; 3]> = visuals[k].parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| m.apply(*q))).filter(|v| v[2] < 2.6).collect();
+        if verts.is_empty() { continue }
+        let (cx, cy) = verts.iter().fold((0.0, 0.0), |a, v| (a.0 + v[0], a.1 + v[1]));
+        let c = [cx / verts.len() as f64, cy / verts.len() as f64];
+        let Some(poly) = rooms.iter().find(|p| p.len() > 2 && in_poly(c, p)) else { continue };
+        // per wall edge: the deepest vertex beyond it
+        let n = poly.len();
+        let mut depth = vec![0.0f64; n];
+        for v in &verts {
+            let p = [v[0], v[1]];
+            if in_poly(p, poly) { continue }
+            let (mut best, mut bi) = (f64::MAX, 0);
+            for i in 0..n {
+                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                let (ab, ap) = ([b[0] - a[0], b[1] - a[1]], [p[0] - a[0], p[1] - a[1]]);
+                let l2 = ab[0] * ab[0] + ab[1] * ab[1];
+                let t = if l2 > 0.0 { ((ap[0] * ab[0] + ap[1] * ab[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let d = (p[0] - a[0] - t * ab[0]).hypot(p[1] - a[1] - t * ab[1]);
+                if d < best { best = d; bi = i; }
+            }
+            depth[bi] = depth[bi].max(best);
+        }
+        if depth.iter().all(|d| *d <= 0.02) { continue }
+        // push inwards: sum over the penetrated edges of (inward normal * depth + 5 mm)
+        let area2: f64 = (0..n).map(|i| poly[i][0] * poly[(i + 1) % n][1] - poly[(i + 1) % n][0] * poly[i][1]).sum();
+        let (mut dx, mut dy) = (0.0, 0.0);
+        for i in 0..n {
+            if depth[i] <= 0.02 { continue }
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+            let l = ex.hypot(ey).max(1e-9);
+            // inward normal: left of the edge for a counter-clockwise polygon
+            let (nx, ny) = if area2 > 0.0 { (-ey / l, ex / l) } else { (ey / l, -ex / l) };
+            dx += nx * (depth[i] + 0.005);
+            dy += ny * (depth[i] + 0.005);
+        }
+        let dbg = std::env::var_os("WALLDBG").is_some();
+        if dbg { eprintln!("WALLDBG {k} depth {:?} push ({dx:.3},{dy:.3})", depth.iter().filter(|d| **d > 0.02).collect::<Vec<_>>()); }
+        if dx.hypot(dy) > max_push { continue }
+        // the move must not make it overlap other floor furniture
+        let (lo, hi) = world_box(state, k);
+        let (nlo, nhi) = ([lo[0] + dx, lo[1] + dy, lo[2]], [hi[0] + dx, hi[1] + dy, hi[2]]);
+        let ov = |a: ([f64; 3], [f64; 3]), b: ([f64; 3], [f64; 3])| (0..3).map(|d| (a.1[d].min(b.1[d]) - a.0[d].max(b.0[d])).max(0.0)).fold(f64::MAX, f64::min);
+        let blocked = keys.iter().any(|o| {
+            if o == k || parent.contains_key(o) { return false }
+            let oc = state.objs[o].generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
+            if oc.contains("Rug") { return false }
+            let ob = world_box(state, o);
+            ov((nlo, nhi), ob) > ov((lo, hi), ob) + 0.02
+        });
+        if blocked { if dbg { eprintln!("WALLDBG {k} blocked"); } continue }
+        let kids: Vec<String> = std::iter::once(k.clone()).chain(keys.iter().filter(|c| { let mut x = c.as_str(); for _ in 0..8 { match parent.get(x) { Some(p) if p == k => return true, Some(p) => x = p, None => return false } } false }).cloned()).collect();
+        for c in kids {
+            if let Some(o) = state.objs.get_mut(&c) { let mut p = o.pose.clone(); p.t[0] += dx; p.t[1] += dy; o.pose = p; }
+        }
+        out.push((k.clone(), dx, dy));
+    }
+    out
+}

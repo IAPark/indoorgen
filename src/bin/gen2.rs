@@ -293,6 +293,11 @@ fn main() {
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }
     }
+    if std::env::var_os("NO_SNAP").is_none() && std::env::var_os("NO_WALLPUSH").is_none() {
+        let wt = g.c.wall_thickness;
+        let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();
+        for (k, dx, dy) in indoorgen::snap::push_out_of_walls(&mut g.state, &visuals, &inner, 0.35) { eprintln!("WALLPUSH {k} by ({:+.3},{:+.3})", dx, dy); }
+    }
     lap("snap done");
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
     indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
