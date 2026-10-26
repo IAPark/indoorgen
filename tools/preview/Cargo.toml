@@ -1,0 +1,19 @@
+[package]
+name = "preview"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+debug = false
+
+[dependencies]
+bytemuck = "1.25.2"
+glam = "0.34.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+pollster = "1.0.1"
+rayon = "1.12.0"
+serde_json = "1.0.154"
+wgpu = "30.0.1"
