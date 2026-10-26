@@ -770,12 +770,25 @@ impl Factory for Bed {
         let off = r.uniform(0.0, 0.3);
         cover.transform(&rot);
         cover.transform(&Mat4::translation([c.size / 2.0 + off, 0.0, z_cover]));
-        let cs_ = Collider::new(&sheet.pos, &sheet.faces);
+        // the comforter is a thin two-layer shell: the cover only sees its outer (top) layer, else vertices that sink between the layers pop out below it
+        let top_faces = {
+            let k = pre.faces.iter().take_while(|f| {
+                let (a, b, c) = (pre.pos[f[0] as usize], pre.pos[f[1] as usize], pre.pos[f[2] as usize]);
+                (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) > 0.0
+            }).count();
+            if k == pre.faces.len() || k == 0 { sheet.faces.len() } else { (k * 16).min(sheet.faces.len()) }
+        };
+        let cs_ = Collider::new(&sheet.pos, &sheet.faces[..top_faces]);
+        if std::env::var_os("BEDDBG").is_some() {
+            let nz = |fs: &[Vec<u32>]| -> f64 { fs.iter().map(|f| { let (a, b, c) = (sheet.pos[f[0] as usize], sheet.pos[f[1] as usize], sheet.pos[f[2] as usize]); let (u, v) = ([b[0]-a[0], b[1]-a[1], b[2]-a[2]], [c[0]-a[0], c[1]-a[1], c[2]-a[2]]); let n = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]; n[2] / (n[0]*n[0]+n[1]*n[1]+n[2]*n[2]).sqrt().max(1e-12) }).sum::<f64>() / fs.len().max(1) as f64 };
+            eprintln!("TOPFACES {} of {} (pre {}): mean nz top {:.3} rest {:.3}", top_faces, sheet.faces.len(), pre.faces.len(), nz(&sheet.faces[..top_faces]), nz(&sheet.faces[top_faces..]));
+        }
         let mut p = ClothParams::default();
         p.mass = 0.05;
         p.tension = 2.0;
         p.distance_min = 5e-3;
         p.end_frame = 80;
+        p.distance_min = std::env::var("COVER_DMIN").ok().and_then(|v| v.parse().ok()).unwrap_or(5e-3);
         let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;

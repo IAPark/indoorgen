@@ -334,6 +334,12 @@ pub struct Calib {
     pub cg_iters: usize,
     pub cg_tol: f64,
     pub substeps_mult: u32,
+    /// pressure only acts on vertices with a collider surface this far below them (m); <= 0 disables
+    pub support_reach: f64,
+    pub sweep: bool,
+    pub edge_probes: bool,
+    pub final_project: bool,
+    pub revert_behind: bool,
 }
 
 impl Default for Calib {
@@ -348,13 +354,18 @@ impl Default for Calib {
             press_thresh_g: e("CL_PTHRG", 0.6),
             press_pow: e("CL_PPOW", 1.0),
             d_scale: e("CL_D", 1.0),
-            col_thickness: e("CL_COL", 0.02),
+            col_thickness: e("CL_COL", 0.035),
             friction: e("CL_FRIC", 10.0),
             push_speed: e("CL_PUSH", 0.05),
             sticky: e("CL_STICKY", 0.9),
             cg_iters: e("CL_CG", 120.0) as usize,
             cg_tol: e("CL_TOL", 1e-5),
             substeps_mult: e("CL_SUBM", 1.0) as u32,
+            support_reach: e("CL_SUPPORT", 0.12),
+            sweep: e("CL_SWEEP", 0.0) > 0.5,
+            edge_probes: e("CL_EDGE", 0.0) > 0.5,
+            final_project: e("CL_FINAL", 1.0) > 0.5,
+            revert_behind: e("CL_REVERT", 0.0) > 0.5,
         }
     }
 }
@@ -446,6 +457,15 @@ pub fn simulate_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders:
 }
 
 pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
+    let t0 = std::time::Instant::now();
+    let r = simulate_inner(pos0, faces, p, colliders, cal);
+    if std::env::var_os("CLOTH_T").is_some() {
+        eprintln!("CLOTH_T {} verts {} frames {:.2}s", pos0.len(), p.end_frame, t0.elapsed().as_secs_f64());
+    }
+    r
+}
+
+fn simulate_inner(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
     let n = pos0.len();
     let springs = build_springs(pos0, faces);
     let avg_len = {
@@ -469,6 +489,7 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
     let mut beta = vec![0.0f64; ns];
     let mut forces = vec![[0.0f64; 3]; n];
     let mut pf = vec![[0.0f64; 3]; n];
+    let mut pw = vec![1.0f64; n];
     let mut b = vec![[0.0f64; 3]; n];
     let mut dv = vec![[0.0f64; 3]; n];
     let mut r = vec![[0.0f64; 3]; n];
@@ -484,10 +505,20 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
         for i in 0..n {
             forces[i] = add(mul(g, m), mul(v[i], -drag));
         }
+        if p.use_pressure && p.pressure != 0.0 && p.gravity > 0.0 && cal.support_reach > 0.0 && !colliders.is_empty() && (_step as u32) % steps_per_frame == 0 {
+            // an inflated comforter only stays puffy where it is supported from below: the overhang deflates and hangs
+            for i in 0..n {
+                let a = x[i];
+                let b = [a[0], a[1], a[2] - cal.support_reach];
+                let hit = colliders.iter().any(|c| c.segment_hit(a, b).is_some());
+                let target = if hit { 1.0 } else { 0.0 };
+                pw[i] += (target - pw[i]) * 0.5;
+            }
+        }
         if p.use_pressure && p.pressure != 0.0 {
             pressure_forces(&x, faces, cal.press_scale * (p.pressure.abs() - cal.press_thresh - if p.gravity > 0.0 { cal.press_thresh_g } else { 0.0 }).max(0.0).powf(cal.press_pow) * p.pressure.signum(), &mut pf);
             for i in 0..n {
-                forces[i] = add(forces[i], pf[i]);
+                forces[i] = add(forces[i], mul(pf[i], pw[i]));
             }
         }
         for b_ in b.iter_mut() {
@@ -627,10 +658,26 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
             if pinned[i] {
                 continue;
             }
-            let xp = add(x[i], mul(v[i], dt));
+            // no tunnelling through thin colliders: a vertex moves at most 0.4 collision radii per step
+            let vl = len(v[i]) * dt;
+            if vl > 0.4 * r_col {
+                v[i] = mul(v[i], 0.4 * r_col / vl);
+            }
+            let mut xp = add(x[i], mul(v[i], dt));
             for c in colliders {
                 if c.is_empty() {
                     continue;
+                }
+                // sweep: a step that would cross a front face stops in front of it
+                if let Some((t, ti)) = if cal.sweep { c.segment_hit(x[i], xp) } else { None } {
+                    let nrm = c.normal(ti);
+                    let hit = add(x[i], mul(sub(xp, x[i]), t));
+                    xp = add(hit, mul(nrm, r_col * 0.9));
+                    let vn = dot(v[i], nrm);
+                    if vn < 0.0 {
+                        v[i] = sub(v[i], mul(nrm, vn));
+                    }
+                    corr[i] = add(corr[i], sub(xp, add(x[i], mul(v[i], dt))));
                 }
                 if let Some((d, q, ti)) = c.closest(xp, r_col) {
                     let nrm = c.normal(ti);
@@ -638,6 +685,14 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
                     let dir = if side >= 0.0 && d > 1e-9 { mul(sub(xp, q), 1.0 / d) } else { nrm };
                     let dd = if side >= 0.0 { d } else { -d };
                     let pen = (r_col - dd).max(0.0);
+                    if side < 0.0 && cal.revert_behind {
+                        // went behind the surface (crease / edge pass): undo the move instead of popping out on a possibly wrong side
+                        let vn = dot(v[i], nrm);
+                        v[i] = sub(v[i], mul(nrm, vn.min(0.0)));
+                        let back = sub(x[i], xp);
+                        corr[i] = add(corr[i], back);
+                        continue;
+                    }
                     let vn = dot(v[i], dir);
                     let approach = (-vn).max(0.0);
                     let vt = sub(v[i], mul(dir, vn));
@@ -648,6 +703,38 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
                 }
             }
         }
+        if cal.edge_probes && !colliders.is_empty() {
+            // edge midpoints catch collider apexes poking between two cloth vertices
+            for s in springs.iter().filter(|s| s.kind == 0) {
+                let (i, j) = (s.i as usize, s.j as usize);
+                if pinned[i] && pinned[j] {
+                    continue;
+                }
+                let pm = mul(add(add(x[i], mul(v[i], dt)), add(x[j], mul(v[j], dt))), 0.5);
+                for c in colliders {
+                    if c.is_empty() {
+                        continue;
+                    }
+                    if let Some((d, q, ti)) = c.closest(pm, r_col) {
+                        let nrm = c.normal(ti);
+                        let side = dot(sub(pm, q), nrm);
+                        let dir = if side >= 0.0 && d > 1e-9 { mul(sub(pm, q), 1.0 / d) } else { nrm };
+                        let dd = if side >= 0.0 { d } else { -d };
+                        let pen = (r_col - dd).max(0.0).min(cal.push_speed * dt);
+                        for k in [i, j] {
+                            if pinned[k] {
+                                continue;
+                            }
+                            let vn = dot(v[k], dir);
+                            if vn < 0.0 {
+                                v[k] = sub(v[k], mul(dir, vn));
+                            }
+                            corr[k] = add(corr[k], mul(dir, pen));
+                        }
+                    }
+                }
+            }
+        }
         for i in 0..n {
             x[i] = add(add(x[i], mul(v[i], dt)), corr[i]);
         }
@@ -655,7 +742,26 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
             let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
             for q in &x { for k in 0..3 { lo[k] = lo[k].min(q[k]); hi[k] = hi[k].max(q[k]); } }
             let vmax = v.iter().map(|q| len(*q)).fold(0.0, f64::max);
+            let mut behind = 0;
+            for q in &x { for c in colliders { if let Some((d, qq, ti)) = c.closest(*q, 0.05) { if dot(sub(*q, qq), c.normal(ti)) < 0.0 && d > 1e-6 { behind += 1; } } } }
+            eprintln!("  behind {}", behind);
             eprintln!("frame {} z [{:.3},{:.3}] y [{:.3},{:.3}] x [{:.3},{:.3}] vmax {:.4}", _step as u32 / steps_per_frame + 2, lo[2], hi[2], lo[1], hi[1], lo[0], hi[0], vmax);
+        }
+    }
+    // final clean-up: vertices that ended behind a collider face (slipped through a crease) are put back on its front side
+    if cal.final_project {
+        for i in 0..n {
+            if pinned[i] {
+                continue;
+            }
+            for c in colliders {
+                if let Some((d, q, ti)) = c.closest(x[i], 0.12) {
+                    let nrm = c.normal(ti);
+                    if dot(sub(x[i], q), nrm) < 0.0 && d > 1e-9 {
+                        x[i] = add(q, mul(nrm, r_col * 0.8));
+                    }
+                }
+            }
         }
     }
     x
