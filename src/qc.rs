@@ -127,7 +127,7 @@ fn ray_count(m: &Mesh, o: V3, d: V3) -> usize {
 }
 
 /// point inside the (closed) mesh: every axis ray, both ways, crosses an odd number of faces (open cavities stay outside)
-fn inside(m: &Mesh, p: V3) -> bool {
+pub(crate) fn inside(m: &Mesh, p: V3) -> bool {
     let o = [p[0] + 1.37e-6, p[1] + 2.11e-6, p[2] + 0.83e-6];
     for d in [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]] {
         if ray_count(m, o, d) % 2 == 0 {

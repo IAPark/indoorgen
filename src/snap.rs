@@ -14,7 +14,7 @@ pub struct Snapped {
 }
 
 /// `max_drop`: largest correction accepted downwards (m); `max_lift`: upwards. Returns the applied corrections.
-pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, skip: &[String], max_drop: f64, max_lift: f64) -> Vec<Snapped> {
+pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, skip: &[String], floor_z: f64, max_drop: f64, max_lift: f64) -> Vec<Snapped> {
     let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
     let keys: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.is_some() && visuals.contains_key(*k)).map(|(k, _)| k.clone()).collect();
     // object parents (relation targets that are generated objects)
@@ -33,7 +33,16 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
         }
         d
     };
-    let mut order: Vec<&String> = keys.iter().filter(|k| parent.contains_key(*k)).collect();
+    // floor-standing objects (no object parent) whose lowest point is within 5 cm of the floor also get snapped down/up onto it
+    let on_floor = |k: &String| -> bool {
+        !parent.contains_key(k) && visuals[k].parts.iter().any(|_| true) && {
+            let m = mat_of(&state.objs[k].pose);
+            let z = visuals[k].parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| m.apply(*q)[2])).fold(f64::MAX, f64::min);
+            z > floor_z - 0.03 && z < floor_z + 0.05
+        }
+    };
+    let floor_keys: Vec<String> = keys.iter().filter(|k| on_floor(k)).cloned().collect();
+    let mut order: Vec<&String> = keys.iter().filter(|k| parent.contains_key(*k) || floor_keys.contains(k)).collect();
     order.sort_by_key(|k| depth(k));
     if order.is_empty() {
         return vec![];
@@ -86,13 +95,50 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
                 }
             }
         }
+        // contact points buried inside a solid part (an item placed in a shelf board / plinth): lift out of it
+        let buried = contacts.iter().any(|c| {
+            let q = [c[0], c[1], c[2] + 0.006];
+            cand.iter().any(|&n| (0..3).all(|d| q[d] > bb[n].0[d] && q[d] < bb[n].1[d]) && crate::qc::inside(&nodes[n].mesh, q))
+        });
         let mut gap = f64::MAX;
-        for c in &contacts {
+        let is_floor = floor_keys.contains(k);
+        if is_floor {
+            gap = lo[2] - floor_z;
+        }
+        for c in contacts.iter().filter(|_| !buried) {
             if let Some((z, _, _)) = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.03]) {
                 gap = gap.min(c[2] - z);
             }
         }
-        if gap == f64::MAX || gap.abs() < 1e-4 {
+        if buried { gap = f64::MAX }
+        if gap == f64::MAX {
+            // nothing below: the item may be buried under a shelf board (placeholder bottom below the visible board): lift onto the first
+            // surface above its contact points within 25 cm
+            for c in &contacts {
+                if let Some((z, _, _)) = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.25]) {
+                    if z > c[2] + 0.005 {
+                        gap = gap.min(c[2] - z);
+                    }
+                }
+            }
+            if gap < -0.25 { gap = f64::MAX }
+            if gap < 0.0 { gap = gap.max(-0.25); }
+            if gap < 0.0 {
+                let dz = -gap;
+                let o = state.objs.get_mut(k).unwrap();
+                let mut p = o.pose.clone();
+                p.t[2] += dz;
+                o.pose = p;
+                for &n in mine {
+                    for v in nodes[n].mesh.pos.iter_mut() { v[2] += dz; }
+                    bb[n].0[2] += dz;
+                    bb[n].1[2] += dz;
+                }
+                out.push(Snapped { key: k.clone(), dz });
+            }
+            continue;
+        }
+        if gap.abs() < 1e-4 {
             continue;
         }
         // accepted: a drop onto a surface within max_drop, or a lift out of a surface by at most max_lift
