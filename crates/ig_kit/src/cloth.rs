@@ -340,6 +340,8 @@ pub struct Calib {
     pub edge_probes: bool,
     pub final_project: bool,
     pub revert_behind: bool,
+    /// substeps per frame (0 = cloth quality x substeps_mult)
+    pub steps: u32,
 }
 
 impl Default for Calib {
@@ -358,14 +360,15 @@ impl Default for Calib {
             friction: e("CL_FRIC", 10.0),
             push_speed: e("CL_PUSH", 0.05),
             sticky: e("CL_STICKY", 0.9),
-            cg_iters: e("CL_CG", 120.0) as usize,
-            cg_tol: e("CL_TOL", 1e-5),
+            cg_iters: e("CL_CG", 40.0) as usize,
+            cg_tol: e("CL_TOL", 1e-4),
             substeps_mult: e("CL_SUBM", 1.0) as u32,
             support_reach: e("CL_SUPPORT", 0.12),
             sweep: e("CL_SWEEP", 0.0) > 0.5,
             edge_probes: e("CL_EDGE", 0.0) > 0.5,
             final_project: e("CL_FINAL", 1.0) > 0.5,
             revert_behind: e("CL_REVERT", 0.0) > 0.5,
+            steps: e("CL_STEPS", 2.0) as u32,
         }
     }
 }
@@ -472,7 +475,7 @@ fn simulate_inner(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &
         let s: Vec<f64> = springs.iter().filter(|s| s.kind == 0).map(|s| s.l0).collect();
         s.iter().sum::<f64>() / s.len().max(1) as f64
     };
-    let steps_per_frame = (p.quality * cal.substeps_mult).max(1);
+    let steps_per_frame = if cal.steps > 0 { cal.steps } else { (p.quality * cal.substeps_mult).max(1) };
     let dt = 1.0 / steps_per_frame as f64;
     let frames = p.end_frame.saturating_sub(1);
     let mut x: Vec<V3> = pos0.to_vec();
