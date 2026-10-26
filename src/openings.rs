@@ -319,6 +319,9 @@ pub fn settle_doors(
     const MARGIN: f64 = 0.02;
     let wt = c.wall_thickness;
     for d in ops.doors.iter_mut() {
+        if let Some(v) = std::env::var("DOORDESIRED").ok().and_then(|v| v.parse::<f64>().ok()) {
+            d.desired = v.to_radians(); // testing: force the desired angle
+        }
         let ct = &cutters[d.ci];
         let m0 = d.full_pose(ct, 0.0);
         let pv = m0.apply([d.xh, d.swing * d.t / 2.0, 0.0]);
@@ -375,6 +378,7 @@ pub fn settle_doors(
                 }
             }
         }
+        if std::env::var("DOORDBG").is_ok() { eprintln!("DOORDBG ci={} obstacles near swing: {:?}", d.ci, obs.iter().map(|o| o.0.clone()).collect::<std::collections::BTreeSet<_>>()); }
         // the room the door swings into (inset by the wall half thickness) for the wall test
         let interior = polys.iter().find(|(n, _)| *n == d.room).map(|(_, g)| crate::shp::buffer_mitre(g, -wt / 2.0));
         let wall_hit = |a: f64| -> bool {
