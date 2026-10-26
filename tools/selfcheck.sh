@@ -1,5 +1,6 @@
 #!/bin/zsh
 IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
+export INFINIGEN_PROGRAM=1  # python-exact program + steps 100/40/5: the lockstep/placeholder gates compare with python oracles (gen2 default is the dense program)
 export ONLY_TARGET=1  # these gates compare/measure a single room (gen2 default is now the whole house)
 # selfcheck.sh: post-merge gate (~2 min): build, determinism, lockstep placement, placeholders
 export PATH=$HOME/.cargo/bin:$PATH
@@ -10,6 +11,10 @@ SCW=$(mktemp -d /tmp/selfcheck.XXXXXX)
 for c in "3 LivingRoom" "1 Kitchen" "0 Bathroom"; do set -- ${=c}
   $B/gen2 $1 $2 $SCW/a.glb >/dev/null 2>&1 || { echo "FAIL gen2 $c"; exit 1; }
   $B/gen2 $1 $2 $SCW/b.glb >/dev/null 2>&1; cmp -s $SCW/a.glb $SCW/b.glb && echo "deterministic $c" || echo "NONDETERMINISTIC $c"
+done
+# dense default mode (no INFINIGEN_PROGRAM): determinism of the shipped default
+for c in "5 Bedroom" "6 Kitchen"; do set -- ${=c}
+  (unset INFINIGEN_PROGRAM; $B/gen2 $1 $2 $SCW/a.glb >/dev/null 2>&1 && $B/gen2 $1 $2 $SCW/b.glb >/dev/null 2>&1; cmp -s $SCW/a.glb $SCW/b.glb && echo "deterministic (dense default) $c" || echo "NONDETERMINISTIC (dense default) $c")
 done
 for c in "Kitchen 1" "Bedroom 1" "Bedroom 0" "Bathroom 0" "Kitchen 0" "LivingRoom 1"; do echo "$c (oracles: placeholders only): $(GEN2=$PWD/target/fast/gen2 tools/lockstep.sh ${=c} ph,emu 2>&1 | tail -1)"; done
 echo "DiningRoom 0 (oracles: placeholders only): $(GEN2=$PWD/target/fast/gen2 tools/lockstep.sh DiningRoom 0 ph 2>&1 | tail -1)"
