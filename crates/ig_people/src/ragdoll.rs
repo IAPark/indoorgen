@@ -44,6 +44,8 @@ pub struct Settled {
     /// largest rotation (rad) of the pelvis / chest away from the key pose, and pelvis drift in xy (m)
     pub tilt: f64,
     pub drift: f64,
+    /// change (rad) of the pelvis-to-chest relative rotation (torso twisted / folded against its key pose)
+    pub twist: f64,
 }
 
 struct Seg {
@@ -313,6 +315,11 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     w.integration_parameters.num_solver_iterations = env_f("RAGDOLL_ITERS", 12.0) as usize;
     let g_static = InteractionGroups::new(Group::GROUP_2, Group::GROUP_1, InteractionTestMode::And);
     let g_body = InteractionGroups::new(Group::GROUP_1, Group::GROUP_2, InteractionTestMode::And);
+    // lower legs (calf, foot) get their own copy of every static so a sofa front / table leg they start inside can be ghosted for them
+    // alone, without dropping the seat from under the thighs
+    let g_static_lo = InteractionGroups::new(Group::GROUP_4, Group::GROUP_5, InteractionTestMode::And);
+    let g_body_lo = InteractionGroups::new(Group::GROUP_5, Group::GROUP_4, InteractionTestMode::And);
+    let lower = |name: &str| name.ends_with("Calf") || name.ends_with("Foot") || name.ends_with("Toe0");
     // static world
     let (mut blo, mut bhi) = ([f64::MAX; 3], [f64::MIN; 3]);
     // body bbox from segment origins +- 1.2 m (limbs are < 1 m): used only to cull static triangles
@@ -324,7 +331,7 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
         }
     }
     let pad = 0.45;
-    let mut static_h: Vec<(ColliderHandle, bool)> = vec![];
+    let mut static_h: Vec<(ColliderHandle, ColliderHandle, bool)> = vec![];
     let mut n_tri = 0usize;
     let mut n_static = 0;
     let cell = env_f("RAGDOLL_CELL", 0.02);
@@ -369,13 +376,15 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
         let idx: Vec<[u32; 3]> = idx3.iter().map(|t| [t[0] as u32, t[1] as u32, t[2] as u32]).collect();
         n_tri += idx.len();
         if let Ok(c) = ColliderBuilder::trimesh(verts, idx) {
+            let c2 = ColliderBuilder::new(c.shape.clone()).friction(0.8).restitution(0.0).collision_groups(g_static_lo);
             let ch = w.insert_collider(c.friction(0.8).restitution(0.0).collision_groups(g_static), None);
-            static_h.push((ch, st.dz != 0.0));
+            let ch2 = w.insert_collider(c2, None);
+            static_h.push((ch, ch2, st.dz != 0.0));
             n_static += 1;
         }
     }
     let t_static = t0.elapsed().as_secs_f64() * 1000.0;
-    let floor = ColliderBuilder::cuboid(20.0, 20.0, 0.5).translation(Vector::new((blo[0] + bhi[0]) * 0.5, (blo[1] + bhi[1]) * 0.5, floor_z - 0.5)).friction(0.8).restitution(0.0).collision_groups(g_static);
+    let floor = ColliderBuilder::cuboid(20.0, 20.0, 0.5).translation(Vector::new((blo[0] + bhi[0]) * 0.5, (blo[1] + bhi[1]) * 0.5, floor_z - 0.5)).friction(0.8).restitution(0.0).collision_groups(InteractionGroups::new(Group::GROUP_2 | Group::GROUP_4, Group::GROUP_1 | Group::GROUP_5, InteractionTestMode::And));
     w.insert_collider(floor, None);
     // bodies
     let mut handles: Vec<RigidBodyHandle> = vec![];
@@ -411,7 +420,7 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
             "Calf" => 3.2,
             _ => 1.0,
         } * env_f("RAGDOLL_MASS", 1.0);
-        w.insert_collider(col.mass(mass).friction(0.8).restitution(0.0).collision_groups(g_body), Some(bh));
+        w.insert_collider(col.mass(mass).friction(0.8).restitution(0.0).collision_groups(if lower(s.name) { g_body_lo } else { g_body }), Some(bh));
         handles.push(bh);
     }
     // motor gains from the supported weight: torque to hold a joint within `dev` radians against gravity (force-based motors), so a light
@@ -492,7 +501,7 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
             let shape = col.shared_shape().clone();
             let cp = *col.position();
             for (oh, oc) in w.intersect_shape(cp, &*shape, QueryFilter::default()) {
-                if oh == ch || oc.parent().is_some() {
+                if oh == ch || oc.parent().is_some() || !col.collision_groups().test(oc.collision_groups()) {
                     continue;
                 }
                 if let Ok(Some(ct)) = rapier3d_f64::parry::query::contact(&cp, &*shape, oc.position(), oc.shape(), 0.0) {
@@ -529,22 +538,29 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     }
     // furniture the key pose already sinks into by more than 2.5 cm (a thigh under a table apron: placement tolerates it) is ghosted
     // instead of being resolved violently: the person would be catapulted out of the chair
-    for &(sh, is_support) in &static_h {
-        let mut worst = 0.0f64;
+    for &(sh, sh2, is_support) in &static_h {
         let sc = &w.colliders[sh];
         let (sp, ss) = (*sc.position(), sc.shared_shape().clone());
-        for &h in &handles {
-            for &ch in w.bodies[h].colliders() {
-                let col = &w.colliders[ch];
-                if let Ok(Some(ct)) = rapier3d_f64::parry::query::contact(col.position(), &**col.shared_shape(), &sp, &*ss, 0.0) {
-                    worst = worst.max(-ct.dist);
+        for (lo_class, target) in [(false, sh), (true, sh2)] {
+            let mut worst = 0.0f64;
+            for (si, &h) in handles.iter().enumerate() {
+                if lower(segs[si].name) != lo_class {
+                    continue;
+                }
+                for &ch in w.bodies[h].colliders() {
+                    let col = &w.colliders[ch];
+                    if let Ok(Some(ct)) = rapier3d_f64::parry::query::contact(col.position(), &**col.shared_shape(), &sp, &*ss, 0.0) {
+                        worst = worst.max(-ct.dist);
+                    }
                 }
             }
-        }
-        if worst > if is_support { 0.06 } else { 0.025 } {
-            w.colliders[sh].set_collision_groups(InteractionGroups::none());
-            if std::env::var_os("RAGDOLL_DBG").is_some() {
-                eprintln!("  ghosted static (pen {worst:.3}, support {is_support})");
+            // the seat itself is ghosted only for the upper body when it is really hopeless; shins may sink into a sofa front much further
+            let lim = if lo_class { 0.02 } else if is_support { 0.06 } else { 0.025 };
+            if worst > lim {
+                w.colliders[target].set_collision_groups(InteractionGroups::none());
+                if std::env::var_os("RAGDOLL_DBG").is_some() {
+                    eprintln!("  ghosted static (pen {worst:.3}, support {is_support}, lower legs {lo_class})");
+                }
             }
         }
     }
@@ -604,7 +620,10 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
                 let r = cm / mm - piv;
                 tau += r.cross(Vector::new(0.0, 0.0, mm * 9.81)) * opt.gc;
             }
-            w.bodies[handles[si]].add_torque(tau, true);
+            // torques persist across steps in rapier: set, don't accumulate
+            let b = &mut w.bodies[handles[si]];
+            b.reset_torques(true);
+            b.add_torque(tau, true);
         }
         w.step();
         steps = step + 1;
@@ -659,7 +678,7 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
             let shape = col.shared_shape().clone();
             let cp = *col.position();
             for (oh, oc) in w.intersect_shape(cp, &*shape, QueryFilter::default()) {
-                if oh == ch || oc.parent().is_some() {
+                if oh == ch || oc.parent().is_some() || !col.collision_groups().test(oc.collision_groups()) {
                     continue;
                 }
                 if let Ok(Some(ct)) = rapier3d_f64::parry::query::contact(&cp, &*shape, oc.position(), oc.shape(), 0.0) {
@@ -679,5 +698,12 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     }
     let pp = w.bodies[handles[0]].translation();
     let drift = (pp.x - key_pos[0][0]).hypot(pp.y - key_pos[0][1]);
-    Some(Settled { g: gs, steps, ms, moved, pen, bodies: segs.len(), tilt, drift })
+    let mut twist = 0.0f64;
+    if let Some(c) = chest {
+        let rel_end = w.bodies[handles[0]].position().rotation.inverse() * w.bodies[handles[c]].position().rotation;
+        let rel_key = quat_of(&gw[segs[0].bone].r).inverse() * quat_of(&gw[segs[c].bone].r);
+        let q = rel_end * rel_key.inverse();
+        twist = 2.0 * q.w.abs().min(1.0).acos();
+    }
+    Some(Settled { g: gs, steps, ms, moved, pen, bodies: segs.len(), tilt, drift, twist })
 }

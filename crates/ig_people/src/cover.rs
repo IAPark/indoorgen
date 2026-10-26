@@ -185,6 +185,10 @@ fn person_tris(scene: &Scene, names: &[String]) -> Vec<[V3; 3]> {
     out
 }
 
+fn env_f(k: &str, d: f64) -> f64 {
+    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+}
+
 pub fn enabled() -> bool {
     std::env::var("PEOPLE_CLOTH").map(|v| v != "0").unwrap_or(true)
 }
@@ -235,7 +239,9 @@ fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
     let body = body_nodes(pi, pl);
     let btris = person_tris(scene, &body);
     // edge of the cover on the body: halfway between the mid chest and the neck
-    let edge = [(lm.chest[0] + lm.neck[0]) * 0.5, (lm.chest[1] + lm.neck[1]) * 0.5];
+    // (the sim drags the edge ~10 cm towards the feet while it crumples: start it nearer the neck)
+    let ef = env_f("COVER_EDGE", 0.8);
+    let edge = [lm.chest[0] + (lm.neck[0] - lm.chest[0]) * ef, lm.chest[1] + (lm.neck[1] - lm.chest[1]) * ef];
     let mut first = true;
     for &ji in &jobs {
         let pose = scene.cloth[ji]["pose"].clone();
@@ -264,7 +270,7 @@ fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
         zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let body_top = zs.get(zs.len() * 85 / 100).copied().unwrap_or(0.0);
         let mattress_top = pl.support_top;
-        let dz = (body_top - mattress_top).max(0.0) * 0.8 + 0.03;
+        let dz = (body_top - mattress_top).max(0.0) * env_f("COVER_DZK", 0.7) + env_f("COVER_DZ0", 0.02);
         if std::env::var_os("COVER_DBG").is_some() {
             eprintln!("COVER under: edge local x {xe:.2} (x_old {x_old:.2} -> {x_new:.2}) body_top {body_top:.3} support_top {mattress_top:.3} lm.top {:.3} dz {dz:.3}", lm.top_z);
         }

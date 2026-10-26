@@ -261,7 +261,7 @@ impl Planner<'_> {
             // sofa shorter than a stretched-out person: knees up (seed bit 21 read by the pose library)
             if let Some(oi) = s.support {
                 let (llo, lhi) = local_extents(&self.w.objs[oi]);
-                if lhi[1] - llo[1] < 2.05 && seed % 4 != 3 {
+                if (lhi[1] - llo[1] < 2.05 || std::env::var_os("PEOPLE_KNEES").is_some()) && seed % 4 != 3 {
                     seed |= 1 << 21;
                 }
             }
@@ -814,9 +814,14 @@ fn ragdoll_person(w: &World, p: &mut Placement) {
         if let Some(st) = settle_k(&av, &model, &g, &p.pose, &statics, w.floor_z, 0.03, &opt) {
             // reject: flung away, deeply stuck, torso rotated more than ~30 degrees, hips left the seat / mattress footprint
             if std::env::var_os("RAGDOLL_DBG").is_some() {
-                eprintln!("RAGDOLL {:?} soft {} tilt {:.2} drift {:.2} moved {:.2} pen {:.3}", p.kind, soft, st.tilt, st.drift, st.moved, st.pen);
+                eprintln!("RAGDOLL {:?} soft {} tilt {:.2} twist {:.2} drift {:.2} moved {:.2} pen {:.3}", p.kind, soft, st.tilt, st.twist, st.drift, st.moved, st.pen);
             }
-            let ok = st.moved < 0.6 && st.pen < 0.05 && st.tilt < 0.53 && st.drift < 0.25;
+            let tilt_max = match p.kind {
+                PoseKind::SitUpright | PoseKind::SitBedEdge => 0.3,
+                PoseKind::LieBed | PoseKind::LieSofa => 0.4,
+                _ => 0.53,
+            };
+            let ok = st.moved < 0.6 && st.pen < 0.05 && st.tilt < tilt_max && st.drift < 0.25 && st.twist < 0.5;
             res = Some(st);
             if ok {
                 break;

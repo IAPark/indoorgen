@@ -1,4 +1,0 @@
-Done: v4 judged; added true back-direction detection (v5).
-Current: merge master (ragdoll2), final rerun tmp/v6, selfcheck, cams0 identity, BACKLOG.
-Blockers: none.
-ETA: ~40 min.

@@ -27,7 +27,7 @@ struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32> }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
-    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32,
+    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>,
 }
 #[derive(Clone)]
 enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String) }
@@ -35,7 +35,7 @@ enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(Strin
 fn parse_args() -> Opts {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
-        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0 };
+        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -59,6 +59,7 @@ fn parse_args() -> Opts {
             "--sun-intensity" => o.sun_i = val().parse().unwrap(),
             "--light-scale" => o.light_scale = val().parse().unwrap(),
             "--no-ceiling" => o.no_ceiling = true,
+            "--cloth" => o.cloth = Some(PathBuf::from(val())),
             "-v" => o.verbose = true,
             _ => o.inputs.push(PathBuf::from(k)),
         }
@@ -116,7 +117,19 @@ struct Gpu { dev: wgpu::Device, q: wgpu::Queue }
 
 fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &wgpu::TextureView, smp: &wgpu::Sampler, opts: &Opts) -> Scene {
     let t = Instant::now();
-    let glb = glb::load(path);
+    let mut glb = glb::load(path);
+    // --cloth OVERLAY.glb (tools/cloth_only.py): nodes of the same name are replaced by the overlay's (Blender-simulated cloth, moved people parts)
+    if let Some(op) = &opts.cloth {
+        let ov = glb::load(op);
+        let base = glb.chunks.len();
+        glb.chunks.extend(ov.chunks);
+        for mut n in ov.nodes {
+            let mat = glb.nodes.iter().find(|m| m.name == n.name).and_then(|m| m.prims.first().map(|p| p.mat)).unwrap_or(0);
+            for p in n.prims.iter_mut() { p.pos.chunk += base; p.idx.chunk += base; if let Some(v) = p.nrm.as_mut() { v.chunk += base; } if let Some(v) = p.uv.as_mut() { v.chunk += base; } p.mat = mat; }
+            for m in glb.nodes.iter_mut().filter(|m| m.name == n.name) { m.prims.clear(); }
+            glb.nodes.push(n);
+        }
+    }
     let side: Value = std::fs::read(path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
     if opts.verbose { eprintln!("  glb parse {:.2}s ({} nodes, {} chunks)", t.elapsed().as_secs_f32(), glb.nodes.len(), glb.chunks.len()); }
     let bufs: Vec<wgpu::Buffer> = glb.chunks.iter().map(|c| gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: c,
