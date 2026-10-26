@@ -39,6 +39,8 @@ fn main() {
         }
         None => 0,
     };
+    let qc_out: Option<String> = args.iter().position(|a| a == "--qc").map(|i| { let v = args[i + 1].clone(); args.drain(i..i + 2); v });
+    let no_glb = args.iter().position(|a| a == "--no-glb").map(|i| { args.remove(i); }).is_some();
     let seed: u64 = args[1].parse().unwrap();
     let mess = indoorgen::mess::MessCfg { level: mess_level, seed };
     let room = args.get(2).cloned();
@@ -202,9 +204,19 @@ fn main() {
     };
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
     indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
+    // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)
+    {
+        let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        if std::env::var_os("NO_SNAP").is_none() {
+            let sn = indoorgen::snap::snap_children(&mut g.state, &visuals, &cut_keys, 0.30, 0.03);
+            if std::env::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm", s.key, s.dz * 1000.0); } }
+            eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
+        }
+    }
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
     indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
     let door_zones: Vec<([f64; 3], [f64; 3], f64)> = ops.doors.iter().flat_map(|d| d.zones(&g.cutters[d.ci], 0.08)).collect();
+    let door_infos: Vec<indoorgen::qc::DoorInfo> = ops.doors.iter().map(|d| indoorgen::qc::DoorInfo { ci: d.ci, desired: d.desired, angle: d.angle, limiter: d.limiter.clone() }).collect();
     for d in std::mem::take(&mut ops.doors) {
         let ct = g.cutters[d.ci].clone();
         for p in d.world_pieces(&ct) {
@@ -373,6 +385,12 @@ fn main() {
     }
     // mess pass, part 2: clutter (no-op at --mess 0)
     indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
+    if let Some(qp) = &qc_out {
+        let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        let label = format!("{}_{}_p{}_m{}", seed, args.get(2).map(|s| s.as_str()).unwrap_or("all"), people_n, mess_level);
+        indoorgen::qc::run(&indoorgen::qc::QcIn { scene: &scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: &door_infos, wall_t: g.c.wall_thickness, cut_keys: &cut_keys }, std::path::Path::new(qp), &label);
+    }
+    if no_glb { return; }
     scene.write_glb(&out).unwrap();
     if cams_k > 0 { add_cameras(&scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }
     if indoorgen::assets::prof_on() {
