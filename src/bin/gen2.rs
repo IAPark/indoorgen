@@ -469,7 +469,7 @@ fn main() {
     lap("qc done");
     scene.write_glb(&out).unwrap();
     lap("glb written");
-    if cams_k > 0 { add_cameras(&scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }
+    if cams_k > 0 { add_cameras(&room, &scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }
     if indoorgen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());
         indoorgen::assets::prof_report();
@@ -477,9 +477,9 @@ fn main() {
 }
 
 /// `--cams K`: photographer-like camera poses (crates/ig_cams) appended to the sidecar json as "cameras"
-fn add_cameras(scene: &Scene, polys: &[(String, indoorgen::shp::G)], k: usize, seed: u64, wall_t: f64, glb: &std::path::Path) {
+fn add_cameras(target: &Option<String>, scene: &Scene, polys: &[(String, indoorgen::shp::G)], k: usize, seed: u64, wall_t: f64, glb: &std::path::Path) {
     let t = std::time::Instant::now();
-    let cams = indoorgen::cams::generate(scene, polys, &indoorgen::cams::Cfg { k, seed, wall_t });
+    let cams = indoorgen::cams::generate(scene, polys, &indoorgen::cams::Cfg { k, seed, wall_t, target: target.clone() });
     let sp = glb.with_extension("json");
     if let Ok(txt) = std::fs::read_to_string(&sp) {
         let mut j: serde_json::Value = serde_json::from_str(&txt).unwrap();
