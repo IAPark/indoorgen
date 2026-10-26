@@ -528,3 +528,10 @@ pub fn triangulate_quads_beauty(verts: &[V3], quads: &[[u32; 4]]) -> Vec<Vec<u32
 
 /// quads of the geometry-nodes cube (mesh cube node) in `box_exact` vertex order (i = x + 2y + 4z), in its face order
 pub const CUBE_QUADS_XFAST: [[u32; 4]; 6] = [[0, 2, 3, 1], [0, 1, 5, 4], [4, 5, 7, 6], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+
+/// dense furnishing mode (gen2 default; INFINIGEN_PROGRAM=1 keeps the python-exact solver inputs): factories may return cheap analytic
+/// placeholders / bounds instead of building the full mesh. NO_CHEAP_PH=1 turns the shortcuts off.
+pub fn dense() -> bool {
+    static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *D.get_or_init(|| std::env::var_os("INFINIGEN_DENSE").is_some() && std::env::var_os("NO_CHEAP_PH").is_none())
+}

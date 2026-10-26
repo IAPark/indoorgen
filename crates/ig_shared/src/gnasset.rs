@@ -71,6 +71,30 @@ impl GnTemplate {
         }
     }
 
+    /// cap the Level input of every SubdivideMesh / SubdivisionSurface node (cheap outline-only evaluation; the shape stays within the control cage)
+    pub fn cap_subdivision(&mut self, max_level: i64) {
+        let Some(groups) = self.raw["groups"].as_object_mut() else { return };
+        for (_, g) in groups.iter_mut() {
+            let Some(nodes) = g["nodes"].as_array_mut() else { continue };
+            for n in nodes.iter_mut() {
+                if !matches!(n["type"].as_str(), Some("GeometryNodeSubdivideMesh") | Some("GeometryNodeSubdivisionSurface")) {
+                    continue;
+                }
+                if let Some(ins) = n["in"].as_array_mut() {
+                    for i in ins.iter_mut() {
+                        if i["id"].as_str() == Some("Level") {
+                            if let Some(v) = i["v"].as_i64() {
+                                if v > max_level {
+                                    i["v"] = J::from(max_level);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// the groups with every parameter patch applied
     pub fn instantiate(&self, params: &Params) -> gn::Groups {
         let mut j = self.raw.clone();

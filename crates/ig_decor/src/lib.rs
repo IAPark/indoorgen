@@ -38,3 +38,4 @@ pub mod tableware;
 pub mod vase;
 pub mod walldecor;
 pub mod wineglass;
+

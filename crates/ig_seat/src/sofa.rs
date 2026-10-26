@@ -601,11 +601,19 @@ pub fn limit_surface(m: &Mesh) -> Mesh {
 /// nodegroup_sofa_geometry evaluated by the node interpreter (data/gn/sofa_group.json, exported with tools/gn_export.py group):
 /// Blender's vertex / face / edge order. Returns the mesh and its edge list.
 pub fn sofa_geometry_gn(p: &SofaParams) -> Option<(Mesh, Vec<[u32; 2]>)> {
+    sofa_geometry_gn_lvl(p, None)
+}
+
+/// `cap`: limit every subdivision level (outline-only evaluation for solver placeholders)
+pub fn sofa_geometry_gn_lvl(p: &SofaParams, cap: Option<i64>) -> Option<(Mesh, Vec<[u32; 2]>)> {
     use crate::gnasset::GnTemplate;
     use serde_json::Value as J;
     static TPL: std::sync::OnceLock<GnTemplate> = std::sync::OnceLock::new();
     let tpl = TPL.get_or_init(|| GnTemplate::parse(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/gn/sofa_group.json"))));
     let mut t = tpl.clone_template();
+    if let Some(c) = cap {
+        t.cap_subdivision(c);
+    }
     let g = "nodegroup_sofa_geometry";
     let v3 = |v: V3| json!([v[0], v[1], v[2]]);
     t.set_group_default(g, "Socket_1", v3(p.dims));
@@ -662,7 +670,9 @@ impl Factory for Sofa {
         // create_placeholder(): the node group output (PlaceholderBBox uses its bounding box)
         let mut r = Rng::seeded(self.seed);
         let fab = spec_material("sofa_fabric", json!({"cls": weighted(&mut r, FAB), "kwargs": {}, "seed": self.seed}), [0.4, 0.4, 0.45]);
-        let place = match sofa_geometry_gn(&self.params) {
+        // dense mode: only the outline matters (PlaceholderBBox); skip the subdivision of the cushion cubes (cage bbox, a few mm larger)
+        let cap = if crate::dense() { Some(0) } else { None };
+        let place = match sofa_geometry_gn_lvl(&self.params, cap) {
             Some((m, _)) if std::env::var("SOFA_OLD").is_err() => m,
             _ => sofa_geometry(&self.params),
         };
@@ -670,6 +680,13 @@ impl Factory for Sofa {
         let b = place.bounds();
         a.mesh(place, &fab, Some(b));
         Some(a)
+    }
+    /// dense mode: outline of the un-subdivided node group (within ~1 cm of the final asset)
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        sofa_geometry_gn_lvl(&self.params, Some(0)).map(|(m, _)| m.bounds())
     }
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
@@ -688,4 +705,29 @@ impl Factory for Sofa {
 
 pub fn make(c: &str, rng: &mut Rng) -> Option<Box<dyn Factory>> {
     Some(Box::new(Sofa::new(rng, c == "ArmChairFactory")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn sofa_cheap_outline() {
+        let (mut worst, mut tf, mut tc) = (0.0f64, 0.0, 0.0);
+        for seed in 0..24u64 {
+            for arm in [false, true] {
+                let s = Sofa::new(&mut Rng::seeded(seed), arm);
+                let t = std::time::Instant::now();
+                let (full, _) = sofa_geometry_gn_lvl(&s.params, None).unwrap();
+                tf += t.elapsed().as_secs_f64();
+                let t = std::time::Instant::now();
+                let (cheap, _) = sofa_geometry_gn_lvl(&s.params, Some(0)).unwrap();
+                tc += t.elapsed().as_secs_f64();
+                let (a, b) = (full.bounds(), cheap.bounds());
+                let e = (0..3).map(|k| (a.0[k] - b.0[k]).abs().max((a.1[k] - b.1[k]).abs())).fold(0.0, f64::max);
+                if e > 0.02 { eprintln!("seed {seed} arm {arm} err {e:.4} {a:?} {b:?}"); }
+                worst = worst.max(e);
+            }
+        }
+        eprintln!("sofa outline: worst bbox err {worst:.4} m, full {tf:.2}s cheap {tc:.2}s");
+    }
 }

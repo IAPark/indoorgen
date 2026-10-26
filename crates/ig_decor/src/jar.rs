@@ -186,6 +186,21 @@ impl Jar {
 }
 
 impl Factory for Jar {
+    /// dense mode: outline from the subdivided base prism and the neck / cap heights (no bridge, solidify or second subsurf)
+    fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        let mut r = inst_rng(self.fs, i);
+        let (m, _) = self.stage_mesh(i, 0);
+        let (lo, hi) = m.bounds();
+        let _shape = r.uniform(0.0, 0.1);
+        let capz = (1.0 + self.z_neck + self.z_cap * r.uniform(0.5, 0.8)) * self.z_length;
+        let top = (capz + self.z_cap * self.z_length).max((1.0 + self.z_neck + self.z_cap) * self.z_length);
+        let rc = self.x_cap * self.x_length + 1e-3;
+        let (rx, ry) = (hi[0].max(-lo[0]).max(rc), hi[1].max(-lo[1]).max(rc));
+        Some(([-rx, -ry, 0.0], [rx, ry, top]))
+    }
     fn asset(&self, i: u64) -> Asset {
         let (m, cap) = self.stage_mesh(i, 9);
         let mat = spec_material("jar", json!({"cls": self.surface, "kwargs": {}, "seed": self.fs}), [0.8, 0.85, 0.9]);
@@ -201,4 +216,28 @@ impl Factory for Jar {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(Jar::new(fs)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn jar_hint_matches_asset() {
+        std::env::set_var("INFINIGEN_DENSE", "1");
+        let (mut worst, mut sum, mut tf, mut th) = (0.0f64, 0.0, 0.0, 0.0);
+        for fs in 0..40u64 {
+            let j = Jar::new(fs);
+            let t = std::time::Instant::now();
+            let a = j.asset(3).bounds();
+            tf += t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let (lo, hi) = j.bounds_hint(3).unwrap();
+            th += t.elapsed().as_secs_f64();
+            let e = (0..3).map(|k| (lo[k] - a.0[k]).abs().max((hi[k] - a.1[k]).abs())).fold(0.0, f64::max);
+            if e > 0.01 { eprintln!("fs {fs} err {e:.4} n {} full {:?} {:?} hint {:?} {:?}", j.n_base, a.0, a.1, lo, hi); }
+            worst = worst.max(e);
+            sum += e;
+        }
+        eprintln!("jar hint: worst {worst:.4} mean {:.4} full {tf:.2}s hint {th:.2}s", sum / 40.0);
+    }
 }

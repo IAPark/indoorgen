@@ -34,6 +34,22 @@ impl Plate {
 }
 
 impl Factory for Plate {
+    /// dense mode: outline of the revolved profile (no subsurf / solidify), padded by the shell thickness
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        let sc = self.scale;
+        let xs = [0.0, self.x_mid * sc, self.x_mid * sc, self.x_end * sc];
+        let zs = [0.0, 0.0, self.z_mid * sc, self.z_length * sc];
+        let anchors: Vec<[f64; 3]> = (0..4).map(|k| [xs[k], 0.0, zs[k]]).collect();
+        let m = spin_anchors(&anchors, &[1, 2]);
+        let (mut lo, mut hi) = m.bounds();
+        let t = self.thickness as f32 as f64;
+        lo[2] -= t;
+        hi[2] += 0.0;
+        Some((lo, hi))
+    }
     fn asset(&self, _i: u64) -> Asset {
         let sc = self.scale;
         let xs = [0.0, self.x_mid * sc, self.x_mid * sc, self.x_end * sc];
@@ -54,4 +70,24 @@ impl Factory for Plate {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(Plate::new(fs)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn plate_hint_matches_asset() {
+        std::env::set_var("INFINIGEN_DENSE", "1");
+        let (mut worst, mut sum) = (0.0f64, 0.0);
+        for fs in 0..40u64 {
+            let j = Plate::new(fs);
+            let a = j.asset(3).bounds();
+            let (lo, hi) = j.bounds_hint(3).unwrap();
+            let e = (0..3).map(|k| (lo[k] - a.0[k]).abs().max((hi[k] - a.1[k]).abs())).fold(0.0, f64::max);
+            if e > 0.005 { eprintln!("fs {fs} err {e:.4} full {:?} {:?} hint {:?} {:?}", a.0, a.1, lo, hi); }
+            worst = worst.max(e);
+            sum += e;
+        }
+        eprintln!("plate hint: worst {worst:.4} mean {:.4}", sum / 40.0);
+    }
 }

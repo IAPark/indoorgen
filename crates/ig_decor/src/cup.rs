@@ -138,6 +138,80 @@ impl Factory for Cup {
         a.mesh(all, &mat, Some(b));
         a
     }
+
+    /// dense mode: the solver only needs the outline, so skip solidify / subsurf / the exact handle boolean:
+    /// body = bevelled revolve (+ the 1.01 wrap), handle = the torus vertices that lie outside the cup on its +x side
+    fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        let mut r = inst_rng(self.fs, i);
+        let sc = self.scale;
+        let (xs, zs): (Vec<f64>, Vec<f64>) = if self.straight {
+            (vec![0.0, self.x_lowest * self.x_end, self.x_end], vec![0.0, 0.0, self.depth])
+        } else {
+            (
+                vec![0.0, self.x_lowest * self.x_end, (self.x_lowest + self.x_lower_ratio * (1.0 - self.x_lowest)) * self.x_end, self.x_end],
+                vec![0.0, 0.0, self.depth * 0.5, self.depth],
+            )
+        };
+        let anchors: Vec<[f64; 3]> = xs.iter().zip(zs.iter()).map(|(&x, &z)| [x * sc, 0.0, z * sc]).collect();
+        let mut m = spin_anchors(&anchors, &[1]);
+        let inv = (1.0 / sc) as f32;
+        for p in m.pos.iter_mut() {
+            for k in 0..3 {
+                p[k] = (p[k] as f32 * inv) as f64;
+            }
+        }
+        let pct = r.uniform(10.0, 50.0);
+        let m = bevel(&m, Offset::Percent(pct), 8, 30f64.to_radians()).unwrap_or(m);
+        let thr = r.uniform(0.0, 0.1);
+        let (mut lo, mut hi) = m.bounds();
+        for p in &m.pos {
+            let (x, y, z) = (p[0], p[1], p[2]);
+            let bad = (z / self.depth < self.wrap_margin) || (z / self.depth > 1.0 - self.wrap_margin + thr) || (y.atan2(x).abs() < std::f64::consts::PI * self.wrap_margin);
+            if !bad {
+                for (k, v) in [x * 1.01, y * 1.01, z].into_iter().enumerate() {
+                    lo[k] = lo[k].min(v);
+                    hi[k] = hi[k].max(v);
+                }
+            }
+        }
+        let (xl, zl) = (xs[xs.len() - 1] - xs[xs.len() - 2], zs[zs.len() - 1] - zs[zs.len() - 2]);
+        let angle_low = (xl / zl).atan();
+        let angle_high = ((xs[2] - xs[1]) / (zs[2] - zs[1])).atan();
+        let handle_angle = r.uniform(angle_low, angle_high + 1e-3);
+        if self.has_guard {
+            let hl = self.handle_location;
+            let n = xs.len();
+            let loc = [xs[n - 2] * (1.0 - hl) + xs[n - 1] * hl, 0.0, zs[n - 2] * (1.0 - hl) + zs[n - 1] * hl];
+            let (t, w) = self.handle_ring(loc, handle_angle);
+            // outer wall radius at height z
+            let radius_at = |z: f64| -> f64 {
+                for k in 1..xs.len() {
+                    if z <= zs[k] && zs[k] > zs[k - 1] {
+                        let f = ((z - zs[k - 1]) / (zs[k] - zs[k - 1])).clamp(0.0, 1.0);
+                        return xs[k - 1] + f * (xs[k] - xs[k - 1]);
+                    }
+                }
+                xs[xs.len() - 1]
+            };
+            for p in &t.pos {
+                let q = mat_mul_v(&w, [p[0] as f32, p[1] as f32, p[2] as f32]);
+                let (x, y, z) = (q[0] as f64, q[1] as f64, q[2] as f64);
+                let outside = z > self.depth || z < 0.0 || x.hypot(y) > radius_at(z);
+                if x > 0.0 && outside {
+                    for (k, v) in [x, y, z].into_iter().enumerate() {
+                        lo[k] = lo[k].min(v);
+                        hi[k] = hi[k].max(v);
+                    }
+                }
+            }
+        }
+        let sc32 = sc as f32;
+        let f = |v: f64| (v as f32 * sc32) as f64;
+        Some(([f(lo[0]), f(lo[1]), f(lo[2])], [f(hi[0]), f(hi[1]), f(hi[2])]))
+    }
 }
 
 fn mat_mul_v(m: &crate::bl32::M4, v: [f32; 3]) -> [f32; 3] {
@@ -184,8 +258,8 @@ fn torus(major: f64, minor: f64) -> Mesh {
 }
 
 impl Cup {
-    /// add_handle: returns the selected loose part in the cup's space
-    fn make_handle(&self, cup: &Mesh, loc: [f64; 3], angle: f64) -> Mesh {
+    /// the tapered handle torus (object space) and its world matrix
+    fn handle_ring(&self, loc: [f64; 3], angle: f64) -> (Mesh, crate::bl32::M4) {
         use crate::bl32::Obj32;
         let mut t = torus(self.handle_radius, self.handle_inner);
         let ob = Obj32::new([loc[0] as f32, loc[1] as f32, loc[2] as f32], [std::f64::consts::FRAC_PI_2 as f32, angle as f32, 0.0]);
@@ -195,6 +269,12 @@ impl Cup {
         super::bpymod::simple_deform(&mut v, super::bpymod::Deform::Taper, self.taper_x, 0);
         super::bpymod::simple_deform(&mut v, super::bpymod::Deform::Taper, self.taper_y, 1);
         t.pos = v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
+        (t, w)
+    }
+
+    /// add_handle: returns the selected loose part in the cup's space
+    fn make_handle(&self, cup: &Mesh, loc: [f64; 3], angle: f64) -> Mesh {
+        let (t, w) = self.handle_ring(loc, angle);
         // operand (cup) into the torus' object space: inverse of the (rigid) world matrix
         let rt = |i: usize, j: usize| w[j][i];
         let mut inv = [[0.0f32; 4]; 4];
@@ -285,4 +365,37 @@ impl Cup {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(Cup::new(fs)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// dense bounds hint vs the full asset (boolean handle): max bbox error over many seeds
+    #[test]
+    fn cup_hint_matches_asset() {
+        std::env::set_var("INFINIGEN_DENSE", "1");
+        let (mut worst, mut sum, mut n) = (0.0f64, 0.0f64, 0);
+        let t_full = std::time::Instant::now();
+        let mut full = vec![];
+        for fs in 0..40u64 {
+            let c = Cup::new(fs);
+            full.push(c.asset(7).bounds());
+        }
+        let tf = t_full.elapsed();
+        let t_h = std::time::Instant::now();
+        for fs in 0..40u64 {
+            let c = Cup::new(fs);
+            let (lo, hi) = c.bounds_hint(7).unwrap();
+            let (flo, fhi) = full[fs as usize];
+            let e = (0..3).map(|k| (lo[k] - flo[k]).abs().max((hi[k] - fhi[k]).abs())).fold(0.0, f64::max);
+            worst = worst.max(e);
+            sum += e;
+            n += 1;
+            if e > 0.01 {
+                eprintln!("fs {fs} err {e:.4} full {flo:?} {fhi:?} hint {lo:?} {hi:?} guard {}", c.has_guard);
+            }
+        }
+        eprintln!("cup hint: worst {worst:.4} mean {:.4}; full {:?} hint {:?}", sum / n as f64, tf, t_h.elapsed());
+        assert!(worst < 0.02);
+    }
 }
