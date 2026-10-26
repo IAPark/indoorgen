@@ -69,12 +69,22 @@ fn main() {
     let mess = indoorgen::mess::MessCfg { level: mess_level, seed };
     let room = args.get(2).cloned();
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
+    // default: the dense-furnishing program + Infinigen's own solver steps 300/200/50 (realistic, lived-in rooms).
+    // INFINIGEN_PROGRAM=1: the program exactly as exported from python home.py + the fast_solve.gin steps 100/40/5 (selfcheck/lockstep semantics).
+    let orig_prog = std::env::var("INFINIGEN_PROGRAM").map_or(false, |v| v == "1");
+    let prog_file = if orig_prog { "home_program.json" } else { "home_program_dense.json" };
+    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/{}", env!("CARGO_MANIFEST_DIR"), prog_file)).unwrap()).unwrap();
+    let steps = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && std::env::var_os("NO_PH_REUSE").is_none());
+    if !orig_prog { indoorgen::furn::dof::set_place_tries(steps("PLACE_TRIES", 40)); }
+    indoorgen::furn::dof::set_counter_over_windows(!orig_prog && std::env::var_os("NO_COUNTER_WIN").is_none());
+    if !orig_prog { std::env::set_var("INFINIGEN_DENSE", "1"); }
+    let (dl, dm, ds) = if orig_prog { (100, 40, 5) } else { (300, 200, 50) };
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
     let assets = indoorgen::assets::RealAssets { fallback };
     let t = std::time::Instant::now();
-    let mut g = generate(&Options { seed, restrict_room: room, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
+    let mut g = generate(&Options { seed, restrict_room: room, steps_large: steps("STEPS_L", dl), steps_medium: steps("STEPS_M", dm), steps_small: steps("STEPS_S", ds) }, &assets, &prog);
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if std::env::var("EVAL").is_ok() {
         let (prog, _) = indoorgen::pipeline::load_program(seed, &prog);

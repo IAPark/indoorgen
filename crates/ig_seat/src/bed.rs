@@ -41,6 +41,11 @@ impl BedSpec {
         let r = &mut r;
         c.width = r.log_uniform(1.4, 2.4);
         c.size = r.uniform(2.0, 2.4);
+        if fseed % 4 == 0 && std::env::var_os("INFINIGEN_DENSE").is_some() {
+            // dense mode (not python-exact): a quarter of the beds are single beds (1.0-1.5 x 1.9-2.2 m) so small bedrooms always get one
+            c.width = 1.0 + (c.width - 1.4) / 1.0 * 0.5;
+            c.size = 1.9 + (c.size - 2.0) * 0.75;
+        }
         c.thickness = r.uniform(0.05, 0.12);
         let has_all_legs = r.uniform(0.0, 1.0) < 0.2;
         c.leg_thickness = r.uniform(0.08, 0.12);

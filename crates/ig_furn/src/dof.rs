@@ -132,7 +132,7 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     let proj_b = projected(&b_tris, nb, origin_b);
     let (Some(proj_a), Some(proj_b)) = (proj_a, proj_b) else { return false };
     let res = if g.check_z {
-        if std::env::var("STAB").is_ok() && name.contains("WallArt") { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
+        if std::env::var("STAB").is_ok() && name.contains("WallArt") || name.contains("KitchenSpace") { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
         shp::within(&proj_a, &shp::buffer(&proj_b, 1e-2))
     } else {
         // rotate so the projection of +z becomes the x axis; compare extents along y
@@ -225,9 +225,16 @@ pub fn check_post_move_validity(state: &State, name: &str) -> bool {
     r
 }
 
+thread_local! { static COUNTER_OVER_WINDOWS: std::cell::Cell<bool> = std::cell::Cell::new(false); }
+/// dense mode: kitchen counter runs (KitchenSpaceFactory, 2.4 m placeholder incl. upper cabinets) may stand in front of windows
+/// (python's cutter boxes make most window walls unusable, leaving kitchens without any counter)
+pub fn set_counter_over_windows(on: bool) { COUNTER_OVER_WINDOWS.with(|c| c.set(on)); }
+
 fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     let nc = no_collision_tag();
-    let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc)).map(|(k, _)| k).collect();
+    let skip_win = COUNTER_OVER_WINDOWS.with(|c| c.get()) && state.objs[name].generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory");
+    let win = Tag::sem("Window");
+    let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc) && !(skip_win && o.tags.contains(win.clone()))).map(|(k, _)| k).collect();
     if others.is_empty() {
         return true;
     }
@@ -524,8 +531,12 @@ pub fn combine_rotation_constraints(state: &State, parents: &[(String, usize)]) 
 }
 
 /// dof.try_apply_relation_constraints
+thread_local! { static PLACE_TRIES: std::cell::Cell<usize> = std::cell::Cell::new(10); }
+/// dense mode: more pose samples per placement attempt (python: 10) so big wall objects (kitchen counter runs) find a free stretch of wall
+pub fn set_place_tries(n: usize) { PLACE_TRIES.with(|c| c.set(n)); }
+
 pub fn try_apply_relation_constraints(state: &mut State, name: &str, rng: &mut Rng) -> bool {
-    for _ in 0..10 {
+    for _ in 0..PLACE_TRIES.with(|c| c.get()) {
         let Some(parents) = apply_relations_surfacesample(state, name, rng) else {
             if std::env::var("DBG2").is_ok() { eprintln!("  [{name}] apply failed (init invalid)"); }
             return false;
@@ -534,6 +545,11 @@ pub fn try_apply_relation_constraints(state: &mut State, name: &str, rng: &mut R
         if std::env::var("DBG2").is_ok() && !valid {
             let rel_ok = all_relations_valid(state, name);
             eprintln!("  [{name}] post-move invalid: relations_ok={rel_ok} pos={:?}", state.objs[name].pose.t);
+            if rel_ok {
+                let nc = no_collision_tag();
+                let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc)).map(|(k, _)| k).collect();
+                eprintln!("    collides with {:?}", others.iter().map(|o| (o.as_str(), col::depth(state, name, o))).filter(|x| x.1 > 1e-4).collect::<Vec<_>>());
+            }
         }
         if valid {
             let dt = combined_stability_matrix(state, &parents);

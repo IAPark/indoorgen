@@ -154,7 +154,36 @@ fn unseeded_init_draws(class: &str, rng: &mut Rng) {
     crate::ctor_draws::set_unseeded(crate::ctor_draws::ctor_draws(class, rng));
 }
 
+thread_local! {
+    static PH_REUSE: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static PH_CACHE: std::cell::RefCell<HashMap<String, (ObjGeom, super::state::GenRef, u32)>> = std::cell::RefCell::new(HashMap::default());
+}
+/// Dense mode (not python-lockstep): the proposals of ONE annealing step (same class, different parent/plane assignments) share one
+/// sampled placeholder instead of building a new asset (up to 1 s for sofas / armchairs) per rejected candidate.
+pub fn set_placeholder_reuse(on: bool) { PH_REUSE.with(|c| c.set(on)); }
+
 pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
+    if PH_REUSE.with(|c| c.get()) {
+        let hit = PH_CACHE.with(|m| {
+            let mut m = m.borrow_mut();
+            let e = m.get_mut(class)?;
+            e.2 += 1;
+            let r = (e.0.clone(), e.1.clone());
+            if e.2 >= 8 { m.remove(class); }
+            Some(r)
+        });
+        if hit.is_some() { return hit; }
+    }
+    let r = sample_rand_placeholder_new(ctx, rng, class);
+    if PH_REUSE.with(|c| c.get()) {
+        if let Some(x) = &r {
+            PH_CACHE.with(|m| m.borrow_mut().insert(class.to_string(), (x.0.clone(), x.1.clone(), 0)));
+        }
+    }
+    r
+}
+
+fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
     let singleton = ctx.usage.has_usage(class, "SingleGenerator");
     let fac_seed = if singleton && ctx.singletons.contains_key(class) {
         ctx.singletons[class]
@@ -218,7 +247,11 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             if !ctx.oracle.is_empty() {
                 eprintln!("ORACLE MISS {class} {fac_seed} {inst_seed}");
             }
-            ctx.assets.placeholder(class, fac_seed, inst_seed, kind)?
+            let _t = ProfGuard::new(3);
+            let t0 = std::time::Instant::now();
+            let r = ctx.assets.placeholder(class, fac_seed, inst_seed, kind);
+            if std::env::var_os("PHTIME").is_some() { eprintln!("PHTIME {class} {kind:?} {:.3}", t0.elapsed().as_secs_f64()); }
+            r?
         }
     };
     if std::env::var_os("PHDBG").is_some() { eprintln!("PHDBG {class} {fac_seed} {inst_seed} lo {:?} hi {:?}", geom.lo, geom.hi); }
@@ -245,7 +278,7 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             o.relations = assignments.clone();
             state.objs.insert(name.clone(), o);
             state.touch(name);
-            let okk = try_apply_relation_constraints(state, name, rng);
+            let okk = { let _t = ProfGuard::new(4); try_apply_relation_constraints(state, name, rng) };
             if std::env::var("ADDDBG").is_ok() {
                 eprintln!("ADD {class}: relation placement ok={okk}");
             }
@@ -283,7 +316,7 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             let o = state.objs[name.as_str()].clone();
             let class = o.generator.as_ref().unwrap().class.clone();
             let b = backup(&o);
-            let Some((geom, gen)) = sample_rand_placeholder(ctx, rng, &class) else { return false };
+            let Some((geom, gen)) = sample_rand_placeholder_new(ctx, rng, &class) else { return false };
             *old = Some((o, b));
             let oo = state.objs.get_mut(name.as_str()).unwrap();
             oo.geom = Arc::new(geom);
@@ -789,6 +822,14 @@ pub fn move_weights(restrict: Option<&[MoveKind]>, add_scalar: f64) -> Vec<(Move
     all.into_iter().filter(|(k, _)| restrict.map_or(true, |r| r.contains(k))).collect()
 }
 
+thread_local! { pub static PROF: std::cell::Cell<[f64; 8]> = std::cell::Cell::new([0.0; 8]); }
+/// scoped wall timer: 0 evaluate, 1 apply_move, 2 move generation (printed with DBG=1)
+struct ProfGuard(usize, std::time::Instant);
+impl ProfGuard { fn new(i: usize) -> Self { ProfGuard(i, std::time::Instant::now()) } }
+impl Drop for ProfGuard {
+    fn drop(&mut self) { PROF.with(|p| { let mut a = p.get(); a[self.0] += self.1.elapsed().as_secs_f64(); p.set(a); }); }
+}
+
 pub struct Annealer {
     pub stats: HashMap<String, [usize; 4]>, // kind -> [steps, proposed, valid, accepted]
     pub cfg: AnnealCfg,
@@ -815,6 +856,7 @@ impl Annealer {
     }
 
     fn evaluate(&mut self, ctx: &Ctx, state: &State) -> (f64, f64) {
+        let _t = ProfGuard::new(0);
         if std::env::var("NOMEMO").is_ok() {
             self.memo.clear();
         }
@@ -836,12 +878,15 @@ impl Annealer {
         st[0] += 1;
         let mut chosen: Option<(Move, (f64, f64))> = None;
         let mut retry = 0usize;
-        while let Some(mut mv) = gen.next(ctx, state, filter, rng) {
+        loop {
+            let nx = { let _t = ProfGuard::new(2); gen.next(ctx, state, filter, rng) };
+            let Some(mut mv) = nx else { break };
             self.stats.get_mut(&format!("{kind:?}")).unwrap()[1] += 1;
             if retry == self.cfg.max_invalid_candidates {
                 break;
             }
-            if apply_move(&mut mv, state, ctx, rng) {
+            let ok = { let _t = ProfGuard::new(1); apply_move(&mut mv, state, ctx, rng) };
+            if ok {
                 self.stats.get_mut(&format!("{kind:?}")).unwrap()[2] += 1;
                 self.evict(ctx, state, &mv);
                 let r = self.evaluate(ctx, state);
@@ -874,6 +919,7 @@ impl Annealer {
                 }
             }
             if accept {
+                if let Move::Addition { class, .. } = &mv { PH_CACHE.with(|m| { m.borrow_mut().remove(class.as_str()); }); }
                 self.stats.get_mut(&format!("{kind:?}")).unwrap()[3] += 1;
                 self.curr = Some(prop);
                 if let Move::Deletion { backup, .. } = &mut mv {
@@ -1046,7 +1092,7 @@ pub fn solve_objects(ctx: &mut Ctx, state: &mut State, stage: &Domain, assign: &
         crate::rng::set_trace(false);
     }
     if std::env::var("DBG").is_ok() {
-        eprintln!("stage assign={:?} bounds={} objs {}->{} loss/viol={:?} stats={:?}", assign, bounds.len(), n_start, state.objs.len(), ann.curr, ann.stats);
+        eprintln!("stage assign={:?} bounds={} objs {}->{} loss/viol={:?} stats={:?} prof[eval,apply,gen,placeholder,addrel]={:?}", assign, bounds.len(), n_start, state.objs.len(), ann.curr, ann.stats, PROF.with(|p| p.get()));
     }
     for o in state.objs.values_mut() {
         o.active = true;
