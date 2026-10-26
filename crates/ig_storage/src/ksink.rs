@@ -85,7 +85,16 @@ impl Factory for KSink {
         let mut a = Asset::default();
         for (n, g) in &outs {
             if n == "Cutter" {
-                a.cutters.push(super::gnhelpers::to_mesh(g));
+                // lift the cutter's top cap 2 cm clear of the countertop surface (coplanar caps confuse the BSP difference);
+                // gen2's cut drops result faces outside the cut piece's bounds, which removes the lifted cap
+                let mut cm = super::gnhelpers::to_mesh(g);
+                let ztop = cm.pos.iter().map(|p| p[2]).fold(f64::MIN, f64::max);
+                for p in cm.pos.iter_mut() {
+                    if p[2] > ztop - 1e-4 {
+                        p[2] += 0.02;
+                    }
+                }
+                a.cutters.push(cm);
             } else {
                 a.mesh(super::gnhelpers::to_mesh(g), &m, None);
             }

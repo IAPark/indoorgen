@@ -181,9 +181,9 @@ impl Mesh {
         let mut uv: Vec<[f64; 2]> = vec![];
         let mut tris = Vec::with_capacity(self.faces.len() * 2);
         for f in &self.faces {
-            for k in 1..f.len() - 1 {
+            for [ia, ib, ic] in triangulate_face(&self.pos, f) {
                 let n = pos.len() as u32;
-                for &i in &[f[0], f[k], f[k + 1]] {
+                for &i in &[ia, ib, ic] {
                     pos.push(self.pos[i as usize]);
                     if has_uv {
                         uv.push(self.uv[i as usize]);
@@ -193,6 +193,54 @@ impl Mesh {
             }
         }
         (pos, uv, tris)
+    }
+}
+
+/// Triangles of one polygon: a fan for triangles and convex polygons (unchanged output), ear clipping (projected onto the
+/// polygon's Newell plane) for non-convex ones, where a fan produces triangles outside the polygon (shards across sink basins).
+pub fn triangulate_face(pos: &[V3], f: &[u32]) -> Vec<[u32; 3]> {
+    let n = f.len();
+    let fan = || (1..n - 1).map(|k| [f[0], f[k], f[k + 1]]).collect::<Vec<_>>();
+    if n <= 3 {
+        return fan();
+    }
+    let mut nrm = [0.0; 3];
+    for i in 0..n {
+        let (a, b) = (pos[f[i] as usize], pos[f[(i + 1) % n] as usize]);
+        nrm[0] += (a[1] - b[1]) * (a[2] + b[2]);
+        nrm[1] += (a[2] - b[2]) * (a[0] + b[0]);
+        nrm[2] += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    let l = dot(nrm, nrm).sqrt();
+    if l < 1e-18 {
+        return fan();
+    }
+    let nrm = [nrm[0] / l, nrm[1] / l, nrm[2] / l];
+    // convex if every corner turns the same way as the polygon normal
+    let convex = (0..n).all(|i| {
+        let (a, b, c) = (pos[f[(i + n - 1) % n] as usize], pos[f[i] as usize], pos[f[(i + 1) % n] as usize]);
+        dot(cross(sub(b, a), sub(c, b)), nrm) >= -1e-12
+    });
+    if convex {
+        return fan();
+    }
+    let ax = if nrm[0].abs() > 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let u = cross(nrm, ax);
+    let ul = dot(u, u).sqrt();
+    let u = [u[0] / ul, u[1] / ul, u[2] / ul];
+    let v = cross(nrm, u);
+    let flat: Vec<f64> = f.iter().flat_map(|&i| { let p = pos[i as usize]; [dot(p, u), dot(p, v)] }).collect();
+    match earcutr::earcut(&flat, &[], 2) {
+        Ok(t) if t.len() == 3 * (n - 2) => t
+            .chunks(3)
+            .map(|c| {
+                let (a, b, cc) = (f[c[0]], f[c[1]], f[c[2]]);
+                // keep the polygon's winding (earcut may return either orientation)
+                let tn = cross(sub(pos[b as usize], pos[a as usize]), sub(pos[cc as usize], pos[a as usize]));
+                if dot(tn, nrm) < 0.0 { [a, cc, b] } else { [a, b, cc] }
+            })
+            .collect(),
+        _ => fan(),
     }
 }
 

@@ -230,6 +230,7 @@ fn main() {
             for c in &a.cutters {
                 let mut w = c.clone();
                 w.transform(&pm);
+                if std::env::var("CUTDBG").is_ok() { let (l, h) = w.bounds(); eprintln!("CUTTER {k} -> {} lo {:?} hi {:?}", rs.target, l, h); }
                 cutters.entry(rs.target.clone()).or_default().push(w);
             }
         }
@@ -355,7 +356,10 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
     use indoorgen::gn::geom::Mesh as GM;
     let (blo, bhi) = b.bounds();
     let e = 1e-3;
+    // the boolean needs the closed part: an open near-faces piece leaves an inverted lid (BSP) or patchy hole walls (exact)
+    let whole = std::env::var_os("CUT_PIECE").is_none();
     let near: Vec<bool> = a.faces.iter().map(|f| {
+        if whole { return true }
         (0..3).all(|d| {
             let (mn, mx) = f.iter().fold((f64::MAX, f64::MIN), |(mn, mx), &i| (mn.min(a.pos[i as usize][d]), mx.max(a.pos[i as usize][d])));
             mn <= bhi[d] + e && mx >= blo[d] - e
@@ -378,9 +382,80 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
         }
     }
     let conv = |m: &Mesh| GM::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[]);
-    let r = indoorgen::gn::csg::mesh_boolean("DIFFERENCE", &conv(&sub), &[&conv(b)]);
+    let r = if whole { indoorgen::gn::csg::mesh_boolean("DIFFERENCE", &conv(&sub), &[&conv(b)]) } else { indoorgen::gn::csg::mesh_boolean_exact("DIFFERENCE", &conv(&sub), &[&conv(b)], false, true) };
     let base = o.pos.len() as u32;
     o.pos.extend(r.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]));
-    o.faces.extend(r.faces_vec().into_iter().map(|f| f.into_iter().map(|x| x + base).collect::<Vec<u32>>()));
+    // `sub` is an open piece of the part, so the BSP inside test can keep cutter faces that lie outside it (e.g. the cutter's
+    // top cap above the countertop): a difference never adds geometry outside the original piece, so drop those faces
+    let (slo, shi) = sub.bounds();
+    // ...and a difference never keeps material inside the cutter: drop faces whose centre is inside b by more than 1 mm
+    // (hole walls lie on b's surface and stay); b is the closed cutter, tested by ray parity
+    let btris: Vec<[V3; 3]> = b.faces.iter().flat_map(|f| (1..f.len() - 1).map(move |k| [f[0], f[k], f[k + 1]])).map(|t| t.map(|i| b.pos[i as usize])).collect();
+    let inside_b = |p: V3| -> bool {
+        let mut n = 0;
+        for t in &btris {
+            // ray +x from p (tiny y/z jitter avoids edge hits)
+            let (o, d) = ([p[0], p[1] + 1.3e-7, p[2] + 2.9e-7], [1.0, 0.0, 0.0]);
+            let (e1, e2) = (sub3(t[1], t[0]), sub3(t[2], t[0]));
+            let h = cross(d, e2);
+            let a = dot(e1, h);
+            if a.abs() < 1e-12 { continue }
+            let f = 1.0 / a;
+            let sv = sub3(o, t[0]);
+            let u = f * dot(sv, h);
+            if !(0.0..=1.0).contains(&u) { continue }
+            let q = cross(sv, e1);
+            let v = f * dot(d, q);
+            if v < 0.0 || u + v > 1.0 { continue }
+            if f * dot(e2, q) > 0.0 { n += 1 }
+        }
+        n % 2 == 1
+    };
+    let dist_b = |p: V3| -> f64 { btris.iter().map(|t| pt_tri_dist(p, t)).fold(f64::MAX, f64::min) };
+    let ok = |f: &Vec<u32>| {
+        let n = f.len() as f64;
+        let c: V3 = [0, 1, 2].map(|d| f.iter().map(|&i| r.pos[i as usize][d] as f64).sum::<f64>() / n);
+        let in_bounds = (0..3).all(|d| c[d] >= slo[d] - 1e-3 && c[d] <= shi[d] + 1e-3);
+        let keep = in_bounds && !(inside_b(c) && dist_b(c) > 1e-3);
+        if keep && std::env::var_os("CUTDBG").is_some() {
+            let (blo, bhi) = b.bounds();
+            if (0..3).all(|d| c[d] > blo[d] + 0.01 && c[d] < bhi[d] - 0.01) {
+                eprintln!("CUTKEEP c=({:.3},{:.3},{:.3}) inside={} dist={:.4}", c[0], c[1], c[2], inside_b(c), dist_b(c));
+            }
+        }
+        keep
+    };
+    o.faces.extend(r.faces_vec().into_iter().filter(|f| ok(f)).map(|f| f.into_iter().map(|x| x + base).collect::<Vec<u32>>()));
     o
+}
+
+fn sub3(a: V3, b: V3) -> V3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// distance from point p to triangle t (Ericson, Real-Time Collision Detection 5.1.5)
+fn pt_tri_dist(p: V3, t: &[V3; 3]) -> f64 {
+    let (a, b, c) = (t[0], t[1], t[2]);
+    let (ab, ac, ap) = (sub3(b, a), sub3(c, a), sub3(p, a));
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    let len = |v: V3| dot(v, v).sqrt();
+    if d1 <= 0.0 && d2 <= 0.0 { return len(ap) }
+    let bp = sub3(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 { return len(bp) }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 { let v = d1 / (d1 - d3); return len(sub3(p, [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v])) }
+    let cp = sub3(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 { return len(cp) }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 { let w = d2 / (d2 - d6); return len(sub3(p, [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w])) }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return len(sub3(p, [b[0] + (c[0] - b[0]) * w, b[1] + (c[1] - b[1]) * w, b[2] + (c[2] - b[2]) * w]));
+    }
+    let den = 1.0 / (va + vb + vc);
+    let (v, w) = (vb * den, vc * den);
+    len(sub3(p, [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w]))
 }
