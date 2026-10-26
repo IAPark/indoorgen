@@ -254,6 +254,19 @@ impl Planner<'_> {
             return self.no(11);
         }
         let seat_z = if sitting { Some(seat_rel) } else { None };
+        // the sitter's own seat is skipped by the collision test, so a pulled-out footrest / chaise in front of the seat would go
+        // through the shins: no upright sitting where the support has a surface below seat height where the lower legs hang
+        if matches!(s.kind, SitUpright | SitRelaxed) {
+            if let Some(oi) = s.support {
+                let o = &self.w.objs[oi];
+                for d in [0.55, 0.65] {
+                    let (x, y) = (s.anchor[0] + s.face[0] * d, s.anchor[1] + s.face[1] * d);
+                    if o.column(x, y).iter().any(|z| *z > fl + 0.15 && *z < s.top - 0.12) {
+                        return self.no(14);
+                    }
+                }
+            }
+        }
         let (cover, top) = self.cover_variant(s, seed);
         // arms-out variant of the lying pose (flag bit read by the pose library)
         let mut seed = if cover == Cover::Under { seed | (1 << 20) } else { seed };

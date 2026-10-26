@@ -125,6 +125,19 @@ pub fn settle(people: &[Placement], scene: &mut Scene, floor_z: f64) {
         }
         // 3: settle onto the surface under the footprint
         let excl: Vec<String> = fol.clone();
+        // soft bodies on the bed drape over the bed's sheets (rest on the highest point, bottom layer follows the surface)
+        let bed_col = {
+            let mut pos: Vec<V3> = vec![];
+            let mut faces: Vec<Vec<u32>> = vec![];
+            for n in &scene.nodes {
+                if n.name.starts_with(&format!("{bed}#")) && !fol.contains(&n.name) && !n.mesh.is_empty() {
+                    let o = pos.len() as u32;
+                    pos.extend_from_slice(&n.mesh.pos);
+                    faces.extend(n.mesh.faces.iter().map(|f| f.iter().map(|i| i + o).collect::<Vec<u32>>()));
+                }
+            }
+            ig_kit::cloth::Collider::new(&pos, &faces)
+        };
         for (i, name) in fol.iter().enumerate() {
             let Some(ni) = node_idx(scene, name) else { continue };
             let (lo, hi) = scene.nodes[ni].mesh.bounds();
@@ -137,6 +150,10 @@ pub fn settle(people: &[Placement], scene: &mut Scene, floor_z: f64) {
                     zs.push(crate::audit::top_below(scene, x, y, hi[2] + 0.3, &excl, floor_z).0);
                 }
             }
+            if std::env::var_os("PILLOW_DBG").is_some() {
+                let c = crate::audit::top_below(scene, pos[i][0], pos[i][1], hi[2] + 0.3, &excl, floor_z);
+                eprintln!("PILLOW {name} lo.z {:.3} hi.z {:.3} zs {:?} centre top {:.3} on {}", lo[2], hi[2], zs.iter().map(|z| (z * 1000.0).round() / 1000.0).collect::<Vec<_>>(), c.0, c.1);
+            }
             zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let under_head = anchored[i];
             let sup = if under_head { zs[4] - 0.03 } else { zs[4] };
@@ -145,6 +162,15 @@ pub fn settle(people: &[Placement], scene: &mut Scene, floor_z: f64) {
                 continue;
             }
             scene.nodes[ni].mesh.transform(&Mat4::translation([dx, dy, dz]));
+            let on_bed = crate::audit::top_below(scene, pos[i][0], pos[i][1], hi[2] + 0.3, &excl, floor_z).1.starts_with(&format!("{bed}#"));
+            if on_bed && !under_head && std::env::var_os("PILLOW_NOWRAP").is_none() {
+                let thin = (hi[2] - lo[2]) < 0.06;
+                if thin {
+                    ig_kit::cloth::rest_and_wrap(&mut scene.nodes[ni].mesh.pos, &bed_col, 0.02, 0.005, 0.1);
+                } else {
+                    ig_kit::cloth::rest_and_wrap(&mut scene.nodes[ni].mesh.pos, &bed_col, 0.07, 0.01, 0.15);
+                }
+            }
             for j in scene.cloth.iter_mut() {
                 if j["kind"] == "follow" && j["part"] == name.as_str() {
                     j["xy"] = json!([pos[i][0], pos[i][1]]);

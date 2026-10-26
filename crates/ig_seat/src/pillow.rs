@@ -1,7 +1,6 @@
 //! seating/pillow.py PillowFactory: two-layer sheet (grid / disc / annulus) inflated by the native cloth solver (approximate by
 //! design), optional rim extrusion, centred, subsurf 2.
 use super::bpyops::fill_grid_loop;
-use super::bridge::bridge_two_loops;
 use super::bpyx::extrude_region;
 use super::cloth::{simulate, Calib, ClothParams};
 use super::clothes::{apply_srt_f32, grid, solidify_simple, vertex_normals};
@@ -60,7 +59,7 @@ impl PillowSpec {
                     let ri = r.uniform(0.2, 0.4);
                     let inner = Self::circle(ri);
                     m.pos.extend(inner.iter().cloned());
-                    bridge_two_loops(&mut m, (0..128).collect(), (128..256).collect(), 12, 0.0);
+                    super::bridge::bridge_pair_opts(&mut m, (0..128).collect(), (128..256).collect(), 12, 0.0, &mut None, super::bridge::Interp::Linear, 1.0, "SMOOTH"); // python: interpolation="LINEAR"
                     let e = boundary_order(&m);
                     (m, e)
                 }
