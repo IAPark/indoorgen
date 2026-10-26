@@ -80,6 +80,7 @@ pub struct SurfaceNets {
 
 /// BKE_mesh_remesh_voxel(mesh, voxel_size, adaptivity 0, isovalue 0) on the corner triangles of a mesh
 pub fn voxel_remesh(pos: &[F3], tris: &[[u32; 3]], voxel: f32) -> SurfaceNets {
+    let voxel = voxel * crate::leafkit::voxel_scale() as f32;
     if std::env::var("NOVDB").is_err() {
         if let Some((v, f)) = crate::vdb::remesh_voxel(pos, tris, voxel) {
             return SurfaceNets { v, f };

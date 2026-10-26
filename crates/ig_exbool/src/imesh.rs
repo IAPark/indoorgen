@@ -4,6 +4,56 @@
 use crate::exbool::mpq::*;
 use num_traits::Zero;
 use std::collections::HashMap;
+use num_bigint::BigInt;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
+
+/// Fx-style hasher for the exact-vertex map (lookup only, never iterated)
+#[derive(Default, Clone, Copy)]
+pub struct VHasher(u64);
+impl Hasher for VHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_u64(&mut self, x: u64) {
+        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+fn vhash(co: &V3q) -> u64 {
+    let mut h = VHasher::default();
+    VKey::hash_co(co, &mut h);
+    h.finish()
+}
+/// key of the vertex map: rationals are kept reduced (num-rational normalises), so equal values have equal (numer, denom) limbs;
+/// the std `Hash for Ratio` does a continued-fraction recursion per hash, which dominated the exact booleans
+#[derive(Clone, PartialEq, Eq)]
+pub struct VKey(pub V3q);
+impl VKey {
+    fn hash_co<H: Hasher>(co: &V3q, h: &mut H) {
+        for q in co {
+            hash_big(q.numer(), h);
+            hash_big(q.denom(), h);
+        }
+    }
+}
+fn hash_big<H: Hasher>(b: &BigInt, h: &mut H) {
+    h.write_u64(b.sign() as i64 as u64);
+    for d in b.magnitude().iter_u64_digits() {
+        h.write_u64(d);
+    }
+}
+impl Hash for VKey {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        for q in &self.0 {
+            hash_big(q.numer(), h);
+            hash_big(q.denom(), h);
+        }
+    }
+}
 
 pub const NO_INDEX: i32 = -1;
 
@@ -88,7 +138,7 @@ impl Face {
 #[derive(Default)]
 pub struct Arena {
     pub verts: Vec<Vert>,
-    vmap: HashMap<V3q, u32>,
+    vmap: HashMap<u64, Vec<u32>, BuildHasherDefault<VHasher>>,
     pub faces: Vec<Face>,
 }
 
@@ -109,7 +159,7 @@ impl Arena {
 
     /// add_or_find_vert(mpq3, orig): double coordinates derived by get_d (truncation).
     pub fn add_or_find_vert_q(&mut self, co: V3q, orig: i32) -> u32 {
-        if let Some(&i) = self.vmap.get(&co) {
+        if let Some(i) = self.find_vert(&co) {
             return i;
         }
         let d = q3_get_d(&co);
@@ -118,7 +168,7 @@ impl Arena {
 
     /// add_or_find_vert(Vert*) with an already computed double coordinate.
     pub fn add_or_find_vert_with_d(&mut self, co: V3q, d: [f64; 3], orig: i32) -> u32 {
-        if let Some(&i) = self.vmap.get(&co) {
+        if let Some(i) = self.find_vert(&co) {
             return i;
         }
         self.insert_vert(co, d, orig)
@@ -126,13 +176,13 @@ impl Arena {
 
     fn insert_vert(&mut self, co: V3q, d: [f64; 3], orig: i32) -> u32 {
         let id = self.verts.len() as u32;
-        self.vmap.insert(co.clone(), id);
+        self.vmap.entry(vhash(&co)).or_default().push(id);
         self.verts.push(Vert { co, d, id: id as i32, orig });
         id
     }
 
     pub fn find_vert(&self, co: &V3q) -> Option<u32> {
-        self.vmap.get(co).copied()
+        self.vmap.get(&vhash(co)).and_then(|l| l.iter().copied().find(|&i| self.verts[i as usize].co == *co))
     }
 
     pub fn add_face(&mut self, vert: Vec<u32>, orig: i32, edge_orig: Vec<i32>, is_intersect: Vec<bool>) -> usize {

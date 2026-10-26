@@ -109,8 +109,8 @@ impl Factory for Cup {
                 wrap.faces.push(f.iter().map(|&v| map[v as usize]).collect());
             }
         }
-        let s = books::solidify_simple(&m, -(self.thickness as f32 as f64), None);
-        let s = subsurf(&s, 2, false);
+        let s0 = books::solidify_simple(&m, -(self.thickness as f32 as f64), None);
+        let s = subsurf(&s0, if crate::dense() { 1 } else { 2 }, false);
         // handle_angle is drawn even without a guard
         let (xl, zl) = (xs[xs.len() - 1] - xs[xs.len() - 2], zs[zs.len() - 1] - zs[zs.len() - 2]);
         let angle_low = (xl / zl).atan();
@@ -122,7 +122,8 @@ impl Factory for Cup {
             let hl = self.handle_location;
             let n = xs.len();
             let loc = [xs[n - 2] * (1.0 - hl) + xs[n - 1] * hl, 0.0, zs[n - 2] * (1.0 - hl) + zs[n - 1] * hl];
-            let h = self.make_handle(&s, loc, handle_angle);
+            // dense mode: cut the handle against the level-1 cup (4x fewer faces in the exact boolean; the junction differs by < 1 mm)
+            let h = if crate::dense() { self.make_handle(&subsurf(&s0, 1, false), loc, handle_angle) } else { self.make_handle(&s, loc, handle_angle) };
             all.append(&h);
         }
         all.append(&wrap);
@@ -224,7 +225,10 @@ fn mat_mul_v(m: &crate::bl32::M4, v: [f32; 3]) -> [f32; 3] {
 
 /// bpy_operators add_torus (48 x 12): mathutils float32 rotation matrix times a float32 vector (products in float, sum in double)
 fn torus(major: f64, minor: f64) -> Mesh {
-    let (maj_seg, min_seg) = (48usize, 12usize);
+    torus_seg(major, minor, 48, 12)
+}
+
+fn torus_seg(major: f64, minor: f64, maj_seg: usize, min_seg: usize) -> Mesh {
     let pi2 = std::f64::consts::PI * 2.0;
     let mut m = Mesh::new();
     let tot = maj_seg * min_seg;
@@ -261,7 +265,7 @@ impl Cup {
     /// the tapered handle torus (object space) and its world matrix
     fn handle_ring(&self, loc: [f64; 3], angle: f64) -> (Mesh, crate::bl32::M4) {
         use crate::bl32::Obj32;
-        let mut t = torus(self.handle_radius, self.handle_inner);
+        let mut t = if crate::dense() { torus_seg(self.handle_radius, self.handle_inner, 32, 8) } else { torus(self.handle_radius, self.handle_inner) };
         let ob = Obj32::new([loc[0] as f32, loc[1] as f32, loc[2] as f32], [std::f64::consts::FRAC_PI_2 as f32, angle as f32, 0.0]);
         let w = ob.matrix_world();
         // two SIMPLE_DEFORM TAPER modifiers in object space
@@ -371,6 +375,17 @@ pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
 mod tests {
     use super::*;
     /// dense bounds hint vs the full asset (boolean handle): max bbox error over many seeds
+    #[test]
+    fn cup_asset_dense_vs_exact_timing() {
+        std::env::set_var("INFINIGEN_DENSE", "1");
+        let t = std::time::Instant::now();
+        let mut tris = 0;
+        for fs in 0..12u64 {
+            let a = Cup::new(fs).asset(7);
+            tris += a.parts.iter().map(|p| p.mesh.faces.len()).sum::<usize>();
+        }
+        eprintln!("cup asset x12 (dense): {:?}, {} faces", t.elapsed(), tris);
+    }
     #[test]
     fn cup_hint_matches_asset() {
         std::env::set_var("INFINIGEN_DENSE", "1");

@@ -480,6 +480,11 @@ pub fn plane_frame(n: V3) -> (V3, V3) {
     ([r[0][0], r[0][1], r[0][2]], [r[1][0], r[1][1], r[1][2]])
 }
 
+fn dense_fast() -> bool {
+    static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *D.get_or_init(|| std::env::var_os("INFINIGEN_DENSE").is_some() && std::env::var_os("NO_CHEAP_PH").is_none())
+}
+
 /// trimesh.path.polygons.projected: union of the (front side) triangles projected onto the plane (origin, normal)
 pub fn projected(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     // memo on the exact input bits: the solver projects the same (static parent / unchanged child) triangles again and again
@@ -566,6 +571,11 @@ fn projected_raw(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
         return None;
     }
     let u_ = shp::union_all(&polys);
+    // dense mode: the triangles of a projected solid share exactly projected vertices, so their union has no slivers to close;
+    // skip the buffer(pad).buffer(-pad) round trip (it changes the polygon by ~1e-5 relative only)
+    if dense_fast() && matches!(geos::Geom::geometry_type(&u_), Ok(geos::GeometryTypes::Polygon)) {
+        return Some(u_);
+    }
     let pad = 1e-5 * (2.0 * scale_);
     Some(shp::buffer(&shp::buffer(&u_, pad), -pad))
 }
