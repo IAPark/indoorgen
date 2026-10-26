@@ -337,8 +337,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     1 => (0.0, 0.7, 0.12, 0.50, 0.40, 0.05, 0.12, 0.45, 8, 1.0, 1.15, 1.0, 22.0, 0.5, 0.08, 0.28),
                     2 => (-0.3, 0.6, 0.15, 0.50, 0.50, 0.08, 0.15, 0.35, 7, 0.8, 1.0, 0.9, 20.0, 0.6, 0.04, 0.2),
                     3 => (-0.5, 0.45, 0.25, 0.50, 0.45, 0.12, 0.20, 0.25, 7, 0.6, 0.8, 0.8, 18.0, 0.7, 0.02, 0.16),
-                    4 => (-1.1, 0.4, 0.30, 0.50, 0.50, 0.15, 0.25, 0.25, 7, 0.6, 0.8, 0.5, 12.0, 0.8, 0.0, 0.16),
-                    _ => (-1.1, 0.4, 0.30, 0.60, 0.60, 0.20, 0.40, 0.2, 0, 0.5, 0.7, 0.4, 5.0, 0.8, 0.0, 0.14),
+                    4 => (-1.1, 0.4, 0.30, 0.50, 0.50, 0.15, 0.25, 0.25, 7, 0.6, 0.8, 0.8, 16.0, 0.8, 0.0, 0.16),
+                    _ => (-1.1, 0.4, 0.30, 0.60, 0.60, 0.20, 0.40, 0.2, 0, 0.5, 0.7, 0.7, 14.0, 0.8, 0.0, 0.14),
                 };
                 let (budget, want) = ([260, 170, 170, 130, 130, 130][lv], if lv == 0 { 10 } else { 6 });
                 let mut best: Option<(f64, usize, V3, V3, f64)> = None;
@@ -491,7 +491,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                             let lo_ok = match (kind, lv) { (1, 0) => 0.33, (1, _) => 0.25, (_, 0) => 0.5, _ => 0.35 };
                             if sz < lo_ok && !(lv > 1) { rej[5] += 1; continue }
                         }
-                        if s.person && lv < 5 && (by1 > 0.93 || by0 < -0.92 || bx0 < -0.97 || bx1 > 0.97) { rej[15] += 1; continue }
+                        if s.person && lv < 5 && (by1 > 0.93 || by0 < if lv < 2 { -0.92 } else { -0.97 } || bx0 < -0.97 || bx1 > 0.97) { rej[15] += 1; continue }
                         if s.person && lv < 5 && (by1 - by0) / 2.0 < if lv == 0 { 0.42 } else { 0.28 } { rej[16] += 1; continue }
                     }
                     // other people must not be cut by the frame edge
@@ -505,6 +505,16 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                                 match proj(pq) { Some((px, py)) => if px.abs() < 1.0 && py.abs() < 1.0 { ins += 1 }, None => {} }
                             }
                             if ins > 0 && ins < tot_p { cut = true }
+                            if ins == tot_p {
+                                let mut blocked = 0;
+                                for fz_ in [0.85, 0.6, 0.35] {
+                                    let tq = [(q.lo[0] + q.hi[0]) / 2.0, (q.lo[1] + q.hi[1]) / 2.0, q.lo[2] + fz_ * (q.hi[2] - q.lo[2])];
+                                    let dq = [tq[0] - o[0], tq[1] - o[1], tq[2] - o[2]];
+                                    let dl = (dq[0] * dq[0] + dq[1] * dq[1] + dq[2] * dq[2]).sqrt();
+                                    if let Some((_, ti)) = w.cast(o, unit(dq), dl - 0.15) { if w.keys[w.owner[ti] as usize] != q.key { blocked += 1 } }
+                                }
+                                if blocked >= 2 { cut = true }
+                            }
                         }
                         if cut { rej[23] += 1; continue }
                     }
@@ -542,8 +552,9 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     let sa_min = if s.person { 0.015 } else if s.group { 0.12 } else { 0.04 } * [1.0, 0.6, 0.4, 0.3, 0.2][lv.min(4)];
                     let big_other = w.keys.iter().enumerate().any(|(ki, kk)| kc[ki] as f64 / tf > key_max && !(s.group || *kk == s.key));
                     let big_subj = !s.group && !s.person && sa_f > [0.5, 0.55, 0.6, 0.7, 0.7, 0.8][lv.min(5)];
-                    let fails = [doorf > door_max, blk_f > blk_max, wall_f > wall_max, big_other, big_subj, furn_f < furn_min, sa_f < sa_min, mid as f64 > mid_max * tf];
-                    if fails.iter().any(|&b| b) { rej[8] += 1; for (i, b) in fails.iter().enumerate() { if *b && i < 6 { rej[17 + i] += 1 } } continue }
+                    let outs_bad = outside_ok && (sa_f < 0.08 || furn_f < 0.1 || wall_f > 0.4);
+                    let fails = [outs_bad, doorf > door_max, blk_f > blk_max, wall_f > wall_max, big_other, big_subj, furn_f < furn_min, sa_f < sa_min, mid as f64 > mid_max * tf];
+                    if fails.iter().any(|&b| b) { rej[8] += 1; for (i, b) in fails.iter().enumerate() { if *b && i < 7 { rej[16 + i] += 1 } } continue }
                     // subject visibility: 3x3x3 sample points
                     let (mut vis, mut n) = (0, 0);
                     for ix in 0..3 {
@@ -569,7 +580,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     if got.iter().any(|(p, ff, sk)| {
                         let dd = ((p[0] - o[0]).powi(2) + (p[1] - o[1]).powi(2)).sqrt();
                         let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
-                        dd < sp_d && ang < sp_a || (*sk == s.key && ang < 35.0 && dd < 2.5) || ang < 8.0
+                        dd < sp_d && ang < sp_a || (*sk == s.key && ang < 25.0 && dd < 1.5) || ang < 12.0
                     }) { rej[11] += 1; continue }
                     let px = proj(c).map_or(0.0, |p| p.0);
                     let lead = match s.face { Some(fc) if s.person && !s.lie => if px * (fc[0] * r[0] + fc[1] * r[1]) < 0.0 { 0.3 } else { 0.0 }, _ => 0.0 };
@@ -593,12 +604,17 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     let ez = (fz + 1.4).min(cz - 0.35);
                     let flens = if small { 12.0 } else { 14.0 };
                     let mut bestp: Option<(f64, [f64; 2], V3)> = None;
-                    for (p, _) in pool.iter().filter(|(_, o)| !*o) {
+                    for (p, outs) in pool.iter().filter(|(_, o)| !*o) {
                         let o = [p[0], p[1], ez];
-                        for tgt in [gt, cen] {
-                            let (dx, dy) = (tgt[0] - p[0], tgt[1] - p[1]);
-                            let dh = dx.hypot(dy);
+                        if *outs {
+                            let free = (0..8).all(|k| { let a = k as f64 * std::f64::consts::FRAC_PI_4; w.cast(o, [a.cos(), a.sin(), 0.0], 0.2).map_or(true, |(_, ti)| w.shell[ti]) });
+                            if !free || w.cast(o, [0.0, 0.0, -1.0], ez - fz + 0.4).is_none() { continue }
+                        }
+                        for (tgt, yo) in [(gt, 0.0), (cen, 0.0), (gt, -0.45), (gt, 0.45), (cen, -0.45), (cen, 0.45)] {
+                            let (dx0, dy0) = (tgt[0] - p[0], tgt[1] - p[1]);
+                            let dh = dx0.hypot(dy0);
                             if dh < 0.8 { continue }
+                            let (dx, dy) = (dx0 * f64::cos(yo) - dy0 * f64::sin(yo), dx0 * f64::sin(yo) + dy0 * f64::cos(yo));
                             let pitch = ((fz + 0.9 - ez).atan2(dh)).clamp(-5f64.to_radians(), 4f64.to_radians());
                             let f = [dx / dh * pitch.cos(), dy / dh * pitch.cos(), pitch.sin()];
                             let (r, u) = ([f[1], -f[0], 0.0], [-f[0] / (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-9) * f[2], -f[1] / (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-9) * f[2], (f[0] * f[0] + f[1] * f[1]).sqrt()]);
@@ -632,6 +648,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                                 } else { ds += 6.0 }
                             } }
                             let dmin = got.iter().map(|(q, ff, _)| if (q[0] - p[0]).hypot(q[1] - p[1]) < 0.8 && (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees() < 25.0 { 0.0 } else { 1.0 }).fold(1.0, f64::min);
+                            if dmin < 0.5 { continue }
                             let sc = -3.0 * cutp - 3.0 * wl as f64 / 40.0 - 3.0 * nr as f64 / 40.0 + ds / 40.0 / 6.0 + 0.8 * (fu as f64 / 40.0).min(0.4) - 2.0 * (1.0 - dmin);
                             if bestp.map_or(true, |b| sc > b.0) { bestp = Some((sc, [p[0], p[1]], f)) }
                         }
