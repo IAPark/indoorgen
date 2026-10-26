@@ -2,6 +2,7 @@
 #include <openvdb/openvdb.h>
 #include <openvdb/tools/MeshToVolume.h>
 #include <openvdb/tools/VolumeToMesh.h>
+#include <tbb/global_control.h>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -15,7 +16,14 @@ static std::once_flag g_init;
 int vdb_remesh_voxel(const float *pts, int npts, const unsigned *tris, int ntri, float voxel_size, float adaptivity, float isovalue,
                      float **out_pts, int *out_npts, unsigned **out_quads, int *out_nquads, unsigned **out_tris, int *out_ntris)
 {
-  std::call_once(g_init, []() { openvdb::initialize(); });
+  std::call_once(g_init, []() {
+    openvdb::initialize();
+    // honour RAYON_NUM_THREADS (one house per thread): OpenVDB's TBB pool otherwise fans out over every core (user CPU > wall)
+    const char *n = std::getenv("RAYON_NUM_THREADS");
+    if (n && std::atoi(n) > 0) {
+      static tbb::global_control gc(tbb::global_control::max_allowed_parallelism, (size_t)std::atoi(n));
+    }
+  });
   std::vector<openvdb::Vec3s> points(npts);
   for (int i = 0; i < npts; i++) {
     points[i] = openvdb::Vec3s(pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]);

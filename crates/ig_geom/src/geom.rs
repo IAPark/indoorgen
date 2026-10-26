@@ -485,6 +485,48 @@ fn dense_fast() -> bool {
     *D.get_or_init(|| std::env::var_os("INFINIGEN_DENSE").is_some() && std::env::var_os("NO_CHEAP_PH").is_none())
 }
 
+/// `projected(..)` followed by shp::buffer(d), memoised on the exact input bits (the parent surface of a stability test is static while
+/// the child moves, so its buffered footprint is the same for thousands of candidate moves)
+pub fn projected_buffer(tris: &[[V3; 3]], normal: V3, origin: V3, d: f64) -> Option<shp::G> {
+    thread_local! {
+        static MEMO: std::cell::RefCell<(std::collections::HashMap<u64, Vec<(Vec<u64>, Option<shp::G>)>>, usize)> = std::cell::RefCell::new((Default::default(), 0));
+    }
+    let mut key: Vec<u64> = Vec::with_capacity(7 + tris.len() * 9);
+    key.push(d.to_bits());
+    for k in 0..3 {
+        key.push(normal[k].to_bits());
+    }
+    for k in 0..3 {
+        key.push(origin[k].to_bits());
+    }
+    for t in tris {
+        for p in t {
+            for k in 0..3 {
+                key.push(p[k].to_bits());
+            }
+        }
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for w in &key {
+        h = (h ^ w).wrapping_mul(0x100000001b3);
+        h ^= h >> 29;
+    }
+    if let Some(r) = MEMO.with(|m| m.borrow().0.get(&h).and_then(|b| b.iter().find(|e| e.0 == key).map(|e| e.1.clone()))) {
+        return r;
+    }
+    let r = projected(tris, normal, origin).map(|g| shp::buffer(&g, d));
+    MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.1 > 2500 {
+            m.0.clear();
+            m.1 = 0;
+        }
+        m.1 += 1;
+        m.0.entry(h).or_default().push((key, r.clone()));
+    });
+    r
+}
+
 /// trimesh.path.polygons.projected: union of the (front side) triangles projected onto the plane (origin, normal)
 pub fn projected(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     // memo on the exact input bits: the solver projects the same (static parent / unchanged child) triangles again and again
@@ -526,6 +568,47 @@ pub fn projected(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     r
 }
 
+/// convex hull (CCW, no repeated end point) of the projected triangles when their areas sum to the hull area (a tiling of a convex region)
+fn tiled_hull(tris: &[[[f64; 2]; 3]]) -> Option<Vec<[f64; 2]>> {
+    if tris.len() < 2 {
+        return None;
+    }
+    let mut pts: Vec<[f64; 2]> = tris.iter().flat_map(|t| t.iter().copied()).collect();
+    pts.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().then(a[1].partial_cmp(&b[1]).unwrap()));
+    pts.dedup();
+    if pts.len() < 3 {
+        return None;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut h: Vec<[f64; 2]> = vec![];
+    for pass in 0..2 {
+        let start = h.len();
+        let it: Box<dyn Iterator<Item = &[f64; 2]>> = if pass == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+        for &p in it {
+            while h.len() >= start + 2 && cross(h[h.len() - 2], h[h.len() - 1], p) <= 1e-15 {
+                h.pop();
+            }
+            h.push(p);
+        }
+        h.pop();
+    }
+    if h.len() < 3 {
+        return None;
+    }
+    let mut area_h = 0.0;
+    for k in 0..h.len() {
+        let (a, b) = (h[k], h[(k + 1) % h.len()]);
+        area_h += a[0] * b[1] - a[1] * b[0];
+    }
+    area_h *= 0.5;
+    let area_t: f64 = tris.iter().map(|t| 0.5 * ((t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[2][0] - t[0][0]) * (t[1][1] - t[0][1])).abs()).sum();
+    if area_h > 0.0 && (area_t - area_h).abs() <= 1e-9 * area_h {
+        Some(h)
+    } else {
+        None
+    }
+}
+
 fn projected_raw(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     let n = unit(normal);
     let (u, v) = plane_frame(n);
@@ -551,6 +634,7 @@ fn projected_raw(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     };
     let mut polys = vec![];
     let mut scale_ = 0.0f64;
+    let mut all2d: Vec<[[f64; 2]; 3]> = vec![];
     for w in side {
         let pts: Vec<[f64; 2]> = w.iter().map(|p| {
             let r = sub(*p, origin);
@@ -563,12 +647,22 @@ fn projected_raw(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
         if a.abs() < 1e-14 {
             continue;
         }
+        all2d.push([pts[0], pts[1], pts[2]]);
         if let Ok(p) = shp::polygon(&pts, &[]) {
             polys.push(p);
         }
     }
     if polys.is_empty() {
         return None;
+    }
+    // dense mode: the front faces of a convex solid (every box placeholder) tile their silhouette exactly: when the summed triangle
+    // areas equal the area of the convex hull of all projected points, that hull IS the union (saves the GEOS cascaded union)
+    if dense_fast() {
+        if let Some(h) = tiled_hull(&all2d) {
+            if let Ok(p) = shp::polygon(&h, &[]) {
+                return Some(p);
+            }
+        }
     }
     let u_ = shp::union_all(&polys);
     // dense mode: the triangles of a projected solid share exactly projected vertices, so their union has no slivers to close;
