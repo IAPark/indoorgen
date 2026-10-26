@@ -193,3 +193,46 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
     }
     out
 }
+
+/// python builds KitchenCabinetFactory with its first cabinet cell at local y = 0 (the cabinet runs from y = 0 to y = width) while its
+/// placeholder / solver box is centred on the origin, so the visible cabinet sits half a width away from the box the solver kept clear
+/// (bookcases placed "next to" it end up inside it, items put on its top hover over nothing). Shift the visual so its horizontal centre
+/// matches the solver box. Returns the objects moved.
+pub fn recenter_visuals(state: &State, visuals: &mut HashMap<String, crate::assets::Asset>, classes: &[&str]) -> Vec<(String, [f64; 2])> {
+    let mut out = vec![];
+    for (k, o) in state.objs.iter() {
+        let Some(g) = &o.generator else { continue };
+        if !classes.contains(&g.class.as_str()) {
+            continue;
+        }
+        let Some(a) = visuals.get_mut(k) else { continue };
+        if !a.cloth.is_empty() || !a.followers.is_empty() || a.parts.is_empty() {
+            continue;
+        }
+        let (lo, hi) = a.bounds();
+        let d = [(o.geom.lo[0] + o.geom.hi[0]) / 2.0 - (lo[0] + hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0 - (lo[1] + hi[1]) / 2.0];
+        if d[0].abs().max(d[1].abs()) < 0.03 {
+            continue;
+        }
+        for p in a.parts.iter_mut() {
+            for v in p.mesh.pos.iter_mut() {
+                v[0] += d[0];
+                v[1] += d[1];
+            }
+        }
+        for c in a.cutters.iter_mut() {
+            for v in c.pos.iter_mut() {
+                v[0] += d[0];
+                v[1] += d[1];
+            }
+        }
+        for s in a.supports.iter_mut() {
+            for q in [&mut s.0, &mut s.1] {
+                q[0] += d[0];
+                q[1] += d[1];
+            }
+        }
+        out.push((k.clone(), d));
+    }
+    out
+}

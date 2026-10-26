@@ -226,6 +226,11 @@ fn main() {
             })
             .collect()
     };
+    // python's KitchenCabinet visual starts at local y = 0 while its solver box is centred: align them (see snap.rs)
+    if std::env::var_os("NO_SNAP").is_none() {
+        let mv = indoorgen::snap::recenter_visuals(&g.state, &mut visuals, &["KitchenCabinetFactory"]);
+        eprintln!("RECENTER {} KitchenCabinet visuals aligned with their solver box", mv.len());
+    }
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
     indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
     // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)

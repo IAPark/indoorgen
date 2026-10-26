@@ -256,6 +256,16 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
     // solver relations as plain data (State is not Sync): key -> (parent object keys, keys of objects that are related TO it)
     let parent_of: std::collections::HashMap<String, String> = inp.state.objs.iter().filter_map(|(k, s)| s.relations.iter().find(|r| inp.state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())).map(|r| (k.clone(), r.target.clone()))).collect();
     let rels_of: std::collections::HashMap<String, Vec<String>> = inp.state.objs.iter().map(|(k, s)| (k.clone(), s.relations.iter().map(|r| format!("{}:{}>{}", r.target, r.child_plane, r.parent_plane)).collect())).collect();
+    let ph_of: std::collections::HashMap<String, (V3, V3)> = inp.state.objs.iter().map(|(k, s)| {
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for c in 0..8 {
+            let q = [if c & 1 == 0 { s.geom.lo[0] } else { s.geom.hi[0] }, if c & 2 == 0 { s.geom.lo[1] } else { s.geom.hi[1] }, if c & 4 == 0 { s.geom.lo[2] } else { s.geom.hi[2] }];
+            let w = s.pose.apply(q);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (k.clone(), (lo, hi))
+    }).collect();
+    let seeds_of: std::collections::HashMap<String, (u64, u64)> = inp.state.objs.iter().filter_map(|(k, s)| s.generator.as_ref().map(|g| (k.clone(), (g.factory_seed, g.inst_seed)))).collect();
     let children_of: std::collections::HashSet<(String, String)> = inp.state.objs.iter().flat_map(|(k, s)| s.relations.iter().map(move |r| (r.target.clone(), k.clone()))).collect();
     let (cut_keys, cutters, wall_t) = (inp.cut_keys, inp.cutters, inp.wall_t);
     let results: Vec<serde_json::Value> = (0..objs.len())
@@ -270,6 +280,8 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
             m.insert("class".into(), json!(o.class));
             m.insert("room".into(), json!(room.map(|r| inner[r].0.clone())));
             m.insert("rels".into(), json!(rels_of.get(&o.key)));
+            m.insert("seeds".into(), json!(seeds_of.get(&o.key)));
+            m.insert("ph".into(), json!(ph_of.get(&o.key)));
             m.insert("lo".into(), json!(o.lo));
             m.insert("hi".into(), json!(o.hi));
             if o.kind == Kind::Person {
@@ -400,6 +412,44 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     }
                 }
             }
+            // part-box overlap: parts (boards, panels, bodies) of two different objects whose boxes overlap by > 3 cm in every axis
+            // (catches furniture standing inside furniture, where no sample point lies inside a closed part)
+            let mut box_ov: Option<(f64, usize)> = None;
+            if !o.class.contains("Rug") && !o.class.contains("Curtain") {
+                for other in 0..objs.len() {
+                    let q = &objs[other];
+                    if other == oi || q.kind == Kind::Person || q.class.contains("Rug") || q.class.contains("Curtain") || o.class.contains("Lamp") || q.class.contains("Lamp") {
+                        continue;
+                    }
+                    if (0..3).any(|d| q.lo[d] > o.hi[d] - 0.03 || q.hi[d] < o.lo[d] + 0.03) {
+                        continue;
+                    }
+                    // chairs / stools tuck under tables; items and children rest on / in their parents
+                    if o.class.contains("Chair") || q.class.contains("Chair") || o.class.contains("Stool") || q.class.contains("Stool") || o.class.contains("Bed") || q.class.contains("Bed") || o.class.contains("Sofa") || q.class.contains("Sofa") {
+                        continue;
+                    }
+                    if parent.as_deref() == Some(q.key.as_str()) || children_of.contains(&(o.key.clone(), q.key.clone())) || parent_of.get(&q.key) == Some(&o.key) || cut_keys.contains(&o.key) || cut_keys.contains(&q.key) {
+                        continue;
+                    }
+                    for &a in &o.nodes {
+                        for &b in &q.nodes {
+                            let ov: Vec<f64> = (0..3).map(|d| bb[a].1[d].min(bb[b].1[d]) - bb[a].0[d].max(bb[b].0[d])).collect();
+                            if ov.iter().all(|&x| x > 0.03) {
+                                let m = ov.iter().cloned().fold(f64::MAX, f64::min);
+                                if box_ov.map_or(true, |w| m > w.0) {
+                                    box_ov = Some((m, other));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((d, other)) = box_ov {
+                if oi < other {
+                    m.insert("box_overlap".into(), json!((d * 1e4).round() / 1e4));
+                    issues.push(format!("overlaps {} (parts overlap by {:.1}cm)", objs[other].key, d * 100.0));
+                }
+            }
             if let Some((d, other)) = worst {
                 m.insert("pen".into(), json!((d * 1e4).round() / 1e4));
                 m.insert("pen_with".into(), json!(objs[other].key));
@@ -489,7 +539,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
     for r in &results {
         for i in r["issues"].as_array().into_iter().flatten() {
             let s = i.as_str().unwrap();
-            let cls = ["floating", "sunk", "penetrates", "through wall", "outside every room", "blocks door", "blocks window", "implausible", "resting on"].iter().find(|k| s.starts_with(*k)).copied().unwrap_or("other");
+            let cls = ["floating", "sunk", "penetrates", "overlaps", "through wall", "outside every room", "blocks door", "blocks window", "implausible", "resting on"].iter().find(|k| s.starts_with(*k)).copied().unwrap_or("other");
             *counts.entry(cls.to_string()).or_default() += 1;
         }
     }
