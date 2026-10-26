@@ -49,6 +49,9 @@ def extras(cons):
         * lamps.related_to(storage.related_to(r)).all(lambda l: l.distance(r, cu.floortags).in_range(0.5, 1.5))))
     C["no_bath_lamps"] = bathrooms.all(lambda r: lamps.related_to(furniture.related_to(r)).count().in_range(0, 0))
 
+    # ---- global storage cap 7 -> 9 (living rooms hold up to 8)
+    C["storage"] = rooms.all(lambda r: storage_freestanding.related_to(r).count().in_range(1, 9))
+
     # ---- plants: up to 2 big floor plants per room (original 0-1), small plants as before
     small_plants = obj[tableware.PlantContainerFactory].related_to(storage, cu.ontop)
     C["plants"] = rooms.all(lambda r: (big_plants.related_to(r).count().in_range(0, 2)
@@ -56,14 +59,15 @@ def extras(cons):
 
     # ---- living room (replaces "livingroom"): more storage, coffee table, side tables, 0-2 armchairs facing the coffee table, floor lamps near seating
     C["livingroom"] = livingrooms.all(lambda r: (
-        storage_freestanding.related_to(r).count().in_range(2, 7)
+        storage_freestanding.related_to(r).count().in_range(3, 8)
         * tvs_n(r)
         * sidetables.related_to(sofas.related_to(r)).count().in_range(1, 2)
         * desks.related_to(r).count().in_range(0, 1)
         * coffeetables.related_to(r).count().in_range(1, 1)
         * coffeetables.related_to(r).all(lambda t: obj[Semantics.OfficeShelfItem].related_to(t, cu.on).count().in_range(0, 3))
         * rugs.related_to(r).count().in_range(0, 2)
-        * armchairs.related_to(r).count().in_range(0, 2)
+        * armchairs.related_to(r).count().in_range(1, 3)
+        * sofas.related_to(r).count().in_range(0, 2)
         * floor_lamps.related_to(r).count().in_range(0, 2)
         * armchairs.related_to(r).all(lambda a: ((cl.accessibility_cost(a, r, dist=1).in_range(0, 0.5))
                                                  * (cl.focus_score(a, coffeetables.related_to(r)) < 0.5)))))

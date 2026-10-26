@@ -154,16 +154,16 @@ fn unseeded_init_draws(class: &str, rng: &mut Rng) {
     crate::ctor_draws::set_unseeded(crate::ctor_draws::ctor_draws(class, rng));
 }
 
+static PH_REUSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 thread_local! {
-    static PH_REUSE: std::cell::Cell<bool> = std::cell::Cell::new(false);
     static PH_CACHE: std::cell::RefCell<HashMap<String, (ObjGeom, super::state::GenRef, u32)>> = std::cell::RefCell::new(HashMap::default());
 }
 /// Dense mode (not python-lockstep): the proposals of ONE annealing step (same class, different parent/plane assignments) share one
 /// sampled placeholder instead of building a new asset (up to 1 s for sofas / armchairs) per rejected candidate.
-pub fn set_placeholder_reuse(on: bool) { PH_REUSE.with(|c| c.set(on)); }
+pub fn set_placeholder_reuse(on: bool) { PH_REUSE.store(on, std::sync::atomic::Ordering::Relaxed); }
 
 pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
-    if PH_REUSE.with(|c| c.get()) {
+    if PH_REUSE.load(std::sync::atomic::Ordering::Relaxed) {
         let hit = PH_CACHE.with(|m| {
             let mut m = m.borrow_mut();
             let e = m.get_mut(class)?;
@@ -175,7 +175,7 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
         if hit.is_some() { return hit; }
     }
     let r = sample_rand_placeholder_new(ctx, rng, class);
-    if PH_REUSE.with(|c| c.get()) {
+    if PH_REUSE.load(std::sync::atomic::Ordering::Relaxed) {
         if let Some(x) = &r {
             PH_CACHE.with(|m| m.borrow_mut().insert(class.to_string(), (x.0.clone(), x.1.clone(), 0)));
         }
@@ -1055,6 +1055,7 @@ pub struct StageParams {
 
 /// Solver.solve_objects
 pub fn solve_objects(ctx: &mut Ctx, state: &mut State, stage: &Domain, assign: &IndexMap<String, String>, sp: &StageParams, cfg: AnnealCfg, rng: &mut Rng) -> usize {
+    PH_CACHE.with(|m| m.borrow_mut().clear()); // cached placeholders never cross stages / rooms (rayon threads are reused)
     let moves = move_weights(sp.restrict_moves.as_deref(), sp.addition_scalar);
     let subs: Vec<(Tag, Domain)> = assign.iter().map(|(k, objkey)| (Tag::var(k), Domain::new(state.objs[objkey].tags.clone()))).collect();
     let filter = substitute_all(stage, &subs);

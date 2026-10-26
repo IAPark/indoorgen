@@ -225,14 +225,14 @@ pub fn check_post_move_validity(state: &State, name: &str) -> bool {
     r
 }
 
-thread_local! { static COUNTER_OVER_WINDOWS: std::cell::Cell<bool> = std::cell::Cell::new(false); }
+static COUNTER_OVER_WINDOWS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// dense mode: kitchen counter runs (KitchenSpaceFactory, 2.4 m placeholder incl. upper cabinets) may stand in front of windows
 /// (python's cutter boxes make most window walls unusable, leaving kitchens without any counter)
-pub fn set_counter_over_windows(on: bool) { COUNTER_OVER_WINDOWS.with(|c| c.set(on)); }
+pub fn set_counter_over_windows(on: bool) { COUNTER_OVER_WINDOWS.store(on, std::sync::atomic::Ordering::Relaxed); }
 
 fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     let nc = no_collision_tag();
-    let skip_win = COUNTER_OVER_WINDOWS.with(|c| c.get()) && state.objs[name].generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")
+    let skip_win = COUNTER_OVER_WINDOWS.load(std::sync::atomic::Ordering::Relaxed) && state.objs[name].generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")
         && !state.objs.iter().any(|(k, o)| k.as_str() != name && o.generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory"));
     let win = Tag::sem("Window");
     let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc) && !(skip_win && o.tags.contains(win.clone()))).map(|(k, _)| k).collect();
@@ -532,13 +532,13 @@ pub fn combine_rotation_constraints(state: &State, parents: &[(String, usize)]) 
 }
 
 /// dof.try_apply_relation_constraints
-thread_local! { static PLACE_TRIES: std::cell::Cell<usize> = std::cell::Cell::new(10); }
+static PLACE_TRIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(10);
 /// dense mode: more pose samples per placement attempt (python: 10) so big wall objects (kitchen counter runs) find a free stretch of wall
-pub fn set_place_tries(n: usize) { PLACE_TRIES.with(|c| c.set(n)); }
+pub fn set_place_tries(n: usize) { PLACE_TRIES.store(n, std::sync::atomic::Ordering::Relaxed); }
 
 pub fn try_apply_relation_constraints(state: &mut State, name: &str, rng: &mut Rng) -> bool {
     let big = state.objs[name].generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenIslandFactory" | "BedFactory"));
-    let tries = if big { PLACE_TRIES.with(|c| c.get()) } else { 10 };
+    let tries = if big { PLACE_TRIES.load(std::sync::atomic::Ordering::Relaxed) } else { 10 };
     for _ in 0..tries {
         let Some(parents) = apply_relations_surfacesample(state, name, rng) else {
             if std::env::var("DBG2").is_ok() { eprintln!("  [{name}] apply failed (init invalid)"); }
