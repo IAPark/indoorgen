@@ -277,6 +277,8 @@ pub struct ClothParams {
     pub self_distance: f64,
     pub use_pressure: bool,
     pub pressure: f64,
+    /// > 0: the pressure fades out linearly as the enclosed volume approaches this value (m^3), i.e. a bounded gas pocket instead of an unbounded push
+    pub volume_cap: f64,
     pub end_frame: u32,
     pub quality: u32,
     /// per vertex pin weight (>= 0.999 = fixed); empty = none
@@ -302,6 +304,7 @@ impl Default for ClothParams {
             self_distance: 0.015,
             use_pressure: false,
             pressure: 0.0,
+            volume_cap: 0.0,
             end_frame: 50,
             quality: 5,
             pin: vec![],
@@ -519,7 +522,18 @@ fn simulate_inner(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &
             }
         }
         if p.use_pressure && p.pressure != 0.0 {
-            pressure_forces(&x, faces, cal.press_scale * (p.pressure.abs() - cal.press_thresh - if p.gravity > 0.0 { cal.press_thresh_g } else { 0.0 }).max(0.0).powf(cal.press_pow) * p.pressure.signum(), &mut pf);
+            let vfac = if p.volume_cap > 0.0 {
+                let mut vol = 0.0;
+                for f in faces {
+                    for k in 1..f.len() - 1 {
+                        vol += dot(x[f[0] as usize], cross(x[f[k] as usize], x[f[k + 1] as usize]));
+                    }
+                }
+                (1.0 - (vol / 6.0) / p.volume_cap).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            pressure_forces(&x, faces, vfac * cal.press_scale * (p.pressure.abs() - cal.press_thresh - if p.gravity > 0.0 { cal.press_thresh_g } else { 0.0 }).max(0.0).powf(cal.press_pow) * p.pressure.signum(), &mut pf);
             for i in 0..n {
                 forces[i] = add(forces[i], mul(pf[i], pw[i]));
             }
