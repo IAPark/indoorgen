@@ -732,8 +732,8 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
             draped.transform(&m);
             let mut rr = cfg.rng(&format!("drape.{rname}.{idx}"));
             let wob = rr.uniform(0.0, 6.28);
-            for q in &mut draped.pos {
-                let local_z = q[2] - m.0[2][3];
+            let mut support: Vec<f64> = Vec::with_capacity(draped.pos.len());
+            for q in &draped.pos {
                 let top = q[2] + 1.0;
                 let mut sz = floor_z;
                 for (ox, oy) in [(0.0, 0.0), (0.025, 0.0), (-0.025, 0.0), (0.0, 0.025), (0.0, -0.025)] {
@@ -741,7 +741,30 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
                         sz = sz.max(top - t);
                     }
                 }
-                q[2] = sz + local_z + 0.003 + 0.004 * (q[0] * 23.0 + wob).sin() * (q[1] * 19.0).sin();
+                support.push(sz);
+            }
+            // cloth cannot drop like a cliff beside a narrow support (chair back): the surface falls at most `slope` m per m away from
+            // the highest support (cone dilation over the garment's own vertices), otherwise it becomes a tall spike
+            let slope = 1.3;
+            let xy: Vec<[f64; 2]> = draped.pos.iter().map(|q| [q[0], q[1]]).collect();
+            let mut dil = support.clone();
+            if support.iter().cloned().fold(f64::MIN, f64::max) - support.iter().cloned().fold(f64::MAX, f64::min) > 0.05 {
+                for i in 0..xy.len() {
+                    for j in 0..xy.len() {
+                        if support[j] > dil[i] {
+                            let d = ((xy[i][0] - xy[j][0]).powi(2) + (xy[i][1] - xy[j][1]).powi(2)).sqrt();
+                            dil[i] = dil[i].max(support[j] - slope * d);
+                        }
+                    }
+                }
+            }
+            // and a garment never stands more than 0.3 m above the typical support under it (no tall cones over chair backs)
+            let mut sorted = support.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let cap = sorted[sorted.len() / 2] + 0.3;
+            for (k, q) in draped.pos.iter_mut().enumerate() {
+                let local_z = q[2] - m.0[2][3];
+                q[2] = dil[k].min(cap) + local_z + 0.003 + 0.004 * (q[0] * 23.0 + wob).sin() * (q[1] * 19.0).sin();
             }
             let (glo, ghi) = pre.bounds();
             let mut collide: Vec<String> = vec![format!("{rname}.floor")];
