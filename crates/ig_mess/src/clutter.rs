@@ -25,9 +25,9 @@ struct Spec {
 }
 
 const SURFACE: &[Spec] = &[
-    Spec { class: "CupFactory", w: [2.0, 3.0, 4.0, 1.0, 3.0, 2.0], max_xy: 0.2, max_z: 0.25 },
-    Spec { class: "BowlFactory", w: [0.0, 1.0, 3.0, 0.0, 2.0, 0.5], max_xy: 0.3, max_z: 0.2 },
-    Spec { class: "PlateFactory", w: [0.0, 0.5, 3.0, 0.0, 3.0, 0.0], max_xy: 0.35, max_z: 0.1 },
+    Spec { class: "CupFactory", w: [2.0, 3.0, 4.0, 1.0, 3.0, 2.0], max_xy: 0.13, max_z: 0.14 },
+    Spec { class: "BowlFactory", w: [0.0, 1.0, 3.0, 0.0, 2.0, 0.5], max_xy: 0.24, max_z: 0.12 },
+    Spec { class: "PlateFactory", w: [0.0, 0.5, 3.0, 0.0, 3.0, 0.0], max_xy: 0.28, max_z: 0.05 },
     Spec { class: "BottleFactory", w: [1.0, 2.0, 2.0, 2.0, 2.0, 1.0], max_xy: 0.15, max_z: 0.4 },
     Spec { class: "CanFactory", w: [0.5, 1.0, 2.0, 0.0, 1.0, 1.0], max_xy: 0.15, max_z: 0.25 },
     Spec { class: "WineglassFactory", w: [0.0, 1.0, 0.5, 0.0, 2.0, 0.0], max_xy: 0.15, max_z: 0.3 },
@@ -46,15 +46,15 @@ const FLOOR: &[Spec] = &[
     Spec { class: "TowelFactory", w: [1.0, 0.0, 0.0, 3.0, 0.0, 0.0], max_xy: 0.8, max_z: 0.3 },
     Spec { class: "FoodBagFactory", w: [0.0, 1.0, 1.0, 0.0, 0.3, 0.0], max_xy: 0.4, max_z: 0.4 },
     Spec { class: "CanFactory", w: [0.3, 0.7, 1.0, 0.0, 0.3, 0.3], max_xy: 0.15, max_z: 0.25 },
-    Spec { class: "BottleFactory", w: [0.3, 0.7, 1.0, 0.3, 0.3, 0.3], max_xy: 0.15, max_z: 0.4 },
-    Spec { class: "CupFactory", w: [0.5, 0.5, 0.3, 0.0, 0.0, 0.3], max_xy: 0.2, max_z: 0.25 },
+    Spec { class: "BottleFactory", w: [0.2, 0.3, 1.0, 0.1, 0.05, 0.2], max_xy: 0.15, max_z: 0.4 },
+    Spec { class: "CupFactory", w: [0.5, 0.5, 0.3, 0.0, 0.0, 0.3], max_xy: 0.13, max_z: 0.14 },
     // dropped clothes: cloth jobs (re-simulated in Blender at render time), height-field drape as the default mesh
     Spec { class: "ShirtFactory", w: [4.0, 1.5, 0.0, 2.0, 0.0, 1.0], max_xy: 1.4, max_z: 0.3 },
     Spec { class: "PantsFactory", w: [3.0, 1.0, 0.0, 1.5, 0.0, 0.7], max_xy: 1.4, max_z: 0.3 },
 ];
 
 /// floor clutter per m^2 of room floor at level 1, per room type [bedroom, living, kitchen, bath, dining, other]
-const FLOOR_DENSITY: W = [0.9, 0.6, 0.2, 0.7, 0.3, 0.4];
+const FLOOR_DENSITY: W = [0.9, 0.6, 0.2, 0.7, 0.12, 0.4];
 /// surface items per m^2 of surface at level 1
 const SURFACE_DENSITY: W = [7.0, 6.0, 6.0, 7.0, 5.0, 6.0];
 
@@ -264,10 +264,22 @@ fn build_item(rng: &mut Rng, spec: &'static Spec, cup_handle: Option<bool>) -> O
     if lo[0] > hi[0] {
         return None;
     }
-    let (ex, ey, ez) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-    if ex.max(ey) > spec.max_xy || ez > spec.max_z || ex.max(ey) < 0.015 || ez < 0.004 {
+    let (mut ex, mut ey, mut ez) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    // oversized samples (factory ranges run large: 20 cm mugs) are scaled down to the limit; more than 2x too big: rejected
+    let sc = (spec.max_xy / ex.max(ey)).min(spec.max_z / ez).min(1.0);
+    if sc < 0.5 || ex.max(ey) < 0.015 || ez < 0.004 {
         return None;
     }
+    if sc < 1.0 {
+        for p in &mut asset.parts {
+            for q in &mut p.mesh.pos {
+                for k in 0..3 { q[k] *= sc; }
+            }
+        }
+        for k in 0..3 { lo[k] *= sc; hi[k] *= sc; }
+        ex *= sc; ey *= sc; ez *= sc;
+    }
+    let _ = (ex, ey, ez);
     let dz = -lo[2];
     for p in &mut asset.parts {
         for q in &mut p.mesh.pos {
