@@ -3,7 +3,7 @@ use indoorgen::assets::*;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     let kind = std::env::args().nth(2).unwrap_or("asset".into());
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
+    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/home_program.json")).unwrap()).unwrap();
     let usage = indoorgen::furn::solver::Usage::from_json(&prog["used_as"]);
     let verbose = std::env::var("V").is_ok();
     let mut stats: std::collections::BTreeMap<String, (usize, usize, usize, usize, usize, f64, usize)> = Default::default();

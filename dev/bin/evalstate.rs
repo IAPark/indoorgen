@@ -11,7 +11,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let seed: u64 = args[1].parse().unwrap();
     let dump: Value = serde_json::from_str(&std::fs::read_to_string(&args[2]).unwrap()).unwrap();
-    let prog_json: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
+    let prog_json: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/home_program.json")).unwrap()).unwrap();
     let (prog, _usage) = load_program(seed, &prog_json);
     // rooms/cutters from our own deterministic generation (identical to the reference for this seed)
     let g = generate_rooms_only(seed);

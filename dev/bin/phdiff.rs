@@ -4,10 +4,10 @@ use indoorgen::furn::solver::Usage;
 use std::collections::BTreeMap;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
+    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/home_program.json")).unwrap()).unwrap();
     let usage = Usage::from_json(&prog["used_as"]);
-    let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
+    let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/asset_bbox_table.json"));
+    fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/asset_samples.json"));
     let assets = indoorgen::assets::RealAssets { fallback };
     let mut stats: BTreeMap<String, (usize, usize, f64, usize)> = BTreeMap::new();
     for line in std::fs::read_to_string(path).unwrap().lines() {

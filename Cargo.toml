@@ -8,7 +8,7 @@ repository = "https://github.com/OWNER/indoorgen"
 readme = "README.md"
 
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "dev"]
 resolver = "2"
 
 [workspace.dependencies]

@@ -5,8 +5,8 @@ use indoorgen::rooms::solidify::CutKind;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let seed: u64 = a[1].parse().unwrap();
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
-    let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
+    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/home_program.json")).unwrap()).unwrap();
+    let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/asset_bbox_table.json"));
     let g = generate(&Options { seed, restrict_room: None, steps_large: 0, steps_medium: 0, steps_small: 0 }, &assets, &prog);
     let c = &g.c;
     let cut: Vec<_> = g.cutters.iter().map(|k| serde_json::json!({"kind": match k.kind { CutKind::Door => "door", CutKind::Window => "window", CutKind::Entrance => "entrance" }, "loc": k.loc, "rot_z": k.rot_z, "dims": k.dims, "rooms": k.rooms})).collect();

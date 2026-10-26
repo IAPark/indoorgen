@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let filter: Vec<String> = a.get(2).map(|s| s.split(',').map(|x| x.to_string()).collect()).unwrap_or_default();
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
+    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/home_program.json")).unwrap()).unwrap();
     let usage = Usage::from_json(&prog["used_as"]);
-    let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
+    let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/asset_bbox_table.json"));
+    fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/asset_samples.json"));
     let assets = indoorgen::assets::RealAssets { fallback };
     let mut stats: BTreeMap<String, (usize, usize, f64)> = BTreeMap::new();
     for line in std::fs::read_to_string(&a[1]).unwrap().lines() {

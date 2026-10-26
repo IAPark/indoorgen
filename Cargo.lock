@@ -1289,6 +1289,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "indoorgen-dev"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "earcutr",
+ "geos",
+ "indexmap",
+ "indoorgen",
+ "md5",
+ "mimalloc",
+ "nalgebra 0.33.3",
+ "parry3d-f64 0.18.0",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

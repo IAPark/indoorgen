@@ -1,0 +1,266 @@
+[package]
+name = "indoorgen-dev"
+version = "0.1.0"
+edition = "2021"
+description = "One-off probes and comparison tools for indoorgen development (not built by default)"
+license = "GPL-3.0-or-later"
+publish = false
+autobins = false
+
+[dependencies]
+indoorgen = { path = ".." }
+geos = { workspace = true }
+indexmap = { workspace = true }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+md5 = { workspace = true }
+earcutr = { workspace = true }
+parry3d-f64 = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
+
+[[bin]]
+name = "accpair"
+path = "bin/accpair.rs"
+
+[[bin]]
+name = "amtprobe"
+path = "bin/amtprobe.rs"
+
+[[bin]]
+name = "applytest"
+path = "bin/applytest.rs"
+
+[[bin]]
+name = "bathcmp"
+path = "bin/bathcmp.rs"
+
+[[bin]]
+name = "bbcheck"
+path = "bin/bbcheck.rs"
+
+[[bin]]
+name = "bedparams"
+path = "bin/bedparams.rs"
+
+[[bin]]
+name = "bedpts"
+path = "bin/bedpts.rs"
+
+[[bin]]
+name = "bedtable"
+path = "bin/bedtable.rs"
+
+[[bin]]
+name = "bevsub"
+path = "bin/bevsub.rs"
+
+[[bin]]
+name = "bmbevtest"
+path = "bin/bmbevtest.rs"
+
+[[bin]]
+name = "bounds"
+path = "bin/bounds.rs"
+
+[[bin]]
+name = "bridgecmp"
+path = "bin/bridgecmp.rs"
+
+[[bin]]
+name = "chairparams"
+path = "bin/chairparams.rs"
+
+[[bin]]
+name = "clothcmp"
+path = "bin/clothcmp.rs"
+
+[[bin]]
+name = "clothexp"
+path = "bin/clothexp.rs"
+
+[[bin]]
+name = "clothexp3"
+path = "bin/clothexp3.rs"
+
+[[bin]]
+name = "clothexp4"
+path = "bin/clothexp4.rs"
+
+[[bin]]
+name = "clothfit"
+path = "bin/clothfit.rs"
+
+[[bin]]
+name = "clothpre"
+path = "bin/clothpre.rs"
+
+[[bin]]
+name = "clothstand"
+path = "bin/clothstand.rs"
+
+[[bin]]
+name = "coilrun"
+path = "bin/coilrun.rs"
+
+[[bin]]
+name = "crtest"
+path = "bin/crtest.rs"
+
+[[bin]]
+name = "ctorcheck"
+path = "bin/ctorcheck.rs"
+
+[[bin]]
+name = "dbg"
+path = "bin/dbg.rs"
+
+[[bin]]
+name = "dbgbounds"
+path = "bin/dbgbounds.rs"
+
+[[bin]]
+name = "dbgoven"
+path = "bin/dbgoven.rs"
+
+[[bin]]
+name = "doordump"
+path = "bin/doordump.rs"
+
+[[bin]]
+name = "drawerdump"
+path = "bin/drawerdump.rs"
+
+[[bin]]
+name = "evalstate"
+path = "bin/evalstate.rs"
+
+[[bin]]
+name = "fcltest"
+path = "bin/fcltest.rs"
+
+[[bin]]
+name = "fctest"
+path = "bin/fctest.rs"
+
+[[bin]]
+name = "gndbg"
+path = "bin/gndbg.rs"
+
+[[bin]]
+name = "gnparams"
+path = "bin/gnparams.rs"
+
+[[bin]]
+name = "hashtest"
+path = "bin/hashtest.rs"
+
+[[bin]]
+name = "hintcmp"
+path = "bin/hintcmp.rs"
+
+[[bin]]
+name = "legtest"
+path = "bin/legtest.rs"
+
+[[bin]]
+name = "matcheck"
+path = "bin/matcheck.rs"
+
+[[bin]]
+name = "meshdiff"
+path = "bin/meshdiff.rs"
+
+[[bin]]
+name = "mprtest"
+path = "bin/mprtest.rs"
+
+[[bin]]
+name = "ngdump"
+path = "bin/ngdump.rs"
+
+[[bin]]
+name = "ngoncmp"
+path = "bin/ngoncmp.rs"
+
+[[bin]]
+name = "pancap"
+path = "bin/pancap.rs"
+
+[[bin]]
+name = "panone"
+path = "bin/panone.rs"
+
+[[bin]]
+name = "parrytest"
+path = "bin/parrytest.rs"
+
+[[bin]]
+name = "phbounds"
+path = "bin/phbounds.rs"
+
+[[bin]]
+name = "phcmp"
+path = "bin/phcmp.rs"
+
+[[bin]]
+name = "phdiff"
+path = "bin/phdiff.rs"
+
+[[bin]]
+name = "phtab"
+path = "bin/phtab.rs"
+
+[[bin]]
+name = "popdiff"
+path = "bin/popdiff.rs"
+
+[[bin]]
+name = "probecmp"
+path = "bin/probecmp.rs"
+
+[[bin]]
+name = "q2test"
+path = "bin/q2test.rs"
+
+[[bin]]
+name = "rngdump"
+path = "bin/rngdump.rs"
+
+[[bin]]
+name = "rsdump"
+path = "bin/rsdump.rs"
+
+[[bin]]
+name = "rsmesh"
+path = "bin/rsmesh.rs"
+
+[[bin]]
+name = "rugprobe"
+path = "bin/rugprobe.rs"
+
+[[bin]]
+name = "subdiv_demo"
+path = "bin/subdiv_demo.rs"
+
+[[bin]]
+name = "subtest"
+path = "bin/subtest.rs"
+
+[[bin]]
+name = "tapdbg"
+path = "bin/tapdbg.rs"
+
+[[bin]]
+name = "torcmp"
+path = "bin/torcmp.rs"
+
+[[bin]]
+name = "tvcmp"
+path = "bin/tvcmp.rs"
+
+[[bin]]
+name = "vectest"
+path = "bin/vectest.rs"
