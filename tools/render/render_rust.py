@@ -30,7 +30,7 @@ sidecar = json.load(open(args.glb.replace(".glb", ".json")))
 if sidecar.get("cloth") and not args.no_cloth:
     # Rust exported the exact pre-sim cloth + python's cloth_sim settings: redo the sims with Blender's solver (tools/cloth_jobs.py)
     import numpy as _np
-    for _t in (os.environ.get("INDOORGEN_TOOLS"), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+    for _t in (os.environ.get("INDOORGEN_TOOLS"), os.path.dirname(os.path.dirname(os.path.realpath(__file__)))):
         if _t and os.path.exists(os.path.join(_t, "cloth_jobs.py")):
             sys.path.insert(0, _t); break
     import cloth_jobs
