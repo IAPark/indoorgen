@@ -20,7 +20,7 @@ like `crate::mesh::Mesh`, `crate::assets::polyfill`, `super::Asset`, `crate::fur
 | ig_plants | cactus, fern, mollusk, monocot, mushroom, nature, plants, shell, snakeplant, spiderplant, succulent |
 | ig_openings | doors, doorhandles, windows |
 | ig_assets | class registry (make_factory, RealAssets, memo caches) = old assets/mod.rs; re-exports every asset crate as `indoorgen::assets` |
-| (root) infinigen | pipeline, openings (scene doors/windows), src/bin/* ; re-exports the crates under the historical paths |
+| (root) indoorgen | pipeline, openings (scene doors/windows), src/bin/* ; re-exports the crates under the historical paths |
 
 Adding a module: put the file in the crate of its layer and add `pub mod x;` to that crate's src/lib.rs (asset classes also need a
 dispatch arm in crates/ig_assets/src/lib.rs `make_factory`). A module that would need a crate below it to depend on a crate above it
