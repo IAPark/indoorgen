@@ -60,7 +60,8 @@ fn solve_longitude(ratio: f64, freq: usize, scale: f64) -> f64 {
 
 /// draws of the maker (volute_make, ...) up to and including the arguments of snail_make
 pub fn maker_params(maker: Maker, r: &mut Rng) -> (SnailParams, bool) {
-    let freq = 256usize;
+    // dense mode: 64 ring copies per turn instead of 256 (4x fewer vertices; the scene budget keeps ~1k triangles for a 5 cm shell)
+    let freq = if ig_kit::api::dense() { std::env::var("SNAIL_FREQ").ok().and_then(|v| v.parse().ok()).unwrap_or(64usize) } else { 256usize };
     match maker {
         Maker::Snail => (SnailParams { lateral: 0.15, longitudinal: 0.04, freq: 28, scale: 0.99, loop_: 8, affine: 1.0, spike: 0.0 }, false),
         Maker::Conch => {

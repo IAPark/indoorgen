@@ -259,7 +259,15 @@ fn main() {
             .map(|(k, gen)| {
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
-                indoorgen::budget::apply_asset(&mut a);
+                if std::env::var_os("BUDGETLOG").is_some() {
+                    let tc = |a: &indoorgen::assets::Asset| a.parts.iter().map(|p| p.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
+                    let t0 = std::time::Instant::now();
+                    let before = tc(&a);
+                    indoorgen::budget::apply_asset(&mut a);
+                    eprintln!("BUDGETLOG {} tris {} -> {} {:.3}s", gen.class, before, tc(&a), t0.elapsed().as_secs_f64());
+                } else {
+                    indoorgen::budget::apply_asset(&mut a);
+                }
                 indoorgen::assets::set_unseeded(None);
                 ((*k).clone(), a)
             })

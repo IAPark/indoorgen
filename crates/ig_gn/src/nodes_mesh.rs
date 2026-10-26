@@ -570,13 +570,30 @@ pub fn merge_by_distance_mesh(m: &Mesh, dist: f32) -> Mesh {
     let n = m.nv();
     let range_sq = dist * dist;
     let mut dup = vec![-2i32; n];
+    // spatial hash (cell >= dist) instead of the all-pairs scan: every j within `dist` of i lies in the 27 cells around i's cell
+    let cell = (dist.max(1e-9) as f64) * 1.01;
+    let ck = |p: [f32; 3]| -> [i64; 3] { [(p[0] as f64 / cell).floor() as i64, (p[1] as f64 / cell).floor() as i64, (p[2] as f64 / cell).floor() as i64] };
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    for j in 0..n {
+        grid.entry(ck(m.pos[j])).or_default().push(j as u32);
+    }
     for i in 0..n {
         if dup[i] == -2 || dup[i] == i as i32 {
             let mut found = false;
-            for j in 0..n {
-                if j != i && dup[j] == -2 && dsq(m.pos[j], m.pos[i]) <= range_sq {
-                    dup[j] = i as i32;
-                    found = true;
+            let c = ck(m.pos[i]);
+            for dx in -1..=1i64 {
+                for dy in -1..=1i64 {
+                    for dz in -1..=1i64 {
+                        if let Some(l) = grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) {
+                            for &j in l {
+                                let j = j as usize;
+                                if j != i && dup[j] == -2 && dsq(m.pos[j], m.pos[i]) <= range_sq {
+                                    dup[j] = i as i32;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if found {

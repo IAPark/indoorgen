@@ -196,7 +196,7 @@ fn transform_by_tri(pt: F3, tar: &[F3; 3], src: &[F3; 3]) -> F3 {
 /// Blender picks circle vertex 892 as the grid corner (f32 angle noise; the circle is the same for every shell). Grid x runs along
 /// increasing circle index, y along decreasing index; boundary vertices keep their circle index, interior vertices follow row by row.
 fn fill_grid_circle(lp: &[[f64; 3]]) -> Mesh {
-    fill_grid_circle_best(lp, 892)
+    fill_grid_circle_best(lp, 892 * lp.len() / 1024)
 }
 
 /// fill_grid_circle with an explicit grid corner `best` (circle vertex index)
@@ -257,9 +257,15 @@ pub fn fill_grid_circle_best(lp: &[[f64; 3]], best: usize) -> Mesh {
     m
 }
 
+fn circle_n() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| if ig_kit::api::dense() { std::env::var("SHELL_CIRCLE_N").ok().and_then(|v| v.parse().ok()).unwrap_or(256) } else { 1024 })
+}
+
 fn build_ellipse(softness: f64) -> Mesh {
     // new_circle(vertices=1024) at x = 1: vertices cos/sin accumulated in float32
-    let n = 1024usize;
+    // dense mode: a 256-gon (16x fewer grid vertices); python uses 1024. The grid corner scales with it (892 / 1024 = 223 / 256).
+    let n = circle_n();
     let mut lp: Vec<[f64; 3]> = vec![];
     for k in 0..n {
         let (sn, cs) = super::cabnodes::sin_cos_from_fraction(k, n);
@@ -425,6 +431,8 @@ pub fn shell_asset(kind: ShellKind, r: &mut Rng, face_size: f64) -> Mesh {
     // decorate_mollusk
     let areas: f64 = obj.faces.iter().map(|f| face_area(&obj, f)).sum::<f64>() / obj.faces.len() as f64;
     if areas >= 1e-6 {
+        // dense mode: shells are < 10 cm, the scene budget keeps ~1k triangles: build with 4^k fewer faces (SHELL_FACE_SCALE, default 16)
+        let face_size = face_size * if ig_kit::api::dense() { std::env::var("SHELL_FACE_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(16.0) } else { 1.0 };
         let levels = (areas / face_size).log2().ceil() as i64;
         if levels > 0 {
             tr("PRE", &obj);

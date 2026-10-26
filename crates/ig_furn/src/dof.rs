@@ -126,6 +126,17 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     if mask.is_empty() {
         if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #3"); } return false;
     }
+    // the child plane's vertices must sit at the margin from the parent plane (cheap, so tested before the polygon projections;
+    // a pure conjunction, the result is unchanged)
+    {
+        let wa = &sa.tris[pa];
+        for v in wa {
+            let dist = dist_to_plane(*v, origin_b, nb);
+            if (dist - g.margin).abs() > 1e-2 + 1e-5 * g.margin.abs() {
+                if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #5"); } return false;
+            }
+        }
+    }
     let sbw = state.world(&rs.target);
     let b_tris: Vec<[V3; 3]> = mask.iter().map(|&i| sbw.tris[i]).collect();
     let proj_a = projected(&sa.tris, nb, origin_b);
@@ -152,13 +163,6 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     };
     if !res {
         if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #4"); } return false;
-    }
-    let wa = &sa.tris[pa];
-    for v in wa {
-        let dist = dist_to_plane(*v, origin_b, nb);
-        if (dist - g.margin).abs() > 1e-2 + 1e-5 * g.margin.abs() {
-            if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #5"); } return false;
-        }
     }
     true
 }

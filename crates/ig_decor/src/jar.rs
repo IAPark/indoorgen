@@ -170,7 +170,8 @@ impl Jar {
         if stage == 1 {
             return (m, e);
         }
-        let m = subsurf(&m, 2, false);
+        // dense mode: one subdivision level fewer on the bridged body (4x fewer faces; the scene budget cuts jars to a few k triangles anyway)
+        let m = subsurf(&m, if crate::dense() { 1 } else { 2 }, false);
         if stage == 2 {
             return (m, e);
         }
