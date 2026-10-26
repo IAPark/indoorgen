@@ -230,6 +230,9 @@ fn main() {
     if std::env::var_os("NO_SNAP").is_none() {
         let mv = indoorgen::snap::recenter_visuals(&g.state, &mut visuals, &["KitchenCabinetFactory"]);
         eprintln!("RECENTER {} KitchenCabinet visuals aligned with their solver box", mv.len());
+        let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        let gone = indoorgen::snap::remove_overlapping(&mut g.state, &visuals, &cut_keys, 0.08);
+        for (k, o) in &gone { eprintln!("OVERLAP removed {k} (inside {o})"); }
     }
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
     indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);

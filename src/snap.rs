@@ -236,3 +236,95 @@ pub fn recenter_visuals(state: &State, visuals: &mut HashMap<String, crate::asse
     }
     out
 }
+
+/// Furniture standing inside other furniture (parts of two unrelated objects whose boxes overlap by more than `min_ov` in every axis):
+/// the solver's placeholders allow it when the visible shape is bigger than the box it used. The smaller object (and everything
+/// resting on it) is removed. Returns the removed keys.
+pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, skip: &[String], min_ov: f64) -> Vec<(String, String)> {
+    let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
+    let exempt = |c: &str| ["Chair", "Stool", "Bed", "Sofa", "Rug", "Curtain", "Lamp", "Light", "Mirror", "WallArt", "Plant", "Door", "Window", "Cloth", "Pillow", "Towel"].iter().any(|e| c.contains(e));
+    struct B {
+        key: String,
+        parts: Vec<([f64; 3], [f64; 3])>,
+        lo: [f64; 3],
+        hi: [f64; 3],
+        parent: Option<String>,
+    }
+    let mut bs: Vec<B> = vec![];
+    for (k, o) in state.objs.iter() {
+        let Some(g) = &o.generator else { continue };
+        let Some(a) = visuals.get(k) else { continue };
+        if exempt(&g.class) || skip.contains(k) {
+            continue;
+        }
+        let m = mat_of(&o.pose);
+        let parts: Vec<_> = a
+            .parts
+            .iter()
+            .map(|p| {
+                let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+                for q in &p.mesh.pos {
+                    let w = m.apply(*q);
+                    for d in 0..3 {
+                        lo[d] = lo[d].min(w[d]);
+                        hi[d] = hi[d].max(w[d]);
+                    }
+                }
+                (lo, hi)
+            })
+            .filter(|(l, _)| l[0] != f64::MAX)
+            .collect();
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for (l, h) in &parts {
+            for d in 0..3 {
+                lo[d] = lo[d].min(l[d]);
+                hi[d] = hi[d].max(h[d]);
+            }
+        }
+        let parent = o.relations.iter().find(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())).map(|r| r.target.clone());
+        bs.push(B { key: k.clone(), parts, lo, hi, parent });
+    }
+    let vol = |b: &B| (0..3).map(|d| b.hi[d] - b.lo[d]).product::<f64>();
+    let related = |a: &B, b: &B| a.parent.as_deref() == Some(b.key.as_str()) || b.parent.as_deref() == Some(a.key.as_str());
+    let mut gone: Vec<(String, String)> = vec![];
+    let mut dead: std::collections::HashSet<String> = Default::default();
+    for i in 0..bs.len() {
+        for j in i + 1..bs.len() {
+            let (a, b) = (&bs[i], &bs[j]);
+            if dead.contains(&a.key) || dead.contains(&b.key) || related(a, b) {
+                continue;
+            }
+            if (0..3).any(|d| a.lo[d] > b.hi[d] - min_ov || b.lo[d] > a.hi[d] - min_ov) {
+                continue;
+            }
+            let hit = a.parts.iter().any(|(al, ah)| b.parts.iter().any(|(bl, bh)| (0..3).all(|d| ah[d].min(bh[d]) - al[d].max(bl[d]) > min_ov)));
+            if hit {
+                let (loser, other) = if vol(a) < vol(b) { (a, b) } else { (b, a) };
+                dead.insert(loser.key.clone());
+                gone.push((loser.key.clone(), other.key.clone()));
+            }
+        }
+    }
+    // descendants go too
+    let all_keys: Vec<String> = state.objs.keys().cloned().collect();
+    let parent_of: HashMap<String, String> = all_keys.iter().filter_map(|k| state.objs[k].relations.iter().find(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())).map(|r| (k.clone(), r.target.clone()))).collect();
+    for (k, _) in &gone {
+        for c in &all_keys {
+            let mut x = c;
+            for _ in 0..8 {
+                match parent_of.get(x) {
+                    Some(p) if p == k => {
+                        dead.insert(c.clone());
+                        break;
+                    }
+                    Some(p) => x = p,
+                    None => break,
+                }
+            }
+        }
+    }
+    for k in &dead {
+        state.objs.shift_remove(k);
+    }
+    gone
+}

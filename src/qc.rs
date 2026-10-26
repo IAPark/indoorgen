@@ -266,6 +266,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
         (k.clone(), (lo, hi))
     }).collect();
     let seeds_of: std::collections::HashMap<String, (u64, u64)> = inp.state.objs.iter().filter_map(|(k, s)| s.generator.as_ref().map(|g| (k.clone(), (g.factory_seed, g.inst_seed)))).collect();
+    let geom_of: std::collections::HashMap<String, (V3, V3)> = inp.state.objs.iter().map(|(k, s)| (k.clone(), (s.geom.lo, s.geom.hi))).collect();
     let children_of: std::collections::HashSet<(String, String)> = inp.state.objs.iter().flat_map(|(k, s)| s.relations.iter().map(move |r| (r.target.clone(), k.clone()))).collect();
     let (cut_keys, cutters, wall_t) = (inp.cut_keys, inp.cutters, inp.wall_t);
     let results: Vec<serde_json::Value> = (0..objs.len())
@@ -280,6 +281,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
             m.insert("class".into(), json!(o.class));
             m.insert("room".into(), json!(room.map(|r| inner[r].0.clone())));
             m.insert("rels".into(), json!(rels_of.get(&o.key)));
+            m.insert("geom".into(), json!(geom_of.get(&o.key)));
             m.insert("seeds".into(), json!(seeds_of.get(&o.key)));
             m.insert("ph".into(), json!(ph_of.get(&o.key)));
             m.insert("lo".into(), json!(o.lo));

@@ -276,6 +276,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             if let Some(geom) = ctx.populated.get(&(g.class.clone(), g.factory_seed, g.inst_seed)) {
                 o.geom = Arc::new(geom.clone());
             } else if let Some(geom) = assets.solver_asset(&g.class, g.factory_seed, g.inst_seed) {
+                if std::env::var_os("PHDBG").is_some() { eprintln!("SOLVER_ASSET {} {} {} lo {:?} hi {:?}", g.class, g.factory_seed, g.inst_seed, geom.lo, geom.hi); }
                 o.geom = Arc::new(geom);
                 let _ = k;
             }
