@@ -1,7 +1,7 @@
-"""Quick people preview (Blender 5.2): ~/work/infinigen-ref/.venv52/bin/python tools/people/preview.py X.glb out.png
+"""Quick people preview (Blender 5.2): $BLENDER_PY tools/people/preview.py X.glb out.png
  [--cam x,y,z,tx,ty,tz] [--lens 50] [--samples 24] [--res 1200x700] [--exposure 0]"""
 import sys, os, json, math, argparse
-sys.path.insert(0, os.path.expanduser("~/work/ref/scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "render"))
 import bpy, mathutils
 ap = argparse.ArgumentParser(); ap.add_argument("glb"); ap.add_argument("out")
 ap.add_argument("--cam"); ap.add_argument("--lens", type=float, default=50); ap.add_argument("--samples", type=int, default=24)

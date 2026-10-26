@@ -3,7 +3,7 @@
 import sys, json, subprocess, numpy as np, bpy, mathutils
 from mathutils.bvhtree import BVHTree
 cls = sys.argv[1]; path = sys.argv[2]; only = set(int(x) for x in sys.argv[3:])
-RS = "/Users/lume/work/agents/furniture/infinigen-rs/target/release/dumpasset"
+RS = __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__))), "target/release/dumpasset")
 def tris(V, P):
     T = []
     for p in P:

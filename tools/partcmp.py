@@ -1,6 +1,6 @@
 """partcmp.py py.json[:part] rs.json : surface compare of two mesh dumps"""
 import sys, json, numpy as np
-sys.path.insert(0, "/Users/lume/work/agents/furniture/tools")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from surflib import *
 a = sys.argv[1]
 if ":" in a:

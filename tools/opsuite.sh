@@ -1,4 +1,5 @@
 #!/bin/bash
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # opsuite.sh [-f] [-b] [ID-substring ...]   run the op regression suite tools/opcases/suite.txt: Blender (tools/opcheck.py) vs Rust (target/fast/opcheck)
 #   Blender results are cached in tools/opcases/<id>.blender.json (+ .key = hash of op/case/params); reruns need no Blender.
 #   -f   force re-running Blender for the selected ids      -b  build target/fast/opcheck first (fast profile)      -v  show full comparison per line
@@ -6,7 +7,7 @@
 #   ids: only lines whose id contains one of the given substrings.     Prints one line per case + a per-op summary; exit 1 if any MISMATCH.
 #   One Blender process at a time (shared cores).  Add a case: add its json (tools/opcases/gen.py) and a line to suite.txt.
 cd "$(dirname "$0")/.." || exit 2
-PY=${OPPY:-$HOME/work/infinigen-ref/.venv/bin/python}
+PY=${OPPY:-$PY_REF}
 BIN=target/fast/opcheck
 force=0; build=0; verbose=0
 while [[ "$1" == -* ]]; do case "$1" in -f) force=1;; -b) build=1;; -v) verbose=1;; esac; shift; done

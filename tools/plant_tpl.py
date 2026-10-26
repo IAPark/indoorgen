@@ -2,7 +2,7 @@
 For every control-flow signature (sequence of numpy draws with their literal arguments) seen in the seeds tried, export the asset
 for 4 seeds with that signature and fit every differing constant of the exported graph as a*draw+b of one scalar draw."""
 import sys, json, importlib, collections, numpy as np
-sys.path.insert(0, "/Users/lume/work/agents/decor/infinigen-rs/tools")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 import bpy
 import gn_export as GX
 from infinigen.core.util.math import int_hash

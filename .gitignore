@@ -4,3 +4,8 @@
 /tmp/
 /tools/preview/target
 STATUS.txt
+/.indoorgen.env
+/.cargo/config.toml
+/local-data/
+/assets/
+__pycache__/

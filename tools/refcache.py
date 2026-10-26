@@ -3,7 +3,7 @@
 usage (run with the infinigen venv python; ONE process, many cases):
   refcache.py module.Class:SEEDS[:INSTS] [...]      e.g. seating.chairs.chair.ChairFactory:0-5  tables.dining_table.TableDiningFactory:0,3,7:0,1
   refcache.py --list cases.txt                       one spec per line
-  options: --force (recompute existing)  --dir DIR (default ~/work/refcache)
+  options: --force (recompute existing)  --dir DIR (default $INDOORGEN_REFCACHE)
 
 Each case -> DIR/<Class>/<fseed>_<inst>.bin :
   b"RCv1" | u32 header_len | header json | f32 verts[nv*3] | u32 face_sizes[nf] | u32 indices[sum(face_sizes)]
@@ -36,7 +36,7 @@ def parse_ints(s):
 def main():
     a = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
     force = "--force" in a
-    d = os.path.expanduser("~/work/refcache")
+    d = os.environ.get("INDOORGEN_REFCACHE") or os.path.join(os.environ.get("INDOORGEN_DATA", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local-data")), "refcache")
     if "--dir" in a:
         d = a[a.index("--dir") + 1]
     specs = []

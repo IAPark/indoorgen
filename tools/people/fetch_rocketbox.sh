@@ -1,9 +1,10 @@
 #!/bin/bash
-# Fetch Microsoft Rocketbox avatars (MIT) into ~/work/assets/rocketbox/<name>/ : Export/<name>.fbx + textures (TGA -> jpg/png, TGA deleted).
+IG_TOOLS=$(cd "$(dirname "$0")/.." && pwd); . "$IG_TOOLS/env.sh"
+# Fetch Microsoft Rocketbox avatars (MIT) into $INDOORGEN_ASSETS (default <repo>/assets/rocketbox)/<name>/ : Export/<name>.fbx + textures (TGA -> jpg/png, TGA deleted).
 # usage: fetch_rocketbox.sh [name ...]   (default: the curated list below). Needs python with PIL (infinigen-ref venv).
 set -e
-OUT=${RB_OUT:-$HOME/work/assets/rocketbox}
-PY=${RB_PY:-$HOME/work/infinigen-ref/.venv/bin/python}
+OUT=${RB_OUT:-$INDOORGEN_ASSETS}
+PY=${RB_PY:-$([ -x "$PY_REF" ] && echo "$PY_REF" || echo python3)}
 HERE=$(cd "$(dirname "$0")" && pwd)
 BASE=https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/master/Assets/Avatars
 LIST="Female_Adult_01 Female_Adult_02 Female_Adult_04 Female_Adult_05 Female_Adult_07 Female_Adult_09 Female_Adult_11 Female_Adult_14 Female_Adult_17

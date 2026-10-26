@@ -1,0 +1,10 @@
+# Local-only build overrides. Copy to .cargo/config.toml (gitignored) if GEOS 3.11 is not found by pkg-config.
+# The `geos` crate (v11, feature v3_11_0) needs GEOS 3.11.x; newer/older libgeos is not API-compatible.
+# Build GEOS 3.11.4 from source (cmake -DCMAKE_INSTALL_PREFIX=$HOME/geos-3.11.4 ... && make install), then:
+[env]
+PKG_CONFIG_PATH = "/ABSOLUTE/PATH/TO/geos-3.11.4/lib/pkgconfig"
+GEOS_LIB_DIR = "/ABSOLUTE/PATH/TO/geos-3.11.4/lib"
+GEOS_VERSION = "3.11.4"
+[build]
+# macOS/Linux: let the binaries find the dynamic libgeos at run time
+rustflags = ["-C", "link-arg=-Wl,-rpath,/ABSOLUTE/PATH/TO/geos-3.11.4/lib"]

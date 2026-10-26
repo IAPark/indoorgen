@@ -7,7 +7,7 @@ from scipy.spatial import cKDTree
 root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 import bpy
 def cache(seed):
-    b = open(os.path.expanduser(f"~/work/refcache/BalloonFactory/{seed}_0.bin"), "rb").read()
+    b = open(os.path.join(os.environ.get("INDOORGEN_REFCACHE", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "local-data", "refcache")), f"BalloonFactory/{seed}_0.bin"), "rb").read()
     n = struct.unpack("<I", b[4:8])[0]; h = json.loads(b[8:8 + n]); o = 8 + n
     return np.frombuffer(b, dtype="<f4", count=h["nv"] * 3, offset=o).reshape(-1, 3).astype(float)
 def nn(a, b):

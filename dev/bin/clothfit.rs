@@ -30,7 +30,7 @@ fn main() {
     let kinds: Vec<String> = std::env::var("KINDS").unwrap_or("sheet cover pillow wrapped".into()).split_whitespace().map(String::from).collect();
     let mut jobs = vec![];
     for s in &seeds {
-        let dir = format!("{}/work/agents/rng/cache/d_BedFactory_{s}", std::env::var("HOME").unwrap());
+        let dir = format!("tmp/cloth/d_BedFactory_{s}");
         let d = PyDump::load(&dir);
         for k in &kinds {
             let key = match k.as_str() { "sheet" => "sim.make_sheet.0", "cover" => "sim.make_cover.0", "pillow" => "sim.create_asset.0", "wrapped" => "sim.make_wrapped.0", _ => continue };

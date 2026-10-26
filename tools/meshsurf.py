@@ -1,5 +1,5 @@
 """meshsurf.py a.json b.json [n] : two-way surface distance between two {v,p} meshes (verts + edge midpoints of one -> triangles of the other), worst points listed.
-run with the venv python (needs bpy/mathutils): ~/work/infinigen-ref/.venv/bin/python tools/meshsurf.py"""
+run with the venv python (needs bpy/mathutils): $PY_REF tools/meshsurf.py"""
 import json,sys,numpy as np, bpy, mathutils
 from mathutils.bvhtree import BVHTree
 A=json.load(open(sys.argv[1])); B=json.load(open(sys.argv[2])); N=int(sys.argv[3]) if len(sys.argv)>3 else 8

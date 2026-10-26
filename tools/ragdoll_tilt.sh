@@ -1,4 +1,5 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # ragdoll_tilt.sh KINDS [N]: per-person RAGDOLL tilt/pen lines (RAGDOLL_DBG) over a standard scene set, PEOPLE_FORCE=KINDS. glbs are deleted.
 cd "$(git rev-parse --show-toplevel)" || exit 1
 K=${1:-SitUpright}; N=${2:-3}

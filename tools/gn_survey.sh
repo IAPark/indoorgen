@@ -1,6 +1,7 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # gn_survey.sh LIST.txt OUT.log [SEED]   LIST: lines "module.Class" (module relative to infinigen.assets.objects); runs gn_check asset on each (sequential, one bpy at a time)
-PY=~/work/infinigen-ref/.venv/bin/python
+PY=$PY_REF
 HERE=${0:A:h}
 LIST=$1; OUT=$2; SEED=${3:-0}
 : > $OUT

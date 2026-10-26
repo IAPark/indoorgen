@@ -92,10 +92,13 @@ impl Avatar {
 }
 
 pub fn root_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("ROCKETBOX_DIR") {
-        return PathBuf::from(p);
+    // INDOORGEN_ASSETS: the rocketbox directory (ROCKETBOX_DIR is the older name); default <repo>/assets/rocketbox
+    for k in ["INDOORGEN_ASSETS", "ROCKETBOX_DIR"] {
+        if let Ok(p) = std::env::var(k) {
+            return PathBuf::from(p);
+        }
     }
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("work/assets/rocketbox")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/rocketbox")
 }
 
 /// avatar names that have an fbx on disk (sorted)

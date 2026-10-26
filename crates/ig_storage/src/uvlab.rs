@@ -198,7 +198,7 @@ mod tests {
     #[test]
     #[ignore]
     fn cylinder_and_propagation_match_blender() {
-        let dir = std::env::var("SDU").unwrap_or("/Users/lume/work/wt/bath/tmp/sdu".into());
+        let dir = std::env::var("SDU").unwrap_or_else(|_| "tmp/sdu".into());
         let rd = |n: &str| -> Value { serde_json::from_str(&std::fs::read_to_string(format!("{dir}/{n}")).unwrap()).unwrap() };
         let c2 = rd("002_object_modifier_apply_SUBSURF.case.json");
         let c3 = rd("003_object_modifier_apply_SUBSURF.case.json");

@@ -1,9 +1,10 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # countbench.sh [gen2]: standalone object counts (no oracles) vs python solve_state.json over every reference room.
 # Single seeds swing a lot (23..45 for identical inputs); compare MEANS over all rooms, not single cases.
 G=${1:-./target/fast/gen2}; cd "$(git rev-parse --show-toplevel)" || exit 1
 W=$(mktemp -d /tmp/countbench.XXXXXX); tp=0; tr=0; n=0
-for f in ~/work/ref/*_[0-9]/solve_state.json; do
+for f in $INDOORGEN_ORACLES/*_[0-9]/solve_state.json; do
   d=$(basename $(dirname $f)); r=${d%_*}; s=${d#*_}
   py=$(python3 -c "
 import json; d=json.load(open('$f'))['objs']

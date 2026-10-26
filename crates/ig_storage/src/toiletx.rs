@@ -1,5 +1,5 @@
 //! bathroom/toilet.py ToiletFactory.create_asset ported stage by stage (surface-equal to Blender; vertex order is not Blender's for
-//! bridge / solidify stages). Stage dumps: ~/work/agents/storage/toistages.py, compared by src/bin/toicmp.rs.
+//! bridge / solidify stages). Stage dumps: tools/toistages.py, compared by dev/attic/toicmp.rs.
 use super::bathroom::Toilet;
 use super::blops::align_bezier_points;
 use super::bridge::{bridge_bm_ex, bridge_two_loops_surface, Interp};

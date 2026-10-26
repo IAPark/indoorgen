@@ -1,6 +1,6 @@
 """drawlog.py MODULE.CLASS SEED INST OUT.json : log every numpy/random draw (and np.random.seed calls) during C(seed) and spawn_asset(INST)"""
 import sys, json, importlib, random as pyrandom, numpy as np
-sys.path.insert(0, "/Users/lume/work/agents/decor/infinigen-rs/tools")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 import bpy
 EV = []
 PH = ["ctor"]

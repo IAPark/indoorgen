@@ -2,7 +2,7 @@
 import sys, json, subprocess, numpy as np
 from scipy.spatial import cKDTree
 cls = sys.argv[1]; path = sys.argv[2]
-RS = "/Users/lume/work/agents/furniture/infinigen-rs/target/release/dumpasset"
+RS = __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__))), "target/release/dumpasset")
 worst = 0; worst_nn = 0; n = 0; cnt_ok = 0; idx_ok = 0
 for l in open(path):
     j = json.loads(l)

@@ -1,4 +1,5 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # f7check.sh: run gen2 on 4 rooms, report user CPU / generate CPU and whether the glb is byte-identical to the recorded baseline (tools/f7_base.md5,
 # md5 of the glb before the F7 performance work). The glb is deleted afterwards (they are 100+ MB). Wall time is meaningless on a loaded machine: use user CPU.
 cd "$(git rev-parse --show-toplevel)" || exit 1

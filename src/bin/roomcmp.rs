@@ -106,7 +106,7 @@ fn main() {
             let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
             let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));
             let st = solver.solve(&mut r);
-            let fx = load(&a.get(4).cloned().unwrap_or_else(|| format!("{}/work/ref/traces/case_{}_{}_state0.json", std::env::var("HOME").unwrap(), room, seed)));
+            let fx = load(&a.get(4).cloned().unwrap_or_else(|| format!("{}/traces/case_{}_{}_state0.json", std::env::var("INDOORGEN_ORACLES").unwrap_or_else(|_| format!("{}/local-data/ref", env!("CARGO_MANIFEST_DIR"))), room, seed)));
             let mut all_ok = true;
             for (name, obj) in st.valid_rooms() {
                 let poly = obj.polygon.as_ref().unwrap();

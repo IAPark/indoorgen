@@ -3,7 +3,7 @@ use indoorgen::assets::cloth::*;
 use indoorgen::assets::clothes::*;
 fn main() {
     let filt = std::env::args().nth(1).unwrap_or_default();
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/Users/lume/work/agents/rng/cache/clothexp4.json").unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("tmp/cloth/clothexp4.json").unwrap()).unwrap();
     let cal = Calib::default();
     let mut pos = vec![];
     for z in [-0.4, 0.0] { for y in [-0.6, 0.6] { for x in [-0.6, 0.6] { pos.push([x, y, z]); } } }

@@ -1,13 +1,13 @@
 """gn_export.py : export Blender geometry node groups to JSON for the Rust interpreter (src/gn).
 
-Run with the infinigen venv:  ~/work/infinigen-ref/.venv/bin/python tools/gn_export.py ...
+Run with the infinigen venv:  $PY_REF tools/gn_export.py ...
 
   gn_export.py group  MODULE.FUNC OUT.json [ARGS_JSON]
       import FUNC (an @node_utils.to_nodegroup function, e.g.
       infinigen.assets.objects.tables.table_utils.nodegroup_n_gon_profile), call it (FUNC(*ARGS)),
       export the returned group + every group it references.
   gn_export.py asset  MODULE.CLASS SEED OUT.json [INST]
-      spawn the factory asset (materials stubbed like ~/work/ref/scripts/geomcmp.py) and record every
+      spawn the factory asset (materials stubbed like tools/oracle/geomcmp.py) and record every
       geometry-nodes modifier that is applied during construction ("steps"): group (+ nested), modifier
       input values and the input mesh the modifier was applied to.
 

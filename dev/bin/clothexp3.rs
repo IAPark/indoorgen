@@ -3,7 +3,7 @@ use indoorgen::assets::cloth::*;
 use indoorgen::assets::clothes::*;
 fn main() {
     let filt = std::env::args().nth(1).unwrap_or_default();
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("EXP3").unwrap_or("/Users/lume/work/agents/rng/cache/clothexp3.json".into())).unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("EXP3").unwrap_or("tmp/cloth/clothexp3.json".into())).unwrap()).unwrap();
     let cal = Calib::default();
     for (key, val) in j.as_object().unwrap() {
         if !key.contains(&filt) { continue; }

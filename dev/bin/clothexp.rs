@@ -7,7 +7,7 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let case = a[1].clone();
     let frame: u32 = a[2].parse().unwrap();
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("EXP2").unwrap_or("/Users/lume/work/agents/rng/cache/clothexp2.json".into())).unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("EXP2").unwrap_or("tmp/cloth/clothexp2.json".into())).unwrap()).unwrap();
     let cal = Calib::default();
     let mut p = ClothParams::default();
     let (sx, sy, nx, z0);

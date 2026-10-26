@@ -3,7 +3,7 @@ simulated / moved nodes to a small overlay glb (same world Z-up convention as th
 the needed meshes are read straight from the glb with numpy (memory-mapped), so it costs the sim time + ~10 s of Blender/infinigen startup.
 Preview it with `tools/preview.sh SCENE.glb --cloth OUT.cloth.glb --person 0 out.png` (the overlay replaces the nodes of the same name).
 Also prints a body-vs-cloth penetration report (cloth vertices inside person meshes, depth from the nearest body surface).
-Run with the Blender-5.2 venv: ~/work/infinigen-ref/.venv52/bin/python tools/cloth_only.py SCENE.glb OUT.cloth.glb
+Run with the Blender-5.2 venv: $BLENDER_PY tools/cloth_only.py SCENE.glb OUT.cloth.glb
 (tools/cloth_only.sh wraps this). Env: INFINIGEN_RS_TOOLS = dir with cloth_jobs.py (default: this file's dir)."""
 import os, sys, json, struct, time
 import numpy as np

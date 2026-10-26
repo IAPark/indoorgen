@@ -2,7 +2,7 @@ use indoorgen::bl32::*;
 fn f(v: &serde_json::Value) -> f32 { v.as_f64().unwrap() as f32 }
 fn v3(v: &serde_json::Value) -> [f32; 3] { let a = v.as_array().unwrap(); [f(&a[0]), f(&a[1]), f(&a[2])] }
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or("/Users/lume/work/ref/bl32/cases.json".into());
+    let path = std::env::args().nth(1).unwrap_or_else(|| format!("{}/bl32/cases.json", std::env::var("INDOORGEN_ORACLES").unwrap_or_else(|_| format!("{}/local-data/ref", env!("CARGO_MANIFEST_DIR")))));
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let verts: Vec<[f32; 3]> = j["verts"].as_array().unwrap().iter().map(v3).collect();
     let polys: Vec<Vec<usize>> = j["polys"].as_array().unwrap().iter().map(|p| p.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect()).collect();

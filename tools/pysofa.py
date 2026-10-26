@@ -1,7 +1,7 @@
 """pysofa.py seed varname out.json : sofa geometry node group output replaced by an intermediate node variable (geometry of that node)"""
 import sys, json, types, numpy as np, bpy
 seed = int(sys.argv[1]); var = sys.argv[2]; out = sys.argv[3]
-src = open("/Users/lume/work/infinigen-ref/src/infinigen/assets/objects/seating/sofa.py").read()
+src = open(__import__("os").path.join(__import__("os").environ["INDOORGEN_REF"], "src")+"/infinigen/assets/objects/seating/sofa.py").read()
 i = src.index("    group_output = nw.new_node(\n        Nodes.GroupOutput,\n        input_kwargs={\"Geometry\": switch_1")
 j = src.index("\n    )\n", i) + 7
 new = '    group_output = nw.new_node(Nodes.GroupOutput, input_kwargs={"Geometry": %s}, attrs={"is_active_output": True})\n' % var

@@ -1,4 +1,5 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # cams_eval.sh OUTDIR TAG "SEED ROOM" [gen2 args]: gen2 --cams 3 then preview contact sheet OUTDIR/<room>_<seed>_<tag>.png; deletes glb
 OUT=${1:A}; TAG=$2; set -- ${=3} "${@:4}"; S=$1; R=$2; shift 2
 G=$PWD/target/fast/gen2; mkdir -p $OUT; T=${TMPDIR:-/tmp}/ev; mkdir -p $T

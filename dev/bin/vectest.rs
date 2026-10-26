@@ -2,7 +2,7 @@ use indoorgen::bl32::*;
 fn f(v: &serde_json::Value) -> f32 { v.as_f64().unwrap() as f32 }
 fn v3(v: &serde_json::Value) -> [f32; 3] { let a = v.as_array().unwrap(); [f(&a[0]), f(&a[1]), f(&a[2])] }
 fn main() {
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/Users/lume/work/ref/bl32/vec.json").unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/bl32/vec.json", std::env::var("INDOORGEN_ORACLES").unwrap_or_else(|_| format!("{}/../local-data/ref", env!("CARGO_MANIFEST_DIR"))))).unwrap()).unwrap();
     let mut bad = std::collections::BTreeMap::<&str, (usize, String)>::new();
     for (i, c) in j.as_array().unwrap().iter().enumerate() {
         let (a, b) = (v3(&c["a"]), v3(&c["b"]));

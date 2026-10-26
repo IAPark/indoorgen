@@ -3,7 +3,7 @@
 Apply ONE Blender operation / modifier to a small mesh and dump the result, so the Rust port of that op can be compared on the same
 input (`target/fast/opcheck OP --in case.json --params ... [--blender res.json]`, see src/bin/opcheck.rs and tools/opsuite.sh).
 
-  ~/work/infinigen-ref/.venv/bin/python tools/opcheck.py bevel --in tools/opcases/cube.json --params '{"offset":0.1,"segments":3}' --out /tmp/r.json
+  $PY_REF tools/opcheck.py bevel --in tools/opcases/cube.json --params '{"offset":0.1,"segments":3}' --out /tmp/r.json
   ... opcheck.py --list            list ops and their default parameters
 
 case.json (all keys optional except verts/polys):

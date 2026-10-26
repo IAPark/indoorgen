@@ -1,5 +1,5 @@
 import sys, json, numpy as np, bpy, importlib, types
-src = open("/Users/lume/work/infinigen-ref/src/infinigen/assets/objects/seating/chairs/seats/curvy_seats.py").read()
+src = open(__import__("os").path.join(__import__("os").environ["INDOORGEN_REF"], "src")+"/infinigen/assets/objects/seating/chairs/seats/curvy_seats.py").read()
 assert 'input_kwargs={"Geometry": warparoundcurvealt},\n        attrs={"is_active_output": True}' in src
 src = src.replace('input_kwargs={"Geometry": warparoundcurvealt},\n        attrs={"is_active_output": True}', 'input_kwargs={"Geometry": lofting_001.outputs["Geometry"]},\n        attrs={"is_active_output": True}')
 import os

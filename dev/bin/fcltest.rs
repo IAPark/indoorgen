@@ -3,7 +3,7 @@ fn tf(t: &Vec<Vec<f64>>, p: [f64; 3]) -> [f64; 3] {
     [0, 1, 2].map(|i| t[i][0] * p[0] + t[i][1] * p[1] + t[i][2] * p[2] + t[i][3])
 }
 fn main() {
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/Users/lume/work/ref/bl32/fcl_cases.json").unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/bl32/fcl_cases.json", std::env::var("INDOORGEN_ORACLES").unwrap_or_else(|_| format!("{}/../local-data/ref", env!("CARGO_MANIFEST_DIR"))))).unwrap()).unwrap();
     let (mut ok, mut bad) = (0, 0);
     for (i, c) in j.as_array().unwrap().iter().enumerate() {
         let ext = |k: &str| { let a = c[k].as_array().unwrap(); [a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap()] };

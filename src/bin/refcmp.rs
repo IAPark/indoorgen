@@ -128,7 +128,7 @@ fn main() {
     }
     let opt = |k: &str| a.iter().position(|x| x == k).map(|i| a[i + 1].clone());
     let cls = &a[1];
-    let dir = opt("--dir").unwrap_or_else(|| format!("{}/work/refcache", std::env::var("HOME").unwrap()));
+    let dir = opt("--dir").unwrap_or_else(|| std::env::var("INDOORGEN_REFCACHE").unwrap_or_else(|_| format!("{}/../local-data/refcache", env!("CARGO_MANIFEST_DIR"))));
     let tol_mean: f64 = opt("--tol-mean").map_or(1e-5, |s| s.parse().unwrap());
     let tol_max: f64 = opt("--tol-max").map_or(1e-4, |s| s.parse().unwrap());
     let inst_filter: Option<u64> = opt("--inst").map(|s| s.parse().unwrap());

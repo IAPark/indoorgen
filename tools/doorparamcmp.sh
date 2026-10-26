@@ -1,8 +1,9 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # doorparamcmp.sh Class seed const_seed : compare python params with rust DoorSpec debug print
-cd ~/work/infinigen-ref && .venv/bin/python ~/work/agents/furniture/tools/pydoor.py $1 $2 $3 /tmp/f_dp.json 2>&1 | grep -E "Trace|rror" | head -3
+cd $INDOORGEN_REF && .venv/bin/python $IG_TOOLS/pydoor.py $1 $2 $3 /tmp/f_dp.json 2>&1 | grep -E "Trace|rror" | head -3
 read w s t <<< $(.venv/bin/python -c "import json;c=json.load(open('/tmp/f_dp.json'))['consts'];print(c['width'],c['size'],c['wall'])")
-~/work/agents/furniture/infinigen-rs/target/release/doorparams $1 $2 $w $s $t | tail -1 > /tmp/f_dp_rs.txt
+$IG_ROOT/target/release/doorparams $1 $2 $w $s $t | tail -1 > /tmp/f_dp_rs.txt
 .venv/bin/python - <<'PY'
 import json,re
 p=json.load(open('/tmp/f_dp.json'))['params']; t=open('/tmp/f_dp_rs.txt').read()

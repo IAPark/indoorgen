@@ -1,4 +1,4 @@
-//! bmesh bevel port vs bpy.ops.mesh.bevel (cases from ~/work/agents/storage/bevtest/gen.py)
+//! bmesh bevel port vs bpy.ops.mesh.bevel (cases from a Blender dump script)
 use indoorgen::bm::bevel::*;
 use indoorgen::bm::*;
 use serde_json::Value;

@@ -1,6 +1,6 @@
 """cmpop.py rust_op.json py_op.json [prefix] : per-cutter surface compare of union of pieces"""
 import sys, json, numpy as np
-sys.path.insert(0, "/Users/lume/work/agents/furniture/tools")
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from surflib import *
 R = json.load(open(sys.argv[1]))["pieces"]; P = json.load(open(sys.argv[2])); pre = sys.argv[3] if len(sys.argv) > 3 else ""
 def union(ms):

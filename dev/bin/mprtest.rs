@@ -1,6 +1,6 @@
 use indoorgen::furn::mpr::*;
 fn main() {
-    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/Users/lume/work/ref/bl32/fcl_cases.json").unwrap()).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/bl32/fcl_cases.json", std::env::var("INDOORGEN_ORACLES").unwrap_or_else(|_| format!("{}/../local-data/ref", env!("CARGO_MANIFEST_DIR"))))).unwrap()).unwrap();
     let (mut ok_ab, mut ok_ba, mut bad) = (0, 0, 0);
     for (i, c) in j.as_array().unwrap().iter().enumerate() {
         let ext = |k: &str| { let a = c[k].as_array().unwrap(); [a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap()] };

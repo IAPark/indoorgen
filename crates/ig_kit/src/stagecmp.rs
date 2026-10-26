@@ -1,5 +1,5 @@
 //! Surface comparison of two polygon meshes (symmetric nearest-surface distance of vertex / edge-point / face-centre probes), used to
-//! validate hand-ported bpy-op assets stage by stage against python dumps (tools: ~/work/agents/storage/*stages.py).
+//! validate hand-ported bpy-op assets stage by stage against python dumps (tools: tools/*stages.py).
 use crate::dhash::HashMap;
 
 type V = [f64; 3];

@@ -1,4 +1,5 @@
 #!/bin/zsh
+IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
 # people_report.sh [N...]: placement report (PEOPLE_SUMMARY lines) for the standard scene set
 cd "$(git rev-parse --show-toplevel)" || exit 1
 Ns=(${@:-1 2 3})
