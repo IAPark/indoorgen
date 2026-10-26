@@ -720,6 +720,7 @@ pub struct DoorParts {
 }
 
 pub struct DoorPieces {
+    pub frame: Mesh,
     pub body: Mesh,
     pub glass: Mesh,
     pub louver: Mesh,
@@ -809,6 +810,11 @@ impl DoorSpec {
 
     /// full single door: frame + hinged door (+ arc), split into material pieces
     pub fn assemble_pieces(&self, parts: &DoorParts) -> DoorPieces {
+        self.assemble_pieces_opt(parts, false)
+    }
+
+    /// `single`: a double-door style (frame_style 3) yields only its first leaf (the opening is one door wide)
+    pub fn assemble_pieces_opt(&self, parts: &DoorParts, single: bool) -> DoorPieces {
         let w = self.width;
         let d = self.depth;
         let (_, cz) = frame_center_offsets(self.frame_style, w, self.frame_width);
@@ -831,7 +837,6 @@ impl DoorSpec {
         let e1 = [fc[0] + vx, fc[1] - d / 2.0, fc[2]];
         let e2 = [fc[0] - w, fc[1] - d / 2.0, fc[2]];
         let mut body = Mesh::new();
-        body.append(&frame);
         let mut glass = Mesh::new();
         let mut louver = Mesh::new();
         let mut handle = Mesh::new();
@@ -846,7 +851,7 @@ impl DoorSpec {
         if let Some(h) = parts.handles.first() {
             handle.append(&make(h, flip, e1));
         }
-        if double {
+        if double && !single {
             body.append(&make(&parts.arc, true, e2));
             body.append(&make(&parts.door, true, e2));
             glass.append(&make(&parts.glass, true, e2));
@@ -857,7 +862,7 @@ impl DoorSpec {
         }
         // final: rotate z by 1.5708 and put the lowest point on z = 0
         let mut all = Mesh::new();
-        for m in [&body, &glass, &louver, &handle] {
+        for m in [&frame, &body, &glass, &louver, &handle] {
             all.append(m);
         }
         let (lo, _) = all.bounds();
@@ -868,11 +873,12 @@ impl DoorSpec {
             }
             translate(m, [0.0, 0.0, -lo[2]]);
         };
+        fin(&mut frame);
         fin(&mut body);
         fin(&mut glass);
         fin(&mut louver);
         fin(&mut handle);
-        DoorPieces { body, glass, louver, handle }
+        DoorPieces { frame, body, glass, louver, handle }
     }
 
     /// factory(j): the instance-seeded door asset split into material pieces
@@ -882,9 +888,17 @@ impl DoorSpec {
         self.assemble_pieces(&parts)
     }
 
+    /// like `build_door`, but a double-door style gives a single leaf and the frame is returned separately (callers fit their own casing)
+    pub fn build_door_leaf(&self, inst: u64) -> DoorPieces {
+        let mut r = super::inst_rng(self.fseed, inst);
+        let parts = self.build_parts(&mut r);
+        self.assemble_pieces_opt(&parts, true)
+    }
+
     pub fn assemble(&self, parts: &DoorParts) -> Mesh {
         let p = self.assemble_pieces(parts);
-        let mut m = p.body;
+        let mut m = p.frame;
+        m.append(&p.body);
         m.append(&p.glass);
         m.append(&p.louver);
         m.append(&p.handle);

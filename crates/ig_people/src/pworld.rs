@@ -138,6 +138,8 @@ pub struct World {
     pub floor_z: f64,
     /// half wall thickness: the walkable area is the room polygon inset by this
     pub wall_in: f64,
+    /// extra keep-out boxes (door swing areas)
+    pub extra: Vec<WBox>,
 }
 
 pub fn in_poly(p: [f64; 2], poly: &[[f64; 2]]) -> bool {
@@ -245,7 +247,7 @@ impl World {
         };
         let mut objs = vec![];
         if rooms.is_empty() {
-            return World { objs, rooms, floor_z, wall_in: wall_t / 2.0 };
+            return World { objs, rooms, floor_z, wall_in: wall_t / 2.0, extra: vec![] };
         }
         for (k, o) in &state.objs {
             let xy = [o.pose.t[0], o.pose.t[1]];
@@ -304,7 +306,7 @@ impl World {
             }
             objs.push(Obj { key: k.clone(), class: gen.class.clone(), pose: o.pose, tris, cover, pillows, lo, hi, room, tm: OnceCell::new() });
         }
-        World { objs, rooms, floor_z, wall_in: wall_t / 2.0 }
+        World { objs, rooms, floor_z, wall_in: wall_t / 2.0, extra: vec![] }
     }
 
     /// objects the physics of a person must respect (everything solid except ceiling lights, wall art, curtains; rugs count)
