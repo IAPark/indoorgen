@@ -520,6 +520,20 @@ fn simulate_inner(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &
                 let target = if hit { 1.0 } else { 0.0 };
                 pw[i] += (target - pw[i]) * 0.5;
             }
+            // spatially smooth (pockets of the comforter must not deflate one by one: that leaves round pits)
+            for _ in 0..3 {
+                let mut acc = pw.clone();
+                let mut cnt = vec![1.0f64; n];
+                for s in springs.iter().filter(|s| s.kind == 0) {
+                    acc[s.i as usize] += pw[s.j as usize];
+                    acc[s.j as usize] += pw[s.i as usize];
+                    cnt[s.i as usize] += 1.0;
+                    cnt[s.j as usize] += 1.0;
+                }
+                for i in 0..n {
+                    pw[i] = acc[i] / cnt[i];
+                }
+            }
         }
         if p.use_pressure && p.pressure != 0.0 {
             let vfac = if p.volume_cap > 0.0 {
@@ -799,11 +813,15 @@ pub fn rest_and_wrap(pos: &mut [V3], col: &Collider, depth: f64, skin: f64, max_
     };
     let mut zs: Vec<Option<f64>> = vec![None; pos.len()];
     let mut min_gap = f64::INFINITY;
+    let mut z_ref = 0.0;
     for (i, p) in pos.iter().enumerate() {
         if p[2] - lo < depth {
             zs[i] = below(*p);
             if let Some(z) = zs[i] {
-                min_gap = min_gap.min(p[2] - z - skin);
+                if p[2] - z - skin < min_gap {
+                    min_gap = p[2] - z - skin;
+                    z_ref = z;
+                }
             }
         }
     }
@@ -819,8 +837,9 @@ pub fn rest_and_wrap(pos: &mut [V3], col: &Collider, depth: f64, skin: f64, max_
             let h = p[2] - (lo - min_gap);
             let w = (1.0 - h / depth).clamp(0.0, 1.0);
             let w = w * w * (3.0 - 2.0 * w);
-            let gap = (p[2] - z - skin).clamp(0.0, max_gap);
-            p[2] -= w * gap;
+            // follow the surface profile below the contact point (a depression of the surface pulls the soft body down into it)
+            let drop = (z_ref - z).clamp(0.0, max_gap);
+            p[2] -= w * drop;
         }
     }
 }

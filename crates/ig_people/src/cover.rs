@@ -224,7 +224,7 @@ pub fn apply(people: &[Placement], scene: &mut Scene, floor_z: f64) {
             }
         }
         match pl.cover {
-            Cover::Under => under_cover(pi, pl, scene),
+            Cover::Under => under_cover(pi, pl, scene, floor_z),
             Cover::On => on_cover(pi, pl, scene),
             Cover::Throw => throw_blanket(pi, pl, scene, floor_z),
             Cover::None => {}
@@ -238,7 +238,7 @@ fn bed_jobs(scene: &Scene, bed: &str) -> Vec<usize> {
     scene.cloth.iter().enumerate().filter(|(_, j)| j["kind"] == "cloth" && j["target"].as_str().map(|t| t.starts_with(&pre)).unwrap_or(false) && j["collide"].as_array().map(|c| !c.is_empty()).unwrap_or(false)).map(|(i, _)| i).collect()
 }
 
-fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
+fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene, floor_z: f64) {
     let Some(bed) = pl.info.support.clone() else { return };
     let Some(lm) = landmarks(pl) else { return };
     let jobs = bed_jobs(scene, &bed);
@@ -291,7 +291,7 @@ fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
         let ztop = zs.last().copied().unwrap_or(mattress_top);
         let sim_dz = dz.max(ztop + env_f("COVER_START", 0.06) - mattress_top);
         let shift = [ax[0] * dx, ax[1] * dx, sim_dz];
-        if !sim_job_mesh(scene, ji, shift) {
+        if !sim_job_mesh(scene, ji, shift, floor_z) {
             // fallback: height-field lift
             let t = Mat4::translation([ax[0] * dx, ax[1] * dx, 0.0]);
             let mut hf = Hf::new([lm.pelvis[0] - 1.6, lm.pelvis[1] - 1.6], [lm.pelvis[0] + 1.6, lm.pelvis[1] + 1.6], 0.03);
@@ -313,13 +313,13 @@ fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
     }
     // the later cover jobs (runner over the comforter) are dropped again onto the new surfaces, person included
     for &ji in jobs.iter().skip(1) {
-        let _ = sim_job_mesh(scene, ji, [0.0, 0.0, 0.0]);
+        let _ = sim_job_mesh(scene, ji, [0.0, 0.0, 0.0], floor_z);
     }
 }
 
 /// Re-simulate the default mesh of cloth job `ji` (job verts in the job's object frame, `shift` in world) with the Rust cloth solver
 /// against the job's collider nodes (bed, person, earlier covers) and replace the target node's mesh. false when impossible.
-fn sim_job_mesh(scene: &mut Scene, ji: usize, shift: V3) -> bool {
+fn sim_job_mesh(scene: &mut Scene, ji: usize, shift: V3, floor_z: f64) -> bool {
     if std::env::var_os("COVER_HF").is_some() {
         return false;
     }
@@ -354,6 +354,9 @@ fn sim_job_mesh(scene: &mut Scene, ji: usize, shift: V3) -> bool {
             cfaces.extend(n.mesh.faces.iter().map(|f| f.iter().map(|i| i + o).collect::<Vec<u32>>()));
         }
     }
+    let o = cpos.len() as u32;
+    cpos.extend_from_slice(&[[-200.0, -200.0, floor_z], [200.0, -200.0, floor_z], [200.0, 200.0, floor_z], [-200.0, 200.0, floor_z]]);
+    cfaces.push(vec![o, o + 1, o + 2, o + 3]);
     let col = ig_kit::cloth::Collider::new(&cpos, &cfaces);
     let mut cp = ig_kit::cloth::ClothParams::default();
     cp.mass = kw["mass"].as_f64().unwrap_or(0.05);

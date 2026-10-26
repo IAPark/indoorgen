@@ -735,7 +735,7 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
             let mut pre = part.mesh.clone();
             pre.transform(&m);
             // pre-sim state: 0.15 m above the support
-            let lift = 0.15 - 0.012;
+            let lift = 0.22 - 0.012;
             for q in &mut pre.pos {
                 q[2] += lift;
             }

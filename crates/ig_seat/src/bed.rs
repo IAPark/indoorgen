@@ -714,6 +714,11 @@ impl Factory for Bed {
         let (mw, msz) = (ms.width, ms.size);
         let cm = Collider::new(&mattress.pos, &mattress.faces);
         let cf = Collider::new(&frame_all.pos, &frame_all.faces);
+        // the floor under the bed: hanging cloth must not sink into it
+        let floor_c = {
+            let zf = frame_all.bounds().0[2];
+            Collider::new(&[[-20.0, -20.0, zf], [20.0, -20.0, zf], [20.0, 20.0, zf], [-20.0, 20.0, zf]], &[vec![0, 1, 2, 3]])
+        };
         let fabric = m("sheet", "fabric.FineKnitFabric", 4, [0.7, 0.7, 0.75]);
 
         // ---- sheet: "none" falls into python's `case _` = box comforter
@@ -748,7 +753,7 @@ impl Factory for Bed {
         p.use_self_collision = s.sheet_folded;
         let mut cal = Calib::default();
         cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
-        let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
+        let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf, &floor_c], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
         let sheet = subsurf(&sheet, 2, false);
@@ -789,7 +794,7 @@ impl Factory for Bed {
         p.distance_min = 5e-3;
         p.end_frame = 80;
         p.distance_min = std::env::var("COVER_DMIN").ok().and_then(|v| v.parse().ok()).unwrap_or(5e-3);
-        let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
+        let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm, &floor_c], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;
         let cvm = subsurf(&cvm, 2, false);
