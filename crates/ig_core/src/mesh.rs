@@ -182,8 +182,17 @@ impl Mesh {
         let mut pos: Vec<V3> = Vec::with_capacity(this.faces.len() * 6);
         let mut uv: Vec<[f64; 2]> = vec![];
         let mut tris = Vec::with_capacity(this.faces.len() * 2);
+        let mut seen: crate::dhash::HashSet<[(i64, i64, i64); 3]> = crate::dhash::HashSet::default();
         for f in &this.faces {
             for [ia, ib, ic] in triangulate_face(&this.pos, f) {
+                // a triangle that coincides with an earlier one (same welded corners, either winding: collapsed cloth layers, merged
+                // box-comforter seams, boolean leftovers) would z-fight with it (one side lit, one dark): keep the first only
+                let q = |i: u32| { let p = this.pos[i as usize]; ((p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64, (p[2] * 1e5).round() as i64) };
+                let mut k = [q(ia), q(ib), q(ic)];
+                k.sort_unstable();
+                if k[0] == k[1] || k[1] == k[2] || !seen.insert(k) {
+                    continue;
+                }
                 let n = pos.len() as u32;
                 for &i in &[ia, ib, ic] {
                     pos.push(this.pos[i as usize]);
