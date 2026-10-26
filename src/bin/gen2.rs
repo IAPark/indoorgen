@@ -63,6 +63,7 @@ fn main() {
     if people_n > 0 && indoorgen::people::avatar_count() == 0 {
         eprintln!("WARNING: --people {people_n} requested but no avatars found in {:?}: run tools/people/fetch_rocketbox.sh or set INDOORGEN_ASSETS (e.g. in .indoorgen.env); no people will be placed", indoorgen::people::avatar::root_dir());
     }
+    indoorgen::assets::bed::set_clean_geometry(true);
     let seed: u64 = args[1].parse().unwrap();
     let mess = indoorgen::mess::MessCfg { level: mess_level, seed };
     let room = args.get(2).cloned();
