@@ -13,6 +13,8 @@ pub struct Cfg {
     pub k: usize,
     pub seed: u64,
     pub wall_t: f64,
+    /// target room type (e.g. "Bedroom", "LivingRoom"): its rooms get `k` cameras, every other furnished room (k + 1) / 2
+    pub target: Option<String>,
 }
 
 #[derive(Clone)]
@@ -27,6 +29,13 @@ struct Subj {
     face: Option<[f64; 2]>,
     low: bool,
     lie: bool,
+    /// people: sampled mesh vertices (framing/crop tests use the real body, not the axis-aligned box)
+    pts: Vec<V3>,
+}
+
+fn sample_pts(pos: &[V3]) -> Vec<V3> {
+    let st = (pos.len() / 40).max(1);
+    pos.iter().step_by(st).copied().collect()
 }
 
 struct World {
@@ -131,13 +140,14 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             let (lo, hi) = bbs[i];
             if let Some(s) = subj.iter_mut().find(|s| s.key == key) {
                 for d in 0..3 { s.lo[d] = s.lo[d].min(lo[d]); s.hi[d] = s.hi[d].max(hi[d]); }
+                if s.person { s.pts.extend(sample_pts(&n.mesh.pos)) }
                 continue;
             }
             let person = n.class == "Person";
             let face = n.pose.filter(|_| person).map(|p| { let v = [-p[0][1], p[1][1]]; let l = v[0].hypot(v[1]).max(1e-9); [v[0] / l, v[1] / l] });
             let lie = person && key.contains("_Lie");
             let low = lie || (person && key.contains("_Sit"));
-            subj.push(Subj { key, lo, hi, w: subject_weight(&n.class), person, group: false, face, low, lie });
+            subj.push(Subj { key, lo, hi, w: subject_weight(&n.class), person, group: false, face, low, lie, pts: if person { sample_pts(&n.mesh.pos) } else { vec![] } });
         }
         subj.retain(|s| in_poly([(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0], &ext));
         if subj.len() < 2 { continue } // shell only (room not furnished in this run)
@@ -158,7 +168,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         let sparse = maxw < 4.0 && all.iter().filter(|s| !s.person).count() >= 2;
         let gi = cand.len();
         {
-            let mut g = Subj { key: "group".into(), lo: [f64::MAX; 3], hi: [f64::MIN; 3], w: 0.9 * maxw.max(1.0), person: false, group: true, face: None, low: false, lie: false };
+            let mut g = Subj { key: "group".into(), lo: [f64::MAX; 3], hi: [f64::MIN; 3], w: 0.9 * maxw.max(1.0), person: false, group: true, face: None, low: false, lie: false, pts: vec![] };
             for s in all.iter() { for d in 0..3 { g.lo[d] = g.lo[d].min(s.lo[d]); g.hi[d] = g.hi[d].max(s.hi[d]); } }
             cand.push(g);
         }
@@ -326,7 +336,9 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         let mut lvl_hist = [0usize; 7];
         let tau = std::f64::consts::TAU;
         let wrap = |mut d: f64| { while d > std::f64::consts::PI { d -= tau } while d < -std::f64::consts::PI { d += tau } d };
-        for slot in 0..cfg.k {
+        let norm = |x: &str| x.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+        let k_room = match &cfg.target { Some(t) if norm(t) != norm(rtype) => (cfg.k + 1) / 2, _ => cfg.k };
+        for slot in 0..k_room {
             // 0 = establishing wide, 1 = medium (people first), 2 = detail
             let kind = if slot == 0 { 0 } else if slot % 2 == 1 { 1 } else { 2 };
             let mut chosen: Option<(f64, usize, V3, V3, f64)> = None;
@@ -476,13 +488,28 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     // subject box in the frame: fully inside (people with headroom), size within the shot's range
                     let (mut inf, mut allp) = (0, 0);
                     let (mut bx0, mut bx1, mut by0, mut by1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-                    for k in 0..8 {
-                        let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
-                        if let Some((px, py)) = proj(q) {
-                            allp += 1;
-                            bx0 = bx0.min(px); bx1 = bx1.max(px); by0 = by0.min(py); by1 = by1.max(py);
-                            if px.abs() < 0.98 && py.abs() < 0.98 { inf += 1 }
+                    if s.pts.is_empty() {
+                        for k in 0..8 {
+                            let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
+                            if let Some((px, py)) = proj(q) {
+                                allp += 1;
+                                bx0 = bx0.min(px); bx1 = bx1.max(px); by0 = by0.min(py); by1 = by1.max(py);
+                                if px.abs() < 0.98 && py.abs() < 0.98 { inf += 1 }
+                            }
                         }
+                    } else {
+                        // real body vertices; counts scaled to the 8-corner convention (8 = everything)
+                        let n = s.pts.len();
+                        let (mut i2, mut a2) = (0usize, 0usize);
+                        for &q in &s.pts {
+                            if let Some((px, py)) = proj(q) {
+                                a2 += 1;
+                                bx0 = bx0.min(px); bx1 = bx1.max(px); by0 = by0.min(py); by1 = by1.max(py);
+                                if px.abs() < 0.98 && py.abs() < 0.98 { i2 += 1 }
+                            }
+                        }
+                        inf = if i2 == n { 8 } else { (i2 * 8 / n).min(7) };
+                        allp = if a2 == n { 8 } else { (a2 * 8 / n).min(7) };
                     }
                     if !s.group {
                         if inf < inf_min { rej[9] += 1; continue }
@@ -498,14 +525,13 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     if lv < 6 {
                         let mut cut = false;
                         for q in cand.iter().filter(|q| q.person && q.key != s.key) {
-                            let (mut ins, mut tot_p) = (0, 0);
-                            for k in 0..8 {
-                                let pq = [if k & 1 == 0 { q.lo[0] } else { q.hi[0] }, if k & 2 == 0 { q.lo[1] } else { q.hi[1] }, if k & 4 == 0 { q.lo[2] } else { q.hi[2] }];
+                            let (mut ins, mut tot_p) = (0usize, 0usize);
+                            for &pq in &q.pts {
                                 tot_p += 1;
                                 match proj(pq) { Some((px, py)) => if px.abs() < 1.0 && py.abs() < 1.0 { ins += 1 }, None => {} }
                             }
-                            if ins > 0 && ins < tot_p { cut = true }
-                            if ins == tot_p {
+                            if ins > 0 && ins * 100 < tot_p * 97 { cut = true }
+                            if ins * 100 >= tot_p * 97 {
                                 let mut blocked = 0;
                                 for fz_ in [0.85, 0.6, 0.35] {
                                     let tq = [(q.lo[0] + q.hi[0]) / 2.0, (q.lo[1] + q.hi[1]) / 2.0, q.lo[2] + fz_ * (q.hi[2] - q.lo[2])];
@@ -624,9 +650,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                             let (mut wl, mut nr, mut ds, mut fu) = (0, 0, 0.0, 0);
                             let mut cutp = 0.0;
                             for q in cand.iter().filter(|q| q.person) {
-                                let (mut ins, mut vis_n) = (0, 0);
-                                for k in 0..8 {
-                                    let pq = [if k & 1 == 0 { q.lo[0] } else { q.hi[0] }, if k & 2 == 0 { q.lo[1] } else { q.hi[1] }, if k & 4 == 0 { q.lo[2] } else { q.hi[2] }];
+                                let (mut ins, mut vis_n) = (0usize, 0usize);
+                                for &pq in &q.pts {
                                     let dq = [pq[0] - o[0], pq[1] - o[1], pq[2] - o[2]];
                                     let zq = dq[0] * f[0] + dq[1] * f[1] + dq[2] * f[2];
                                     if zq < 0.1 { continue }
@@ -634,7 +659,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                                     let (px, py) = ((dq[0] * r[0] + dq[1] * r[1]) / zq / th, (dq[0] * u[0] + dq[1] * u[1] + dq[2] * u[2]) / zq / tv);
                                     if px.abs() < 1.0 && py.abs() < 1.0 { ins += 1 }
                                 }
-                                if ins > 0 && ins < 8 { cutp += 1.0 } else if vis_n > 0 && vis_n < 8 { cutp += 1.0 }
+                                let nn = q.pts.len();
+                                if (ins > 0 && ins * 100 < nn * 97) || (vis_n > 0 && vis_n * 100 < nn * 97) { cutp += 1.0 }
                             }
                             for iy in 0..5 { for ix in 0..8 {
                                 let nx = ((ix as f64 + 0.5) / 8.0) * 2.0 - 1.0;
