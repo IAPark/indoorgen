@@ -105,26 +105,35 @@ fn project_frame(n: V3, p: V3) -> [f64; 2] {
     [dot(p, u), dot(p, v)]
 }
 
+static LAST_FAIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn stab_fail(n: u64) {
+    LAST_FAIL.store(n, std::sync::atomic::Ordering::Relaxed);
+    if FAILSTAT.load(std::sync::atomic::Ordering::Relaxed) {
+        let mut g = PLACE_STATS.lock().unwrap();
+        g.get_or_insert_with(Default::default).entry(format!("#fail{n}")).or_default().0 += 1;
+    }
+}
+
 /// stability.stable_against
 pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool {
     let pa_list = state.planes(name, &g.child);
     let pb_list = state.planes(&rs.target, &g.parent);
     if rs.child_plane >= pa_list.len() || rs.parent_plane >= pb_list.len() {
-        if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #1"); } return false;
+        stab_fail(1); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #1"); } return false;
     }
     let (pa, pb) = (pa_list[rs.child_plane], pb_list[rs.parent_plane]);
     let (na, _) = plane_normal(state, name, pa, false);
     let (nb, origin_b) = plane_normal(state, &rs.target, pb, g.rev_normal);
     let d = dot(na, nb);
     if !((d.abs() - 1.0).abs() <= 1e-2 + 1e-5 || (d + 1.0).abs() <= 1e-2) {
-        if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #2"); } return false;
+        stab_fail(2); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #2"); } return false;
     }
     let sa = state.world(name);
     let so = &state.objs[&rs.target];
     let (pos, neg) = tag_masks(&g.parent);
     let mask = plane_mask(&so.geom, &so.pose, pos, neg, pb);
     if mask.is_empty() {
-        if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #3"); } return false;
+        stab_fail(3); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #3"); } return false;
     }
     // the child plane's vertices must sit at the margin from the parent plane (cheap, so tested before the polygon projections;
     // a pure conjunction, the result is unchanged)
@@ -133,7 +142,7 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
         for v in wa {
             let dist = dist_to_plane(*v, origin_b, nb);
             if (dist - g.margin).abs() > 1e-2 + 1e-5 * g.margin.abs() {
-                if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #5"); } return false;
+                stab_fail(5); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #5"); } return false;
             }
         }
     }
@@ -166,7 +175,7 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
         by0 <= ay0 && ay1 <= by1
     };
     if !res {
-        if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #4"); } return false;
+        stab_fail(4); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #4"); } return false;
     }
     true
 }
@@ -385,6 +394,253 @@ fn check_init_valid(state: &mut State, name: &str, picks: &[PlanePick]) -> (bool
     }
 }
 
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// dense mode: constructive pose sampling. The python solver draws a random point on the parent plane, snaps the object onto it and
+// only then (GEOS projection + buffer + within, collision) learns that the footprint sticks out of the support polygon or through
+// a wall. Here candidate positions are screened first with the cheap necessary part of that test (every projected vertex of the
+// child must lie inside the buffered parent footprint, or inside the parent's extent for check_z=false relations); only a
+// position that passes goes through the exact snap + validity pipeline, and a plane with no feasible candidate fails at once.
+static CONSTRUCTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CAND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(64);
+pub fn set_constructive(on: bool, candidates: usize) {
+    CONSTRUCTIVE.store(on, std::sync::atomic::Ordering::Relaxed);
+    CAND.store(candidates.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+struct PlaneSampler {
+    tris: Vec<[V3; 3]>,
+    cum: Vec<f64>,
+}
+
+impl PlaneSampler {
+    fn new(state: &State, b: &str, tags: &TagSet, plane: usize) -> Option<PlaneSampler> {
+        let o = &state.objs[b];
+        let (pos, neg) = tag_masks(tags);
+        let idxs = plane_mask(&o.geom, &o.pose, pos, neg, plane);
+        if idxs.is_empty() {
+            return None;
+        }
+        let w = state.world(b);
+        let tris: Vec<[V3; 3]> = idxs.iter().map(|&i| w.tris[i]).collect();
+        let mut cum = vec![];
+        let mut s = 0.0;
+        for t in &tris {
+            s += tri_area(t);
+            cum.push(s);
+        }
+        if s <= 0.0 {
+            return None;
+        }
+        Some(PlaneSampler { tris, cum })
+    }
+    fn draw(&self, rng: &mut Rng) -> V3 {
+        let r = rng.f64() * self.cum[self.cum.len() - 1];
+        let fi = self.cum.partition_point(|&c| c < r).min(self.tris.len() - 1);
+        let t = &self.tris[fi];
+        let (a, b, c) = (rng.f64(), rng.f64(), rng.f64());
+        let sum = (a + b + c).max(1e-12);
+        let (a, b, c) = (a / sum, b / sum, c / sum);
+        [a * t[0][0] + b * t[1][0] + c * t[2][0], a * t[0][1] + b * t[1][1] + c * t[2][1], a * t[0][2] + b * t[1][2] + c * t[2][2]]
+    }
+}
+
+enum PreKind {
+    /// check_z: child vertices inside the buffered parent footprint
+    Inside(std::sync::Arc<Rings>),
+    /// !check_z: extent along the rotated y axis inside the parent's extent: (sin, cos, child y range, parent y range)
+    YRange(f64, f64, (f64, f64), (f64, f64)),
+}
+
+struct PreRel {
+    kind: PreKind,
+    pts: Vec<[f64; 2]>,
+    u: V3,
+    v: V3,
+}
+
+fn build_pre(state: &State, name: &str, p: &PlanePick) -> Option<(PreRel, V3)> {
+    let Relation::Geometry(g) = &p.relation else { return None };
+    if g.kind != GeoKind::StableAgainst {
+        return None;
+    }
+    let (nb, origin_b) = plane_normal(state, &p.parent, p.parent_plane, g.rev_normal);
+    let so = &state.objs[&p.parent];
+    let (pos, neg) = tag_masks(&g.parent);
+    let mask = plane_mask(&so.geom, &so.pose, pos, neg, p.parent_plane);
+    if mask.is_empty() {
+        return None;
+    }
+    let sbw = state.world(&p.parent);
+    let b_tris: Vec<[V3; 3]> = mask.iter().map(|&i| sbw.tris[i]).collect();
+    let sa = state.world(name);
+    let pts = projected_points(&sa.tris, nb, origin_b);
+    if pts.is_empty() {
+        return None;
+    }
+    let (u, v) = plane_frame(nb);
+    let kind = if g.check_z {
+        PreKind::Inside(projected_buffer_rings(&b_tris, nb, origin_b, 1e-2)?)
+    } else {
+        let z2 = [dot([0., 0., 1.], u), dot([0., 0., 1.], v)];
+        let ang = z2[1].atan2(z2[0]).to_degrees();
+        let (sn, cs) = (ang.to_radians().sin(), ang.to_radians().cos());
+        let yr = |pts: &[[f64; 2]]| pts.iter().fold((f64::MAX, f64::MIN), |a, q| {
+            let y = q[0] * sn + q[1] * cs;
+            (a.0.min(y), a.1.max(y))
+        });
+        let bp = projected_points(&b_tris, nb, origin_b);
+        if bp.is_empty() {
+            return None;
+        }
+        PreKind::YRange(sn, cs, yr(&pts), yr(&bp))
+    };
+    Some((PreRel { kind, pts, u, v }, nb))
+}
+
+fn pre_ok(rels: &[PreRel], delta: V3) -> bool {
+    for r in rels {
+        let d2 = [dot(delta, r.u), dot(delta, r.v)];
+        match &r.kind {
+            PreKind::Inside(rings) => {
+                for q in &r.pts {
+                    if !rings.contains([q[0] + d2[0], q[1] + d2[1]]) {
+                        return false;
+                    }
+                }
+            }
+            PreKind::YRange(sn, cs, (c0, c1), (b0, b1)) => {
+                let dy = d2[0] * sn + d2[1] * cs;
+                if c0 + dy < b0 - 1e-7 || c1 + dy > b1 + 1e-7 {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn outcome_dbg(state: &State, name: &str, tag: &str) {
+    if FAILSTAT.load(std::sync::atomic::Ordering::Relaxed) {
+        let class = state.objs[name].generator.as_ref().map_or("?".to_string(), |g| g.class.clone());
+        PLACE_STATS.lock().unwrap().get_or_insert_with(Default::default).entry(format!("!{tag} {class}")).or_default().0 += 1;
+    }
+}
+
+fn verify_dbg(state: &State, name: &str, tag: &str) {
+    outcome_dbg(state, name, tag);
+    if std::env::var_os("PREVERIFY").is_none() {
+        return;
+    }
+    LAST_FAIL.store(0, std::sync::atomic::Ordering::Relaxed);
+    let ok = all_relations_valid(state, name);
+    let cls = state.objs[name].generator.as_ref().map_or("?".to_string(), |g| g.class.clone());
+    eprintln!("PREVERIFY {cls} {tag} ok={ok} fail={}", LAST_FAIL.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+/// Some(None): no feasible position (fail the placement); Some(Some(..)): placed; None: not applicable, use the python-style sampling
+fn constructive_pose(state: &mut State, name: &str, picks: &[PlanePick], dof: usize, t0: V3, rng: &mut Rng) -> Option<Option<Vec<(String, usize)>>> {
+    let ncand = CAND.load(std::sync::atomic::Ordering::Relaxed);
+    let result = |picks: &[PlanePick]| Some(Some(picks.iter().map(|p| (p.parent.clone(), p.parent_plane)).collect::<Vec<_>>()));
+    if dof == 2 && picks.len() == 1 {
+        let p = &picks[0];
+        let Relation::Geometry(g) = &p.relation else { return None };
+        if g.kind != GeoKind::StableAgainst {
+            return None;
+        }
+        let rz = 2.0 * std::f64::consts::PI * rng.randint(0, 4) as f64 / 4.0;
+        let mut pose = state.objs[name].pose;
+        pose.set_euler([0., 0., rz]);
+        state.set_pose(name, pose);
+        let sampler = PlaneSampler::new(state, &p.parent, &p.parent_tags, p.parent_plane)?;
+        let rf0 = sampler.draw(rng);
+        let mut pose = state.objs[name].pose;
+        pose.set_loc(rf0);
+        state.set_pose(name, pose);
+        snap_against(state, name, &p.parent, p.child_name_plane, p.parent_plane, p.margin, p.rev);
+        let Some((pre, nb)) = build_pre(state, name, p) else { return Some(Some(vec![(p.parent.clone(), p.parent_plane)])) };
+        let pre = [pre];
+        let inplane = |d: V3| -> V3 { let k = dot(d, nb); [d[0] - k * nb[0], d[1] - k * nb[1], d[2] - k * nb[2]] };
+        if pre_ok(&pre, [0.0; 3]) {
+            verify_dbg(state, name, "dof2-rf0");
+            return result(picks);
+        }
+        for _ in 0..ncand {
+            let rf = sampler.draw(rng);
+            if pre_ok(&pre, inplane(sub(rf, rf0))) {
+                let mut pose = state.objs[name].pose;
+                pose.set_loc(rf);
+                state.set_pose(name, pose);
+                snap_against(state, name, &p.parent, p.child_name_plane, p.parent_plane, p.margin, p.rev);
+                verify_dbg(state, name, "dof2-cand");
+                return result(picks);
+            }
+        }
+        outcome_dbg(state, name, "dof2-none");
+        return Some(None);
+    }
+    if dof == 1 && picks.len() == 2 {
+        let (p1, p2) = (&picks[0], &picks[1]);
+        let (n1, _) = plane_normal(state, &p1.parent, p1.parent_plane, false);
+        let po1 = &state.objs[&p1.parent];
+        let (pos1, neg1) = tag_masks(&p1.parent_tags);
+        let m1 = plane_mask(&po1.geom, &po1.pose, pos1, neg1, p1.parent_plane);
+        let w1 = state.world(&p1.parent);
+        let t1: Vec<[V3; 3]> = m1.iter().map(|&i| w1.tris[i]).collect();
+        let Some(proj1) = projected(&t1, n1, [0., 0., 0.]) else { return None };
+        let po2 = &state.objs[&p2.parent];
+        let (pos2, neg2) = tag_masks(&p2.parent_tags);
+        let m2 = plane_mask(&po2.geom, &po2.pose, pos2, neg2, p2.parent_plane);
+        let w2 = state.world(&p2.parent);
+        let padded = shp::buffer(&proj1, 1e-1);
+        let all_in = m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::contains_pt(&padded, project_frame_origin(n1, *p))));
+        let (first, _second) = if all_in && !is_coplanar_rel(&p2.relation) { (p2, p1) } else { (p1, p2) };
+        // exact construction instead of two sequential snaps: check_init_valid already rotated the object and solved the contact of
+        // both planes (translation `t0`); the remaining freedom is a slide `s` along the intersection line of the two planes
+        let (na, _) = plane_normal(state, &p1.parent, p1.parent_plane, p1.rev);
+        let (nb2, _) = plane_normal(state, &p2.parent, p2.parent_plane, p2.rev);
+        let d = cross(na, nb2);
+        if norm(d) < 1e-4 {
+            return None;
+        }
+        let d = unit(d);
+        let Some(sampler) = PlaneSampler::new(state, &first.parent, &first.parent_tags, first.parent_plane) else { return None };
+        let mut pose = state.objs[name].pose;
+        pose.translate(t0);
+        state.set_pose(name, pose);
+        let loc0 = state.objs[name].pose.t;
+        let mut pres: Vec<PreRel> = vec![];
+        for p in [p1, p2] {
+            if let Some((pr, _)) = build_pre(state, name, p) {
+                pres.push(pr);
+            }
+        }
+        if pres.is_empty() {
+            outcome_dbg(state, name, "dof1-nopre");
+            return result(picks);
+        }
+        let slide = |state: &mut State, s: f64| {
+            let mut pose = state.objs[name].pose;
+            pose.translate([d[0] * s, d[1] * s, d[2] * s]);
+            state.set_pose(name, pose);
+        };
+        // a first slide drawn like the python sampler would (uniform on the plane), kept when it is feasible, so the distribution is not
+        // biased towards s = 0; then more draws
+        for k in 0..=ncand {
+            let s = if k == 0 { 0.0 } else { dot(sub(sampler.draw(rng), loc0), d) };
+            let dl = [d[0] * s, d[1] * s, d[2] * s];
+            if pre_ok(&pres, dl) {
+                slide(state, s);
+                verify_dbg(state, name, "dof1-cand");
+                return result(picks);
+            }
+        }
+        outcome_dbg(state, name, "dof1-none");
+        return Some(None);
+    }
+    None
+}
+
 fn is_coplanar_rel(r: &Relation) -> bool {
     matches!(r, Relation::Geometry(g) if g.kind == GeoKind::CoPlanar)
 }
@@ -433,6 +689,15 @@ pub fn apply_relations_surfacesample(state: &mut State, name: &str, rng: &mut Rn
             eprintln!("  [{name}] check_init_valid false (picks {})", picks.len());
         }
         return None;
+    }
+    if FAILSTAT.load(std::sync::atomic::Ordering::Relaxed) {
+        let class = state.objs[name].generator.as_ref().map_or("?".to_string(), |g| g.class.clone());
+        PLACE_STATS.lock().unwrap().get_or_insert_with(Default::default).entry(format!("@dof{dof}x{} {class}", picks.len())).or_default().0 += 1;
+    }
+    if CONSTRUCTIVE.load(std::sync::atomic::Ordering::Relaxed) && (dof == 1 || dof == 2) {
+        if let Some(r) = constructive_pose(state, name, &picks, dof, t, rng) {
+            return r;
+        }
     }
     if dof == 0 {
         let mut pose = state.objs[name].pose;
@@ -544,15 +809,51 @@ static PLACE_TRIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 /// dense mode: more pose samples per placement attempt (python: 10) so big wall objects (kitchen counter runs) find a free stretch of wall
 pub fn set_place_tries(n: usize) { PLACE_TRIES.store(n, std::sync::atomic::Ordering::Relaxed); }
 
+/// PLACESTAT=1: per class (placements, pose tries, successful placements) of try_apply_relation_constraints
+pub static FAILSTAT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static PLACE_STATS: std::sync::Mutex<Option<std::collections::BTreeMap<String, (u64, u64, u64)>>> = std::sync::Mutex::new(None);
+fn place_stat(class: &str, tries: u64, ok: bool) {
+    let mut g = PLACE_STATS.lock().unwrap();
+    let e = g.get_or_insert_with(Default::default).entry(class.to_string()).or_default();
+    e.0 += 1;
+    e.1 += tries;
+    e.2 += ok as u64;
+}
 pub fn try_apply_relation_constraints(state: &mut State, name: &str, rng: &mut Rng) -> bool {
+    static STAT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let stat = *STAT.get_or_init(|| { let on = std::env::var_os("PLACESTAT").is_some(); if std::env::var_os("FAILSTAT").is_some() { FAILSTAT.store(true, std::sync::atomic::Ordering::Relaxed); } on });
+    if !stat {
+        return try_apply_relation_constraints_inner(state, name, rng, &mut 0);
+    }
+    let mut tries = 0u64;
+    let ok = try_apply_relation_constraints_inner(state, name, rng, &mut tries);
+    let class = state.objs[name].generator.as_ref().map_or("?".to_string(), |g| g.class.clone());
+    place_stat(&class, tries, ok);
+    ok
+}
+
+fn try_apply_relation_constraints_inner(state: &mut State, name: &str, rng: &mut Rng, ntries: &mut u64) -> bool {
     let big = state.objs[name].generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenIslandFactory" | "BedFactory"));
     let tries = if big { PLACE_TRIES.load(std::sync::atomic::Ordering::Relaxed) } else { 10 };
     for _ in 0..tries {
+        *ntries += 1;
         let Some(parents) = apply_relations_surfacesample(state, name, rng) else {
             if std::env::var("DBG2").is_ok() { eprintln!("  [{name}] apply failed (init invalid)"); }
             return false;
         };
-        let valid = check_post_move_validity(state, name);
+        let valid = if *ntries > 0 && FAILSTAT.load(std::sync::atomic::Ordering::Relaxed) {
+            let rel_ok = all_relations_valid(state, name);
+            let v = rel_ok && check_post_move_validity(state, name);
+            let class = state.objs[name].generator.as_ref().map_or("?".to_string(), |g| g.class.clone());
+            let mut g = PLACE_STATS.lock().unwrap();
+            let e = g.get_or_insert_with(Default::default).entry(format!("~{class}")).or_default();
+            // (tries, relations failed, collision failed)
+            e.0 += 1;
+            if !rel_ok { e.1 += 1 } else if !v { e.2 += 1 }
+            v
+        } else {
+            check_post_move_validity(state, name)
+        };
         if std::env::var("DBG2").is_ok() && !valid {
             let rel_ok = all_relations_valid(state, name);
             eprintln!("  [{name}] post-move invalid: relations_ok={rel_ok} pos={:?}", state.objs[name].pose.t);

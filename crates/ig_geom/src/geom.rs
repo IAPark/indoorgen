@@ -527,6 +527,126 @@ pub fn projected_buffer(tris: &[[V3; 3]], normal: V3, origin: V3, d: f64) -> Opt
     r
 }
 
+
+/// 2D footprint (polygons with holes) in the plane frame of `projected`, with a cheap point test (dense-mode pose prefilter)
+pub struct Rings {
+    pub polys: Vec<(Vec<[f64; 2]>, Vec<Vec<[f64; 2]>>)>,
+}
+
+fn pip(ring: &[[f64; 2]], p: [f64; 2]) -> bool {
+    let n = ring.len();
+    let mut inside = false;
+    let mut j = n.wrapping_sub(1);
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[j]);
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+fn near_ring(ring: &[[f64; 2]], p: [f64; 2], eps: f64) -> bool {
+    let n = ring.len();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        let (qx, qy) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+        if qx * qx + qy * qy <= eps * eps {
+            return true;
+        }
+    }
+    false
+}
+
+impl Rings {
+    /// true when `p` is inside the polygon set or within 1e-6 of its boundary (conservative: only definite outsiders are rejected)
+    pub fn contains(&self, p: [f64; 2]) -> bool {
+        for (ext, holes) in &self.polys {
+            if pip(ext, p) && !holes.iter().any(|h| pip(h, p)) {
+                return true;
+            }
+        }
+        for (ext, holes) in &self.polys {
+            if near_ring(ext, p, 1e-6) || holes.iter().any(|h| near_ring(h, p, 1e-6)) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// vertices (plane-frame 2D) of the triangles `projected` unions: front side, or back side, or the side with fewer faces
+pub fn projected_points(tris: &[[V3; 3]], normal: V3, origin: V3) -> Vec<[f64; 2]> {
+    let n = unit(normal);
+    let (u, v) = plane_frame(n);
+    let (mut front, mut back) = (vec![], vec![]);
+    for w in tris {
+        let d = dot(tri_normal(w), n);
+        if d > 1e-10 {
+            front.push(w);
+        } else if d < -1e-10 {
+            back.push(w);
+        }
+    }
+    let side = if front.is_empty() { back } else if back.is_empty() { front } else if front.len() <= back.len() { front } else { back };
+    let mut pts: Vec<[f64; 2]> = vec![];
+    for w in side {
+        for p in w {
+            let r = sub(*p, origin);
+            pts.push([dot(r, u), dot(r, v)]);
+        }
+    }
+    pts
+}
+
+/// `projected_buffer` as plain rings, memoised on the exact input bits
+pub fn projected_buffer_rings(tris: &[[V3; 3]], normal: V3, origin: V3, d: f64) -> Option<std::sync::Arc<Rings>> {
+    thread_local! {
+        static MEMO: std::cell::RefCell<(std::collections::HashMap<u64, Vec<(Vec<u64>, Option<std::sync::Arc<Rings>>)>>, usize)> = std::cell::RefCell::new((Default::default(), 0));
+    }
+    let mut key: Vec<u64> = Vec::with_capacity(7 + tris.len() * 9);
+    key.push(d.to_bits());
+    for k in 0..3 {
+        key.push(normal[k].to_bits());
+    }
+    for k in 0..3 {
+        key.push(origin[k].to_bits());
+    }
+    for t in tris {
+        for p in t {
+            for k in 0..3 {
+                key.push(p[k].to_bits());
+            }
+        }
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for w in &key {
+        h = (h ^ w).wrapping_mul(0x100000001b3);
+        h ^= h >> 29;
+    }
+    if let Some(r) = MEMO.with(|m| m.borrow().0.get(&h).and_then(|b| b.iter().find(|e| e.0 == key).map(|e| e.1.clone()))) {
+        return r;
+    }
+    let r = projected_buffer(tris, normal, origin, d).map(|g| {
+        let polys = shp::parts(&g).into_iter().filter(|p| shp::is_polygon(p)).map(|p| (shp::exterior(&p), shp::interiors(&p))).collect();
+        std::sync::Arc::new(Rings { polys })
+    });
+    MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.1 > 2500 {
+            m.0.clear();
+            m.1 = 0;
+        }
+        m.1 += 1;
+        m.0.entry(h).or_default().push((key, r.clone()));
+    });
+    r
+}
+
 /// trimesh.path.polygons.projected: union of the (front side) triangles projected onto the plane (origin, normal)
 pub fn projected(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     // memo on the exact input bits: the solver projects the same (static parent / unchanged child) triangles again and again

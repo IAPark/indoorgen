@@ -83,6 +83,7 @@ fn main() {
     let steps = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && std::env::var_os("NO_PH_REUSE").is_none());
     if !orig_prog { indoorgen::furn::dof::set_place_tries(steps("PLACE_TRIES", 40)); }
+    indoorgen::furn::dof::set_constructive(!orig_prog && std::env::var_os("NO_CONSTRUCTIVE").is_none(), steps("PLACE_CAND", 64));
     indoorgen::furn::dof::set_counter_over_windows(!orig_prog && std::env::var_os("NO_COUNTER_WIN").is_none());
     if !orig_prog { std::env::set_var("INFINIGEN_DENSE", "1"); }
     let (dl, dm, ds) = if orig_prog { (100, 40, 5) } else { (300, 200, 50) };
@@ -92,6 +93,11 @@ fn main() {
     let t = std::time::Instant::now();
     let mut g = generate(&Options { seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps("STEPS_L", dl), steps_medium: steps("STEPS_M", dm), steps_small: steps("STEPS_S", ds) }, &assets, &prog);
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
+    if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {
+        let (mut a, mut b, mut c) = (0, 0, 0);
+        for (k, v) in m { eprintln!("PLACESTAT {k} placements {} tries {} ok {}", v.0, v.1, v.2); a += v.0; b += v.1; c += v.2; }
+        eprintln!("PLACESTAT TOTAL placements {a} tries {b} ok {c}");
+    }
     // dense program: every extra shelf gets filled with NatureShelfTrinkets (~250k triangles each; 120-200 per house took
     // 1-2 min of build time and most of the glb): at most 3 per shelf piece and 40 per house
     if !orig_prog {
