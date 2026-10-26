@@ -58,6 +58,7 @@ pub fn post_visuals(visuals: &mut HashMap<String, Asset>, state: &State, cfg: &M
     let _: Option<V3> = None;
     if std::env::var("MESS_DUMP_ASSETS").is_ok() {
         for (k, a) in visuals.iter() {
+            if !state.objs.contains_key(k) { continue; }
             let cls = state.objs[k].generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
             if cls.contains("Cabinet") || cls.contains("KitchenSpace") {
                 dump(k, &cls, a);
@@ -73,6 +74,7 @@ pub fn post_visuals(visuals: &mut HashMap<String, Asset>, state: &State, cfg: &M
     let mut xf_hint: Option<f64>;
     for k in &keys {
         xf_hint = None;
+        if !state.objs.contains_key(k) { continue; } // removed after solving (snap/QC prune)
         let cls = state.objs[k].generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
         if matches!(cls.as_str(), "KitchenCabinetFactory" | "KitchenSpaceFactory") {
             let clear = { let (lo, hi) = asset_bounds(&visuals[k]); front_clearance(state, k, lo, hi) };
