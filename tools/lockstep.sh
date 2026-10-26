@@ -1,5 +1,6 @@
 #!/bin/zsh
 IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
+export ONLY_TARGET=1  # these gates compare/measure a single room (gen2 default is now the whole house)
 # lockstep.sh ROOM SEED [oracles]: like $INDOORGEN_ORACLES/cmpcase.sh but each python oracle is opt-in.
 # oracles: comma list of state0,ph,ctor (loaded from the python dumps); ctoremu = Rust constructor-draw emulation (no CTORWORDS file).
 R=$1; S=$2; O=${3:-state0,ph,ctor}

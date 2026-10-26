@@ -1,5 +1,6 @@
 #!/bin/zsh
 IG_TOOLS=$(cd "$(dirname "$0")" && pwd); . "$IG_TOOLS/env.sh"
+export ONLY_TARGET=1  # these gates compare/measure a single room (gen2 default is now the whole house)
 # countbench.sh [gen2]: standalone object counts (no oracles) vs python solve_state.json over every reference room.
 # Single seeds swing a lot (23..45 for identical inputs); compare MEANS over all rooms, not single cases.
 G=${1:-./target/fast/gen2}; cd "$(git rev-parse --show-toplevel)" || exit 1
