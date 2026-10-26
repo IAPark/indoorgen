@@ -91,6 +91,8 @@ pub fn post_visuals(visuals: &mut HashMap<String, Asset>, state: &State, cfg: &M
                     *rep.candidates.entry("drawer_cabinet".into()).or_default() += 1;
                     if moved_parts > 0 && na.parts.len() == visuals[k].parts.len() {
                         *rep.changed.entry("drawer_cabinet".into()).or_default() += 1;
+                        let mut na = na;
+                        keep_offset(&visuals[k], &mut na);
                         visuals.insert(k.clone(), na);
                     }
                 }
@@ -364,4 +366,34 @@ fn asset_bounds(a: &Asset) -> (V3, V3) {
         }
     }
     (lo, hi)
+}
+
+/// The old visual may have been shifted after it was built (snap::recenter_visuals moves KitchenCabinet visuals onto their solver box).
+/// A rebuilt asset (drawers pulled out) comes back unshifted: find the constant offset between the two on a part that did not move
+/// (same vertex count, every vertex displaced by the same vector) and apply it to the rebuilt asset.
+fn keep_offset(old: &ig_kit::api::Asset, na: &mut ig_kit::api::Asset) {
+    // rigid offsets of all parts; pulled drawers move too, so take the most common one (the carcass, shelves, top, ...)
+    let mut offs: Vec<([f64; 3], usize)> = vec![];
+    for (a, b) in old.parts.iter().zip(&na.parts) {
+        if a.mesh.pos.len() != b.mesh.pos.len() || a.mesh.pos.is_empty() {
+            continue;
+        }
+        let c = [a.mesh.pos[0][0] - b.mesh.pos[0][0], a.mesh.pos[0][1] - b.mesh.pos[0][1], a.mesh.pos[0][2] - b.mesh.pos[0][2]];
+        if !a.mesh.pos.iter().zip(&b.mesh.pos).all(|(p, q)| (0..3).all(|k| (p[k] - q[k] - c[k]).abs() < 1e-6)) {
+            continue;
+        }
+        match offs.iter_mut().find(|(o, _)| (0..3).all(|k| (o[k] - c[k]).abs() < 1e-5)) {
+            Some(e) => e.1 += 1,
+            None => offs.push((c, 1)),
+        }
+    }
+    let d = offs.iter().max_by_key(|(_, n)| *n).map(|(o, _)| *o);
+    let Some(d) = d else { return };
+    if d.iter().all(|x| x.abs() < 1e-9) {
+        return;
+    }
+    let sh = |v: &mut [f64; 3]| for k in 0..3 { v[k] += d[k]; };
+    for p in na.parts.iter_mut() { p.mesh.pos.iter_mut().for_each(sh); }
+    for c in na.cutters.iter_mut() { c.pos.iter_mut().for_each(sh); }
+    for s in na.supports.iter_mut() { sh(&mut s.0); sh(&mut s.1); }
 }
