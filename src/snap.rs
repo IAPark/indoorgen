@@ -110,8 +110,17 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
         if lo[0] > hi[0] {
             continue;
         }
+        if state.objs[k].generator.as_ref().map_or(false, |g| g.class.contains("Rug")) {
+            // rugs lie on the floor
+            let dz = floor_z - lo[2];
+            if dz.abs() > 1e-4 && dz.abs() < 0.2 {
+                shift(state, &mut nodes, &mut bb, &of_key, &parent, k, dz);
+                out.push(Snapped { key: k.clone(), dz, removed: false });
+            }
+            continue;
+        }
         let cand: Vec<usize> = (0..nodes.len())
-            .filter(|&n| owner[n] != keys.iter().position(|x| x == k).unwrap() && bb[n].0[0] <= hi[0] && bb[n].1[0] >= lo[0] && bb[n].0[1] <= hi[1] && bb[n].1[1] >= lo[1] && bb[n].0[2] <= hi[2])
+            .filter(|&n| !state.objs[&keys[owner[n]]].generator.as_ref().map_or(false, |g| g.class.contains("Rug")) && owner[n] != keys.iter().position(|x| x == k).unwrap() && bb[n].0[0] <= hi[0] && bb[n].1[0] >= lo[0] && bb[n].0[1] <= hi[1] && bb[n].1[1] >= lo[1] && bb[n].0[2] <= hi[2])
             .collect();
         // contact points: lowest vertices, clustered on a 3 cm grid
         let mut vs: Vec<[f64; 3]> = mine.iter().flat_map(|&n| nodes[n].mesh.pos.iter().copied()).filter(|v| v[2] < lo[2] + 0.01).collect();

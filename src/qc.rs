@@ -345,7 +345,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                 if cut {
                 } else if gap > 0.005 && ((parent.is_some() && gap < 1.0) || (near_floor && gap < 0.15)) {
                     issues.push(format!("floating {:.1}mm", gap * 1000.0));
-                } else if gap < -0.005 && !on_rug {
+                } else if gap < -0.005 && !on_rug && !o.class.contains("Rug") {
                     issues.push(format!("sunk {:.1}mm", -gap * 1000.0));
                 }
             }
