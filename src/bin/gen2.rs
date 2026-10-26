@@ -83,7 +83,7 @@ fn main() {
     let steps = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && std::env::var_os("NO_PH_REUSE").is_none());
     if !orig_prog { indoorgen::furn::dof::set_place_tries(steps("PLACE_TRIES", 40)); }
-    indoorgen::furn::dof::set_constructive(!orig_prog && std::env::var_os("NO_CONSTRUCTIVE").is_none(), steps("PLACE_CAND", 64));
+    indoorgen::furn::dof::set_constructive(!orig_prog && std::env::var_os("CONSTRUCTIVE").is_some(), steps("PLACE_CAND", 64));
     indoorgen::furn::dof::set_counter_over_windows(!orig_prog && std::env::var_os("NO_COUNTER_WIN").is_none());
     if !orig_prog { std::env::set_var("INFINIGEN_DENSE", "1"); }
     let (dl, dm, ds) = if orig_prog { (100, 40, 5) } else { (300, 200, 50) };

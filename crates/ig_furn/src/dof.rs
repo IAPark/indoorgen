@@ -383,6 +383,11 @@ fn check_init_valid(state: &mut State, name: &str, picks: &[PlanePick]) -> (bool
             return (false, 0, [0.; 3]);
         }
     }
+    solve_contacts(state, name, picks)
+}
+
+/// translation (min-norm) that puts every picked child plane in contact (margin) with its parent plane: (valid, dof, t)
+fn solve_contacts(state: &State, name: &str, picks: &[PlanePick]) -> (bool, usize, V3) {
     let mut a = vec![];
     let mut c = vec![];
     for p in picks {
@@ -612,9 +617,21 @@ fn constructive_pose(state: &mut State, name: &str, picks: &[PlanePick], dof: us
         }
         let d = unit(d);
         let Some(sampler) = PlaneSampler::new(state, &first.parent, &first.parent_tags, first.parent_plane) else { return None };
+        // reference pose: the python-style snaps at a random point (they also finish the small rotations check_init_valid skips),
+        // then the exact contact solve removes the position error the sequential snaps leave for non-perpendicular planes
+        let _ = t0;
+        let rf0 = sampler.draw(rng);
         let mut pose = state.objs[name].pose;
-        pose.translate(t0);
+        pose.set_loc(rf0);
         state.set_pose(name, pose);
+        snap_against(state, name, &first.parent, first.child_name_plane, first.parent_plane, first.margin, first.rev);
+        snap_against(state, name, &_second.parent, _second.child_name_plane, _second.parent_plane, _second.margin, _second.rev);
+        let (ok, dof_now, t1) = solve_contacts(state, name, picks);
+        if ok && dof_now == 1 {
+            let mut pose = state.objs[name].pose;
+            pose.translate(t1);
+            state.set_pose(name, pose);
+        }
         let loc0 = state.objs[name].pose.t;
         let mut pres: Vec<PreRel> = vec![];
         for p in [p1, p2] {
@@ -633,8 +650,12 @@ fn constructive_pose(state: &mut State, name: &str, picks: &[PlanePick], dof: us
         };
         // a first slide drawn like the python sampler would (uniform on the plane), kept when it is feasible, so the distribution is not
         // biased towards s = 0; then more draws
-        for k in 0..=ncand {
-            let s = if k == 0 { 0.0 } else { dot(sub(sampler.draw(rng), loc0), d) };
+        if pre_ok(&pres, [0.0; 3]) {
+            verify_dbg(state, name, "dof1-rf0");
+            return result(picks);
+        }
+        for _ in 0..ncand {
+            let s = dot(sub(sampler.draw(rng), loc0), d);
             let dl = [d[0] * s, d[1] * s, d[2] * s];
             if pre_ok(&pres, dl) {
                 slide(state, s);

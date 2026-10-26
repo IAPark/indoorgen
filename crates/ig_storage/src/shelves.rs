@@ -844,17 +844,25 @@ pub fn np_sum(a: &[f64]) -> f64 {
     }
 }
 
-impl Factory for KitchenSpace {
-    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
-        if !self.island {
-            return None;
-        }
-        let e = self.bottom_cabinet();
+impl KitchenSpace {
+    fn island_hint(&self, dense: bool) -> (V3, V3) {
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for v in &e.v {
-            for k in 0..3 {
-                lo[k] = lo[k].min(v[k] as f64);
-                hi[k] = hi[k].max(v[k] as f64);
+        if dense {
+            // dense mode: the island's cabinet row without building its door / drawer meshes: n = floor((y - 0.15) / 0.45) cells of
+            // width w + 0.0405 each (side boards + gap); x from the carcass (-0.005) to the front (+0.055 is the larger of the door and
+            // drawer protrusions, up to 2.7 cm generous), z up to the cabinet top (+ up to 8.2 cm of plinth / handles)
+            let [x, y, _z] = self.dims;
+            let d1 = y - 0.15;
+            let n = ((d1 / 0.45) as usize).max(1) as f64;
+            lo = [-x / 2.0 - 0.005, -0.001, 0.0];
+            hi = [x / 2.0 + 0.055, d1 + n * 0.0405 + 0.0005, self.bottom_h + 0.082];
+        } else {
+            let e = self.bottom_cabinet();
+            for v in &e.v {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(v[k] as f64);
+                    hi[k] = hi[k].max(v[k] as f64);
+                }
             }
         }
         // countertop slab (geometry_nodes_add_cabinet_top): generate_table_top(thickness 0.05, 4-gon, profile width 1.414 * x range,
@@ -868,7 +876,16 @@ impl Factory for KitchenSpace {
             lo[k] = lo[k].min(tlo[k] + off);
             hi[k] = hi[k].max(thi[k] + off);
         }
-        Some((lo, hi))
+        (lo, hi)
+    }
+}
+
+impl Factory for KitchenSpace {
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !self.island {
+            return None;
+        }
+        Some(self.island_hint(crate::dense()))
     }
     fn placeholder_exact(&self, _i: u64) -> Option<cabnodes::ExactMesh> {
         if self.island {
@@ -976,5 +993,37 @@ mod island_tests {
             }
         }
         eprintln!("40 island cabinets {:?}", t.elapsed());
+        let mut st = [[f64::INFINITY, f64::NEG_INFINITY]; 5];
+        for seed in 0..60u64 {
+            let ks = KitchenSpace::new(&mut Rng::seeded(seed), true, seed);
+            let e = ks.bottom_cabinet();
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for v in &e.v {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(v[k] as f64);
+                    hi[k] = hi[k].max(v[k] as f64);
+                }
+            }
+            let d = [lo[0] + ks.dims[0] / 2.0, hi[0] - ks.dims[0] / 2.0, lo[1], hi[1] - (ks.dims[1] - 0.15), hi[2] - ks.bottom_h];
+            for k in 0..5 {
+                st[k][0] = st[k][0].min(d[k]);
+                st[k][1] = st[k][1].max(d[k]);
+            }
+        }
+        {
+            let (mut worst, mut under) = ([0.0f64; 6], 0);
+            for seed in 0..60u64 {
+                let ks = KitchenSpace::new(&mut Rng::seeded(seed), true, seed);
+                let (dl, dh) = (ks.island_hint(true), ks.island_hint(false));
+                for k in 0..3 {
+                    let (a, b) = (dl.0[k] - dh.0[k], dl.1[k] - dh.1[k]);
+                    worst[k] = worst[k].max(a.abs());
+                    worst[3 + k] = worst[3 + k].max(b.abs());
+                    if a > 1e-6 || b < -1e-6 { under += 1; }
+                }
+            }
+            eprintln!("ISLAND dense vs exact hint: worst |dlo| {:?} |dhi| {:?} cases where dense is smaller {under}", &worst[0..3], &worst[3..6]);
+        }
+        eprintln!("ISLAND delta ranges (lo_x+x/2, hi_x-x/2, lo_y, hi_y-(y-0.15), hi_z-bh): {:?}", st);
     }
 }
