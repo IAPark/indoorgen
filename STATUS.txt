@@ -1,0 +1,4 @@
+Done: baseline sheets of 15 scenes x plain/pm (tmp/base); ig_cams v1 = room-type priors, door-frac reject/penalty, subject-area + furniture-coverage + depth scoring, 'group' establishing subject for sparse rooms; tools/cams_eval.sh, cams_evalall.sh.
+Current: eyeballing v1 sheets (tmp/v1) on Kitchen0/Bathroom0/LivingRoom3, then full set rerun.
+Blockers: none (tmp small, glbs deleted right after preview).
+ETA: ~1-1.5 h to pass-rate report + selfcheck + BACKLOG.
