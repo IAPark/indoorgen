@@ -360,6 +360,54 @@ fn back_divide(m: &Mesh, dist: f64, garbled: bool, r: &mut Rng) -> Mesh {
     }
 }
 
+static CLEAN_GEOMETRY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Scene export mode: repair python's own geometry defects (garbled flat hulls) instead of reproducing them (refcmp keeps the bug-compatible default).
+pub fn set_clean_geometry(on: bool) {
+    CLEAN_GEOMETRY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+fn clean_geometry() -> bool {
+    CLEAN_GEOMETRY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// If all points lie in one axis-aligned plane (extent < 1e-4 along one axis), the strict 2D convex hull as a single n-gon.
+fn flat_hull_polygon(hp: &[[f32; 3]]) -> Option<(Vec<[f32; 3]>, Vec<[u32; 2]>, Vec<Vec<u32>>)> {
+    if hp.len() < 3 {
+        return None;
+    }
+    let ext = |k: usize| {
+        let lo = hp.iter().map(|p| p[k]).fold(f32::INFINITY, f32::min);
+        let hi = hp.iter().map(|p| p[k]).fold(f32::NEG_INFINITY, f32::max);
+        hi - lo
+    };
+    let ax = (0..3).min_by(|&a, &b| ext(a).partial_cmp(&ext(b)).unwrap()).unwrap();
+    if ext(ax) > 1e-4 {
+        return None;
+    }
+    let (u, v) = match ax { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
+    let mut idx: Vec<usize> = (0..hp.len()).collect();
+    idx.sort_by(|&a, &b| (hp[a][u], hp[a][v]).partial_cmp(&(hp[b][u], hp[b][v])).unwrap());
+    let cr = |o: usize, a: usize, b: usize| (hp[a][u] - hp[o][u]) as f64 * (hp[b][v] - hp[o][v]) as f64 - (hp[a][v] - hp[o][v]) as f64 * (hp[b][u] - hp[o][u]) as f64;
+    let mut h: Vec<usize> = vec![];
+    for pass in 0..2 {
+        let start = h.len();
+        let it: Vec<usize> = if pass == 0 { idx.clone() } else { idx.iter().rev().cloned().collect() };
+        for i in it {
+            while h.len() >= start + 2 && cr(h[h.len() - 2], h[h.len() - 1], i) <= 1e-9 {
+                h.pop();
+            }
+            h.push(i);
+        }
+        h.pop();
+    }
+    if h.len() < 3 {
+        return None;
+    }
+    let n = h.len() as u32;
+    let pts: Vec<[f32; 3]> = h.iter().map(|&i| hp[i]).collect();
+    let edges: Vec<[u32; 2]> = (0..n).map(|i| [i, (i + 1) % n]).collect();
+    Some((pts, edges, vec![(0..n).collect()]))
+}
+
 /// make_back: convex hull (exact bmesh port) of the joined back posts, SOLIDIFY (thickness t, offset 0), normals made outward
 fn back_hull_slab(backs: &[Vec<V3>], t: f64) -> Mesh {
     use crate::bm::BMesh;
@@ -376,7 +424,16 @@ fn back_hull_slab(backs: &[Vec<V3>], t: f64) -> Mesh {
     }
     let mut bm = BMesh::from_mesh(&pos, &edges, &[], &[]);
     crate::bm::hull::convex_hull(&mut bm, &crate::bm::hull::HullParams::default());
-    let (hp, he, hf) = bm.to_mesh();
+    let (mut hp, mut he, mut hf) = bm.to_mesh();
+    // The posts' points are coplanar (float noise 1e-7 only): bmesh's hull of a flat point set is a pile of overlapping, flipped
+    // triangles (python has the same defect: torn zig-zag headboards after divide()). Replace it by the flat convex polygon.
+    if clean_geometry() {
+        if let Some((p2, e2, f2)) = flat_hull_polygon(&hp) {
+            hp = p2;
+            he = e2;
+            hf = f2;
+        }
+    }
     if let Ok(p) = std::env::var("BEDDUMP4") {
         std::fs::write(p, serde_json::json!({"verts": hp.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect::<Vec<_>>(), "polys": hf}).to_string()).ok();
     }

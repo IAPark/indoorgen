@@ -241,8 +241,10 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
                 b.side(-top, "Forearm", Op::Aim { dir: d(fx * 0.85, -0.35, 0.25), twist: 0.0 });
             } else {
                 // seed bit 20: arms out above the cover (beside the head) for a person under a bed cover
-                let folded = kind == LieBed && seed & 0x80 != 0;
-                let arms_up = kind == LieBed && seed & (1 << 20) != 0 && !folded;
+                let mut folded = kind == LieBed && seed & 0x80 != 0;
+                let mut arms_up = kind == LieBed && seed & (1 << 20) != 0 && !folded;
+                // testing: LIE_ARMS=up|folded|side forces the arm variant
+                if let Ok(a) = std::env::var("LIE_ARMS") { folded = a == "folded"; arms_up = a == "up"; }
                 for s in [-1.0, 1.0] {
                     // relaxed legs: feet fall apart a little, knees slightly flexed (heels rest on the mattress)
                     b.side(s, "Thigh", Op::Rel([0.0, 0.0, s * (9.0 + v.v(3.0))]));
@@ -259,8 +261,9 @@ pub fn make_def(rig: &Rig, kind: PoseKind, seed: u64, org: V, root_z: Option<f64
                         b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.34 + v.v(0.06), 1.0, -0.10), twist: 0.0 });
                         b.side(s, "Forearm", Op::Aim { dir: d(-s * (0.80 + v.v(0.1)), 0.45 + v.v(0.1), 0.30), twist: 0.0 });
                     } else if arms_up {
-                        b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.62, -0.55 + v.v(0.1), 0.12), twist: 0.0 });
-                        b.side(s, "Forearm", Op::Aim { dir: d(s * 0.10, -1.0, 0.45), twist: 0.0 });
+                        // hands behind the head: elbows out beside the head, forearms folded back under it
+                        b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.80, -0.55 + v.v(0.08), -0.05), twist: 0.0 });
+                        b.side(s, "Forearm", Op::Aim { dir: d(-s * 0.85, -0.35, -0.25), twist: 0.0 });
                     } else {
                         b.side(s, "UpperArm", Op::Aim { dir: d(s * 0.14, 1.0, -0.12), twist: 0.0 });
                         b.side(s, "Forearm", Op::Aim { dir: d(s * 0.05, 1.0, 0.05), twist: 0.0 });

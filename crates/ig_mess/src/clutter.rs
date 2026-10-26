@@ -25,9 +25,9 @@ struct Spec {
 }
 
 const SURFACE: &[Spec] = &[
-    Spec { class: "CupFactory", w: [2.0, 3.0, 4.0, 1.0, 3.0, 2.0], max_xy: 0.2, max_z: 0.25 },
-    Spec { class: "BowlFactory", w: [0.0, 1.0, 3.0, 0.0, 2.0, 0.5], max_xy: 0.3, max_z: 0.2 },
-    Spec { class: "PlateFactory", w: [0.0, 0.5, 3.0, 0.0, 3.0, 0.0], max_xy: 0.35, max_z: 0.1 },
+    Spec { class: "CupFactory", w: [2.0, 3.0, 4.0, 1.0, 3.0, 2.0], max_xy: 0.13, max_z: 0.14 },
+    Spec { class: "BowlFactory", w: [0.0, 1.0, 3.0, 0.0, 2.0, 0.5], max_xy: 0.24, max_z: 0.12 },
+    Spec { class: "PlateFactory", w: [0.0, 0.5, 3.0, 0.0, 3.0, 0.0], max_xy: 0.28, max_z: 0.05 },
     Spec { class: "BottleFactory", w: [1.0, 2.0, 2.0, 2.0, 2.0, 1.0], max_xy: 0.15, max_z: 0.4 },
     Spec { class: "CanFactory", w: [0.5, 1.0, 2.0, 0.0, 1.0, 1.0], max_xy: 0.15, max_z: 0.25 },
     Spec { class: "WineglassFactory", w: [0.0, 1.0, 0.5, 0.0, 2.0, 0.0], max_xy: 0.15, max_z: 0.3 },
@@ -46,15 +46,15 @@ const FLOOR: &[Spec] = &[
     Spec { class: "TowelFactory", w: [1.0, 0.0, 0.0, 3.0, 0.0, 0.0], max_xy: 0.8, max_z: 0.3 },
     Spec { class: "FoodBagFactory", w: [0.0, 1.0, 1.0, 0.0, 0.3, 0.0], max_xy: 0.4, max_z: 0.4 },
     Spec { class: "CanFactory", w: [0.3, 0.7, 1.0, 0.0, 0.3, 0.3], max_xy: 0.15, max_z: 0.25 },
-    Spec { class: "BottleFactory", w: [0.3, 0.7, 1.0, 0.3, 0.3, 0.3], max_xy: 0.15, max_z: 0.4 },
-    Spec { class: "CupFactory", w: [0.5, 0.5, 0.3, 0.0, 0.0, 0.3], max_xy: 0.2, max_z: 0.25 },
+    Spec { class: "BottleFactory", w: [0.2, 0.3, 1.0, 0.1, 0.05, 0.2], max_xy: 0.15, max_z: 0.4 },
+    Spec { class: "CupFactory", w: [0.5, 0.5, 0.3, 0.0, 0.0, 0.3], max_xy: 0.13, max_z: 0.14 },
     // dropped clothes: cloth jobs (re-simulated in Blender at render time), height-field drape as the default mesh
     Spec { class: "ShirtFactory", w: [4.0, 1.5, 0.0, 2.0, 0.0, 1.0], max_xy: 1.4, max_z: 0.3 },
     Spec { class: "PantsFactory", w: [3.0, 1.0, 0.0, 1.5, 0.0, 0.7], max_xy: 1.4, max_z: 0.3 },
 ];
 
 /// floor clutter per m^2 of room floor at level 1, per room type [bedroom, living, kitchen, bath, dining, other]
-const FLOOR_DENSITY: W = [0.9, 0.6, 0.2, 0.7, 0.3, 0.4];
+const FLOOR_DENSITY: W = [0.9, 0.6, 0.2, 0.7, 0.12, 0.4];
 /// surface items per m^2 of surface at level 1
 const SURFACE_DENSITY: W = [7.0, 6.0, 6.0, 7.0, 5.0, 6.0];
 
@@ -264,10 +264,22 @@ fn build_item(rng: &mut Rng, spec: &'static Spec, cup_handle: Option<bool>) -> O
     if lo[0] > hi[0] {
         return None;
     }
-    let (ex, ey, ez) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-    if ex.max(ey) > spec.max_xy || ez > spec.max_z || ex.max(ey) < 0.015 || ez < 0.004 {
+    let (mut ex, mut ey, mut ez) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    // oversized samples (factory ranges run large: 20 cm mugs) are scaled down to the limit; more than 2x too big: rejected
+    let sc = (spec.max_xy / ex.max(ey)).min(spec.max_z / ez).min(1.0);
+    if sc < 0.5 || ex.max(ey) < 0.015 || ez < 0.004 {
         return None;
     }
+    if sc < 1.0 {
+        for p in &mut asset.parts {
+            for q in &mut p.mesh.pos {
+                for k in 0..3 { q[k] *= sc; }
+            }
+        }
+        for k in 0..3 { lo[k] *= sc; hi[k] *= sc; }
+        ex *= sc; ey *= sc; ez *= sc;
+    }
+    let _ = (ex, ey, ez);
     let dz = -lo[2];
     for p in &mut asset.parts {
         for q in &mut p.mesh.pos {
@@ -732,8 +744,8 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
             draped.transform(&m);
             let mut rr = cfg.rng(&format!("drape.{rname}.{idx}"));
             let wob = rr.uniform(0.0, 6.28);
-            for q in &mut draped.pos {
-                let local_z = q[2] - m.0[2][3];
+            let mut support: Vec<f64> = Vec::with_capacity(draped.pos.len());
+            for q in &draped.pos {
                 let top = q[2] + 1.0;
                 let mut sz = floor_z;
                 for (ox, oy) in [(0.0, 0.0), (0.025, 0.0), (-0.025, 0.0), (0.0, 0.025), (0.0, -0.025)] {
@@ -741,7 +753,30 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
                         sz = sz.max(top - t);
                     }
                 }
-                q[2] = sz + local_z + 0.003 + 0.004 * (q[0] * 23.0 + wob).sin() * (q[1] * 19.0).sin();
+                support.push(sz);
+            }
+            // cloth cannot drop like a cliff beside a narrow support (chair back): the surface falls at most `slope` m per m away from
+            // the highest support (cone dilation over the garment's own vertices), otherwise it becomes a tall spike
+            let slope = 1.3;
+            let xy: Vec<[f64; 2]> = draped.pos.iter().map(|q| [q[0], q[1]]).collect();
+            let mut dil = support.clone();
+            if support.iter().cloned().fold(f64::MIN, f64::max) - support.iter().cloned().fold(f64::MAX, f64::min) > 0.05 {
+                for i in 0..xy.len() {
+                    for j in 0..xy.len() {
+                        if support[j] > dil[i] {
+                            let d = ((xy[i][0] - xy[j][0]).powi(2) + (xy[i][1] - xy[j][1]).powi(2)).sqrt();
+                            dil[i] = dil[i].max(support[j] - slope * d);
+                        }
+                    }
+                }
+            }
+            // and a garment never stands more than 0.3 m above the typical support under it (no tall cones over chair backs)
+            let mut sorted = support.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let cap = sorted[sorted.len() / 2] + 0.3;
+            for (k, q) in draped.pos.iter_mut().enumerate() {
+                let local_z = q[2] - m.0[2][3];
+                q[2] = dil[k].min(cap) + local_z + 0.003 + 0.004 * (q[0] * 23.0 + wob).sin() * (q[1] * 19.0).sin();
             }
             let (glo, ghi) = pre.bounds();
             let mut collide: Vec<String> = vec![format!("{rname}.floor")];

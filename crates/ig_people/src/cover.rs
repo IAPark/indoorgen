@@ -72,6 +72,15 @@ impl Hf {
             self.tri(&[m.pos[t[0] as usize], m.pos[t[1] as usize], m.pos[t[2] as usize]]);
         }
     }
+    /// like `mesh`, but only triangles whose highest vertex is below `zmax`
+    pub fn mesh_below(&mut self, m: &Mesh, zmax: f64) {
+        for t in m.triangles() {
+            let q = [m.pos[t[0] as usize], m.pos[t[1] as usize], m.pos[t[2] as usize]];
+            if q.iter().all(|v| v[2] <= zmax) {
+                self.tri(&q);
+            }
+        }
+    }
     /// cloth surface over the obstacles: z(x) = max_y (h(y) - slope * |x - y|) (a cone dilation, two chamfer passes)
     pub fn drape(&mut self, slope: f64) {
         let (nx, ny) = (self.nx as i64, self.ny as i64);
@@ -351,7 +360,12 @@ fn throw_blanket(pi: usize, pl: &Placement, scene: &mut Scene, floor_z: f64) {
             continue;
         }
         if n.class != "Person" || body.contains(&n.name) {
-            hf.mesh(&n.mesh);
+            if n.class == "Person" && !lying {
+                // a throw on a seated person lies over the lap and legs, not over the torso (the height field would make a cape over the shoulders)
+                hf.mesh_below(&n.mesh, lm.pelvis[2] + 0.16);
+            } else {
+                hf.mesh(&n.mesh);
+            }
         }
         if n.mesh.pos.len() <= 120000 && !(n.class == "Person" && !body_nodes(pi, pl).contains(&n.name)) {
             collide.push(n.name.clone());
