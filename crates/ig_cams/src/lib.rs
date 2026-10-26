@@ -336,9 +336,9 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     0 => (0.45, 0.9, 0.08, 0.40, 0.32, 0.03, 0.08, 0.5, 8, 1.2, 1.3, 1.2, 25.0, 0.4, 0.12, 0.3),
                     1 => (0.0, 0.7, 0.12, 0.50, 0.40, 0.05, 0.12, 0.45, 8, 1.0, 1.15, 1.0, 22.0, 0.5, 0.08, 0.28),
                     2 => (-0.3, 0.6, 0.15, 0.50, 0.50, 0.08, 0.15, 0.35, 7, 0.8, 1.0, 0.9, 20.0, 0.6, 0.04, 0.2),
-                    3 => (-0.5, 0.45, 0.25, 0.50, 0.60, 0.12, 0.20, 0.25, 7, 0.6, 0.8, 0.8, 18.0, 0.7, 0.02, 0.16),
-                    4 => (-1.1, 0.4, 0.30, 0.55, 0.65, 0.15, 0.25, 0.25, 7, 0.6, 0.8, 0.5, 12.0, 0.8, 0.0, 0.16),
-                    _ => (-1.1, 0.4, 0.30, 0.75, 0.80, 0.20, 0.40, 0.2, 0, 0.5, 0.7, 0.4, 5.0, 0.8, 0.0, 0.14),
+                    3 => (-0.5, 0.45, 0.25, 0.50, 0.45, 0.12, 0.20, 0.25, 7, 0.6, 0.8, 0.8, 18.0, 0.7, 0.02, 0.16),
+                    4 => (-1.1, 0.4, 0.30, 0.50, 0.50, 0.15, 0.25, 0.25, 7, 0.6, 0.8, 0.5, 12.0, 0.8, 0.0, 0.16),
+                    _ => (-1.1, 0.4, 0.30, 0.60, 0.60, 0.20, 0.40, 0.2, 0, 0.5, 0.7, 0.4, 5.0, 0.8, 0.0, 0.14),
                 };
                 let (budget, want) = ([260, 170, 170, 130, 130, 130][lv], if lv == 0 { 10 } else { 6 });
                 let mut best: Option<(f64, usize, V3, V3, f64)> = None;
@@ -351,7 +351,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                             return if kind == 0 || lv >= 3 || (sparse && kind > 0) { if kind == 0 { 1.0 } else { 0.5 * s.w } } else { 0.0 };
                         }
                         if kind == 0 && lv < 3 { return 0.0 }
-                        if lv == 4 && s.person && cand.iter().any(|q| !q.person && !q.group) { return 0.0 }
+                        if lv >= 4 && s.person && cand.iter().any(|q| !q.person && !q.group) { return 0.0 }
                         let mut w0 = s.w;
                         if kind == 2 && s.person { w0 *= 0.3 }
                         if kind == 1 && s.person { w0 *= 1.5 }
@@ -495,7 +495,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                         if s.person && lv < 5 && (by1 - by0) / 2.0 < if lv == 0 { 0.42 } else { 0.28 } { rej[16] += 1; continue }
                     }
                     // other people must not be cut by the frame edge
-                    if lv < 4 {
+                    if lv < 5 {
                         let mut cut = false;
                         for q in cand.iter().filter(|q| q.person && q.key != s.key) {
                             let (mut ins, mut tot_p) = (0, 0);
@@ -588,21 +588,46 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                 None => {
                     // last resort: a corner wide shot from the polygon vertex pulled in, farthest from earlier cameras
                     lvl_hist[6] += 1;
-                    let mut bestp: Option<(f64, [f64; 2])> = None;
-                    for (p, _) in pool.iter().filter(|(_, o)| !*o) {
-                        let dmin = got.iter().map(|(q, _, _)| (q[0] - p[0]).hypot(q[1] - p[1])).fold(f64::MAX, f64::min);
-                        let sc = dmin.min(5.0) + (cen[0] - p[0]).hypot(cen[1] - p[1]) * 0.5;
-                        if bestp.map_or(true, |b| sc > b.0) { bestp = Some((sc, *p)) }
-                    }
-                    let p = bestp.map_or(cen, |b| b.1);
-                    let o = [p[0], p[1], (fz + 1.4).min(cz - 0.35)];
                     let g = &cand[gi];
-                    let tgt = [(g.lo[0] + g.hi[0]) / 2.0, (g.lo[1] + g.hi[1]) / 2.0];
-                    let tgt = if (tgt[0] - p[0]).hypot(tgt[1] - p[1]) < 0.5 { cen } else { tgt };
-                    let (dx, dy) = (tgt[0] - p[0], tgt[1] - p[1]);
-                    let dh = dx.hypot(dy).max(1e-6);
-                    let pitch = ((fz + 0.9 - o[2]).atan2(dh)).clamp(-5f64.to_radians(), 4f64.to_radians());
-                    (gi, o, [dx / dh * pitch.cos(), dy / dh * pitch.cos(), pitch.sin()], 14.0)
+                    let gt = [(g.lo[0] + g.hi[0]) / 2.0, (g.lo[1] + g.hi[1]) / 2.0];
+                    let ez = (fz + 1.4).min(cz - 0.35);
+                    let flens = if small { 12.0 } else { 14.0 };
+                    let mut bestp: Option<(f64, [f64; 2], V3)> = None;
+                    for (p, _) in pool.iter().filter(|(_, o)| !*o) {
+                        let o = [p[0], p[1], ez];
+                        for tgt in [gt, cen] {
+                            let (dx, dy) = (tgt[0] - p[0], tgt[1] - p[1]);
+                            let dh = dx.hypot(dy);
+                            if dh < 0.8 { continue }
+                            let pitch = ((fz + 0.9 - ez).atan2(dh)).clamp(-5f64.to_radians(), 4f64.to_radians());
+                            let f = [dx / dh * pitch.cos(), dy / dh * pitch.cos(), pitch.sin()];
+                            let (r, u) = ([f[1], -f[0], 0.0], [-f[0] / (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-9) * f[2], -f[1] / (f[0] * f[0] + f[1] * f[1]).sqrt().max(1e-9) * f[2], (f[0] * f[0] + f[1] * f[1]).sqrt()]);
+                            let rn = (r[0] * r[0] + r[1] * r[1]).sqrt().max(1e-9);
+                            let r = [r[0] / rn, r[1] / rn, 0.0];
+                            let (th, tv) = (18.0 / flens, 18.0 / flens * 9.0 / 16.0);
+                            let (mut wl, mut nr, mut ds, mut fu) = (0, 0, 0.0, 0);
+                            for iy in 0..5 { for ix in 0..8 {
+                                let nx = ((ix as f64 + 0.5) / 8.0) * 2.0 - 1.0;
+                                let ny = 1.0 - ((iy as f64 + 0.5) / 5.0) * 2.0;
+                                let d = unit([f[0] + r[0] * nx * th + u[0] * ny * tv, f[1] + r[1] * nx * th + u[1] * ny * tv, f[2] + u[2] * ny * tv]);
+                                if let Some((t, ti)) = w.cast(o, d, 6.0) {
+                                    ds += t;
+                                    if w.keys[w.owner[ti] as usize].contains(".wall") { wl += 1 }
+                                    if t < 0.9 { nr += 1 }
+                                    if !w.shell[ti] { fu += 1 }
+                                } else { ds += 6.0 }
+                            } }
+                            let dmin = got.iter().map(|(q, ff, _)| if (q[0] - p[0]).hypot(q[1] - p[1]) < 0.8 && (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees() < 25.0 { 0.0 } else { 1.0 }).fold(1.0, f64::min);
+                            let sc = -1.5 * wl as f64 / 40.0 - 3.0 * nr as f64 / 40.0 + ds / 40.0 / 6.0 + 0.8 * (fu as f64 / 40.0).min(0.4) - 2.0 * (1.0 - dmin);
+                            if bestp.map_or(true, |b| sc > b.0) { bestp = Some((sc, [p[0], p[1]], f)) }
+                        }
+                    }
+                    let (o, f) = match bestp { Some((_, p, f)) => ([p[0], p[1], ez], f), None => {
+                        let (dx, dy) = (gt[0] - cen[0], gt[1] - cen[1]);
+                        let dh = dx.hypot(dy).max(1e-6);
+                        ([cen[0], cen[1], ez], [dx / dh, dy / dh, 0.0])
+                    } };
+                    (gi, o, f, flens)
                 }
             };
             let (r, u) = ([f[1], -f[0], 0.0], {
