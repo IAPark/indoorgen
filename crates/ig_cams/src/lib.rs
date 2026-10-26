@@ -193,6 +193,19 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             if s.group || s.person || !["Sofa", "ArmChair", "BedFactory", "TVStand"].iter().any(|k| s.key.contains(k)) { return None }
             let z = s.lo[2] + 0.5 * (s.hi[2] - s.lo[2]);
             let (cx, cy) = ((s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0);
+            // the high part (backrest/headboard) is off-centre: its mean offset along the dominant axis gives the back direction
+            let zt = s.lo[2] + 0.6 * (s.hi[2] - s.lo[2]);
+            let (mut mx, mut my, mut cnt) = (0.0, 0.0, 0usize);
+            for n in scene.nodes.iter().filter(|n| key_of(&n.name) == s.key) {
+                for p in n.mesh.pos.iter().filter(|p| p[2] > zt) { mx += p[0] - cx; my += p[1] - cy; cnt += 1 }
+            }
+            if cnt > 20 {
+                let (mx, my) = (mx / cnt as f64, my / cnt as f64);
+                let (ex, ey) = (s.hi[0] - s.lo[0], s.hi[1] - s.lo[1]);
+                if (mx.abs() / ex).max(my.abs() / ey) > 0.06 {
+                    return Some(if mx.abs() / ex > my.abs() / ey { [mx.signum(), 0.0] } else { [0.0, my.signum()] });
+                }
+            }
             let mut best: Option<(f64, [f64; 2])> = None;
             for (d, o) in [([1.0, 0.0], s.hi[0] + 0.02), ([-1.0, 0.0], s.lo[0] - 0.02), ([0.0, 1.0], s.hi[1] + 0.02), ([0.0, -1.0], s.lo[1] - 0.02)] {
                 let org = if d[0] != 0.0 { [o, cy, z] } else { [cx, o, z] };

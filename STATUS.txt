@@ -1,4 +1,4 @@
-Done: v3 judged by eye: ~67/84 shots good (80%, 74% counting missing cams); found failure modes: sofa seen from behind, tiny bathrooms get <3 cams, foreground appliances.
-Current: fixing tiny-room sampling + back-of-seat rejection, then v4 full rerun.
+Done: v4 judged; added true back-direction detection (v5).
+Current: merge master (ragdoll2), final rerun tmp/v6, selfcheck, cams0 identity, BACKLOG.
 Blockers: none.
-ETA: ~45 min.
+ETA: ~40 min.
