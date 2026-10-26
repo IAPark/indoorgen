@@ -176,7 +176,7 @@ impl Mesh {
         // Full triangle soup: every triangle owns its 3 vertices. The exporter computes smooth-by-angle normals per vertex
         // (welding by position), so a vertex index shared by faces at a sharp corner would get the normal of whichever triangle was
         // processed last (dark / flipped-looking triangles on flat panels of indexed meshes such as the exact KitchenSpace slab).
-        let fixed = self.split_tjunctions();
+        let fixed = if std::env::var_os("NO_TJ").is_some() { None } else { self.split_tjunctions() };
         let this = fixed.as_ref().unwrap_or(self);
         let has_uv = this.uv.len() == this.pos.len();
         let mut pos: Vec<V3> = Vec::with_capacity(this.faces.len() * 6);
@@ -253,7 +253,8 @@ impl Mesh {
             let (pa, pb) = (self.pos[rep[a as usize] as usize], self.pos[rep[b as usize] as usize]);
             let d = sub(pb, pa);
             let l2 = dot(d, d);
-            if l2 < 4e-8 {
+            // only edges >= 1 cm: leaf / foliage meshes have mm-scale open edges everywhere by design (no visible cracks, +40% triangles)
+            if l2 < 1e-4 {
                 continue;
             }
             let (lo, hi) = ([pa[0].min(pb[0]) - 1e-4, pa[1].min(pb[1]) - 1e-4, pa[2].min(pb[2]) - 1e-4], [pa[0].max(pb[0]) + 1e-4, pa[1].max(pb[1]) + 1e-4, pa[2].max(pb[2]) + 1e-4]);
@@ -333,8 +334,25 @@ pub fn triangulate_face(pos: &[V3], f: &[u32]) -> Vec<[u32; 3]> {
         let area2 = |a: u32, b: u32, c: u32| { let (pa, pb, pc) = (pos[a as usize], pos[b as usize], pos[c as usize]); let x = cross(sub(pb, pa), sub(pc, pa)); dot(x, x).sqrt() };
         let ok = |a: usize| (1..n - 1).all(|k| area2(f[a], f[(a + k) % n], f[(a + k + 1) % n]) > 1e-12);
         match (0..n).find(|&a| ok(a)) {
-            Some(a) if a != 0 => (1..n - 1).map(|k| [f[a], f[(a + k) % n], f[(a + k + 1) % n]]).collect::<Vec<_>>(),
-            _ => fan0(),
+            Some(0) => fan0(),
+            Some(a) => (1..n - 1).map(|k| [f[a], f[(a + k) % n], f[(a + k + 1) % n]]).collect::<Vec<_>>(),
+            None => {
+                // collinear vertices on several sides (T-junction repairs): clip ears with a real area, so every vertex stays on a triangle
+                let mut rest: Vec<u32> = f.to_vec();
+                let mut out = vec![];
+                while rest.len() > 3 {
+                    let m = rest.len();
+                    let Some(i) = (0..m).find(|&i| area2(rest[(i + m - 1) % m], rest[i], rest[(i + 1) % m]) > 1e-12) else { break };
+                    out.push([rest[(i + m - 1) % m], rest[i], rest[(i + 1) % m]]);
+                    rest.remove(i);
+                }
+                if rest.len() == 3 {
+                    out.push([rest[0], rest[1], rest[2]]);
+                    out
+                } else {
+                    fan0()
+                }
+            }
         }
     };
     let mut nrm = [0.0; 3];
