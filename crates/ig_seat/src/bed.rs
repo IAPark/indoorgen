@@ -714,6 +714,11 @@ impl Factory for Bed {
         let (mw, msz) = (ms.width, ms.size);
         let cm = Collider::new(&mattress.pos, &mattress.faces);
         let cf = Collider::new(&frame_all.pos, &frame_all.faces);
+        // the floor under the bed: hanging cloth must not sink into it
+        let floor_c = {
+            let zf = frame_all.bounds().0[2];
+            Collider::new(&[[-20.0, -20.0, zf], [20.0, -20.0, zf], [20.0, 20.0, zf], [-20.0, 20.0, zf]], &[vec![0, 1, 2, 3]])
+        };
         let fabric = m("sheet", "fabric.FineKnitFabric", 4, [0.7, 0.7, 0.75]);
 
         // ---- sheet: "none" falls into python's `case _` = box comforter
@@ -748,7 +753,7 @@ impl Factory for Bed {
         p.use_self_collision = s.sheet_folded;
         let mut cal = Calib::default();
         cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
-        let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf], &cal);
+        let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf, &floor_c], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
         let sheet = subsurf(&sheet, 2, false);
@@ -770,22 +775,47 @@ impl Factory for Bed {
         let off = r.uniform(0.0, 0.3);
         cover.transform(&rot);
         cover.transform(&Mat4::translation([c.size / 2.0 + off, 0.0, z_cover]));
-        let cs_ = Collider::new(&sheet.pos, &sheet.faces);
+        // the comforter is a thin two-layer shell: the cover only sees its outer (top) layer, else vertices that sink between the layers pop out below it
+        let top_faces = {
+            let k = pre.faces.iter().take_while(|f| {
+                let (a, b, c) = (pre.pos[f[0] as usize], pre.pos[f[1] as usize], pre.pos[f[2] as usize]);
+                (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) > 0.0
+            }).count();
+            if k == pre.faces.len() || k == 0 { sheet.faces.len() } else { (k * 16).min(sheet.faces.len()) }
+        };
+        let cs_ = Collider::new(&sheet.pos, &sheet.faces[..top_faces]);
+        if std::env::var_os("BEDDBG").is_some() {
+            let nz = |fs: &[Vec<u32>]| -> f64 { fs.iter().map(|f| { let (a, b, c) = (sheet.pos[f[0] as usize], sheet.pos[f[1] as usize], sheet.pos[f[2] as usize]); let (u, v) = ([b[0]-a[0], b[1]-a[1], b[2]-a[2]], [c[0]-a[0], c[1]-a[1], c[2]-a[2]]); let n = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]; n[2] / (n[0]*n[0]+n[1]*n[1]+n[2]*n[2]).sqrt().max(1e-12) }).sum::<f64>() / fs.len().max(1) as f64 };
+            eprintln!("TOPFACES {} of {} (pre {}): mean nz top {:.3} rest {:.3}", top_faces, sheet.faces.len(), pre.faces.len(), nz(&sheet.faces[..top_faces]), nz(&sheet.faces[top_faces..]));
+        }
         let mut p = ClothParams::default();
         p.mass = 0.05;
         p.tension = 2.0;
         p.distance_min = 5e-3;
         p.end_frame = 80;
-        let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm], &Calib::default());
+        p.distance_min = std::env::var("COVER_DMIN").ok().and_then(|v| v.parse().ok()).unwrap_or(5e-3);
+        let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm, &floor_c], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;
         let cvm = subsurf(&cvm, 2, false);
         let cbb = cvm.bounds();
         a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)), build: Some(json!({"type": "blanket", "width": cb.width, "size": cb.size, "thickness": cb.thickness, "margin": 0.0, "fold": null, "x": c.size / 2.0 + off})), post: None });
+        let cover_final = cvm.clone();
         a.parts.push(Part { mesh: cvm, mat: fabric.clone(), col: Some((cbb.0, cbb.1)) });
 
         // ---- pillows
         let bases = [&sheet, &mattress];
+        // soft bodies rest on everything that is on the bed (sheet, mattress, cover)
+        let rest_col = {
+            let mut pos = vec![];
+            let mut faces: Vec<Vec<u32>> = vec![];
+            for mm in [&sheet, &mattress, &cover_final] {
+                let o = pos.len() as u32;
+                pos.extend_from_slice(&mm.pos);
+                faces.extend(mm.faces.iter().map(|f| f.iter().map(|i| i + o).collect()));
+            }
+            Collider::new(&pos, &faces)
+        };
         let np = r.randint(2, 4) as usize;
         let pc = pillow_ctor(&mut r);
         let pspec = PillowSpec::from_ctor(&pc);
@@ -799,6 +829,7 @@ impl Factory for Bed {
             let lowz = pm.bounds().0[2];
             pm.transform(&Mat4::rot_z(rz));
             pm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
+            super::cloth::rest_and_wrap(&mut pm.pos, &rest_col, 0.07, 0.01, 0.15);
             let b = pm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
             a.parts.push(Part { mesh: pm, mat: pill_mat.clone(), col: Some((b.0, b.1)) });
@@ -816,6 +847,7 @@ impl Factory for Bed {
             let lowz = tm.bounds().0[2];
             tm.transform(&Mat4::rot_z(rz));
             tm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
+            super::cloth::rest_and_wrap(&mut tm.pos, &rest_col, 0.02, 0.005, 0.1);
             let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
             let b = tm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });

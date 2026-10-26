@@ -211,7 +211,7 @@ pub fn crumple(m: &mut Mesh, rng: &mut Rng, amount: f64) {
     let (a1, a2) = (rng.uniform(0.0, 6.28), rng.uniform(0.0, 6.28));
     let (k1, k2) = (rng.uniform(6.0, 14.0), rng.uniform(6.0, 14.0));
     let twist = rng.uniform(-0.6, 0.6) * amount;
-    let amp = 0.03 * amount;
+    let amp = 0.07 * amount;
     for p in m.pos.iter_mut() {
         let r = (p[0] * p[0] + p[1] * p[1]).sqrt();
         let th = twist * (-(r * r) / 0.12).exp();
