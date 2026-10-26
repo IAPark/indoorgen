@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """meshqc_sum.py DIR [--base DIR0] : aggregate meshqc JSON files: per defect class (nodes affected / total items) and per asset class."""
 import sys, json, glob, os, re, collections
-CL = ['holes', 'nonmanif', 'tjunc', 'degenerate', 'sliver', 'flipped', 'inconsistent', 'dupface', 'xdup', 'nan', 'empty']
+CL = ['holes', 'holes_open', 'cracks', 'nonmanif', 'tjunc', 'degenerate', 'sliver', 'flipped', 'inconsistent', 'dupface', 'xdup', 'nan', 'empty']
 def load(d):
     rows = []
     for f in sorted(glob.glob(os.path.join(d, '*.json'))):
@@ -28,7 +28,7 @@ def main():
     bn = bi = bb = None
     if base:
         brs = load(base); bn, bi, bb, bnc, bhl = agg(brs)
-    print('scenes', len(set(r['scene'] for r in rows)), 'nodes', len(rows), 'hole_length_m %.1f' % hl, ('(before %.1f)' % bhl if base else ''))
+    print('scenes', len(set(r['scene'] for r in rows)), 'nodes', len(rows), 'hole_area_m2 %.2f' % hl, ('(before %.1f)' % bhl if base else ''))
     print('%-14s %12s %12s' % ('defect', 'nodes', 'items'))
     for k in CL:
         print('%-14s %5d%7s %7d%7s' % (k, n[k], ('(%d)' % bn[k]) if base else '', i[k], ('(%d)' % bi[k]) if base else ''))

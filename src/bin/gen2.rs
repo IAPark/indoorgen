@@ -424,6 +424,8 @@ fn add_cameras(scene: &Scene, polys: &[(String, indoorgen::shp::G)], k: usize, s
 fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
     use indoorgen::gn::geom::Mesh as GM;
     let (blo, bhi) = b.bounds();
+    let split = if std::env::var_os("CUT_NOSPLIT").is_none() { Some(grid_split(a, blo, bhi, 0.1)) } else { None };
+    let a = split.as_ref().unwrap_or(a);
     let e = 1e-3;
     // the boolean needs the closed part: an open near-faces piece leaves an inverted lid (BSP) or patchy hole walls (exact)
     let whole = std::env::var_os("CUT_PIECE").is_none();
@@ -481,10 +483,12 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
         n % 2 == 1
     };
     let dist_b = |p: V3| -> f64 { btris.iter().map(|t| pt_tri_dist(p, t)).fold(f64::MAX, f64::min) };
+    let nofilter = std::env::var_os("CUT_NOFILTER").is_some();
     let ok = |f: &Vec<u32>| {
+        if nofilter { return true }
         let n = f.len() as f64;
         let c: V3 = [0, 1, 2].map(|d| f.iter().map(|&i| r.pos[i as usize][d] as f64).sum::<f64>() / n);
-        let in_bounds = (0..3).all(|d| c[d] >= slo[d] - 1e-3 && c[d] <= shi[d] + 1e-3);
+        let in_bounds = (0..3).all(|d| c[d] >= slo[d] - 1e-3 && c[d] <= shi[d] + 1e-3) && f.iter().all(|&i| (0..3).all(|d| (r.pos[i as usize][d] as f64) >= slo[d] - 2e-3 && (r.pos[i as usize][d] as f64) <= shi[d] + 2e-3));
         let keep = in_bounds && !(inside_b(c) && dist_b(c) > 1e-3);
         if keep && std::env::var_os("CUTDBG").is_some() {
             let (blo, bhi) = b.bounds();
@@ -495,6 +499,51 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
         keep
     };
     o.faces.extend(r.faces_vec().into_iter().filter(|f| ok(f)).map(|f| f.into_iter().map(|x| x + base).collect::<Vec<u32>>()));
+    o
+}
+
+
+/// Cut every face of `a` that crosses one of the grid planes x = k h / y = k h (k covering the cutter footprint +- 0.2 m) into convex pieces with
+/// consistently computed points on shared edges. Long thin fan triangles of big counter tops made the BSP lose slivers (hairline cracks beside the sink).
+fn grid_split(a: &Mesh, blo: V3, bhi: V3, h: f64) -> Mesh {
+    let mut planes: Vec<(usize, f64)> = vec![];
+    for d in 0..2 {
+        let (k0, k1) = (((blo[d] - 0.2) / h).floor() as i64, ((bhi[d] + 0.2) / h).ceil() as i64);
+        for k in k0..=k1 { planes.push((d, k as f64 * h)); }
+    }
+    let mut o = Mesh::new();
+    let cut = |p: V3, q: V3, d: usize, c: f64| -> V3 {
+        // canonical orientation so both neighbours compute bit-identical points
+        let (p, q) = if (p[0], p[1], p[2]) <= (q[0], q[1], q[2]) { (p, q) } else { (q, p) };
+        let t = (c - p[d]) / (q[d] - p[d]);
+        let mut r = [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]), p[2] + t * (q[2] - p[2])];
+        r[d] = c;
+        r
+    };
+    for f in &a.faces {
+        let pts: Vec<V3> = f.iter().map(|&i| a.pos[i as usize]).collect();
+        let crosses = planes.iter().any(|&(d, c)| pts.iter().any(|p| p[d] < c - 1e-9) && pts.iter().any(|p| p[d] > c + 1e-9));
+        if !crosses { o.add_face(&pts); continue }
+        let mut polys: Vec<Vec<V3>> = triangulate_face(&a.pos, f).into_iter().map(|t| t.iter().map(|&i| a.pos[i as usize]).collect()).collect();
+        for &(d, c) in &planes {
+            let mut next = vec![];
+            for poly in polys {
+                if !(poly.iter().any(|p| p[d] < c - 1e-9) && poly.iter().any(|p| p[d] > c + 1e-9)) { next.push(poly); continue }
+                let (mut lo, mut hi) = (vec![], vec![]);
+                for i in 0..poly.len() {
+                    let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+                    let (sp, sq) = (p[d] - c, q[d] - c);
+                    if sp <= 1e-9 { lo.push(p) }
+                    if sp >= -1e-9 { hi.push(p) }
+                    if (sp < -1e-9 && sq > 1e-9) || (sp > 1e-9 && sq < -1e-9) { let x = cut(p, q, d, c); lo.push(x); hi.push(x); }
+                }
+                if lo.len() >= 3 { next.push(lo) }
+                if hi.len() >= 3 { next.push(hi) }
+            }
+            polys = next;
+        }
+        for p in polys { o.add_face(&p); }
+    }
     o
 }
 

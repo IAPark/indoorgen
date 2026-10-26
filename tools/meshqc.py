@@ -145,6 +145,15 @@ def check_node(name, cls, pos, idx):
     closed = (bc == 0) & (nmc == 0)
     inside_out = closed & (cvol < -1e-9) & (carea_c > 1e-4)
     if inside_out.any():
+        # a negative-volume shell that sits inside a positive one is a legitimate cavity (hollow object), not an inverted solid
+        tlo = np.minimum(np.minimum(a, b), c); thi = np.maximum(np.maximum(a, b), c)
+        clo = np.full((ncomp, 3), np.inf); chi = np.full((ncomp, 3), -np.inf)
+        np.minimum.at(clo, lab, tlo); np.maximum.at(chi, lab, thi)
+        pos_c = np.flatnonzero(closed & (cvol > 1e-9))
+        for k in np.flatnonzero(inside_out):
+            if any((clo[q] <= clo[k] + 1e-4).all() and (chi[q] >= chi[k] - 1e-4).all() for q in pos_c):
+                inside_out[k] = False
+    if inside_out.any():
         D['flipped'] = int(inside_out.sum())
         r['flipped_area'] = float(carea_c[inside_out].sum())
         r['flipped_vol'] = float(cvol[inside_out].sum())
@@ -163,17 +172,35 @@ def check_node(name, cls, pos, idx):
         loop_len = np.bincount(ll[vinv[:, 0]], weights=bl, minlength=nl)
         loop_n = np.bincount(ll[vinv[:, 0]], minlength=nl)
         r['loops'] = int(nl)
+        # opening area of each boundary component: |vector area| of its directed edges (directions come from the single triangle)
+        first = np.full(nedges, -1, dtype=np.int64)
+        first[einv[::-1]] = np.arange(len(einv))[::-1]
+        de = ed[first[bnd]]
+        va = 0.5 * np.cross(P[de[:, 0]], P[de[:, 1]])
+        loop_va = np.stack([np.bincount(ll[vinv[:, 0]], weights=va[:, k], minlength=nl) for k in range(3)], axis=1)
+        loop_area = np.linalg.norm(loop_va, axis=1)
+        big = loop_area >= 2e-4  # >= 2 x 1 cm opening: a visible hole; smaller / zero-width gaps are cracks
+        r['hole_area'] = float(loop_area[big].sum())
+        if big.any() and mostly_closed:
+            D['holes'] = int(big.sum())
+            D['hole_edges'] = int(np.bincount(ll[vinv[:, 0]], minlength=nl)[big].sum())
+        if (~big).any() and mostly_closed:
+            D['cracks'] = int((~big).sum())
         if mostly_closed:
-            D['holes'] = int(nl)
-            D['hole_edges'] = int(bnd.sum())
-            o = np.argsort(-loop_len)[:3]
+            loop_len = np.where(big, loop_area * 100, 0.0)
+            o = np.argsort(-loop_area)[:3]
             ex = []
             for k in o:
                 sel = ll[vinv[:, 0]] == k
                 pts = P[be[sel].reshape(-1)]
-                ex.append({'len': float(loop_len[k]), 'edges': int(loop_n[k]), 'lo': pts.min(0).round(3).tolist(), 'hi': pts.max(0).round(3).tolist()})
+                tn = np.cross(b - a, c - a)
+                bt = tri_of_edge[bnd][sel]
+                nn = tn[bt].sum(0)
+                nn = nn / max(np.linalg.norm(nn), 1e-12)
+                an = loop_va[k] / max(np.linalg.norm(loop_va[k]), 1e-12)
+                ex.append({'an': an.round(4).tolist(), 'c': pts.mean(0).round(4).tolist(), 'n': nn.round(3).tolist(), 'ext': float(np.linalg.norm(pts.max(0) - pts.min(0))), 'area': float(loop_area[k]), 'edges': int(loop_n[k]), 'lo': pts.min(0).round(3).tolist(), 'hi': pts.max(0).round(3).tolist()})
             r['hole_ex'] = ex
-            r['hole_len'] = float(bl.sum())
+            r['hole_len'] = float(loop_area[big].sum())
         # T-junctions: boundary vertices lying inside another boundary edge
         if len(be) >= 2:
             p0, p1 = P[be[:, 0]], P[be[:, 1]]
@@ -222,6 +249,66 @@ def srt_keys(uk, T):
     return (t[:, 0] + t[:, 1] + t[:, 2]) ^ (t[:, 0] * t[:, 1] * t[:, 2])
 
 
+def seg_hit(o, d, L, tri):
+    """nearest hit distance of ray o + t d (t in [0, L]) against triangles tri (n,3,3), Moller-Trumbore; L if none"""
+    e1, e2 = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+    pv = np.cross(d, e2)
+    det = np.einsum('ij,ij->i', e1, pv)
+    ok = np.abs(det) > 1e-14
+    inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+    tv = o - tri[:, 0]
+    u = np.einsum('ij,ij->i', tv, pv) * inv
+    qv = np.cross(tv, e1)
+    v = (qv @ d) * inv
+    t = np.einsum('ij,ij->i', e2, qv) * inv
+    hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 0) & (t < L)
+    return float(t[hit].min()) if hit.any() else L
+
+
+EXPOSE_L = 0.3
+
+
+def exposure_pass(nodes, res):
+    """Mark hole loops that open to the room: the ray from the loop centre along the outward opening normal runs >= 0.3 m free."""
+    if not any(r['defects'].get('holes') for r in res):
+        return
+    lo = np.array([n[2].min(0) if len(n[2]) else np.zeros(3) for n in nodes])
+    hi = np.array([n[2].max(0) if len(n[2]) else np.zeros(3) for n in nodes])
+    for i, r in enumerate(res):
+        ex = r.get('hole_ex')
+        if not ex or not r['defects'].get('holes'):
+            continue
+        ctr = (lo[i] + hi[i]) / 2
+        nvis = 0
+        va = 0.0
+        for e in ex:
+            c = np.array(e['c']); an = np.array(e['an'])
+            if an @ (c - ctr) < 0:
+                an = -an
+            e['an'] = an.round(4).tolist()
+            o = c + an * 1e-3
+            a0, a1 = np.minimum(o, o + an * EXPOSE_L) - 2e-3, np.maximum(o, o + an * EXPOSE_L) + 2e-3
+            m = np.flatnonzero(((hi >= a0) & (lo <= a1)).all(axis=1))
+            free = EXPOSE_L
+            for j in m:
+                pos, idx = nodes[j][2], nodes[j][3]
+                if len(idx) == 0:
+                    continue
+                tri = pos[idx]
+                ok = ~((tri.max(1) < a0).any(1) | (tri.min(1) > a1).any(1)) if len(tri) > 64 else np.ones(len(tri), bool)
+                if ok.any():
+                    free = min(free, seg_hit(o, an, EXPOSE_L, tri[ok]))
+            e['free'] = free
+            e['exposed'] = bool(free >= EXPOSE_L - 1e-9)
+            if e['exposed']:
+                nvis += 1
+                va += e['area']
+        r['hole_exposed'] = nvis
+        r['hole_exposed_area'] = va
+        if nvis:
+            r['defects']['holes_open'] = nvis
+
+
 def run(path, top=15, quiet=False):
     nodes = load_glb(path)
     res = []
@@ -230,6 +317,7 @@ def run(path, top=15, quiet=False):
         r, k = check_node(name, cls, pos, idx)
         res.append(r)
         keysets.append(k)
+    exposure_pass(nodes, res)
     # cross-node duplicate triangles
     allk = [(i, k) for i, k in enumerate(keysets) if k is not None]
     if allk:
@@ -245,7 +333,7 @@ def run(path, top=15, quiet=False):
     return res
 
 
-CLASSES = ['holes', 'nonmanif', 'tjunc', 'degenerate', 'sliver', 'flipped', 'inconsistent', 'dupface', 'xdup', 'nan', 'empty']
+CLASSES = ['holes', 'holes_open', 'cracks', 'nonmanif', 'tjunc', 'degenerate', 'sliver', 'flipped', 'inconsistent', 'dupface', 'xdup', 'nan', 'empty']
 
 
 def main():

@@ -176,17 +176,19 @@ impl Mesh {
         // Full triangle soup: every triangle owns its 3 vertices. The exporter computes smooth-by-angle normals per vertex
         // (welding by position), so a vertex index shared by faces at a sharp corner would get the normal of whichever triangle was
         // processed last (dark / flipped-looking triangles on flat panels of indexed meshes such as the exact KitchenSpace slab).
-        let has_uv = self.uv.len() == self.pos.len();
-        let mut pos: Vec<V3> = Vec::with_capacity(self.faces.len() * 6);
+        let fixed = self.split_tjunctions();
+        let this = fixed.as_ref().unwrap_or(self);
+        let has_uv = this.uv.len() == this.pos.len();
+        let mut pos: Vec<V3> = Vec::with_capacity(this.faces.len() * 6);
         let mut uv: Vec<[f64; 2]> = vec![];
-        let mut tris = Vec::with_capacity(self.faces.len() * 2);
-        for f in &self.faces {
-            for [ia, ib, ic] in triangulate_face(&self.pos, f) {
+        let mut tris = Vec::with_capacity(this.faces.len() * 2);
+        for f in &this.faces {
+            for [ia, ib, ic] in triangulate_face(&this.pos, f) {
                 let n = pos.len() as u32;
                 for &i in &[ia, ib, ic] {
-                    pos.push(self.pos[i as usize]);
+                    pos.push(this.pos[i as usize]);
                     if has_uv {
-                        uv.push(self.uv[i as usize]);
+                        uv.push(this.uv[i as usize]);
                     }
                 }
                 tris.push([n, n + 1, n + 2]);
@@ -196,14 +198,136 @@ impl Mesh {
     }
 }
 
+impl Mesh {
+    /// Repair T-junctions: a vertex that lies on the interior of another face's boundary edge (within 0.1 mm; both ends welded on a
+    /// 10 um grid) is inserted into that edge, so booleans / sub-divided neighbours leave no hairline cracks. Only edges used by a single
+    /// face (open boundary) are examined. Returns None when nothing changes (no allocation on the common path).
+    pub fn split_tjunctions(&self) -> Option<Mesh> {
+        use crate::dhash::HashMap;
+        let key = |p: V3| ((p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64, (p[2] * 1e5).round() as i64);
+        let mut ids: HashMap<(i64, i64, i64), u32> = HashMap::default();
+        let mut wid = Vec::with_capacity(self.pos.len());
+        let mut rep: Vec<u32> = vec![]; // welded id -> first vertex index
+        for (i, p) in self.pos.iter().enumerate() {
+            let n = ids.len() as u32;
+            let w = *ids.entry(key(*p)).or_insert(n);
+            if w == n {
+                rep.push(i as u32);
+            }
+            wid.push(w);
+        }
+        let mut cnt: HashMap<(u32, u32), u32> = HashMap::default();
+        for f in &self.faces {
+            for k in 0..f.len() {
+                let (a, b) = (wid[f[k] as usize], wid[f[(k + 1) % f.len()] as usize]);
+                if a != b {
+                    *cnt.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut bedges: Vec<(u32, u32)> = cnt.iter().filter(|(_, &c)| c == 1).map(|(&e, _)| e).collect();
+        if bedges.len() < 2 {
+            return None;
+        }
+        bedges.sort_unstable();
+        let mut bv: Vec<u32> = bedges.iter().flat_map(|e| [e.0, e.1]).collect();
+        bv.sort_unstable();
+        bv.dedup();
+        const CELL: f64 = 0.05;
+        let cell = |p: V3| ((p[0] / CELL).floor() as i64, (p[1] / CELL).floor() as i64, (p[2] / CELL).floor() as i64);
+        let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::default();
+        for &w in &bv {
+            grid.entry(cell(self.pos[rep[w as usize] as usize])).or_default().push(w);
+        }
+        let mut ins: HashMap<(u32, u32), Vec<(f64, u32)>> = HashMap::default();
+        for &(a, b) in &bedges {
+            let (pa, pb) = (self.pos[rep[a as usize] as usize], self.pos[rep[b as usize] as usize]);
+            let d = sub(pb, pa);
+            let l2 = dot(d, d);
+            if l2 < 4e-8 {
+                continue;
+            }
+            let (lo, hi) = ([pa[0].min(pb[0]) - 1e-4, pa[1].min(pb[1]) - 1e-4, pa[2].min(pb[2]) - 1e-4], [pa[0].max(pb[0]) + 1e-4, pa[1].max(pb[1]) + 1e-4, pa[2].max(pb[2]) + 1e-4]);
+            let (c0, c1) = (cell(lo), cell(hi));
+            if (c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1) * (c1.2 - c0.2 + 1) > 20000 {
+                continue;
+            }
+            for cx in c0.0..=c1.0 {
+                for cy in c0.1..=c1.1 {
+                    for cz in c0.2..=c1.2 {
+                        let Some(vs) = grid.get(&(cx, cy, cz)) else { continue };
+                        for &w in vs {
+                            if w == a || w == b {
+                                continue;
+                            }
+                            let p = self.pos[rep[w as usize] as usize];
+                            let t = dot(sub(p, pa), d) / l2;
+                            let l = l2.sqrt();
+                            if t * l < 2e-5 || (1.0 - t) * l < 2e-5 || t <= 0.0 || t >= 1.0 {
+                                continue;
+                            }
+                            let q = [pa[0] + t * d[0], pa[1] + t * d[1], pa[2] + t * d[2]];
+                            let dd = sub(p, q);
+                            if dot(dd, dd) < 1e-8 {
+                                ins.entry((a, b)).or_default().push((t, rep[w as usize]));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if ins.is_empty() {
+            return None;
+        }
+        let mut m = self.clone();
+        for f in m.faces.iter_mut() {
+            let n = f.len();
+            let mut nf: Vec<u32> = Vec::with_capacity(n + 2);
+            let mut changed = false;
+            for k in 0..n {
+                let (u, v) = (f[k], f[(k + 1) % n]);
+                nf.push(u);
+                let (wu, wv) = (wid[u as usize], wid[v as usize]);
+                if wu == wv {
+                    continue;
+                }
+                if let Some(list) = ins.get(&(wu.min(wv), wu.max(wv))) {
+                    let mut l = list.clone();
+                    l.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+                    l.dedup_by(|x, y| wid[x.1 as usize] == wid[y.1 as usize]);
+                    if wu > wv {
+                        l.reverse();
+                    }
+                    nf.extend(l.iter().map(|x| x.1));
+                    changed = true;
+                }
+            }
+            if changed {
+                *f = nf;
+            }
+        }
+        Some(m)
+    }
+}
+
 /// Triangles of one polygon: a fan for triangles and convex polygons (unchanged output), ear clipping (projected onto the
 /// polygon's Newell plane) for non-convex ones, where a fan produces triangles outside the polygon (shards across sink basins).
 pub fn triangulate_face(pos: &[V3], f: &[u32]) -> Vec<[u32; 3]> {
     let n = f.len();
-    let fan = || (1..n - 1).map(|k| [f[0], f[k], f[k + 1]]).collect::<Vec<_>>();
+    let fan0 = || (1..n - 1).map(|k| [f[0], f[k], f[k + 1]]).collect::<Vec<_>>();
     if n <= 3 {
-        return fan();
+        return fan0();
     }
+    // fan from vertex 0 unless that makes a zero-area triangle (collinear vertices, e.g. T-junction repairs inserted on an edge): then the first apex
+    // whose fan has no sliver, so every vertex stays used by a real triangle and the edge it splits is not bridged by a long triangle
+    let fan = || {
+        let area2 = |a: u32, b: u32, c: u32| { let (pa, pb, pc) = (pos[a as usize], pos[b as usize], pos[c as usize]); let x = cross(sub(pb, pa), sub(pc, pa)); dot(x, x).sqrt() };
+        let ok = |a: usize| (1..n - 1).all(|k| area2(f[a], f[(a + k) % n], f[(a + k + 1) % n]) > 1e-12);
+        match (0..n).find(|&a| ok(a)) {
+            Some(a) if a != 0 => (1..n - 1).map(|k| [f[a], f[(a + k) % n], f[(a + k + 1) % n]]).collect::<Vec<_>>(),
+            _ => fan0(),
+        }
+    };
     let mut nrm = [0.0; 3];
     for i in 0..n {
         let (a, b) = (pos[f[i] as usize], pos[f[(i + 1) % n] as usize]);
@@ -231,7 +355,11 @@ pub fn triangulate_face(pos: &[V3], f: &[u32]) -> Vec<[u32; 3]> {
     let v = cross(nrm, u);
     let flat: Vec<f64> = f.iter().flat_map(|&i| { let p = pos[i as usize]; [dot(p, u), dot(p, v)] }).collect();
     match earcutr::earcut(&flat, &[], 2) {
-        Ok(t) if t.len() == 3 * (n - 2) => t
+        Ok(t) if t.len() == 3 * (n - 2) || (t.len() >= 3 && t.len() < 3 * (n - 2) && {
+            // earcut drops collinear / zero-area ears: accept when the triangles still cover the polygon (areas add up to the Newell area)
+            let tri_area: f64 = t.chunks(3).map(|c| { let x = cross(sub(pos[f[c[1]] as usize], pos[f[c[0]] as usize]), sub(pos[f[c[2]] as usize], pos[f[c[0]] as usize])); 0.5 * dot(x, x).sqrt() }).sum();
+            (tri_area - 0.5 * l).abs() <= 1e-7 * (0.5 * l).max(1e-12)
+        }) => t
             .chunks(3)
             .map(|c| {
                 let (a, b, cc) = (f[c[0]], f[c[1]], f[c[2]]);
