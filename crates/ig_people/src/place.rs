@@ -108,11 +108,13 @@ pub struct Ctx<'a> {
     pub visuals: Option<&'a std::collections::HashMap<String, ig_kit::api::Asset>>,
     pub floor_z: f64,
     pub wall_t: f64,
+    /// extra keep-out boxes (centre, half extents, yaw), e.g. the swept area of room doors; people stay clear of them
+    pub keepout: &'a [([f64; 3], [f64; 3], f64)],
 }
 
 /// Up to `n` people for the scene (0 -> empty). Deterministic per seed. Without visuals the solver placeholders are the colliders.
 pub fn place(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usize, seed: u64) -> Vec<Placement> {
-    place_ctx(state, room_polys, n, seed, &Ctx { visuals: None, floor_z: 0.135, wall_t: 0.27 })
+    place_ctx(state, room_polys, n, seed, &Ctx { visuals: None, floor_z: 0.135, wall_t: 0.27, keepout: &[] })
 }
 
 fn yaw_of(f: [f64; 2]) -> f64 {
@@ -338,6 +340,9 @@ impl Planner<'_> {
         let pen_wall = self.w.pen_wall(&wb, s.room);
         if pen_wall > tol {
             return self.no(7);
+        }
+        if !self.w.extra.is_empty() && pen_boxes(&wb, &self.w.extra) > 0.005 {
+            return self.no(12); // inside a door's swing area
         }
         let skip = match s.kind {
             SitUpright | SitRelaxed | SitBedEdge | LieBed | LieSofa => s.support,
@@ -630,7 +635,8 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
         return vec![];
     }
     let t0 = std::time::Instant::now();
-    let world = World::new(state, room_polys, ctx.visuals, ctx.floor_z, ctx.wall_t);
+    let mut world = World::new(state, room_polys, ctx.visuals, ctx.floor_z, ctx.wall_t);
+    world.extra = ctx.keepout.iter().map(|(c, h, yaw)| crate::pworld::WBox { c: *c, h: *h, yaw: *yaw }).collect();
     if world.rooms.is_empty() {
         return vec![];
     }

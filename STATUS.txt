@@ -1,3 +1,4 @@
-ragdoll2: tasks 1+2 numerically done: SitUpright tilt 0.03-0.09 rad (was 1.3-1.8 first try), pen<=0.007, no ejection (per-class ghosting: lower legs get own static copies).
-Now: commit, merge master (doors keepout), preview check dining/sofa sitters; then task 3 (cover/arms/lier), task 4 (--cloth-only).
-Blockers: none. ETA tasks 3-4 a few hours.
+Done: thin leaves + frame/casing + hinged swing + sweep collision + keep-outs + doorway sill fix; selfcheck rc=0; 8-scene report run.
+Current: BACKLOG D10 row, final commit, copy preview pngs out of tmp.
+Blockers: none (furniture never limited a door in tested scenes; wall limit seen; fake-obstacle test works).
+ETA: ~5 min.

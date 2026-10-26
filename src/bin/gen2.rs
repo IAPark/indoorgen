@@ -63,13 +63,27 @@ fn main() {
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
     let decos = infinigen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), infinigen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
-    for (s, rm) in g.shells.iter().zip(decos) {
+    // the doorway reveal (shell.rs `reveal`) has a bottom quad at floor height in the WALL material: it showed as a white strip across
+    // every doorway. Move those quads to the room's floor mesh so the floor runs continuously through the opening.
+    let floor_z0 = g.c.wall_thickness / 2.0;
+    let mut shells_fix: Vec<(infinigen::mesh::Mesh, infinigen::mesh::Mesh)> = vec![];
+    for s in g.shells.iter() {
+        let (mut wall, mut floor) = (s.wall.clone(), s.floor.clone());
+        let is_sill = |f: &Vec<u32>| f.iter().all(|&i| (s.wall.pos[i as usize][2] - floor_z0).abs() < 1e-9);
+        for f in s.wall.faces.iter().filter(|f| is_sill(f)) {
+            let pts: Vec<_> = f.iter().map(|&i| s.wall.pos[i as usize]).collect();
+            floor.add_face(&pts);
+        }
+        wall.faces.retain(|f| !is_sill(f));
+        shells_fix.push((wall, floor));
+    }
+    for ((s, rm), (swall, sfloor)) in g.shells.iter().zip(decos).zip(shells_fix) {
         use infinigen::materials::WallAlt;
         let (w, f, c) = (scene.material(rm.wall), scene.material(rm.floor), scene.material(rm.ceiling));
         let split = match rm.alt {
             WallAlt::None => None,
-            WallAlt::Half { frac } => Some(infinigen::rooms::walldeco::apply_half(&s.wall, g.c.wall_height, frac)),
-            WallAlt::Aligned => Some(infinigen::rooms::walldeco::apply_aligned(&s.wall)),
+            WallAlt::Half { frac } => Some(infinigen::rooms::walldeco::apply_half(&swall, g.c.wall_height, frac)),
+            WallAlt::Aligned => Some(infinigen::rooms::walldeco::apply_aligned(&swall)),
         };
         match (split, rm.alt_wall) {
             (Some((base, alt)), Some(am)) => {
@@ -77,9 +91,9 @@ fn main() {
                 scene.add(&format!("{}.wall", s.name), "room", base, w);
                 scene.add(&format!("{}.wall.alt", s.name), "room", alt, ai);
             }
-            _ => scene.add(&format!("{}.wall", s.name), "room", s.wall.clone(), w),
+            _ => scene.add(&format!("{}.wall", s.name), "room", swall.clone(), w),
         }
-        scene.add(&format!("{}.floor", s.name), "room", s.floor.clone(), f);
+        scene.add(&format!("{}.floor", s.name), "room", sfloor, f);
         scene.add(&format!("{}.ceiling", s.name), "room", s.ceiling.clone(), c);
     }
     let wt = g.c.wall_thickness;
@@ -128,15 +142,19 @@ fn main() {
     }
     // mess pass, part 1 (before openings, whose doors avoid the moved furniture): furniture states on the solved layout (no-op at --mess 0)
     infinigen::mess::states::apply(&mut g.state, &mess);
-    let mut opening_pieces = infinigen::openings::make_openings(&g.c, &g.cutters, seed);
+    let mut ops = infinigen::openings::make_openings(&g.c, &g.cutters, &g.room_polys, seed);
     if mess.on() {
-        // mess pass: room door open angles varied
-        let mut it: Vec<(&str, &mut infinigen::mesh::Mesh)> = opening_pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
-        let (n, tot) = infinigen::mess::doors::open_doors(&mut it, &g.cutters, g.c.door_width, g.c.door_size, g.c.wall_thickness, &g.state, &mess);
+        // mess pass: room door desired open angles varied (the opening pass limits them against furniture / walls below)
+        let mut ang: Vec<(usize, f64)> = ops.doors.iter().map(|d| (d.ci, d.desired)).collect();
+        let (n, tot) = infinigen::mess::doors::vary_angles(&mut ang, &mess);
+        for (d, (_, a)) in ops.doors.iter_mut().zip(&ang) {
+            d.desired = *a;
+        }
+        let mut it: Vec<(&str, &mut infinigen::mesh::Mesh)> = ops.pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
         let (cn, ctot) = infinigen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
         eprintln!("MESS doors changed {n} of {tot}; curtains changed {cn} of {ctot}");
     }
-    for p in opening_pieces {
+    for p in std::mem::take(&mut ops.pieces) {
         let m = scene.material(p.mat);
         scene.add(&p.name, &p.class, p.mesh, m);
     }
@@ -184,6 +202,16 @@ fn main() {
     };
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
     infinigen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
+    // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
+    infinigen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
+    let door_zones: Vec<([f64; 3], [f64; 3], f64)> = ops.doors.iter().flat_map(|d| d.zones(&g.cutters[d.ci], 0.08)).collect();
+    for d in std::mem::take(&mut ops.doors) {
+        let ct = g.cutters[d.ci].clone();
+        for p in d.world_pieces(&ct) {
+            let m = scene.material(p.mat);
+            scene.add(&p.name, &p.class, p.mesh, m);
+        }
+    }
     // python apply_cutter: the world-space cutter of each object is boolean-differenced from every part of its relation targets
     let mut cutters: std::collections::HashMap<String, Vec<infinigen::mesh::Mesh>> = Default::default();
     for (k, o) in &g.state.objs {
@@ -276,7 +304,7 @@ fn main() {
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = std::time::Instant::now();
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
-    let people = infinigen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &infinigen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness });
+    let people = infinigen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &infinigen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
     for (pi, pl) in people.iter().enumerate() {
         let mut a = pl.build();
         if a.parts.is_empty() && std::env::var_os("PEOPLE_PROXY").is_some() {
@@ -291,7 +319,13 @@ fn main() {
     }
     infinigen::people::cover::apply(&people, &mut scene, g.c.wall_thickness / 2.0);
     // the clutter pass keeps off the people (their occupied boxes, padded 4 cm)
-    let keepout: Vec<infinigen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
+    let mut keepout: Vec<infinigen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
+    // ... and off the swept area of the room doors
+    for (c, h, yaw) in &door_zones {
+        let mut m = Mesh::cuboid([-h[0], -h[1], -h[2]], [h[0], h[1], h[2]]);
+        m.transform(&Mat4::translation(*c).mul(&Mat4::rot_z(*yaw)));
+        keepout.push(m);
+    }
     // mess pass, part 2: clutter (no-op at --mess 0)
     infinigen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
     scene.write_glb(&out).unwrap();
