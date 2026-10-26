@@ -11,6 +11,7 @@ use std::collections::HashMap;
 pub struct Snapped {
     pub key: String,
     pub dz: f64,
+    pub removed: bool,
 }
 
 /// `max_drop`: largest correction accepted downwards (m); `max_lift`: upwards. Returns the applied corrections.
@@ -35,7 +36,7 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
     };
     // floor-standing objects (no object parent) whose lowest point is within 5 cm of the floor also get snapped down/up onto it
     let on_floor = |k: &String| -> bool {
-        !parent.contains_key(k) && visuals[k].parts.iter().any(|_| true) && {
+        visuals[k].parts.iter().any(|_| true) && {
             let m = mat_of(&state.objs[k].pose);
             let z = visuals[k].parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| m.apply(*q)[2])).fold(f64::MAX, f64::min);
             z > floor_z - 0.03 && z < floor_z + 0.05
@@ -64,6 +65,36 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
     let bb: Vec<_> = nodes.iter().map(|n| n.mesh.bounds()).collect();
     let mut bb = bb;
     let mut out = vec![];
+    let mut drop_keys: Vec<String> = vec![];
+    // move an object and everything related to it (its descendants keep their offset)
+    fn shift(state: &mut State, nodes: &mut [Node], bb: &mut [([f64; 3], [f64; 3])], of_key: &HashMap<String, Vec<usize>>, parent: &HashMap<String, String>, k: &str, dz: f64) {
+        let kids: Vec<String> = std::iter::once(k.to_string()).chain(parent.iter().filter(|(c, _)| is_desc(parent, c, k)).map(|(c, _)| c.clone())).collect();
+        for c in kids {
+            if let Some(o) = state.objs.get_mut(&c) {
+                let mut p = o.pose.clone();
+                p.t[2] += dz;
+                o.pose = p;
+            }
+            for &n in of_key.get(&c).into_iter().flatten() {
+                for v in nodes[n].mesh.pos.iter_mut() {
+                    v[2] += dz;
+                }
+                bb[n].0[2] += dz;
+                bb[n].1[2] += dz;
+            }
+        }
+    }
+    fn is_desc(parent: &HashMap<String, String>, c: &str, anc: &str) -> bool {
+        let mut x = c;
+        for _ in 0..8 {
+            match parent.get(x) {
+                Some(p) if p == anc => return true,
+                Some(p) => x = p,
+                None => return false,
+            }
+        }
+        false
+    }
     for k in order {
         if skip.contains(k) {
             continue;
@@ -101,18 +132,24 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
             cand.iter().any(|&n| (0..3).all(|d| q[d] > bb[n].0[d] && q[d] < bb[n].1[d]) && crate::qc::inside(&nodes[n].mesh, q))
         });
         let mut gap = f64::MAX;
-        let is_floor = floor_keys.contains(k);
-        if is_floor {
-            gap = lo[2] - floor_z;
-        }
-        for c in contacts.iter().filter(|_| !buried) {
-            if let Some((z, _, _)) = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.03]) {
-                gap = gap.min(c[2] - z);
+        let size_max = (0..3).map(|d| hi[d] - lo[d]).fold(0.0, f64::max);
+        let cls = &state.objs[k].generator.as_ref().unwrap().class;
+        // small tabletop-style items that end up with nothing plausible under them are removed
+        let removable = parent.contains_key(k) && size_max < 0.6 && !(cls.contains("Lamp") || cls.contains("Light") || cls.contains("Mirror"));
+        if !buried {
+            for c in &contacts {
+                let mut best = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.03]).map(|h| h.0);
+                // the floor is a support too for anything standing within a few cm of it
+                if c[2] - floor_z < 0.08 && c[2] - floor_z > -0.03 && best.map_or(true, |z| z < floor_z) {
+                    best = Some(floor_z);
+                }
+                if let Some(z) = best {
+                    gap = gap.min(c[2] - z);
+                }
             }
         }
-        if buried { gap = f64::MAX }
         if gap == f64::MAX {
-            // nothing below: the item may be buried under a shelf board (placeholder bottom below the visible board): lift onto the first
+            // nothing below (or buried in a shelf board / plinth: the placeholder bottom lies below the visible board): lift onto the first
             // surface above its contact points within 25 cm
             for c in &contacts {
                 if let Some((z, _, _)) = down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.25]) {
@@ -121,43 +158,38 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
                     }
                 }
             }
-            if gap < -0.25 { gap = f64::MAX }
-            if gap < 0.0 { gap = gap.max(-0.25); }
-            if gap < 0.0 {
-                let dz = -gap;
-                let o = state.objs.get_mut(k).unwrap();
-                let mut p = o.pose.clone();
-                p.t[2] += dz;
-                o.pose = p;
-                for &n in mine {
-                    for v in nodes[n].mesh.pos.iter_mut() { v[2] += dz; }
-                    bb[n].0[2] += dz;
-                    bb[n].1[2] += dz;
+            if gap < -0.25 || gap == f64::MAX || gap >= 0.0 {
+                if removable && !buried {
+                    drop_keys.push(k.clone());
                 }
-                out.push(Snapped { key: k.clone(), dz });
+                continue;
             }
+            let dz = -gap;
+            shift(state, &mut nodes, &mut bb, &of_key, &parent, k, dz);
+            out.push(Snapped { key: k.clone(), dz, removed: false });
             continue;
         }
         if gap.abs() < 1e-4 {
             continue;
         }
-        // accepted: a drop onto a surface within max_drop, or a lift out of a surface by at most max_lift
         let dz = -gap;
         if (dz < 0.0 && -dz > max_drop) || (dz > 0.0 && dz > max_lift) {
+            if removable && dz < 0.0 {
+                drop_keys.push(k.clone());
+            }
             continue;
         }
-        let o = state.objs.get_mut(k).unwrap();
-        let mut p = o.pose.clone();
-        p.t[2] += dz;
-        o.pose = p;
-        for &n in mine {
-            for v in nodes[n].mesh.pos.iter_mut() {
-                v[2] += dz;
+        shift(state, &mut nodes, &mut bb, &of_key, &parent, k, dz);
+        out.push(Snapped { key: k.clone(), dz, removed: false });
+    }
+    // remove the unsupported items and everything resting on them
+    for k in &drop_keys {
+        let all: Vec<String> = std::iter::once(k.clone()).chain(parent.keys().filter(|c| is_desc(&parent, c, k)).cloned()).collect();
+        for c in all {
+            if state.objs.shift_remove(&c).is_some() {
+                out.push(Snapped { key: c, dz: 0.0, removed: true });
             }
-            bb[n].0[2] += dz;
-            bb[n].1[2] += dz;
         }
-        out.push(Snapped { key: k.clone(), dz });
     }
     out
 }

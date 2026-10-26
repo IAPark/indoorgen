@@ -233,7 +233,7 @@ fn main() {
         let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
         if std::env::var_os("NO_SNAP").is_none() {
             let sn = indoorgen::snap::snap_children(&mut g.state, &visuals, &cut_keys, g.c.wall_thickness / 2.0, 0.30, 0.03);
-            if std::env::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm", s.key, s.dz * 1000.0); } }
+            if std::env::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm{}", s.key, s.dz * 1000.0, if s.removed { " REMOVED" } else { "" }); } }
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }
     }

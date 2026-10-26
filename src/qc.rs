@@ -255,6 +255,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
 
     // solver relations as plain data (State is not Sync): key -> (parent object keys, keys of objects that are related TO it)
     let parent_of: std::collections::HashMap<String, String> = inp.state.objs.iter().filter_map(|(k, s)| s.relations.iter().find(|r| inp.state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())).map(|r| (k.clone(), r.target.clone()))).collect();
+    let rels_of: std::collections::HashMap<String, Vec<String>> = inp.state.objs.iter().map(|(k, s)| (k.clone(), s.relations.iter().map(|r| format!("{}:{}>{}", r.target, r.child_plane, r.parent_plane)).collect())).collect();
     let children_of: std::collections::HashSet<(String, String)> = inp.state.objs.iter().flat_map(|(k, s)| s.relations.iter().map(move |r| (r.target.clone(), k.clone()))).collect();
     let (cut_keys, cutters, wall_t) = (inp.cut_keys, inp.cutters, inp.wall_t);
     let results: Vec<serde_json::Value> = (0..objs.len())
@@ -268,6 +269,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
             m.insert("key".into(), json!(o.key));
             m.insert("class".into(), json!(o.class));
             m.insert("room".into(), json!(room.map(|r| inner[r].0.clone())));
+            m.insert("rels".into(), json!(rels_of.get(&o.key)));
             m.insert("lo".into(), json!(o.lo));
             m.insert("hi".into(), json!(o.hi));
             if o.kind == Kind::Person {
@@ -324,7 +326,8 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     m.insert("support_tilt_deg".into(), json!((nrm[2].clamp(-1.0, 1.0).acos().to_degrees() * 10.0).round() / 10.0));
                 }
                 let cut = cut_keys.contains(&o.key);
-                if gap > 0.005 && (gap < 0.15 || (parent.is_some() && gap < 1.0)) {
+                let near_floor = o.lo[2] < wall_t / 2.0 + 0.06;
+                if gap > 0.005 && ((parent.is_some() && gap < 1.0) || (near_floor && gap < 0.15)) {
                     issues.push(format!("floating {:.1}mm", gap * 1000.0));
                 } else if gap < -0.005 && !cut {
                     issues.push(format!("sunk {:.1}mm", -gap * 1000.0));

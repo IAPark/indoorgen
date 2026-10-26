@@ -9,7 +9,7 @@ for f in sorted(glob.glob(os.path.join(d, '*.json'))):
     objs += j['objects']
     for k, v in j['counts'].items(): tot[k] += v
     for r in j['results']:
-        for i in r['issues']:
+        for i in r.get('issues', []):
             issues[i.split(' ')[0] + ' ' + (i.split(' ')[1] if i.split(' ')[0] in ('through','blocks','outside','resting') else '')].append((j['scene'], r['key'], r['class'], i))
     for s in j.get('door_swing_limited', []): tot['door_swing_limited'] += 1
 print(f"TOTAL objects={objs} defects={dict(tot)}")
