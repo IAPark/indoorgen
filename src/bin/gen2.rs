@@ -212,6 +212,39 @@ fn main() {
             scene.add(&p.name, &p.class, p.mesh, m);
         }
     }
+    // cut-in sinks: python places the basin flush with the countertop front, but cabinet doors sit recessed below the counter
+    // edge, so the basin stuck out past the cabinet fronts; move each sink back (towards the wall, sink local -x = tap side) so its
+    // front is >= 6 cm behind the countertop's front edge, limited by the room behind it
+    let sink_keys: Vec<String> = g.state.objs.iter().filter(|(k, _)| visuals.get(*k).map_or(false, |a| !a.cutters.is_empty())).map(|(k, _)| k.clone()).collect();
+    for k in sink_keys {
+        let o = &g.state.objs[&k];
+        let Some(rs) = o.relations.first() else { continue };
+        let (Some(t), Some(tv)) = (g.state.objs.get(&rs.target), visuals.get(&rs.target)) else { continue };
+        let mat_of = |p: &indoorgen::furn::geom::Pose| Mat4([
+            [p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]],
+            [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]],
+            [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        let (sm, tm) = (mat_of(&o.pose), mat_of(&t.pose));
+        let fdir = [o.pose.r[0][0], o.pose.r[1][0], o.pose.r[2][0]]; // sink local +x in world
+        let along = |p: V3| dot(p, fdir);
+        let sink_pts: Vec<f64> = visuals[&k].parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| along(sm.apply(*q)))).collect();
+        let counter_pts: Vec<f64> = tv.parts.iter().filter(|p| p.mat.name.starts_with("counter")).flat_map(|p| p.mesh.pos.iter().map(|q| along(tm.apply(*q)))).collect();
+        if sink_pts.is_empty() || counter_pts.is_empty() { continue }
+        let (s_back, s_front) = (sink_pts.iter().cloned().fold(f64::MAX, f64::min), sink_pts.iter().cloned().fold(f64::MIN, f64::max));
+        let (c_back, c_front) = (counter_pts.iter().cloned().fold(f64::MAX, f64::min), counter_pts.iter().cloned().fold(f64::MIN, f64::max));
+        let want = s_front - (c_front - 0.06);
+        let room = (s_back - c_back - 0.005).max(0.0);
+        let shift = want.min(room);
+        if shift > 1e-4 {
+            if std::env::var_os("CUTDBG").is_some() { eprintln!("SINKSHIFT {k} back {:.3} m (wanted {:.3}, room {:.3})", shift, want, room); }
+            let o = g.state.objs.get_mut(&k).unwrap();
+            let mut p = o.pose.clone();
+            for d in 0..3 { p.t[d] -= fdir[d] * shift; }
+            o.pose = p;
+        }
+    }
     // python apply_cutter: the world-space cutter of each object is boolean-differenced from every part of its relation targets
     let mut cutters: std::collections::HashMap<String, Vec<indoorgen::mesh::Mesh>> = Default::default();
     for (k, o) in &g.state.objs {
@@ -290,7 +323,18 @@ fn main() {
                 for c in cs {
                     let (mlo, mhi) = m.bounds();
                     let (clo, chi) = c.bounds();
-                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) {
+                    // only cut parts that have horizontal surfaces inside the cutter (countertop, cabinet top boards); door and
+                    // drawer fronts below the counter are vertical panels: cutting them exposed the basin from the front
+                    let horiz_area: f64 = m.faces.iter().map(|f| {
+                        let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
+                        let c: V3 = [0, 1, 2].map(|d| ps.iter().map(|p| p[d]).sum::<f64>() / ps.len() as f64);
+                        if !(0..3).all(|d| c[d] > clo[d] && c[d] < chi[d]) { return 0.0 }
+                        let mut nrm = [0.0; 3];
+                        for i in 0..ps.len() { let (a, b) = (ps[i], ps[(i + 1) % ps.len()]); nrm[0] += (a[1] - b[1]) * (a[2] + b[2]); nrm[1] += (a[2] - b[2]) * (a[0] + b[0]); nrm[2] += (a[0] - b[0]) * (a[1] + b[1]); }
+                        let area = 0.5 * dot(nrm, nrm).sqrt();
+                        if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 { area } else { 0.0 }
+                    }).sum();
+                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && horiz_area > 1e-3 {
                         let tb = std::time::Instant::now();
                         let nv0 = m.pos.len();
                         m = mesh_diff(&m, c);
