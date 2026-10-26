@@ -41,6 +41,24 @@ impl Wineglass {
 }
 
 impl Factory for Wineglass {
+    /// dense mode: outline of the revolved profile (the solidify shell only adds the wall thickness)
+    fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        let mut r = inst_rng(self.fs, i);
+        let z_bottom = self.z_length * r.log_uniform(0.01, 0.05);
+        let xs = [self.x_end, self.x_end / 2.0, self.x_neck, self.x_neck, self.x_mid, self.x_top];
+        let zs = [0.0, z_bottom / 2.0, z_bottom, self.z_cup, self.z_mid, self.z_length];
+        let anchors: Vec<[f64; 3]> = (0..6).map(|k| [xs[k], 0.0, zs[k]]).collect();
+        let m = spin_anchors(&anchors, &[0, 1, 2, 3]);
+        let (mut lo, mut hi) = m.bounds();
+        let t = self.thickness as f32 as f64;
+        lo[2] -= t;
+        let sc = self.scale as f32;
+        let f = |v: f64| (v as f32 * sc) as f64;
+        Some(([f(lo[0]), f(lo[1]), f(lo[2])], [f(hi[0]), f(hi[1]), f(hi[2])]))
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let z_bottom = self.z_length * r.log_uniform(0.01, 0.05);
@@ -65,4 +83,24 @@ impl Factory for Wineglass {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(Wineglass::new(fs)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn wineglass_hint_matches_asset() {
+        std::env::set_var("INFINIGEN_DENSE", "1");
+        let (mut worst, mut sum) = (0.0f64, 0.0);
+        for fs in 0..40u64 {
+            let j = Wineglass::new(fs);
+            let a = j.asset(3).bounds();
+            let (lo, hi) = j.bounds_hint(3).unwrap();
+            let e = (0..3).map(|k| (lo[k] - a.0[k]).abs().max((hi[k] - a.1[k]).abs())).fold(0.0, f64::max);
+            if e > 0.005 { eprintln!("fs {fs} err {e:.4} full {:?} {:?} hint {:?} {:?}", a.0, a.1, lo, hi); }
+            worst = worst.max(e);
+            sum += e;
+        }
+        eprintln!("wineglass hint: worst {worst:.4} mean {:.4}", sum / 40.0);
+    }
 }

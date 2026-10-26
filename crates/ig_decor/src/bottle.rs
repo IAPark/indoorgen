@@ -144,6 +144,20 @@ impl Bottle {
 }
 
 impl Factory for Bottle {
+    /// dense mode: outline from the revolved profile (no subsurf / solidify / label / cap meshes)
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        let anchors: Vec<[f64; 3]> = (0..self.x_anchors.len()).map(|k| [self.x_anchors[k] * self.x_length, 0.0, self.z_anchors[k] * self.z_length]).collect();
+        let m = spin_anchors(&anchors, &self.is_vector);
+        let (lo, hi) = m.bounds();
+        let w = self.bottle_width as f32 as f64;
+        let rx = hi[0].max(-lo[0]).max((self.x_cap + 0.1) * self.x_length);
+        let ry = hi[1].max(-lo[1]).max((self.x_cap + 0.1) * self.x_length);
+        let top = hi[2].max((1.0 + 0.01) * self.z_length);
+        Some(([-rx, -ry, lo[2] - w], [rx, ry, top]))
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         // --- bottle body
@@ -198,4 +212,24 @@ impl Factory for Bottle {
 
 pub fn make(_c: &str, _rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(Box::new(Bottle::new(fs)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bottle_hint_matches_asset() {
+        std::env::set_var("INFINIGEN_DENSE", "1");
+        let (mut worst, mut sum) = (0.0f64, 0.0);
+        for fs in 0..40u64 {
+            let j = Bottle::new(fs);
+            let a = j.asset(3).bounds();
+            let (lo, hi) = j.bounds_hint(3).unwrap();
+            let e = (0..3).map(|k| (lo[k] - a.0[k]).abs().max((hi[k] - a.1[k]).abs())).fold(0.0, f64::max);
+            if e > 0.005 { eprintln!("fs {fs} err {e:.4} full {:?} {:?} hint {:?} {:?}", a.0, a.1, lo, hi); }
+            worst = worst.max(e);
+            sum += e;
+        }
+        eprintln!("bottle hint: worst {worst:.4} mean {:.4}", sum / 40.0);
+    }
 }

@@ -957,3 +957,24 @@ pub fn make(c: &str, rng: &mut Rng, factory_seed: u64) -> Option<Box<dyn Factory
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod island_tests {
+    use super::*;
+    #[test]
+    fn island_cabinet_bounds_vs_dims() {
+        let t = std::time::Instant::now();
+        for seed in 0..40u64 {
+            let ks = KitchenSpace::new(&mut Rng::seeded(seed), true, seed);
+            let e = ks.bottom_cabinet();
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for v in &e.v {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(v[k] as f64);
+                    hi[k] = hi[k].max(v[k] as f64);
+                }
+            }
+        }
+        eprintln!("40 island cabinets {:?}", t.elapsed());
+    }
+}
