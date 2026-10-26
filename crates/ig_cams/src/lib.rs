@@ -188,9 +188,22 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
         let Ok(tm) = TriMesh::new(verts, idx) else { continue };
         let w = World { tm, ntri, floor, door, shell, owner, keys };
         let mut rng = Rng::seeded(ig_core::int_hash(&[&cfg.seed.to_string(), rname, "cams"]));
+        // seating/beds/TV stands have a back against a wall: never shoot them from behind
+        let backs: Vec<Option<[f64; 2]>> = cand.iter().map(|s| {
+            if s.group || s.person || !["Sofa", "ArmChair", "BedFactory", "TVStand"].iter().any(|k| s.key.contains(k)) { return None }
+            let z = s.lo[2] + 0.5 * (s.hi[2] - s.lo[2]);
+            let (cx, cy) = ((s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0);
+            let mut best: Option<(f64, [f64; 2])> = None;
+            for (d, o) in [([1.0, 0.0], s.hi[0] + 0.02), ([-1.0, 0.0], s.lo[0] - 0.02), ([0.0, 1.0], s.hi[1] + 0.02), ([0.0, -1.0], s.lo[1] - 0.02)] {
+                let org = if d[0] != 0.0 { [o, cy, z] } else { [cx, o, z] };
+                if let Some((t, _)) = w.cast(org, [d[0], d[1], 0.0], 0.6) { if best.map_or(true, |b| t < b.0) { best = Some((t, d)) } }
+            }
+            best.map(|b| b.1)
+        }).collect();
         let mut got: Vec<(V3, V3, String)> = vec![];
         let mut used = vec![0.0f64; cand.len()];
         let mut tries = 0;
+        let mut rej = [0u32; 24];
         let has_people = cand.iter().any(|s| s.person);
         // per camera: collect up to NV valid candidates, keep the best-scoring one (open view, subject visible, important subject)
         let mut best: Option<(f64, usize, V3, V3, f64, String)> = None;
@@ -227,14 +240,15 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             let hgt = s.hi[2] - s.lo[2];
             let cz_s = if s.person { s.lo[2] + 0.8 * hgt } else { s.lo[2] + (0.5 * hgt).min(0.9).max(0.3 * hgt) };
             let c = [sc[0], sc[1], cz_s];
-            let pos = if rng.f64() < 0.75 {
+            let pu = rng.f64();
+            let pos = if pu < 0.75 {
                 let a = rng.uniform(0.0, std::f64::consts::TAU);
-                let r = rng.uniform(1.0, 5.5);
+                let r = if pu < 0.35 { rng.uniform(0.7, 2.8) } else { rng.uniform(1.0, 5.5) };
                 [sc[0] + a.cos() * r, sc[1] + a.sin() * r]
             } else {
                 [rng.uniform(x0, x1), rng.uniform(y0, y1)]
             };
-            if !in_poly(pos, &poly) { continue }
+            if !in_poly(pos, &poly) { rej[0] += 1; continue }
             let eye = fz + rng.uniform(1.0, 1.75).min(cz - fz - 0.3);
             let o = [pos[0], pos[1], eye];
             // clearance: 8 horizontal rays at 3 heights, floor below must be floor/rug, nothing right above
@@ -242,18 +256,23 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             'cl: for hh in [fz + 0.3, fz + 0.8, eye] {
                 for k in 0..8 {
                     let a = k as f64 * std::f64::consts::FRAC_PI_4;
-                    if w.cast([pos[0], pos[1], hh], [a.cos(), a.sin(), 0.0], 0.3).is_some() { bad = true; break 'cl }
+                    if w.cast([pos[0], pos[1], hh], [a.cos(), a.sin(), 0.0], if cam_tries < 400 { 0.3 } else { 0.2 }).is_some() { bad = true; break 'cl }
                 }
             }
-            if bad { continue }
+            if bad { rej[1] += 1; continue }
             match w.cast(o, [0.0, 0.0, -1.0], eye - fz + 0.5) {
                 Some((_, ti)) if w.floor[ti] => {}
-                _ => continue,
+                _ => { rej[2] += 1; continue }
             }
-            if w.cast(o, [0.0, 0.0, 1.0], 0.3).is_some() { continue }
+            if w.cast(o, [0.0, 0.0, 1.0], 0.3).is_some() { rej[3] += 1; continue }
+            if let Some(bk) = backs[si] {
+                let (vx, vy) = (pos[0] - sc[0], pos[1] - sc[1]);
+                let vl = vx.hypot(vy).max(1e-9);
+                if (vx * bk[0] + vy * bk[1]) / vl > 0.3 { rej[12] += 1; continue }
+            }
             let dx = (s.lo[0] - pos[0]).max(0.0).max(pos[0] - s.hi[0]);
             let dy = (s.lo[1] - pos[1]).max(0.0).max(pos[1] - s.hi[1]);
-            if dx.hypot(dy) < if cam_tries < 400 { 1.1 } else { 0.6 } { continue }
+            if dx.hypot(dy) < if cam_tries < 400 { 1.1 } else { 0.6 } { rej[4] += 1; continue }
             let bearing = (c[1] - pos[1]).atan2(c[0] - pos[0]);
             let corners = [[s.lo[0], s.lo[1]], [s.hi[0], s.lo[1]], [s.hi[0], s.hi[1]], [s.lo[0], s.hi[1]]];
             let (mut amin, mut amax) = (f64::MAX, f64::MIN);
@@ -271,7 +290,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             let tan_h = 18.0 / lens;
             let tan_v = tan_h * 9.0 / 16.0;
             let real_frac = (span / 2.0).tan() / tan_h;
-            if !(0.2..=if s.group { 1.5 } else { 1.0 }).contains(&real_frac) { continue }
+            if !(0.2..=if s.group { 1.5 } else { 1.0 }).contains(&real_frac) { rej[5] += 1; continue }
             // rule of thirds
             let tx = rng.uniform(0.2, 0.45) * if rng.bool(0.5) { 1.0 } else { -1.0 };
             let ty = rng.uniform(-0.25, 0.2);
@@ -291,7 +310,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             };
             match proj(c) {
                 Some((px, py)) if px.abs() < 0.75 && py.abs() < 0.75 => {}
-                _ => continue,
+                _ => { rej[6] += 1; continue }
             }
             // coarse ray grid (stricter near-occluder test first, the spec's 0.6 m / 15% after 350 failed tries)
             let (near_d, near_f) = if cam_tries < 400 { (0.9, 0.08) } else { (0.6, 0.15) };
@@ -321,16 +340,16 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     }
                 }
             }
-            if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { continue }
+            if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { rej[7] += 1; continue }
             let strict = cam_tries < 400;
             let (furn_f, sa_f, doorf, blk_f, wall_f) = (furn as f64 / tot as f64, sa as f64 / tot as f64, doorc as f64 / tot as f64, blk as f64 / tot as f64, wallall as f64 / tot as f64);
-            if strict && (doorf > 0.03 || blk_f > 0.10 || wall_f > 0.45 || (sa_f > 0.5 && !s.person && !s.group) || furn_f < 0.12 || sa_f < if s.person { 0.015 } else { 0.04 } || mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { continue }
+            if strict && (doorf > 0.03 || blk_f > 0.10 || wall_f > 0.45 || (sa_f > 0.5 && !s.person && !s.group) || furn_f < 0.12 || sa_f < if s.person { 0.015 } else { 0.04 } || mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { rej[8] += 1; continue }
             // the subject box should be mostly inside the frame
             let inf = (0..8).filter(|k| {
                 let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
                 matches!(proj(q), Some((px, py)) if px.abs() < 1.02 && py.abs() < 1.02)
             }).count();
-            if strict && inf < 5 && !s.group { continue }
+            if strict && inf < 5 && !s.group { rej[9] += 1; continue }
             // subject visibility: 3x3x3 sample points
             let (mut vis, mut n) = (0, 0);
             for ix in 0..3 {
@@ -351,17 +370,18 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     }
                 }
             }
-            if (vis as f64) < 0.5 * n as f64 { continue }
+            if (vis as f64) < 0.5 * n as f64 { rej[10] += 1; continue }
             // spread
             if got.iter().any(|(p, ff, sk)| {
                 let dd = ((p[0] - o[0]).powi(2) + (p[1] - o[1]).powi(2)).sqrt();
                 let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
                 if strict { dd < 1.2 || (*sk == s.key && ang < 40.0) || ang < 20.0 } else { dd < 0.7 || ang < 10.0 }
-            }) { continue }
+            }) { rej[11] += 1; continue }
             let score = dsum / tot as f64 / 6.0 + 0.3 * inf as f64 / 8.0 - 0.5 * wall as f64 / tot as f64 - 6.0 * doorf - 3.0 * blk_f - 1.0 * (wall_f - 0.3).max(0.0) - 1.5 * (sa_f - 0.35).max(0.0) + 1.0 * (sa_f / 0.2).min(1.0) + 0.8 * (furn_f / 0.4).min(1.0) + if fg as f64 > 0.1 * tot as f64 && bg as f64 > 0.1 * tot as f64 { 0.3 } else { 0.0 } - 0.5 * mid as f64 / tot as f64 - if strict { 0.0 } else { 1.0 } + 0.8 * vis as f64 / n as f64 + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64();
             nvalid += 1;
             if best.as_ref().map_or(true, |b| score > b.0) { best = Some((score, si, o, f, lens, s.key.clone())) }
         }
+        if std::env::var("CAMDBG").is_ok() { eprintln!("CAMDBG {rname} got={} tries={tries} rej={:?}", got.len(), &rej[..13]); }
     }
     out
 }

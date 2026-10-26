@@ -1,4 +1,4 @@
-Done: v2 full-set sheets generated (tmp/v2, doors merged).
-Current: eyeballing 30 sheets for per-shot pass/fail.
+Done: v3 judged by eye: ~67/84 shots good (80%, 74% counting missing cams); found failure modes: sofa seen from behind, tiny bathrooms get <3 cams, foreground appliances.
+Current: fixing tiny-room sampling + back-of-seat rejection, then v4 full rerun.
 Blockers: none.
 ETA: ~45 min.
