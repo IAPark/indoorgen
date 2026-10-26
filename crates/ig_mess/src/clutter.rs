@@ -817,6 +817,16 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
                 let mut sim = pre.clone();
                 sim.pos = out;
                 draped = ig_shared::subsurf::subsurf(&sim, 1, false);
+                // the solver keeps a collision skin (~8 mm) above what the garment lies on (floor, rug, bed): close the gap
+                let mut gap = f64::MAX;
+                for q in draped.pos.iter().step_by(3) {
+                    if let Some(t) = world.ray([q[0], q[1], q[2] + 0.05], [0.0, 0.0, -1.0], 0.3) {
+                        gap = gap.min(q[2] - (q[2] + 0.05 - t));
+                    }
+                }
+                if gap > 0.001 && gap < 0.02 {
+                    for q in &mut draped.pos { q[2] -= gap - 0.001; }
+                }
             }
             let name = format!("{nm_base}#0");
             let faces = pre.faces.clone();

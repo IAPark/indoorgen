@@ -43,7 +43,8 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
         }
     };
     let floor_keys: Vec<String> = keys.iter().filter(|k| on_floor(k)).cloned().collect();
-    let mut order: Vec<&String> = keys.iter().filter(|k| parent.contains_key(*k) || floor_keys.contains(k)).collect();
+    let is_rug = |k: &String| state.objs[k].generator.as_ref().map_or(false, |g| g.class.contains("Rug"));
+    let mut order: Vec<&String> = keys.iter().filter(|k| parent.contains_key(*k) || floor_keys.contains(k) || is_rug(k)).collect();
     order.sort_by_key(|k| depth(k));
     if order.is_empty() {
         return vec![];
@@ -111,9 +112,13 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
             continue;
         }
         if state.objs[k].generator.as_ref().map_or(false, |g| g.class.contains("Rug")) {
-            // rugs lie on the floor
+            // rugs lie flat on the floor; a tilted rug (the solver sometimes leans one against a bed / wall) is removed
+            if hi[2] - lo[2] > 0.06 {
+                drop_keys.push(k.clone());
+                continue;
+            }
             let dz = floor_z - lo[2];
-            if dz.abs() > 1e-4 && dz.abs() < 0.2 {
+            if dz.abs() > 1e-4 && dz.abs() < 1.0 {
                 shift(state, &mut nodes, &mut bb, &of_key, &parent, k, dz);
                 out.push(Snapped { key: k.clone(), dz, removed: false });
             }
