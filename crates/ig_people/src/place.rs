@@ -326,6 +326,23 @@ impl Planner<'_> {
             }
         }
         let pose = pose_mat(origin, z, yaw);
+        if s.kind == Crouch && (self.w.rooms[s.room].ty == "bathroom" || self.w.objs.iter().any(|o| o.class.contains("Toilet") && (o.lo[0] - 1.2..o.hi[0] + 1.2).contains(&origin[0]) && (o.lo[1] - 1.2..o.hi[1] + 1.2).contains(&origin[1]))) {
+            return self.no(13); // no crouching next to toilets
+        }
+        if s.kind == Reach {
+            // a real target at hand height: the support's surface within 15 cm of the raised hand, and the support tall enough to hold it
+            let (Some(h), Some(si)) = (pi.hands, s.support) else { return self.no(14) };
+            let ob = &self.w.objs[si];
+            let hw = h.map(|q| pose.apply(q));
+            let hz = hw[0][2].max(hw[1][2]);
+            if ob.hi[2] < hz - 0.25 || ob.hi[2] - fl < 1.4 {
+                return self.no(14);
+            }
+            let near = |q: V3| ob.tris.iter().filter(|t| (0..3).all(|k| q[k] > t[0][k].min(t[1][k]).min(t[2][k]) - 0.2 && q[k] < t[0][k].max(t[1][k]).max(t[2][k]) + 0.2)).any(|t| crate::audit::pt_tri_dist(q, t) < 0.15);
+            if !(near(hw[0]) || near(hw[1])) {
+                return self.no(14);
+            }
+        }
         let asset = crate::build_person_seat(avatar, s.kind, seed, seat_z);
         let boxes = body_slabs(&asset, &pi);
         let wb = world_boxes(&boxes, &pose);
@@ -375,6 +392,15 @@ impl Planner<'_> {
         let info = PlaceInfo { room: room.name.clone(), support: s.support.map(|i| self.w.objs[i].key.clone()), pen_furn, pen_wall, pen_people, feet_err, seat_gap, hand_err };
         let sink = if s.soft { 0.04 } else { 0.0 };
         Some(Placement { avatar, kind: s.kind, pose, seed, boxes, info, seat_z, sink: if matches!(s.kind, LieBed | LieSofa) { 0.02 } else { sink }, cover, support_top: top, settled: None, pillow_moves: vec![] })
+    }
+}
+
+/// most people placed in one room of this type
+fn room_cap(ty: &str) -> usize {
+    match ty {
+        "bathroom" => 1,
+        "bedroom" | "kitchen" => 2,
+        _ => 4,
     }
 }
 
@@ -497,6 +523,7 @@ fn make_slots(w: &World, rng: &mut Rng) -> Vec<Slot> {
                     "dining-room" => 3.0,
                     "living-room" => 1.0,
                     "kitchen" => 0.6,
+                    "bedroom" => 1.6, // desk / armchair seats: the bedroom pose mix must not be all LieBed
                     _ => 0.8,
                 };
                 out.push(Slot { kind, room, anchor: [a[0], a[1]], face: front, support: Some(oi), top: seat.top, w: base, depth: seat.x1 - seat.x0, soft: !is_chair, has_back: seat.has_back, group: oi });
@@ -520,7 +547,7 @@ fn make_slots(w: &World, rng: &mut Rng) -> Vec<Slot> {
             for i in 0..nl {
                 let ly = if nl == 1 { 0.0 } else if i == 0 { -0.36 } else { 0.36 };
                 let a = o.w([llo[0] + 1.15, ly, 0.0]);
-                out.push(Slot { kind: LieBed, room, anchor: [a[0], a[1]], face: head_dir, support: Some(oi), top, w: if nl == 1 { 1.3 } else { 0.9 }, depth: 0.0, soft: true, has_back: false, group: oi });
+                out.push(Slot { kind: LieBed, room, anchor: [a[0], a[1]], face: head_dir, support: Some(oi), top, w: if nl == 1 { 0.45 } else { 0.3 }, depth: 0.0, soft: true, has_back: false, group: oi });
             }
             // sitting on the bed edge, both sides
             for sgn in [-1.0, 1.0] {
@@ -536,7 +563,7 @@ fn make_slots(w: &World, rng: &mut Rng) -> Vec<Slot> {
                 let a = o.w([lx, y - sgn * 0.12, 0.0]);
                 let face = norm([side[0] * sgn, side[1] * sgn]);
                 if top - fl <= 0.66 {
-                    out.push(Slot { kind: SitBedEdge, room, anchor: [a[0], a[1]], face, support: Some(oi), top, w: 0.8, depth: 0.0, soft: true, has_back: false, group: oi });
+                    out.push(Slot { kind: SitBedEdge, room, anchor: [a[0], a[1]], face, support: Some(oi), top, w: 1.4, depth: 0.0, soft: true, has_back: false, group: oi });
                 }
             }
             continue;
@@ -622,6 +649,18 @@ fn make_slots(w: &World, rng: &mut Rng) -> Vec<Slot> {
                 let a = rng.uniform(0.0, std::f64::consts::TAU);
                 [a.cos(), a.sin()]
             };
+            // never stand facing a blank wall: the view must be open (>= 1.6 m to the wall) or end at a piece of furniture; else turn to the room centre
+            let look = {
+                let f = norm(look);
+                let wall = ray_poly([x, y], f, &r.poly);
+                let furn = w.objs.iter().filter(|o| o.room == ri && o.hi[2] - fl > 0.4 && !o.class.contains("Light")).filter_map(|o| ray_aabb([x, y], f, [o.lo[0] - 0.1, o.lo[1] - 0.1], [o.hi[0] + 0.1, o.hi[1] + 0.1])).fold(f64::MAX, f64::min);
+                if wall >= 1.6 || furn < wall - 0.05 {
+                    f
+                } else {
+                    let cf = norm([0.5 * (r.bbox[0] + r.bbox[2]) - x, 0.5 * (r.bbox[1] + r.bbox[3]) - y]);
+                    if ray_poly([x, y], cf, &r.poly) >= 1.6 { cf } else { continue }
+                }
+            };
             let kind = if rng.f64() < 0.65 { Stand } else { Walk };
             out.push(Slot { kind, room: ri, anchor: [x, y], face: norm(look), support: None, top: fl, w: rw / nsamp as f64 * 2.0, depth: 0.0, soft: false, has_back: false, group: usize::MAX });
         }
@@ -664,11 +703,18 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
         let mut ws: Vec<f64> = Vec::with_capacity(slots.len());
         for s in &slots {
             let mut wgt = s.w;
+            // people per room by type: bathrooms hold at most one, bedrooms two
+            let in_room = pl.placed_slot.iter().filter(|q| q.room == s.room).count();
+            if in_room >= room_cap(&world.rooms[s.room].ty) {
+                ws.push(0.0);
+                continue;
+            }
             for ps in pl.placed_slot.iter() {
                 let same_room = ps.room == s.room;
                 wgt *= if same_room { 2.2 } else { 0.5 };
                 if ps.kind == s.kind {
-                    wgt *= 0.7;
+                    // never two identical poses in one room (people may share a table / sofa)
+                    wgt *= if same_room && !matches!(s.kind, PoseKind::SitUpright | PoseKind::SitRelaxed) { 0.0 } else { 0.7 };
                 }
                 let sitting = |k: PoseKind| matches!(k, PoseKind::SitUpright | PoseKind::SitRelaxed);
                 if same_room && sitting(s.kind) && sitting(ps.kind) {
@@ -724,6 +770,18 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
                 ragdoll_person(&world, p);
             }
         }
+        // settled bodies must not overlap each other (limbs moved): the later person is dropped
+        let nb: Vec<Vec<WBox>> = pl_placed.iter().map(|p| p.world_boxes()).collect();
+        let mut keep = vec![true; pl_placed.len()];
+        for j in 1..pl_placed.len() {
+            for i in 0..j {
+                if keep[i] && pen_boxes(&nb[i], &nb[j]) > 0.02 {
+                    keep[j] = false;
+                }
+            }
+        }
+        let mut ki = keep.iter();
+        pl_placed.retain(|_| *ki.next().unwrap());
         pl.placed = pl_placed;
         if dbg {
             eprintln!("PEOPLE ragdoll pass {:?}", tr.elapsed());

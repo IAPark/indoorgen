@@ -168,6 +168,48 @@ pub fn edge_dist(p: [f64; 2], poly: &[[f64; 2]]) -> f64 {
     (0..n).map(|i| seg_dist(p, poly[i], poly[(i + 1) % n])).fold(f64::MAX, f64::min)
 }
 
+/// distance along the ray (origin o, unit dir d) to the first crossing of the polygon boundary
+pub fn ray_poly(o: [f64; 2], d: [f64; 2], poly: &[[f64; 2]]) -> f64 {
+    let mut best = f64::MAX;
+    let n = poly.len();
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        let e = [b[0] - a[0], b[1] - a[1]];
+        let den = d[0] * e[1] - d[1] * e[0];
+        if den.abs() < 1e-12 {
+            continue;
+        }
+        let ao = [a[0] - o[0], a[1] - o[1]];
+        let t = (ao[0] * e[1] - ao[1] * e[0]) / den;
+        let u = (ao[0] * d[1] - ao[1] * d[0]) / den;
+        if t > 0.0 && (0.0..=1.0).contains(&u) {
+            best = best.min(t);
+        }
+    }
+    best
+}
+
+/// distance along the ray to a 2D AABB (slab test), None when missed
+pub fn ray_aabb(o: [f64; 2], d: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<f64> {
+    let (mut t0, mut t1) = (0.0f64, f64::MAX);
+    for k in 0..2 {
+        if d[k].abs() < 1e-12 {
+            if o[k] < lo[k] || o[k] > hi[k] {
+                return None;
+            }
+        } else {
+            let (a, b) = ((lo[k] - o[k]) / d[k], (hi[k] - o[k]) / d[k]);
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+        }
+    }
+    if t0 <= t1 {
+        Some(t0)
+    } else {
+        None
+    }
+}
+
 /// signed distance to the polygon boundary: > 0 inside
 pub fn inside_dist(p: [f64; 2], poly: &[[f64; 2]]) -> f64 {
     let d = edge_dist(p, poly);

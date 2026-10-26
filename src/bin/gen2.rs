@@ -415,6 +415,7 @@ fn main() {
         }
     }
     indoorgen::people::cover::apply(&people, &mut scene, g.c.wall_thickness / 2.0);
+    if !people.is_empty() { indoorgen::people::pillows::settle(&people, &mut scene, g.c.wall_thickness / 2.0); }
     // the clutter pass keeps off the people (their occupied boxes, padded 4 cm)
     let mut keepout: Vec<indoorgen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
     // ... and off the swept area of the room doors
@@ -435,7 +436,14 @@ fn main() {
     }
     if let Some(qp) = &qc_out {
         let label = format!("{}_{}_p{}_m{}", seed, args.get(2).map(|s| s.as_str()).unwrap_or("all"), people_n, mess_level);
-        indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(qp), &label);
+        let mut rep = indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(qp), &label);
+        // people / pillow plausibility audit, merged into the report
+        let pw = indoorgen::people::pworld::World::new(&g.state, &g.room_polys, Some(&visuals), g.c.wall_thickness / 2.0, g.c.wall_thickness);
+        let pa = indoorgen::people::audit::audit(&pw, &people, &scene);
+        for i in pa["issues"].as_array().into_iter().flatten() { eprintln!("QCP {label} {}", i.as_str().unwrap_or("")); }
+        eprintln!("QCP {label} people={} kinds={} issues={}", pa["n"], pa["kinds"], pa["issues"].as_array().map_or(0, |a| a.len()));
+        rep["people"] = pa;
+        std::fs::write(qp, serde_json::to_vec_pretty(&rep).unwrap()).unwrap();
     }
     if no_glb { return; }
     scene.write_glb(&out).unwrap();

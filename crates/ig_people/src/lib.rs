@@ -11,6 +11,8 @@ pub mod place;
 pub mod pworld;
 pub mod ragdoll;
 pub mod cover;
+pub mod audit;
+pub mod pillows;
 
 pub use ig_core::*;
 pub use ig_core::mesh::V3;
