@@ -11,6 +11,7 @@ rayon = { workspace = true }
 parry3d-f64 = { workspace = true }
 ig_core = { path = "../ig_core" }
 ig_kit = { path = "../ig_kit" }
+ig_shared = { path = "../ig_shared" }
 ig_furn = { path = "../ig_furn" }
 ig_rooms = { path = "../ig_rooms" }
 russimp = { version = "3.2.1", default-features = false }

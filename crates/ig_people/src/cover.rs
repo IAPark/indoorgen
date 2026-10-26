@@ -286,23 +286,101 @@ fn under_cover(pi: usize, pl: &Placement, scene: &mut Scene) {
         let b = &mut scene.cloth[ji]["build"];
         b["x"] = json!(x_new);
         b["dz"] = json!(dz);
-        // default mesh: shift the sheet like the build, then lift it over the body
-        let t = Mat4::translation([ax[0] * dx, ax[1] * dx, 0.0]);
-        let mut hf = Hf::new([lm.pelvis[0] - 1.6, lm.pelvis[1] - 1.6], [lm.pelvis[0] + 1.6, lm.pelvis[1] + 1.6], 0.03);
-        for tr in &btris {
-            if (tr[0][0] - bm[0][3]) * ax[0] + (tr[0][1] - bm[1][3]) * ax[1] > xe {
-                hf.tri(tr);
+        // default mesh: shift the sheet like the build, then let it fall onto the person (Rust cloth sim)
+        // the sim starts the cloth flat above the whole body (highest point beyond the cover edge) and lets it fall
+        let ztop = zs.last().copied().unwrap_or(mattress_top);
+        let sim_dz = dz.max(ztop + env_f("COVER_START", 0.06) - mattress_top);
+        let shift = [ax[0] * dx, ax[1] * dx, sim_dz];
+        if !sim_job_mesh(scene, ji, shift) {
+            // fallback: height-field lift
+            let t = Mat4::translation([ax[0] * dx, ax[1] * dx, 0.0]);
+            let mut hf = Hf::new([lm.pelvis[0] - 1.6, lm.pelvis[1] - 1.6], [lm.pelvis[0] + 1.6, lm.pelvis[1] + 1.6], 0.03);
+            for tr in &btris {
+                if (tr[0][0] - bm[0][3]) * ax[0] + (tr[0][1] - bm[1][3]) * ax[1] > xe {
+                    hf.tri(tr);
+                }
             }
-        }
-        hf.drape(1.2);
-        if let Some(n) = scene.nodes.iter_mut().find(|n| n.name == target) {
-            n.mesh.transform(&t);
-            for q in n.mesh.pos.iter_mut() {
-                if let Some(z) = hf.at(q[0], q[1]) {
-                    q[2] = q[2].max(z + 0.02);
+            hf.drape(1.2);
+            if let Some(n) = scene.nodes.iter_mut().find(|n| n.name == target) {
+                n.mesh.transform(&t);
+                for q in n.mesh.pos.iter_mut() {
+                    if let Some(z) = hf.at(q[0], q[1]) {
+                        q[2] = q[2].max(z + 0.02);
+                    }
                 }
             }
         }
+    }
+    // the later cover jobs (runner over the comforter) are dropped again onto the new surfaces, person included
+    for &ji in jobs.iter().skip(1) {
+        let _ = sim_job_mesh(scene, ji, [0.0, 0.0, 0.0]);
+    }
+}
+
+/// Re-simulate the default mesh of cloth job `ji` (job verts in the job's object frame, `shift` in world) with the Rust cloth solver
+/// against the job's collider nodes (bed, person, earlier covers) and replace the target node's mesh. false when impossible.
+fn sim_job_mesh(scene: &mut Scene, ji: usize, shift: V3) -> bool {
+    if std::env::var_os("COVER_HF").is_some() {
+        return false;
+    }
+    let job = &scene.cloth[ji];
+    let Some(target) = job["target"].as_str().map(|s| s.to_string()) else { return false };
+    let (Some(vs), Some(fs)) = (job["verts"].as_array(), job["faces"].as_array()) else { return false };
+    let mut pos: Vec<V3> = vec![];
+    for v in vs {
+        let Some(a) = v.as_array() else { return false };
+        let q = [a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0), a[2].as_f64().unwrap_or(0.0)];
+        pos.push([q[0] + shift[0], q[1] + shift[1], q[2] + shift[2]]); // job verts are world coordinates
+    }
+    let faces: Vec<Vec<u32>> = fs.iter().map(|f| f.as_array().map(|a| a.iter().map(|x| x.as_u64().unwrap_or(0) as u32).collect()).unwrap_or_default()).collect();
+    let names: Vec<String> = job["collide"].as_array().map(|c| c.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
+    let kw = job["kwargs"].clone();
+    let end_frame = job["end_frame"].as_u64().unwrap_or(50) as u32;
+    let mut cpos: Vec<V3> = vec![];
+    let mut cfaces: Vec<Vec<u32>> = vec![];
+    for nm in names.iter().filter(|n| **n != target) {
+        if let Some(n) = scene.nodes.iter().find(|n| &n.name == nm) {
+            if std::env::var_os("COVER_DBG").is_some() {
+                let mut vol = 0.0;
+                for t in n.mesh.triangles() {
+                    let (a, b, c) = (n.mesh.pos[t[0] as usize], n.mesh.pos[t[1] as usize], n.mesh.pos[t[2] as usize]);
+                    vol += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0;
+                }
+                let (lo, hi) = n.mesh.bounds();
+                eprintln!("  collider {nm} signed volume {vol:.4} bounds {:?} {:?}", lo, hi);
+            }
+            let o = cpos.len() as u32;
+            cpos.extend_from_slice(&n.mesh.pos);
+            cfaces.extend(n.mesh.faces.iter().map(|f| f.iter().map(|i| i + o).collect::<Vec<u32>>()));
+        }
+    }
+    let col = ig_kit::cloth::Collider::new(&cpos, &cfaces);
+    let mut cp = ig_kit::cloth::ClothParams::default();
+    cp.mass = kw["mass"].as_f64().unwrap_or(0.05);
+    cp.tension = kw["tension_stiffness"].as_f64().unwrap_or(2.0);
+    cp.distance_min = kw["distance_min"].as_f64().unwrap_or(5e-3);
+    cp.end_frame = end_frame;
+    let mut cal = ig_kit::cloth::Calib::default();
+    if kw["use_pressure"].as_bool().unwrap_or(false) {
+        cp.use_pressure = true;
+        cp.pressure = kw["uniform_pressure_force"].as_f64().unwrap_or(0.0);
+        cal.press_scale *= 0.85;
+    }
+    let out = ig_kit::cloth::simulate(&pos, &faces, &cp, &[&col], &cal);
+    if std::env::var_os("COVER_DBG").is_some() {
+        let zr = |p: &[V3]| (p.iter().map(|q| q[2]).fold(f64::MAX, f64::min), p.iter().map(|q| q[2]).fold(f64::MIN, f64::max));
+        eprintln!("SIMJOB {target} verts {} colliders {:?} tris {} z before {:?} after {:?} pressure {}", pos.len(), names, cfaces.len(), zr(&pos), zr(&out), cp.use_pressure);
+    }
+    let mut sim = Mesh::new();
+    sim.pos = out;
+    sim.faces = faces;
+    let sm = ig_shared::subsurf::subsurf(&sim, job["subsurf"].as_u64().unwrap_or(2) as usize, false);
+    match scene.nodes.iter_mut().find(|n| n.name == target) {
+        Some(n) => {
+            n.mesh = sm;
+            true
+        }
+        None => false,
     }
 }
 
@@ -376,6 +454,28 @@ fn throw_blanket(pi: usize, pl: &Placement, scene: &mut Scene, floor_z: f64) {
     for q in draped.pos.iter_mut() {
         let base = hf.at(q[0], q[1]).unwrap_or(floor_z);
         q[2] = base.max(floor_z) + 0.012;
+    }
+    if std::env::var_os("THROW_HF").is_none() {
+        // cloth sim (Rust XPBD-like solver) of the blanket falling onto the person and the furniture around: soft folds instead of height-field spikes
+        let mut cpos: Vec<V3> = vec![];
+        let mut cfaces: Vec<Vec<u32>> = vec![];
+        for nm in body_nodes(pi, pl).iter().chain(collide.iter()) {
+            if let Some(n) = scene.nodes.iter().find(|n| &n.name == nm) {
+                let o = cpos.len() as u32;
+                cpos.extend_from_slice(&n.mesh.pos);
+                cfaces.extend(n.mesh.faces.iter().map(|f| f.iter().map(|i| i + o).collect::<Vec<u32>>()));
+            }
+        }
+        let col = ig_kit::cloth::Collider::new(&cpos, &cfaces);
+        let mut cp = ig_kit::cloth::ClothParams::default();
+        cp.mass = 0.05;
+        cp.tension = 2.0;
+        cp.distance_min = 5e-3;
+        cp.end_frame = 80;
+        let out = ig_kit::cloth::simulate(&pre.pos, &pre.faces, &cp, &[&col], &ig_kit::cloth::Calib::default());
+        let mut sim = pre.clone();
+        sim.pos = out;
+        draped = ig_shared::subsurf::subsurf(&sim, 2, false);
     }
     // person parts first so that they are never cut by the limit below, then furniture
     let mut cl: Vec<String> = body_nodes(pi, pl);
