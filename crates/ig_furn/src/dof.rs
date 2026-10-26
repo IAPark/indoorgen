@@ -232,7 +232,8 @@ pub fn set_counter_over_windows(on: bool) { COUNTER_OVER_WINDOWS.with(|c| c.set(
 
 fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     let nc = no_collision_tag();
-    let skip_win = COUNTER_OVER_WINDOWS.with(|c| c.get()) && state.objs[name].generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory");
+    let skip_win = COUNTER_OVER_WINDOWS.with(|c| c.get()) && state.objs[name].generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")
+        && !state.objs.iter().any(|(k, o)| k.as_str() != name && o.generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory"));
     let win = Tag::sem("Window");
     let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc) && !(skip_win && o.tags.contains(win.clone()))).map(|(k, _)| k).collect();
     if others.is_empty() {
@@ -536,7 +537,9 @@ thread_local! { static PLACE_TRIES: std::cell::Cell<usize> = std::cell::Cell::ne
 pub fn set_place_tries(n: usize) { PLACE_TRIES.with(|c| c.set(n)); }
 
 pub fn try_apply_relation_constraints(state: &mut State, name: &str, rng: &mut Rng) -> bool {
-    for _ in 0..PLACE_TRIES.with(|c| c.get()) {
+    let big = state.objs[name].generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenIslandFactory" | "BedFactory"));
+    let tries = if big { PLACE_TRIES.with(|c| c.get()) } else { 10 };
+    for _ in 0..tries {
         let Some(parents) = apply_relations_surfacesample(state, name, rng) else {
             if std::env::var("DBG2").is_ok() { eprintln!("  [{name}] apply failed (init invalid)"); }
             return false;

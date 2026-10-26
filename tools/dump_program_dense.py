@@ -87,12 +87,12 @@ def extras(cons):
     # ---- kitchen (replaces "kitchen_counters"): 2-3 wall counter runs; cabinets
     wallcounter = furniture[Semantics.KitchenCounter][shelves.KitchenSpaceFactory].related_to(rooms, cu.against_wall)
     island = furniture[Semantics.KitchenCounter][shelves.KitchenIslandFactory]
-    C["kitchen_counters"] = kitchens.all(lambda r: (wallcounter.related_to(r).count().in_range(2, 3)
+    C["kitchen_counters"] = kitchens.all(lambda r: (wallcounter.related_to(r).count().in_range(1, 3)
                                                     * island.related_to(r).count().in_range(0, 1)))
-    C["kitchen_dense"] = kitchens.all(lambda r: wallfurn[shelves.KitchenCabinetFactory].related_to(r).count().in_range(1, 3))
+    C["kitchen_dense"] = kitchens.all(lambda r: wallfurn[shelves.KitchenCabinetFactory].related_to(r).count().in_range(0, 2))
 
     # ---- dining room: sideboard/cabinets on free walls
-    C["diningroom_dense"] = diningrooms.all(lambda r: storage_freestanding.related_to(r).count().in_range(1, 4))
+    C["diningroom_dense"] = diningrooms.all(lambda r: storage_freestanding.related_to(r).count().in_range(2, 4))
     # ---- bathroom: storage
     C["bathroom_dense"] = bathrooms.all(lambda r: storage_freestanding.related_to(r).count().in_range(1, 2))
 
