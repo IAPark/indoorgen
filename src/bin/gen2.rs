@@ -7,7 +7,28 @@ use indoorgen::furn::assets::TableAssets;
 use indoorgen::mesh::*;
 use indoorgen::pipeline::*;
 
+/// Load KEY=VALUE lines from `.indoorgen.env` (repo root, then the current directory) into the environment, without overriding
+/// variables that are already set; `$HOME` / `~` are expanded. tools/env.sh reads the same file for the shell tools.
+fn load_local_env() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    for p in [std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".indoorgen.env"), std::path::PathBuf::from(".indoorgen.env")] {
+        let Ok(txt) = std::fs::read_to_string(&p) else { continue };
+        for line in txt.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') { continue }
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let (k, v) = (k.trim().trim_start_matches("export ").trim(), v.trim().trim_matches('"'));
+            if std::env::var_os(k).is_none() {
+                let v = v.replace("$HOME", &home).replace("${HOME}", &home);
+                let v = if let Some(r) = v.strip_prefix("~/") { format!("{home}/{r}") } else { v };
+                std::env::set_var(k, v);
+            }
+        }
+    }
+}
+
 fn main() {
+    load_local_env();
     let mut args: Vec<String> = std::env::args().collect();
     // cloth that is exported as a sidecar job is re-simulated in Blender at render time: skip the Rust sim unless --rust-cloth
     if let Some(i) = args.iter().position(|a| a == "--rust-cloth") {
@@ -41,6 +62,9 @@ fn main() {
     };
     let qc_out: Option<String> = args.iter().position(|a| a == "--qc").map(|i| { let v = args[i + 1].clone(); args.drain(i..i + 2); v });
     let no_glb = args.iter().position(|a| a == "--no-glb").map(|i| { args.remove(i); }).is_some();
+    if people_n > 0 && indoorgen::people::avatar_count() == 0 {
+        eprintln!("WARNING: --people {people_n} requested but no avatars found in {:?}: run tools/people/fetch_rocketbox.sh or set INDOORGEN_ASSETS (e.g. in .indoorgen.env); no people will be placed", indoorgen::people::avatar::root_dir());
+    }
     let seed: u64 = args[1].parse().unwrap();
     let mess = indoorgen::mess::MessCfg { level: mess_level, seed };
     let room = args.get(2).cloned();
