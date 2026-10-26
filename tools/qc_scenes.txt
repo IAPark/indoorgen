@@ -1,0 +1,20 @@
+1 Bedroom
+2 Bedroom
+4 Bedroom
+1 LivingRoom
+2 LivingRoom
+3 LivingRoom
+3 Kitchen
+5 Kitchen
+7 Kitchen
+1 Bathroom
+2 Bathroom
+3 Bathroom
+1 DiningRoom
+2 DiningRoom
+3 DiningRoom
+2 Bedroom --people 2 --mess 0.5
+1 LivingRoom --people 2 --mess 0.5
+3 Kitchen --people 2 --mess 0.5
+2 Bathroom --people 2 --mess 0.5
+1 DiningRoom --people 2 --mess 0.5

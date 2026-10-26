@@ -14,3 +14,5 @@ pub use ig_people as people;
 pub use ig_cams as cams;
 pub mod openings;
 pub mod pipeline;
+pub mod qc;
+pub mod snap;

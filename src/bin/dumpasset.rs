@@ -4,8 +4,9 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (class, fs) = (&a[1], a[2].parse::<u64>().unwrap());
     if std::env::var("NOUNSEEDED").is_err() { set_unseeded(indoorgen::assets::ctor_draws::ctor_draws(class, &mut indoorgen::rng::Rng::seeded(fs))); }
+    let inst: u64 = std::env::var("INST").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let f = make_factory(class, fs).expect("no factory");
-    let asset = if std::env::var("PH").is_ok() { f.placeholder(0).expect("no placeholder") } else { f.asset(0) };
+    let asset = if std::env::var("PH").is_ok() { f.placeholder(inst).expect("no placeholder") } else if std::env::var("SCENE").is_ok() { scene_asset(&*f, inst) } else { f.asset(inst) };
     let mut verts = vec![];
     let mut polys = vec![];
     if std::env::var("PARTS").is_ok() { let mut o = 0; for p in &asset.parts { eprintln!("part {}..{} ({} verts)", o, o + p.mesh.pos.len(), p.mesh.pos.len()); o += p.mesh.pos.len(); } }

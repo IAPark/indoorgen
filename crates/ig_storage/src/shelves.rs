@@ -640,11 +640,10 @@ impl Factory for KitchenCabinet {
     }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
-        if let Some(fs) = self.fseed {
-            KitchenCabinet::from_instance(fs, i).build(&mut a, [0.0, 0.0, 0.0]);
-        } else {
-            self.build(&mut a, [0.0, 0.0, 0.0]);
-        }
+        // python samples the dimensions once per factory (KitchenCabinetFactory.sample_params under FixedSeed(factory_seed)), and the exact
+        // geometry (`exact`) uses them: the approximate asset (its collision boxes are the solver geometry of the populated cabinet) must too
+        let _ = i;
+        self.build(&mut a, [0.0, 0.0, 0.0]);
         a
     }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
