@@ -378,6 +378,11 @@ pub fn settle_doors(
                 }
             }
         }
+        if std::env::var("DOORFAKE").is_ok() {
+            // testing: a fake 30 cm obstacle in the leaf's path at 40 degrees
+            let cc = d.full_pose(ct, 40f64.to_radians()).apply([d.xh - d.hs * d.w * 0.8, 0.0, d.zb + 0.5]);
+            obs.push(("fake_obstacle".into(), SharedShape::cuboid(0.15, 0.15, 0.5), Isometry::translation(cc[0], cc[1], cc[2])));
+        }
         if std::env::var("DOORDBG").is_ok() { eprintln!("DOORDBG ci={} obstacles near swing: {:?}", d.ci, obs.iter().map(|o| o.0.clone()).collect::<std::collections::BTreeSet<_>>()); }
         // the room the door swings into (inset by the wall half thickness) for the wall test
         let interior = polys.iter().find(|(n, _)| *n == d.room).map(|(_, g)| crate::shp::buffer_mitre(g, -wt / 2.0));

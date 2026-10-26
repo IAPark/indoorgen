@@ -1,0 +1,4 @@
+Done: thin leaves + frame/casing + hinged swing + sweep collision + keep-outs + doorway sill fix; selfcheck rc=0; 8-scene report run.
+Current: BACKLOG D10 row, final commit, copy preview pngs out of tmp.
+Blockers: none (furniture never limited a door in tested scenes; wall limit seen; fake-obstacle test works).
+ETA: ~5 min.
