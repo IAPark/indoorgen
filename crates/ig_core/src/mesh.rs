@@ -193,6 +193,11 @@ impl Mesh {
                 if k[0] == k[1] || k[1] == k[2] || !seen.insert(k) {
                     continue;
                 }
+                // zero-area triangles (collinear corners) draw nothing
+                let x = cross(sub(this.pos[ib as usize], this.pos[ia as usize]), sub(this.pos[ic as usize], this.pos[ia as usize]));
+                if dot(x, x) < 4e-20 {
+                    continue;
+                }
                 let n = pos.len() as u32;
                 for &i in &[ia, ib, ic] {
                     pos.push(this.pos[i as usize]);
