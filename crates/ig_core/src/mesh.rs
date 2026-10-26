@@ -395,71 +395,55 @@ impl Scene {
 
     /// Write a binary glTF 2.0 (.glb). Z-up scene is converted to glTF's Y-up with a root rotation node.
     pub fn write_glb(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let mut bin: Vec<u8> = vec![];
-        let mut buffer_views = vec![];
-        let mut accessors = vec![];
-        let mut meshes = vec![];
-        let mut nodes = vec![];
-        let mut child_ids = vec![];
-        for (ni, n) in self.nodes.iter().enumerate() {
+        use rayon::prelude::*;
+        // per-node blobs are built in parallel (pure functions of the node), then concatenated in node order: deterministic
+        struct Blob { lo: V3, hi: V3, nv: usize, ntri: usize, pos: Vec<u8>, nrm: Vec<u8>, uv: Option<Vec<u8>>, idx: Vec<u8> }
+        let blobs: Vec<Blob> = self.nodes.par_iter().map(|n| {
             let (xpos, xuv, xtris) = n.mesh.export_tris();
             let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
             let tris = &xtris;
-            // positions
-            let pstart = bin.len();
             let (lo, hi) = m.bounds();
-            for p in &m.pos {
-                for k in 0..3 {
-                    bin.extend_from_slice(&(p[k] as f32).to_le_bytes());
-                }
-            }
-            buffer_views.push(json!({"buffer":0,"byteOffset":pstart,"byteLength":bin.len()-pstart,"target":34962}));
-            accessors.push(json!({"bufferView":buffer_views.len()-1,"componentType":5126,"count":m.pos.len(),"type":"VEC3",
-                "min":[lo[0],lo[1],lo[2]],"max":[hi[0],hi[1],hi[2]]}));
-            let pacc = accessors.len() - 1;
             // smooth-by-angle normals: weld by position, average face normals within 40 degrees of the vertex's own face
             let mut normals = vec![[0f32; 3]; m.pos.len()];
             {
                 let key = |p: V3| ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64, (p[2] * 1e4).round() as i64);
                 let fnorm: Vec<V3> = tris.iter().map(|t| cross(sub(m.pos[t[1] as usize], m.pos[t[0] as usize]), sub(m.pos[t[2] as usize], m.pos[t[0] as usize]))).collect();
-                let mut groups: crate::dhash::HashMap<(i64, i64, i64), Vec<usize>> = crate::dhash::HashMap::default();
+                // vertices welded by position: sort (key, tri, corner) so each group lists its triangles in ascending order
+                let mut ent: Vec<((i64, i64, i64), u32, u32)> = Vec::with_capacity(tris.len() * 3);
                 for (ti, t) in tris.iter().enumerate() {
-                    for &v in t {
-                        groups.entry(key(m.pos[v as usize])).or_default().push(ti);
+                    for (c, &v) in t.iter().enumerate() {
+                        ent.push((key(m.pos[v as usize]), ti as u32, c as u32));
                     }
                 }
+                ent.sort_unstable();
+                let flen: Vec<f64> = fnorm.iter().map(|f| (f[0].powi(2) + f[1].powi(2) + f[2].powi(2)).sqrt().max(1e-18)).collect();
                 let cos_t = 40f64.to_radians().cos();
-                for (ti, t) in tris.iter().enumerate() {
-                    let nl = (fnorm[ti][0].powi(2) + fnorm[ti][1].powi(2) + fnorm[ti][2].powi(2)).sqrt().max(1e-18);
-                    let nu = [fnorm[ti][0] / nl, fnorm[ti][1] / nl, fnorm[ti][2] / nl];
-                    for &v in t {
+                let mut g0 = 0;
+                while g0 < ent.len() {
+                    let mut g1 = g0 + 1;
+                    while g1 < ent.len() && ent[g1].0 == ent[g0].0 { g1 += 1; }
+                    for &(_, ti, c) in &ent[g0..g1] {
+                        let ti = ti as usize;
+                        let nl = flen[ti];
+                        let nu = [fnorm[ti][0] / nl, fnorm[ti][1] / nl, fnorm[ti][2] / nl];
                         let mut acc = [0f64; 3];
-                        for &si in &groups[&key(m.pos[v as usize])] {
-                            let sl = (fnorm[si][0].powi(2) + fnorm[si][1].powi(2) + fnorm[si][2].powi(2)).sqrt().max(1e-18);
-                            let d = (fnorm[si][0] * nu[0] + fnorm[si][1] * nu[1] + fnorm[si][2] * nu[2]) / sl;
+                        for &(_, si, _) in &ent[g0..g1] {
+                            let si = si as usize;
+                            let d = (fnorm[si][0] * nu[0] + fnorm[si][1] * nu[1] + fnorm[si][2] * nu[2]) / flen[si];
                             if d >= cos_t {
                                 for k in 0..3 {
                                     acc[k] += fnorm[si][k];
                                 }
                             }
                         }
+                        let v = tris[ti][c as usize] as usize;
                         for k in 0..3 {
-                            normals[v as usize][k] = acc[k] as f32;
+                            normals[v][k] = acc[k] as f32;
                         }
                     }
+                    g0 = g1;
                 }
             }
-            let nstart = bin.len();
-            for nv in &normals {
-                let l = (nv[0] * nv[0] + nv[1] * nv[1] + nv[2] * nv[2]).sqrt().max(1e-12);
-                for k in 0..3 {
-                    bin.extend_from_slice(&(nv[k] / l).to_le_bytes());
-                }
-            }
-            buffer_views.push(json!({"buffer":0,"byteOffset":nstart,"byteLength":bin.len()-nstart,"target":34962}));
-            accessors.push(json!({"bufferView":buffer_views.len()-1,"componentType":5126,"count":m.pos.len(),"type":"VEC3"}));
-            let nacc = accessors.len() - 1;
-            let mut attrs = json!({"POSITION":pacc,"NORMAL":nacc});
             let generated_uv: Vec<[f64; 2]>;
             let uvs: &Vec<[f64; 2]> = if m.uv.len() == m.pos.len() {
                 &m.uv
@@ -478,24 +462,53 @@ impl Scene {
                 generated_uv = uv;
                 &generated_uv
             };
-            if uvs.len() == m.pos.len() {
-                let ustart = bin.len();
-                for u in uvs {
-                    bin.extend_from_slice(&(u[0] as f32).to_le_bytes());
-                    bin.extend_from_slice(&(u[1] as f32).to_le_bytes());
-                }
-                buffer_views.push(json!({"buffer":0,"byteOffset":ustart,"byteLength":bin.len()-ustart,"target":34962}));
-                accessors.push(json!({"bufferView":buffer_views.len()-1,"componentType":5126,"count":m.pos.len(),"type":"VEC2"}));
+
+            // lossless weld: soup vertices with identical f32 position / normal / uv share one index
+            let has_uv = uvs.len() == m.pos.len();
+            let mut map: crate::dhash::HashMap<[u32; 8], u32> = crate::dhash::HashMap::default();
+            let (mut pos, mut nrm, mut uvb, mut idx) = (vec![], vec![], vec![], Vec::with_capacity(tris.len() * 12));
+            let mut remap = vec![0u32; m.pos.len()];
+            let mut nv = 0u32;
+            for (i, p) in m.pos.iter().enumerate() {
+                let nn = normals[i];
+                let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]).sqrt().max(1e-12);
+                let nn = [nn[0] / l, nn[1] / l, nn[2] / l];
+                let pf = [p[0] as f32, p[1] as f32, p[2] as f32];
+                let uf = if has_uv { [uvs[i][0] as f32, uvs[i][1] as f32] } else { [0.0, 0.0] };
+                let key = [pf[0].to_bits(), pf[1].to_bits(), pf[2].to_bits(), nn[0].to_bits(), nn[1].to_bits(), nn[2].to_bits(), uf[0].to_bits(), uf[1].to_bits()];
+                remap[i] = *map.entry(key).or_insert_with(|| {
+                    for k in 0..3 { pos.extend_from_slice(&pf[k].to_le_bytes()); }
+                    for k in 0..3 { nrm.extend_from_slice(&nn[k].to_le_bytes()); }
+                    if has_uv { for k in 0..2 { uvb.extend_from_slice(&uf[k].to_le_bytes()); } }
+                    nv += 1;
+                    nv - 1
+                });
+            }
+            for t in tris { for &i in t { idx.extend_from_slice(&remap[i as usize].to_le_bytes()); } }
+            Blob { lo, hi, nv: nv as usize, ntri: tris.len(), pos, nrm, uv: if has_uv { Some(uvb) } else { None }, idx }
+        }).collect();
+        let mut bin: Vec<u8> = vec![];
+        let mut buffer_views = vec![];
+        let mut accessors = vec![];
+        let mut meshes = vec![];
+        let mut nodes = vec![];
+        let mut child_ids = vec![];
+        for (ni, (n, bl)) in self.nodes.iter().zip(&blobs).enumerate() {
+            let mut put = |data: &[u8], target: u32, bin: &mut Vec<u8>| { let st = bin.len(); bin.extend_from_slice(data); buffer_views.push(json!({"buffer":0,"byteOffset":st,"byteLength":data.len(),"target":target})); buffer_views.len() - 1 };
+            let bv = put(&bl.pos, 34962, &mut bin);
+            accessors.push(json!({"bufferView":bv,"componentType":5126,"count":bl.nv,"type":"VEC3","min":[bl.lo[0],bl.lo[1],bl.lo[2]],"max":[bl.hi[0],bl.hi[1],bl.hi[2]]}));
+            let pacc = accessors.len() - 1;
+            let bv = put(&bl.nrm, 34962, &mut bin);
+            accessors.push(json!({"bufferView":bv,"componentType":5126,"count":bl.nv,"type":"VEC3"}));
+            let nacc = accessors.len() - 1;
+            let mut attrs = json!({"POSITION":pacc,"NORMAL":nacc});
+            if let Some(u) = &bl.uv {
+                let bv = put(u, 34962, &mut bin);
+                accessors.push(json!({"bufferView":bv,"componentType":5126,"count":bl.nv,"type":"VEC2"}));
                 attrs["TEXCOORD_0"] = json!(accessors.len() - 1);
             }
-            let istart = bin.len();
-            for t in tris {
-                for &i in t {
-                    bin.extend_from_slice(&i.to_le_bytes());
-                }
-            }
-            buffer_views.push(json!({"buffer":0,"byteOffset":istart,"byteLength":bin.len()-istart,"target":34963}));
-            accessors.push(json!({"bufferView":buffer_views.len()-1,"componentType":5125,"count":tris.len()*3,"type":"SCALAR"}));
+            let bv = put(&bl.idx, 34963, &mut bin);
+            accessors.push(json!({"bufferView":bv,"componentType":5125,"count":bl.ntri*3,"type":"SCALAR"}));
             let iacc = accessors.len() - 1;
             meshes.push(json!({"name":n.name,"primitives":[{"attributes":attrs,"indices":iacc,"material":n.material}]}));
             nodes.push(json!({"name":n.name,"mesh":ni,"extras":{"class":n.class}}));
@@ -541,6 +554,7 @@ impl Scene {
             js.push(b' ');
         }
         let total = 12 + 8 + js.len() + 8 + bin.len();
+        if total > u32::MAX as usize { return Err(std::io::Error::new(std::io::ErrorKind::Other, "glb larger than 4 GiB")); }
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(b"glTF");
         out.extend_from_slice(&2u32.to_le_bytes());

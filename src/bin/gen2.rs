@@ -1,3 +1,5 @@
+// usage: gen2 <seed> [room] [out.glb] [--only-target] [--rust-cloth]
+//   default: every room of the house is furnished; `room` is the target room (cameras favour it). --only-target / ONLY_TARGET=1: furnish only the first room of that type
 // usage: gen2 <seed> [room] [out.glb] [--rust-cloth] [--mess LEVEL] [--cams K]
 //   --cams K: K photographer-like camera poses per furnished room written to the sidecar json "cameras" (crates/ig_cams); 0 (default) = unchanged
 //   --people N: up to N posed photoreal avatars placed after the solve (crates/ig_people); 0 (default) = unchanged output
@@ -60,6 +62,9 @@ fn main() {
         }
         None => 0,
     };
+    // default: furnish every room of the house; the room argument names the target room (floor plan seed is `seed`; cameras favour it).
+    // --only-target (or ONLY_TARGET=1): furnish just the first room of that type, as before (lockstep / selfcheck use this)
+    let only_target = args.iter().position(|a| a == "--only-target").map(|i| { args.remove(i); }).is_some() || std::env::var_os("ONLY_TARGET").is_some();
     let qc_out: Option<String> = args.iter().position(|a| a == "--qc").map(|i| { let v = args[i + 1].clone(); args.drain(i..i + 2); v });
     let no_glb = args.iter().position(|a| a == "--no-glb").map(|i| { args.remove(i); }).is_some();
     if people_n > 0 && indoorgen::people::avatar_count() == 0 {
@@ -74,7 +79,7 @@ fn main() {
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
     let assets = indoorgen::assets::RealAssets { fallback };
     let t = std::time::Instant::now();
-    let mut g = generate(&Options { seed, restrict_room: room, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
+    let mut g = generate(&Options { seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if std::env::var("EVAL").is_ok() {
         let (prog, _) = indoorgen::pipeline::load_program(seed, &prog);
@@ -86,6 +91,7 @@ fn main() {
         eprintln!("viol {:?}", r.violations.iter().filter(|x| x.1 > 0.0).collect::<Vec<_>>());
     }
     let t_scene = std::time::Instant::now();
+    let lap = |what: &str| { if std::env::var_os("LAPS").is_some() { eprintln!("LAP {what} {:.1}s since scene start", t_scene.elapsed().as_secs_f64()); } };
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
     let decos = indoorgen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
@@ -226,6 +232,7 @@ fn main() {
             })
             .collect()
     };
+    lap("visuals built");
     // python's KitchenCabinet visual starts at local y = 0 while its solver box is centred: align them (see snap.rs)
     if std::env::var_os("NO_SNAP").is_none() {
         let mv = indoorgen::snap::recenter_visuals(&g.state, &mut visuals, &["KitchenCabinetFactory"]);
@@ -253,8 +260,10 @@ fn main() {
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }
     }
+    lap("snap done");
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
     indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
+    lap("doors settled");
     let door_zones: Vec<([f64; 3], [f64; 3], f64)> = ops.doors.iter().flat_map(|d| d.zones(&g.cutters[d.ci], 0.08)).collect();
     let door_infos: Vec<indoorgen::qc::DoorInfo> = ops.doors.iter().map(|d| indoorgen::qc::DoorInfo { ci: d.ci, desired: d.desired, angle: d.angle, limiter: d.limiter.clone() }).collect();
     for d in std::mem::take(&mut ops.doors) {
@@ -297,6 +306,7 @@ fn main() {
             o.pose = p;
         }
     }
+    lap("sink shift");
     // python apply_cutter: the world-space cutter of each object is boolean-differenced from every part of its relation targets
     let mut cutters: std::collections::HashMap<String, Vec<indoorgen::mesh::Mesh>> = Default::default();
     for (k, o) in &g.state.objs {
@@ -398,6 +408,7 @@ fn main() {
             scene.add_posed(&format!("{k}#{pi}"), &gen.class, m, mi, pose_m.0);
         }
     }
+    lap("objects added");
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = std::time::Instant::now();
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
@@ -434,6 +445,7 @@ fn main() {
         let gone = indoorgen::qc::prune_clutter(&mut scene, &rep);
         eprintln!("PRUNE {} clutter items removed for interpenetration", gone.len());
     }
+    lap("people+mess+prune");
     if let Some(qp) = &qc_out {
         let label = format!("{}_{}_p{}_m{}", seed, args.get(2).map(|s| s.as_str()).unwrap_or("all"), people_n, mess_level);
         let mut rep = indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(qp), &label);
@@ -445,8 +457,17 @@ fn main() {
         rep["people"] = pa;
         std::fs::write(qp, serde_json::to_vec_pretty(&rep).unwrap()).unwrap();
     }
+    if std::env::var_os("SCENESTAT").is_some() {
+        let mut by: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+        for n in &scene.nodes { let e = by.entry(n.class.clone()).or_default(); e.0 += 1; e.1 += n.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>(); }
+        let mut v: Vec<_> = by.into_iter().collect();
+        v.sort_by_key(|x| std::cmp::Reverse((x.1).1));
+        for (c, (n, t)) in v.iter().take(25) { eprintln!("SCENESTAT {c} nodes {n} tris {t}"); }
+    }
     if no_glb { return; }
+    lap("qc done");
     scene.write_glb(&out).unwrap();
+    lap("glb written");
     if cams_k > 0 { add_cameras(&scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }
     if indoorgen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());
