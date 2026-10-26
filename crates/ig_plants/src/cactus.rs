@@ -300,6 +300,10 @@ fn build_spike(r: &mut Rng, base_radius: f64) -> GMeshT {
     set_point_attr(&mut m, "rad", Ty::F, radius.iter().map(|&x| Val::F((base_radius * x) as f32)).collect());
     let mut j = tpl().clone();
     bind_attr(&mut j, "geo_radius", "Socket_2", "rad");
+    if ig_kit::api::dense() {
+        // a 2 mm spike does not need a 32-gon cross section: 4 sides
+        set_in(&mut j, "geo_radius", "Curve Circle", "Resolution", json!(std::env::var("CACTUS_SPIKE_RES").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(4)));
+    }
     let g = run(j, "geo_radius", GGeom::from_mesh(m), &gn::Objects::default(), None);
     let o = g.mesh.unwrap();
     static SPK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

@@ -610,7 +610,7 @@ pub fn interp_weights_tri_f32(v1: F3, v2: F3, v3: F3, co: F3) -> [f32; 3] {
     [1.0 / 3.0; 3]
 }
 
-/// dense furnishing mode: leaf / gill sheets are remeshed at a coarser voxel size (LEAF_RES_SCALE, default 2.0: 4x fewer vertices; the
+/// dense furnishing mode: leaf / gill sheets are remeshed at a coarser voxel size (LEAF_RES_SCALE, default 4.0: 16x fewer vertices; the
 /// scene budget decimates plants to a few k triangles anyway). 1.0 (python-exact) when not dense.
 pub fn detail_scale() -> f64 {
     static S: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
@@ -618,18 +618,18 @@ pub fn detail_scale() -> f64 {
         if !ig_kit::api::dense() {
             return 1.0;
         }
-        std::env::var("LEAF_RES_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0)
+        std::env::var("LEAF_RES_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0)
     })
 }
 
-/// dense mode: voxel remesh size multiplier (VOXEL_RES_SCALE, default 2.0)
+/// dense mode: voxel remesh size multiplier (VOXEL_RES_SCALE, default 4.0)
 pub fn voxel_scale() -> f64 {
     static S: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *S.get_or_init(|| {
         if !ig_kit::api::dense() {
             return 1.0;
         }
-        std::env::var("VOXEL_RES_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0)
+        std::env::var("VOXEL_RES_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0)
     })
 }
 
