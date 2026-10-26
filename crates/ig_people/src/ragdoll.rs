@@ -44,6 +44,8 @@ pub struct Settled {
     /// largest rotation (rad) of the pelvis / chest away from the key pose, and pelvis drift in xy (m)
     pub tilt: f64,
     pub drift: f64,
+    /// change (rad) of the pelvis-to-chest relative rotation (torso twisted / folded against its key pose)
+    pub twist: f64,
 }
 
 struct Seg {
@@ -696,5 +698,12 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
     }
     let pp = w.bodies[handles[0]].translation();
     let drift = (pp.x - key_pos[0][0]).hypot(pp.y - key_pos[0][1]);
-    Some(Settled { g: gs, steps, ms, moved, pen, bodies: segs.len(), tilt, drift })
+    let mut twist = 0.0f64;
+    if let Some(c) = chest {
+        let rel_end = w.bodies[handles[0]].position().rotation.inverse() * w.bodies[handles[c]].position().rotation;
+        let rel_key = quat_of(&gw[segs[0].bone].r).inverse() * quat_of(&gw[segs[c].bone].r);
+        let q = rel_end * rel_key.inverse();
+        twist = 2.0 * q.w.abs().min(1.0).acos();
+    }
+    Some(Settled { g: gs, steps, ms, moved, pen, bodies: segs.len(), tilt, drift, twist })
 }

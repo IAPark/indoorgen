@@ -106,8 +106,13 @@ def write_glb(path, nodes):
         fo.write(struct.pack("<I", len(bin_)) + b"BIN\0" + bytes(bin_))
 
 
+SIGN = 1.0
+NEAR = 0.06  # only a vertex within 6 cm of a body surface can be 'inside' it (the cloth never wraps deeper than that)
+
+
 def penetration(cloth, bodies, thr=(0.005, 0.01, 0.02)):
     """cloth vertices inside the body meshes: depth = distance to the nearest body surface for vertices on the inner side"""
+    import bpy
     from mathutils import Vector
     from mathutils.bvhtree import BVHTree
     trees = [BVHTree.FromPolygons([tuple(p) for p in v], [tuple(map(int, t)) for t in f]) for v, f in bodies]
@@ -119,13 +124,16 @@ def penetration(cloth, bodies, thr=(0.005, 0.01, 0.02)):
             hit = t.find_nearest(pv)
             if hit[0] is None:
                 continue
-            if (pv - hit[0]).dot(hit[1]) < 0:
-                best = max(best, (pv - hit[0]).length)
+            d = (pv - hit[0]).length
+            if d < NEAR and (pv - hit[0]).dot(hit[1]) * SIGN < 0:
+                best = max(best, d)
         depth[i] = best
     return depth
 
 
 def main():
+    global SIGN
+    SIGN = float(os.environ.get("PEN_SIGN", "1"))
     glb_path, out = sys.argv[1], sys.argv[2]
     t0 = time.time()
     g = Glb(glb_path)
@@ -154,19 +162,25 @@ def main():
         store[name] = (np.asarray(v, dtype=np.float64), np.array(tris, dtype=np.int64))
         changed[name] = True
 
-    import cloth_jobs
-    cloth_jobs.run_jobs(jobs, world_mesh, set_mesh)
-    print("cloth jobs done %.1fs" % (time.time() - t0))
+    if "--pen-only" in sys.argv:  # re-check an existing overlay without simulating
+        og = Glb(out)
+        for name in og.by_name:
+            store[name] = og.mesh(name)
+    else:
+        import cloth_jobs
+        cloth_jobs.run_jobs(jobs, world_mesh, set_mesh)
+        print("cloth jobs done %.1fs" % (time.time() - t0))
     nodes = []
-    for name in changed:
+    for name in ([] if "--pen-only" in sys.argv else changed):
         v, f = store[name]
         orig = g.prims(name)
         nrm = uv = None
         if len(orig) == 1 and len(orig[0]["pos"]) == len(v):  # moved only (follow): keep the original shading data
             nrm, uv = orig[0]["nrm"], orig[0]["uv"]
         nodes.append((name, v, f, nrm, uv))
-    write_glb(out, nodes)
-    print("wrote", out, len(nodes), "nodes")
+    if nodes:
+        write_glb(out, nodes)
+        print("wrote", out, len(nodes), "nodes")
     # body-vs-cloth penetration
     bodies = []
     for j in jobs:
