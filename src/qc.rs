@@ -219,7 +219,7 @@ fn is_tableware(c: &str) -> bool {
 }
 
 fn bad_support(c: &str) -> bool {
-    (c == "TVFactory" || c.contains("Monitor") || c.contains("Chair") || c.contains("Stool") || c.contains("Sofa") || c.contains("Bed") || c.contains("Toilet") || c.contains("Lamp") || c.contains("Mirror") || c.contains("Sink"))
+    (c == "TVFactory" || c.contains("Monitor") || c.contains("Chair") || c.contains("Stool") || c.contains("Sofa") || c.contains("Bed") || c.contains("Toilet") || c.contains("Lamp") || c.contains("Mirror"))
         && !c.contains("Cabinet")
 }
 
