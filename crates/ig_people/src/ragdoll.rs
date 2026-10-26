@@ -604,7 +604,10 @@ pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[St
                 let r = cm / mm - piv;
                 tau += r.cross(Vector::new(0.0, 0.0, mm * 9.81)) * opt.gc;
             }
-            w.bodies[handles[si]].add_torque(tau, true);
+            // torques persist across steps in rapier: set, don't accumulate
+            let b = &mut w.bodies[handles[si]];
+            b.reset_torques(true);
+            b.add_torque(tau, true);
         }
         w.step();
         steps = step + 1;
