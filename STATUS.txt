@@ -1,4 +1,4 @@
-Done: v1 ig_cams (priors, door penalty, subject-area/furniture coverage/depth scoring, group subject) committed; spot checks Kitchen0/Bath0/LR3 look good.
-Current: full 29-sheet rerun (tmp/v1) running; then judge per-shot, then merge master (doors landed) and re-run.
+Done: v2 full-set sheets generated (tmp/v2, doors merged).
+Current: eyeballing 30 sheets for per-shot pass/fail.
 Blockers: none.
-ETA: ~1 h.
+ETA: ~45 min.

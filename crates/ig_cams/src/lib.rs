@@ -220,7 +220,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             tries += 1;
             cam_tries += 1;
             // subject: people first, weights decay with use
-            let ws: Vec<f64> = cand.iter().enumerate().map(|(i, s)| if has_people && got.is_empty() && !s.person { 0.0 } else { s.w / (1.0 + 6.0 * used[i]) }).collect();
+            let ws: Vec<f64> = cand.iter().enumerate().map(|(i, s)| if has_people && got.is_empty() && !s.person && cam_tries < 300 { 0.0 } else { s.w / (1.0 + 6.0 * used[i]) }).collect();
             let si = rng.choice_p(&ws);
             let s = &cand[si];
             let sc = [(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0];
@@ -297,7 +297,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             let (near_d, near_f) = if cam_tries < 400 { (0.9, 0.08) } else { (0.6, 0.15) };
             let (gw, gh) = (16, 9);
             let (mut near, mut close, mut tot, mut dsum, mut mid, mut wall, mut doorc) = (0, 0, 0, 0.0f64, 0, 0, 0);
-            let (mut furn, mut sa, mut fg, mut bg) = (0, 0, 0, 0);
+            let (mut furn, mut sa, mut fg, mut bg, mut blk, mut wallall) = (0, 0, 0, 0, 0, 0);
             for iy in 0..gh {
                 for ix in 0..gw {
                     let nx = ((ix as f64 + 0.5) / gw as f64) * 2.0 - 1.0;
@@ -310,6 +310,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                         if t < 4.5 && w.door[ti] { doorc += 1 }
                         if !w.shell[ti] { furn += 1 }
                         if s.group { if !w.shell[ti] { sa += 1 } } else if w.keys[w.owner[ti] as usize] == s.key { sa += 1 }
+                        if t < 2.2 && !w.floor[ti] && if s.group { w.shell[ti] } else { w.keys[w.owner[ti] as usize] != s.key } { blk += 1 }
+                        if w.keys[w.owner[ti] as usize].contains(".wall") { wallall += 1 }
                         if t < 2.0 { fg += 1 } else if t > 3.5 { bg += 1 }
                         if t < 3.0 && w.keys[w.owner[ti] as usize].contains(".wall") { wall += 1 }
                         if t < 1.2 { close += 1 }
@@ -321,8 +323,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             }
             if near as f64 > near_f * tot as f64 || close as f64 > 0.6 * tot as f64 { continue }
             let strict = cam_tries < 400;
-            let (furn_f, sa_f, doorf) = (furn as f64 / tot as f64, sa as f64 / tot as f64, doorc as f64 / tot as f64);
-            if strict && (doorf > 0.03 || furn_f < 0.12 || sa_f < if s.person { 0.015 } else { 0.04 } || mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { continue }
+            let (furn_f, sa_f, doorf, blk_f, wall_f) = (furn as f64 / tot as f64, sa as f64 / tot as f64, doorc as f64 / tot as f64, blk as f64 / tot as f64, wallall as f64 / tot as f64);
+            if strict && (doorf > 0.03 || blk_f > 0.10 || wall_f > 0.45 || (sa_f > 0.5 && !s.person && !s.group) || furn_f < 0.12 || sa_f < if s.person { 0.015 } else { 0.04 } || mid as f64 > 0.4 * tot as f64 || wall as f64 > 0.4 * tot as f64) { continue }
             // the subject box should be mostly inside the frame
             let inf = (0..8).filter(|k| {
                 let q = [if k & 1 == 0 { s.lo[0] } else { s.hi[0] }, if k & 2 == 0 { s.lo[1] } else { s.hi[1] }, if k & 4 == 0 { s.lo[2] } else { s.hi[2] }];
@@ -354,9 +356,9 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
             if got.iter().any(|(p, ff, sk)| {
                 let dd = ((p[0] - o[0]).powi(2) + (p[1] - o[1]).powi(2)).sqrt();
                 let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
-                dd < 1.2 || (*sk == s.key && ang < 40.0) || ang < 20.0
+                if strict { dd < 1.2 || (*sk == s.key && ang < 40.0) || ang < 20.0 } else { dd < 0.7 || ang < 10.0 }
             }) { continue }
-            let score = dsum / tot as f64 / 6.0 + 0.3 * inf as f64 / 8.0 - 0.5 * wall as f64 / tot as f64 - 6.0 * doorf + 1.0 * (sa_f / 0.2).min(1.0) + 0.8 * (furn_f / 0.4).min(1.0) + if fg as f64 > 0.1 * tot as f64 && bg as f64 > 0.1 * tot as f64 { 0.3 } else { 0.0 } - 0.5 * mid as f64 / tot as f64 - if strict { 0.0 } else { 1.0 } + 0.8 * vis as f64 / n as f64 + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64();
+            let score = dsum / tot as f64 / 6.0 + 0.3 * inf as f64 / 8.0 - 0.5 * wall as f64 / tot as f64 - 6.0 * doorf - 3.0 * blk_f - 1.0 * (wall_f - 0.3).max(0.0) - 1.5 * (sa_f - 0.35).max(0.0) + 1.0 * (sa_f / 0.2).min(1.0) + 0.8 * (furn_f / 0.4).min(1.0) + if fg as f64 > 0.1 * tot as f64 && bg as f64 > 0.1 * tot as f64 { 0.3 } else { 0.0 } - 0.5 * mid as f64 / tot as f64 - if strict { 0.0 } else { 1.0 } + 0.8 * vis as f64 / n as f64 + 0.4 * s.w.min(6.0) / 6.0 + 0.2 * rng.f64();
             nvalid += 1;
             if best.as_ref().map_or(true, |b| score > b.0) { best = Some((score, si, o, f, lens, s.key.clone())) }
         }
