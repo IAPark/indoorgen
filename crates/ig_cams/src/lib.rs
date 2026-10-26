@@ -649,7 +649,8 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                             } }
                             let dmin = got.iter().map(|(q, ff, _)| if (q[0] - p[0]).hypot(q[1] - p[1]) < 0.8 && (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees() < 25.0 { 0.0 } else { 1.0 }).fold(1.0, f64::min);
                             if dmin < 0.5 { continue }
-                            let sc = -3.0 * cutp - 3.0 * wl as f64 / 40.0 - 3.0 * nr as f64 / 40.0 + ds / 40.0 / 6.0 + 0.8 * (fu as f64 / 40.0).min(0.4) - 2.0 * (1.0 - dmin);
+                            let kmax = { let mut kc = vec![0u32; w.keys.len()]; for iy in 0..5 { for ix in 0..8 { let nx = ((ix as f64 + 0.5) / 8.0) * 2.0 - 1.0; let ny = 1.0 - ((iy as f64 + 0.5) / 5.0) * 2.0; let d = unit([f[0] + r[0] * nx * th + u[0] * ny * tv, f[1] + r[1] * nx * th + u[1] * ny * tv, f[2] + u[2] * ny * tv]); if let Some((t, ti)) = w.cast(o, d, 6.0) { if !w.shell[ti] && t < 3.0 { kc[w.owner[ti] as usize] += 1 } } } } kc.into_iter().max().unwrap_or(0) as f64 / 40.0 };
+                            let sc = -20.0 * cutp - 6.0 * (kmax - 0.22).max(0.0) - 3.0 * wl as f64 / 40.0 - 3.0 * nr as f64 / 40.0 + ds / 40.0 / 6.0 + 0.8 * (fu as f64 / 40.0).min(0.4) - 2.0 * (1.0 - dmin);
                             if bestp.map_or(true, |b| sc > b.0) { bestp = Some((sc, [p[0], p[1]], f)) }
                         }
                     }
