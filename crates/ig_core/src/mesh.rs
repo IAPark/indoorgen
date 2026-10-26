@@ -182,15 +182,25 @@ impl Mesh {
         let mut pos: Vec<V3> = Vec::with_capacity(this.faces.len() * 6);
         let mut uv: Vec<[f64; 2]> = vec![];
         let mut tris = Vec::with_capacity(this.faces.len() * 2);
-        let mut seen: crate::dhash::HashSet<[(i64, i64, i64); 3]> = crate::dhash::HashSet::default();
+        let mut seen: std::collections::HashSet<u128, FxBuild> = Default::default();
         for f in &this.faces {
             for [ia, ib, ic] in triangulate_face(&this.pos, f) {
                 // a triangle that coincides with an earlier one (same welded corners, either winding: collapsed cloth layers, merged
                 // box-comforter seams, boolean leftovers) would z-fight with it (one side lit, one dark): keep the first only
-                let q = |i: u32| { let p = this.pos[i as usize]; ((p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64, (p[2] * 1e5).round() as i64) };
+                // corner = 64-bit mix of the welded 10 um grid cell; the triangle key is the sorted corner triple folded to 128 bits
+                let q = |i: u32| -> u64 {
+                    let p = this.pos[i as usize];
+                    let mut h = 0x9E37_79B9_7F4A_7C15u64;
+                    for d in 0..3 { h = (h ^ ((p[d] * 1e5).round() as i64 as u64)).wrapping_mul(0xFF51_AFD7_ED55_8CCD); h ^= h >> 32; }
+                    h
+                };
                 let mut k = [q(ia), q(ib), q(ic)];
                 k.sort_unstable();
-                if k[0] == k[1] || k[1] == k[2] || !seen.insert(k) {
+                if k[0] == k[1] || k[1] == k[2] {
+                    continue;
+                }
+                let key128 = ((k[0] ^ k[1].rotate_left(21) ^ k[2].rotate_left(42)) as u128) << 64 | (k[0].wrapping_mul(3).wrapping_add(k[1].wrapping_mul(5)).wrapping_add(k[2].wrapping_mul(7)) as u128);
+                if !seen.insert(key128) {
                     continue;
                 }
                 // zero-area triangles (collinear corners) draw nothing
@@ -217,7 +227,7 @@ impl Mesh {
     /// 10 um grid) is inserted into that edge, so booleans / sub-divided neighbours leave no hairline cracks. Only edges used by a single
     /// face (open boundary) are examined. Returns None when nothing changes (no allocation on the common path).
     pub fn split_tjunctions(&self) -> Option<Mesh> {
-        use crate::dhash::HashMap;
+        use FxMap as HashMap;
         let key = |p: V3| ((p[0] * 1e5).round() as i64, (p[1] * 1e5).round() as i64, (p[2] * 1e5).round() as i64);
         let mut ids: HashMap<(i64, i64, i64), u32> = HashMap::default();
         let mut wid = Vec::with_capacity(self.pos.len());
@@ -516,6 +526,20 @@ pub struct Node {
     pub pose: Option<[[f64; 4]; 4]>,
 }
 
+/// Fast deterministic hasher (FxHash) for lookup-only maps in the exporter whose iteration order never reaches the output.
+#[derive(Default, Clone, Copy)]
+pub struct FxHasher(u64);
+impl std::hash::Hasher for FxHasher {
+    fn finish(&self) -> u64 { self.0 }
+    fn write(&mut self, bytes: &[u8]) { for &b in bytes { self.write_u64(b as u64); } }
+    fn write_u64(&mut self, x: u64) { self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95); }
+    fn write_u32(&mut self, x: u32) { self.write_u64(x as u64); }
+    fn write_i64(&mut self, x: i64) { self.write_u64(x as u64); }
+    fn write_usize(&mut self, x: usize) { self.write_u64(x as u64); }
+}
+pub type FxBuild = std::hash::BuildHasherDefault<FxHasher>;
+pub type FxMap<K, V> = std::collections::HashMap<K, V, FxBuild>;
+
 #[derive(Clone, Debug)]
 pub struct Light {
     pub loc: V3,
@@ -556,10 +580,15 @@ impl Scene {
     /// Write a binary glTF 2.0 (.glb). Z-up scene is converted to glTF's Y-up with a root rotation node.
     pub fn write_glb(&self, path: &std::path::Path) -> std::io::Result<()> {
         use rayon::prelude::*;
+        let t_glb = std::time::Instant::now();
         // per-node blobs are built in parallel (pure functions of the node), then concatenated in node order: deterministic
         struct Blob { lo: V3, hi: V3, nv: usize, ntri: usize, pos: Vec<u8>, nrm: Vec<u8>, uv: Option<Vec<u8>>, idx: Vec<u8> }
+        let ph: [std::sync::atomic::AtomicU64; 4] = Default::default();
+        let lapn = |i: usize, t: &mut std::time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = std::time::Instant::now(); };
         let blobs: Vec<Blob> = self.nodes.par_iter().map(|n| {
+            let mut tt = std::time::Instant::now();
             let (xpos, xuv, xtris) = n.mesh.export_tris();
+            lapn(0, &mut tt);
             let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
             let tris = &xtris;
             let (lo, hi) = m.bounds();
@@ -604,6 +633,7 @@ impl Scene {
                     g0 = g1;
                 }
             }
+            lapn(1, &mut tt);
             let generated_uv: Vec<[f64; 2]>;
             let uvs: &Vec<[f64; 2]> = if m.uv.len() == m.pos.len() {
                 &m.uv
@@ -623,9 +653,10 @@ impl Scene {
                 &generated_uv
             };
 
+            lapn(2, &mut tt);
             // lossless weld: soup vertices with identical f32 position / normal / uv share one index
             let has_uv = uvs.len() == m.pos.len();
-            let mut map: crate::dhash::HashMap<[u32; 8], u32> = crate::dhash::HashMap::default();
+            let mut map: FxMap<[u32; 8], u32> = FxMap::default();
             let (mut pos, mut nrm, mut uvb, mut idx) = (vec![], vec![], vec![], Vec::with_capacity(tris.len() * 12));
             let mut remap = vec![0u32; m.pos.len()];
             let mut nv = 0u32;
@@ -645,16 +676,18 @@ impl Scene {
                 });
             }
             for t in tris { for &i in t { idx.extend_from_slice(&remap[i as usize].to_le_bytes()); } }
+            lapn(3, &mut tt);
             Blob { lo, hi, nv: nv as usize, ntri: tris.len(), pos, nrm, uv: if has_uv { Some(uvb) } else { None }, idx }
         }).collect();
-        let mut bin: Vec<u8> = vec![];
+        if std::env::var_os("GLBPROF").is_some() { eprintln!("GLBPROF blobs {:.1}s (cpu s: export {:.1} normals {:.1} uv {:.1} weld {:.1})", t_glb.elapsed().as_secs_f64(), ph[0].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[1].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[2].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[3].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6); }
+        let mut bin: usize = 0; // total bin chunk length; the blobs are streamed to the file in the same order
         let mut buffer_views = vec![];
         let mut accessors = vec![];
         let mut meshes = vec![];
         let mut nodes = vec![];
         let mut child_ids = vec![];
         for (ni, (n, bl)) in self.nodes.iter().zip(&blobs).enumerate() {
-            let mut put = |data: &[u8], target: u32, bin: &mut Vec<u8>| { let st = bin.len(); bin.extend_from_slice(data); buffer_views.push(json!({"buffer":0,"byteOffset":st,"byteLength":data.len(),"target":target})); buffer_views.len() - 1 };
+            let mut put = |data: &[u8], target: u32, bin: &mut usize| { let st = *bin; *bin += data.len(); buffer_views.push(json!({"buffer":0,"byteOffset":st,"byteLength":data.len(),"target":target})); buffer_views.len() - 1 };
             let bv = put(&bl.pos, 34962, &mut bin);
             accessors.push(json!({"bufferView":bv,"componentType":5126,"count":bl.nv,"type":"VEC3","min":[bl.lo[0],bl.lo[1],bl.lo[2]],"max":[bl.hi[0],bl.hi[1],bl.hi[2]]}));
             let pacc = accessors.len() - 1;
@@ -692,9 +725,7 @@ impl Scene {
                 j
             })
             .collect();
-        while bin.len() % 4 != 0 {
-            bin.push(0);
-        }
+        assert!(bin % 4 == 0);
         let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec, "pose": n.pose})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
         let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth});
@@ -707,25 +738,31 @@ impl Scene {
             "scene":0,"scenes":[{"nodes":[root]}],
             "nodes":nodes,"meshes":meshes,"materials":materials,
             "accessors":accessors,"bufferViews":buffer_views,
-            "buffers":[{"byteLength":bin.len()}]
+            "buffers":[{"byteLength":bin}]
         });
         let mut js = serde_json::to_vec(&gltf).unwrap();
         while js.len() % 4 != 0 {
             js.push(b' ');
         }
-        let total = 12 + 8 + js.len() + 8 + bin.len();
+        let total = 12 + 8 + js.len() + 8 + bin;
         if total > u32::MAX as usize { return Err(std::io::Error::new(std::io::ErrorKind::Other, "glb larger than 4 GiB")); }
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(b"glTF");
-        out.extend_from_slice(&2u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(js.len() as u32).to_le_bytes());
-        out.extend_from_slice(b"JSON");
-        out.extend_from_slice(&js);
-        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
-        out.extend_from_slice(b"BIN\0");
-        out.extend_from_slice(&bin);
-        std::fs::write(path, out)
+        use std::io::Write;
+        let mut out = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
+        out.write_all(b"glTF")?;
+        out.write_all(&2u32.to_le_bytes())?;
+        out.write_all(&(total as u32).to_le_bytes())?;
+        out.write_all(&(js.len() as u32).to_le_bytes())?;
+        out.write_all(b"JSON")?;
+        out.write_all(&js)?;
+        out.write_all(&(bin as u32).to_le_bytes())?;
+        out.write_all(b"BIN\0")?;
+        for bl in &blobs {
+            out.write_all(&bl.pos)?;
+            out.write_all(&bl.nrm)?;
+            if let Some(u) = &bl.uv { out.write_all(u)?; }
+            out.write_all(&bl.idx)?;
+        }
+        out.flush()
     }
 }
 
