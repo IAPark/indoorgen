@@ -770,6 +770,47 @@ fn simulate_inner(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &
     x
 }
 
+/// Rest a soft body (pillow, towel) on the surfaces of `col`: the body is moved vertically until its lowest region touches the highest
+/// support point below it (gap `skin`), then the bottom `depth` metres of the body follow the surface below (shrink-wrap, at most `max_gap`
+/// per vertex), so the body drapes over bumps instead of hovering over the low spots. Vertices without a surface below are left alone.
+pub fn rest_and_wrap(pos: &mut [V3], col: &Collider, depth: f64, skin: f64, max_gap: f64) {
+    if pos.is_empty() || col.is_empty() {
+        return;
+    }
+    let lo = pos.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
+    let below = |p: V3| -> Option<f64> {
+        let a = [p[0], p[1], p[2] + 0.12];
+        let b = [p[0], p[1], p[2] - 0.6];
+        col.segment_hit(a, b).map(|(t, _)| a[2] + (b[2] - a[2]) * t)
+    };
+    let mut zs: Vec<Option<f64>> = vec![None; pos.len()];
+    let mut min_gap = f64::INFINITY;
+    for (i, p) in pos.iter().enumerate() {
+        if p[2] - lo < depth {
+            zs[i] = below(*p);
+            if let Some(z) = zs[i] {
+                min_gap = min_gap.min(p[2] - z - skin);
+            }
+        }
+    }
+    if !min_gap.is_finite() {
+        return;
+    }
+    // rigid move so the lowest contact has exactly `skin` clearance
+    for p in pos.iter_mut() {
+        p[2] -= min_gap;
+    }
+    for (i, p) in pos.iter_mut().enumerate() {
+        if let Some(z) = zs[i] {
+            let h = p[2] - (lo - min_gap);
+            let w = (1.0 - h / depth).clamp(0.0, 1.0);
+            let w = w * w * (3.0 - 2.0 * w);
+            let gap = (p[2] - z - skin).clamp(0.0, max_gap);
+            p[2] -= w * gap;
+        }
+    }
+}
+
 // ---------------------------------------------------------------- surface comparison
 
 /// symmetric surface distance between two meshes: probes = vertices + 3 points per edge, distance to the other surface.

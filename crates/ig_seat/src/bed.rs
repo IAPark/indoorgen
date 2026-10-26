@@ -795,10 +795,22 @@ impl Factory for Bed {
         let cvm = subsurf(&cvm, 2, false);
         let cbb = cvm.bounds();
         a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)), build: Some(json!({"type": "blanket", "width": cb.width, "size": cb.size, "thickness": cb.thickness, "margin": 0.0, "fold": null, "x": c.size / 2.0 + off})), post: None });
+        let cover_final = cvm.clone();
         a.parts.push(Part { mesh: cvm, mat: fabric.clone(), col: Some((cbb.0, cbb.1)) });
 
         // ---- pillows
         let bases = [&sheet, &mattress];
+        // soft bodies rest on everything that is on the bed (sheet, mattress, cover)
+        let rest_col = {
+            let mut pos = vec![];
+            let mut faces: Vec<Vec<u32>> = vec![];
+            for mm in [&sheet, &mattress, &cover_final] {
+                let o = pos.len() as u32;
+                pos.extend_from_slice(&mm.pos);
+                faces.extend(mm.faces.iter().map(|f| f.iter().map(|i| i + o).collect()));
+            }
+            Collider::new(&pos, &faces)
+        };
         let np = r.randint(2, 4) as usize;
         let pc = pillow_ctor(&mut r);
         let pspec = PillowSpec::from_ctor(&pc);
@@ -812,6 +824,7 @@ impl Factory for Bed {
             let lowz = pm.bounds().0[2];
             pm.transform(&Mat4::rot_z(rz));
             pm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
+            super::cloth::rest_and_wrap(&mut pm.pos, &rest_col, 0.07, 0.01, 0.15);
             let b = pm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
             a.parts.push(Part { mesh: pm, mat: pill_mat.clone(), col: Some((b.0, b.1)) });
@@ -829,6 +842,7 @@ impl Factory for Bed {
             let lowz = tm.bounds().0[2];
             tm.transform(&Mat4::rot_z(rz));
             tm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
+            super::cloth::rest_and_wrap(&mut tm.pos, &rest_col, 0.02, 0.005, 0.1);
             let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
             let b = tm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
