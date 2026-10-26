@@ -1,15 +1,15 @@
 //! gncheck CASES.json [--filter substr] [--tol 1e-6] [-v]
 //! Evaluates every case of a case file (written by tools/gn_check.py: groups + Blender's evaluated meshes) with the Rust
 //! geometry-nodes interpreter and compares against Blender: vertices, edges, faces, attributes.
-use infinigen::gn::eval::Objects;
-use infinigen::gn::geom::*;
-use infinigen::gn::load::*;
-use infinigen::gn::*;
+use indoorgen::gn::eval::Objects;
+use indoorgen::gn::geom::*;
+use indoorgen::gn::load::*;
+use indoorgen::gn::*;
 use serde_json::Value as J;
-use infinigen::dhash::HashMap;
+use indoorgen::dhash::HashMap;
 
 fn jmesh(j: &J) -> Mesh {
-    infinigen::gn::load::mesh_from_json(j)
+    indoorgen::gn::load::mesh_from_json(j)
 }
 
 fn flat(v: &Val) -> Vec<f64> {
@@ -141,7 +141,7 @@ fn compare(exp: &J, got: &Mesh, tol: f64, verbose: bool) -> Report {
                 };
                 let have: Vec<f64> = match rust {
                     Some(at) if at.dom == dom => flat(&at.data[i]),
-                    Some(at) => flat(&infinigen::gn::attr::adapt_mesh(got, at.dom, dom, at.ty, &at.data)[i]),
+                    Some(at) => flat(&indoorgen::gn::attr::adapt_mesh(got, at.dom, dom, at.ty, &at.data)[i]),
                     None => vec![0.0; want.len()],
                 };
                 let mut dd = 0.0f64;
@@ -339,21 +339,21 @@ fn main() {
                         }
                     }
                 }
-                objects.map.insert(k.clone(), infinigen::gn::eval::Object { geo, matrix: m });
+                objects.map.insert(k.clone(), indoorgen::gn::eval::Object { geo, matrix: m });
             }
         }
         if let Some(cs) = c["collections"].as_object() {
             for (k, o) in cs {
                 let names = |j: &J| -> Vec<String> { j.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default() };
                 let off = o["offset"].as_array().map(|a| [a[0].as_f64().unwrap_or(0.0) as f32, a[1].as_f64().unwrap_or(0.0) as f32, a[2].as_f64().unwrap_or(0.0) as f32]).unwrap_or([0.0; 3]);
-                objects.collections.insert(k.clone(), infinigen::gn::eval::Collection { objects: names(&o["objects"]), children: names(&o["children"]), offset: off });
+                objects.collections.insert(k.clone(), indoorgen::gn::eval::Collection { objects: names(&o["objects"]), children: names(&o["children"]), offset: off });
             }
         }
         if let Some(fa) = c.get("factory").and_then(|f| f.as_array()) {
             // compare the Rust Factory (parameter sampler + template) against Blender's final mesh
             let (class, fseed, inst) = (fa[0].as_str().unwrap_or(""), fa[1].as_u64().unwrap_or(0), fa[2].as_u64().unwrap_or(0));
             let exp = &c["expect"];
-            let Some(f) = infinigen::assets::make_factory(class, fseed) else {
+            let Some(f) = indoorgen::assets::make_factory(class, fseed) else {
                 println!("CASE FAIL {} no Rust factory {}", name, class);
                 nfail += 1;
                 continue;
@@ -365,7 +365,7 @@ fn main() {
             };
             let m = Mesh::from_faces(ex.verts.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &ex.polys, &[]);
             if std::env::var("GNPROF").is_ok() {
-            for (k, t, n) in infinigen::gn::eval::prof_report().iter().take(8) {
+            for (k, t, n) in indoorgen::gn::eval::prof_report().iter().take(8) {
                 eprintln!("  prof {:32} {:8.1} ms  x{}", k, t * 1000.0, n);
             }
         }
@@ -419,13 +419,13 @@ fn main() {
         let outs_for_attrs = &outs;
         let mesh = if probe.is_some() {
             match &outs[0].1 {
-                Value::G(g) => Some(infinigen::gn::probe_mesh(g)),
+                Value::G(g) => Some(indoorgen::gn::probe_mesh(g)),
                 _ => None,
             }
         } else {
             gi.and_then(|k| match &outs[k].1 {
                 Value::G(gg) => {
-                    let geo = if c.get("out_attrs").map_or(false, |a| a.is_array()) { infinigen::gn::apply_out_attrs(g, outs_for_attrs, (**gg).clone(), &c["out_attrs"]) } else { (**gg).clone() };
+                    let geo = if c.get("out_attrs").map_or(false, |a| a.is_array()) { indoorgen::gn::apply_out_attrs(g, outs_for_attrs, (**gg).clone(), &c["out_attrs"]) } else { (**gg).clone() };
                     geo.mesh
                 }
                 _ => None,
@@ -438,7 +438,7 @@ fn main() {
         }
         let got = mesh.unwrap_or_else(Mesh::new);
         if std::env::var("GNPROF").is_ok() {
-            for (k, t, n) in infinigen::gn::eval::prof_report().iter().take(10) {
+            for (k, t, n) in indoorgen::gn::eval::prof_report().iter().take(10) {
                 eprintln!("  prof {:32} {:8.1} ms  x{}", k, t * 1000.0, n);
             }
         }

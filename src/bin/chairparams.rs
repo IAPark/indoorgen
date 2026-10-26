@@ -1,4 +1,4 @@
-use infinigen::assets::chair::ChairSpec;
+use indoorgen::assets::chair::ChairSpec;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (s0, n): (u64, u64) = (a[1].parse().unwrap(), a[2].parse().unwrap());

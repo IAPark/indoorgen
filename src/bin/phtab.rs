@@ -1,6 +1,6 @@
 //! phtab oracle.jsonl [Class,...] : placeholder bounds check for my classes; Coffee/Side unseeded dims are fitted from the oracle bbox
-use infinigen::furn::assets::TableAssets;
-use infinigen::furn::solver::{Assets, PlaceholderKind, Usage};
+use indoorgen::furn::assets::TableAssets;
+use indoorgen::furn::solver::{Assets, PlaceholderKind, Usage};
 use std::collections::BTreeMap;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -9,7 +9,7 @@ fn main() {
     let usage = Usage::from_json(&prog["used_as"]);
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
-    let assets = infinigen::assets::RealAssets { fallback };
+    let assets = indoorgen::assets::RealAssets { fallback };
     let mut stats: BTreeMap<String, (usize, usize, f64)> = BTreeMap::new();
     for line in std::fs::read_to_string(&a[1]).unwrap().lines() {
         let j: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -21,7 +21,7 @@ fn main() {
         for v in j["verts"].as_array().unwrap() { for k in 0..3 { let x = v[k].as_f64().unwrap(); lo[k] = lo[k].min(x); hi[k] = hi[k].max(x); } }
         let kind = if usage.has_usage(&class, "RealPlaceholder") { PlaceholderKind::Real } else if usage.has_usage(&class, "PlaceholderBBox") { PlaceholderKind::BboxOfPlaceholder } else { PlaceholderKind::BboxOfAsset };
         let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2]];
-        let measure = |u: &Vec<f64>| -> Option<([f64; 3], [f64; 3])> { infinigen::assets::set_unseeded(Some(u.clone())); let g = assets.placeholder(&class, fs, inst, kind)?; Some((g.lo, g.hi)) };
+        let measure = |u: &Vec<f64>| -> Option<([f64; 3], [f64; 3])> { indoorgen::assets::set_unseeded(Some(u.clone())); let g = assets.placeholder(&class, fs, inst, kind)?; Some((g.lo, g.hi)) };
         let g = match class.as_str() {
             "SideTableFactory" | "CoffeeTableFactory" => {
                 let side = class == "SideTableFactory";
@@ -36,9 +36,9 @@ fn main() {
                         for k in 0..3 { u[k] *= ext[k] / e[k]; }
                     }
                 }
-                measure(&u).map(|(l, h)| infinigen::furn::geom::ObjGeom::cuboid(l, h, 0))
+                measure(&u).map(|(l, h)| indoorgen::furn::geom::ObjGeom::cuboid(l, h, 0))
             }
-            _ => { infinigen::assets::set_unseeded(None); assets.placeholder(&class, fs, inst, kind) }
+            _ => { indoorgen::assets::set_unseeded(None); assets.placeholder(&class, fs, inst, kind) }
         };
         let e = stats.entry(class.clone()).or_default();
         e.0 += 1;

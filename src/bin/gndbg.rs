@@ -1,6 +1,6 @@
 //! gndbg FILE.json GROUP NODE.. SOCKET : evaluate a node output and print a summary of the geometry
-use infinigen::gn::*;
-use infinigen::dhash::HashMap;
+use indoorgen::gn::*;
+use indoorgen::dhash::HashMap;
 fn summ(g: &Geometry, ind: usize) {
     let p = " ".repeat(ind);
     if let Some(m) = &g.mesh {
@@ -29,7 +29,7 @@ fn main() {
         Value::G(g) => {
             summ(&g, 0);
             if let Ok(path) = std::env::var("GNDUMP") {
-                let r = infinigen::gn::meshops::realize_instances(&g, 1000);
+                let r = indoorgen::gn::meshops::realize_instances(&g, 1000);
                 if let Some(m) = &r.mesh {
                     let v: Vec<[f32; 3]> = m.pos.clone();
                     std::fs::write(path, serde_json::to_string(&v).unwrap()).unwrap();

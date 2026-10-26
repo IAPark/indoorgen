@@ -1,8 +1,8 @@
-use infinigen::int_hash;
-use infinigen::rng::Rng;
-use infinigen::rooms::consts::RoomConstants;
-use infinigen::rooms::plan::{FloorPlanSolver, PlanConfig};
-use infinigen::shp::*;
+use indoorgen::int_hash;
+use indoorgen::rng::Rng;
+use indoorgen::rooms::consts::RoomConstants;
+use indoorgen::rooms::plan::{FloorPlanSolver, PlanConfig};
+use indoorgen::shp::*;
 use geos::Geom;
 use serde_json::json;
 
@@ -33,7 +33,7 @@ fn main() {
             eprintln!("EXTREL {} {}", r.target, r.value.to_wkt().unwrap());
         }
     }
-    let sol = infinigen::rooms::solidify::Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false };
+    let sol = indoorgen::rooms::solidify::Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false };
     let mut rc = Rng::seeded(seed);
     let res = sol.solidify(&mut rc, &st);
     let cut: Vec<_> = res.cutters.iter().map(|c| json!({"kind": format!("{:?}", c.kind), "loc": c.loc, "rot": c.rot_z, "dim": c.dims, "rooms": c.rooms})).collect();

@@ -1,7 +1,7 @@
 //! showcase CLASS N out.glb [fseed0]: lay out N instances of a factory in a row (for eyeballing ports)
-use infinigen::assets::*;
-use infinigen::furn::assets::TableAssets;
-use infinigen::mesh::*;
+use indoorgen::assets::*;
+use indoorgen::furn::assets::TableAssets;
+use indoorgen::mesh::*;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();

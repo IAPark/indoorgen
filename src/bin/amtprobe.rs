@@ -1,4 +1,4 @@
-use infinigen::rng::Rng;
+use indoorgen::rng::Rng;
 fn main() {
     // replicate Bathtub::new draws up to hole_radius, then scan
     for (seed, want) in [(1u64, 0.00446161307834657f64), (2, 0.003471448838589538), (6, 0.004682033219057195), (7, 0.0018702638204578278)] {

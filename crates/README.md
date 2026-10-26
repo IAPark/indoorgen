@@ -19,7 +19,7 @@ like `crate::mesh::Mesh`, `crate::assets::polyfill`, `super::Asset`, `crate::fur
 | ig_decor | balloon, books, bottle, bowl, can, chopsticks, cup, cutlery, decor, foodbox, jar, lamps, lid, plate, proxy, tableware, vase, walldecor, wineglass |
 | ig_plants | cactus, fern, mollusk, monocot, mushroom, nature, plants, shell, snakeplant, spiderplant, succulent |
 | ig_openings | doors, doorhandles, windows |
-| ig_assets | class registry (make_factory, RealAssets, memo caches) = old assets/mod.rs; re-exports every asset crate as `infinigen::assets` |
+| ig_assets | class registry (make_factory, RealAssets, memo caches) = old assets/mod.rs; re-exports every asset crate as `indoorgen::assets` |
 | (root) infinigen | pipeline, openings (scene doors/windows), src/bin/* ; re-exports the crates under the historical paths |
 
 Adding a module: put the file in the crate of its layer and add `pub mod x;` to that crate's src/lib.rs (asset classes also need a

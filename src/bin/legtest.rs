@@ -1,6 +1,6 @@
 //! legtest IN.json OUT.json : apply DISPLACE (legacy texture) to a mesh. IN: {"v","f","kind","stype","wave","scale","strength","mid","depth","hard","basis"}
-use infinigen::assets::legtex::*;
-use infinigen::mesh::Mesh;
+use indoorgen::assets::legtex::*;
+use indoorgen::mesh::Mesh;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();

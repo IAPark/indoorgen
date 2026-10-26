@@ -1,9 +1,9 @@
 //! dumpasset CLASS fseed out.json : dump the Rust factory asset (inst 0) as {verts, polys}
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (class, fs) = (&a[1], a[2].parse::<u64>().unwrap());
-    if std::env::var("NOUNSEEDED").is_err() { set_unseeded(infinigen::assets::ctor_draws::ctor_draws(class, &mut infinigen::rng::Rng::seeded(fs))); }
+    if std::env::var("NOUNSEEDED").is_err() { set_unseeded(indoorgen::assets::ctor_draws::ctor_draws(class, &mut indoorgen::rng::Rng::seeded(fs))); }
     let f = make_factory(class, fs).expect("no factory");
     let asset = if std::env::var("PH").is_ok() { f.placeholder(0).expect("no placeholder") } else { f.asset(0) };
     let mut verts = vec![];

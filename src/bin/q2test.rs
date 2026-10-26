@@ -1,4 +1,4 @@
-use infinigen::assets::polyfill::quad_split_24_beauty;
+use indoorgen::assets::polyfill::quad_split_24_beauty;
 fn main() {
     let c: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("tmp/sd/005_mesh_bridge_edge_loops.case.json").unwrap()).unwrap();
     let v = |i: usize| -> [f32; 3] { let a = &c["verts"][i]; [a[0].as_f64().unwrap() as f32, a[1].as_f64().unwrap() as f32, a[2].as_f64().unwrap() as f32] };

@@ -3,7 +3,7 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (fs, inst): (u64, u64) = (a[2].parse().unwrap(), a.get(3).map(|x| x.parse().unwrap()).unwrap_or(0));
     let p = match a[1].as_str() {
-        "TriangleShelfFactory" => infinigen::assets::gnports::triangle_shelf_params(fs, inst),
+        "TriangleShelfFactory" => indoorgen::assets::gnports::triangle_shelf_params(fs, inst),
         _ => panic!("unknown class"),
     };
     let mut k: Vec<_> = p.iter().collect();

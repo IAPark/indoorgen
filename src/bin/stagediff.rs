@@ -1,5 +1,5 @@
 //! stagediff DIR_RUST DIR_PY: compare every NNN_kind_out.bin of the Rust trace (MONOTRACE) with the python trace (tools/pytrace.py), in order.
-use infinigen::assets::stagefile::*;
+use indoorgen::assets::stagefile::*;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();

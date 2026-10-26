@@ -1260,7 +1260,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "infinigen"
+name = "indoorgen"
 version = "0.1.0"
 dependencies = [
  "anyhow",

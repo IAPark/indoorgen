@@ -1,4 +1,4 @@
-use infinigen::assets::curvekit::*;
+use indoorgen::assets::curvekit::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let cases: Vec<Vec<(f64, f64)>> = serde_json::from_str::<Vec<Vec<(f64, f64)>>>(&a[1]).unwrap();

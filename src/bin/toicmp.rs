@@ -1,7 +1,7 @@
-use infinigen::assets::bathroom::Toilet;
-use infinigen::assets::stagecmp::surface_dist;
-use infinigen::assets::toiletx;
-use infinigen::rng::Rng;
+use indoorgen::assets::bathroom::Toilet;
+use indoorgen::assets::stagecmp::surface_dist;
+use indoorgen::assets::toiletx;
+use indoorgen::rng::Rng;
 use serde_json::Value;
 
 fn load(j: &Value, k: &str) -> Option<(Vec<[f64; 3]>, Vec<Vec<u32>>)> {
@@ -18,7 +18,7 @@ fn report(name: &str, got: (&[[f64; 3]], &[Vec<u32>]), j: &Value, key: &str) {
     }
     let Some((v, f)) = load(j, key) else { println!("{name}: no stage {key}"); return };
     if !got.0.is_empty() {
-        let vn = infinigen::assets::bathkit::nn_max(got.0, &v).max(infinigen::assets::bathkit::nn_max(&v, got.0));
+        let vn = indoorgen::assets::bathkit::nn_max(got.0, &v).max(indoorgen::assets::bathkit::nn_max(&v, got.0));
         print!("vnn {vn:.2e} ");
     }
     let ok_counts = format!("verts {}/{} faces {}/{}", got.0.len(), v.len(), got.1.len(), f.len());
@@ -46,7 +46,7 @@ fn main() {
     let j: Value = serde_json::from_str(&std::fs::read_to_string(&a[3]).unwrap()).unwrap();
     let mut rng = Rng::seeded(seed);
     let t = Toilet::new(&mut rng);
-    let mut r = infinigen::assets::inst_rng(seed, inst);
+    let mut r = indoorgen::assets::inst_rng(seed, inst);
     let st = toiletx::tube_bridge(&t, &mut r);
     report("upper", (&st.upper, &[]), &j, "upper");
     report("lower", (&st.lower, &[]), &j, "lower");
@@ -65,18 +65,18 @@ fn main() {
         println!("verts at clip z: rust {} py {}", nz, nzp);
     }
     report("tube", (&tube.pos, &tube.faces), &j, "tube");
-    let mut r = infinigen::assets::inst_rng(seed, inst);
+    let mut r = indoorgen::assets::inst_rng(seed, inst);
     let t0 = std::time::Instant::now();
     let p = toiletx::build(&t, &mut r);
     println!("build {:.2}s", t0.elapsed().as_secs_f64());
     let plane = toiletx::make_plane(&t, &tube);
     report("plane", (&plane.pos, &plane.faces), &j, "plane");
-    let ss = infinigen::assets::bpyops::solidify(&plane, t.extrude_height, 1.0);
+    let ss = indoorgen::assets::bpyops::solidify(&plane, t.extrude_height, 1.0);
     report("seatsol", (&ss.pos, &ss.faces), &j, "m13_SOLIDIFY");
     report("seat", (&p.seat.pos, &p.seat.faces), &j, "seat");
     report("cover", (&p.cover.pos, &p.cover.faces), &j, "cover");
     if std::env::var("STANDSCAN").is_ok() {
-        let mut r2 = infinigen::assets::inst_rng(seed, inst);
+        let mut r2 = indoorgen::assets::inst_rng(seed, inst);
         let a = r2.uniform(0.1, 0.2);
         let b = r2.uniform(0.0, 0.15);
         println!("draws: bridge {a} stand {b}");
@@ -95,10 +95,10 @@ fn main() {
     report("hw", (&p.hw.pos, &p.hw.faces), &j, "hw");
     if std::env::var("PYTUBE").is_ok() {
         let (pv, pf) = load(&j, "tube").unwrap();
-        let mut m = infinigen::mesh::Mesh::new();
+        let mut m = indoorgen::mesh::Mesh::new();
         m.pos = pv.iter().map(|p| [p[0] as f32 as f64, p[1] as f32 as f64, p[2] as f32 as f64]).collect();
         m.faces = pf;
-        let b = infinigen::assets::bathkit::bevel_def(&m, 0.1, 2);
+        let b = indoorgen::assets::bathkit::bevel_def(&m, 0.1, 2);
         report("pytubebev", (&b.pos, &b.faces), &j, "m29_BEVEL");
         if std::env::var("DUMP").is_ok() {}
     }

@@ -1,10 +1,10 @@
-use infinigen::furn::dof::*;
-use infinigen::furn::geom::*;
-use infinigen::furn::relations::*;
-use infinigen::furn::state::*;
-use infinigen::furn::tags::*;
-use infinigen::mesh::*;
-use infinigen::rng::Rng;
+use indoorgen::furn::dof::*;
+use indoorgen::furn::geom::*;
+use indoorgen::furn::relations::*;
+use indoorgen::furn::state::*;
+use indoorgen::furn::tags::*;
+use indoorgen::mesh::*;
+use indoorgen::rng::Rng;
 use std::sync::Arc;
 
 fn main() {

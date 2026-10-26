@@ -5,8 +5,8 @@
 //! Per case: vertex/face counts, exact-order max coordinate error (when counts match), whether polygon lists are
 //! identical, and symmetric nearest-surface distances (probes = vertices + edge midpoints, mean/p95/max both ways).
 //! Exit code 1 if any case exceeds the tolerances (surface mean/max) or is missing.
-use infinigen::assets::*;
-use infinigen::rng::Rng;
+use indoorgen::assets::*;
+use indoorgen::rng::Rng;
 use nalgebra as na;
 use parry3d_f64::query::PointQuery;
 use parry3d_f64::shape::TriMesh;
@@ -53,7 +53,7 @@ fn trimesh(m: &M) -> Option<TriMesh> {
         if f.len() > 4 {
             // concave n-gons: ear clipping (a fan would cover area outside the polygon)
             let co: Vec<[f32; 3]> = f.iter().map(|&i| { let p = m.v[i as usize]; [p[0] as f32, p[1] as f32, p[2] as f32] }).collect();
-            for t in infinigen::assets::polyfill::triangulate_ngon(&co) {
+            for t in indoorgen::assets::polyfill::triangulate_ngon(&co) {
                 idx.push([f[t[0] as usize], f[t[1] as usize], f[t[2] as usize]]);
             }
             continue;
@@ -166,7 +166,7 @@ fn main() {
         };
         let asset = if a.iter().any(|x| x == "--raw") { f.asset(*i) } else { scene_asset(&*f, *i) };
         if let Some(cp) = opt("--cloth-json") {
-            let id = infinigen::mesh::Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
+            let id = indoorgen::mesh::Mat4([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]);
             std::fs::write(cp, serde_json::to_vec(&asset.cloth_json("bed", &id)).unwrap()).unwrap();
         }
         if let Some(d) = opt("--dump") {

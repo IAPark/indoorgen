@@ -1,5 +1,5 @@
 //! rsmesh PY.jsonl : for each (class,fseed,inst) print the Rust asset (parts concatenated) as jsonl {verts,polys}
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     for line in std::fs::read_to_string(path).unwrap().lines() {

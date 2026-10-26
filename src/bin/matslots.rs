@@ -1,5 +1,5 @@
 //! matslots CLASS FSEED INST : per-slot material spec + face count of Factory::exact_slots (compare with python's material slots of the same instance)
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let (class, s, inst): (&str, u64, u64) = (&a[1], a[2].parse().unwrap(), a[3].parse().unwrap());

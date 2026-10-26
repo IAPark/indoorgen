@@ -1,4 +1,4 @@
-use infinigen::furn::mpr::*;
+use indoorgen::furn::mpr::*;
 fn main() {
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/Users/lume/work/ref/bl32/fcl_cases.json").unwrap()).unwrap();
     let (mut ok_ab, mut ok_ba, mut bad) = (0, 0, 0);

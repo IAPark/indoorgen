@@ -1,6 +1,6 @@
 //! bmesh bevel port vs bpy.ops.mesh.bevel (cases from ~/work/agents/storage/bevtest/gen.py)
-use infinigen::bm::bevel::*;
-use infinigen::bm::*;
+use indoorgen::bm::bevel::*;
+use indoorgen::bm::*;
 use serde_json::Value;
 fn main() {
     let a: Vec<String> = std::env::args().collect();

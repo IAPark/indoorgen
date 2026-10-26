@@ -1,6 +1,6 @@
 //! clothcmp DUMPDIR KEY : run the Rust cloth solver on a python-dumped cloth_sim call (KEY e.g. sim.make_sheet.0) and compare with Blender's result.
-use infinigen::assets::cloth::*;
-use infinigen::assets::pydump::*;
+use indoorgen::assets::cloth::*;
+use indoorgen::assets::pydump::*;
 fn stats(a: &[[f64; 3]], b: &[[f64; 3]]) -> (f64, f64) {
     let mut s = 0.0;
     let mut m: f64 = 0.0;

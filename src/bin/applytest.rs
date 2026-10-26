@@ -1,6 +1,6 @@
-use infinigen::assets::doors::apply_draws;
-use infinigen::assets::matdraw::init;
-use infinigen::rng::Rng;
+use indoorgen::assets::doors::apply_draws;
+use indoorgen::assets::matdraw::init;
+use indoorgen::rng::Rng;
 fn main() {
     let names = ["metal.MetalBasic", "metal.BrushedMetal", "metal.GalvanizedMetal", "metal.GrainedMetal", "metal.HammeredMetal", "metal.BrushedBlackMetal", "wood.Wood", "wood.WhitePlywood", "wood.BlackPlywood", "wood.BlondePlywood", "plastic.Plastic", "plastic.PlasticRough", "plastic.PlasticTranslucent", "ceramic.Glass"];
     let mut out = serde_json::Map::new();

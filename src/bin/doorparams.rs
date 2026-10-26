@@ -1,7 +1,7 @@
 //! doorparams CLASS fseed const_seed : print door parameters as json
-use infinigen::assets::doors::*;
-use infinigen::rng::Rng;
-use infinigen::rooms::consts::RoomConstants;
+use indoorgen::assets::doors::*;
+use indoorgen::rng::Rng;
+use indoorgen::rooms::consts::RoomConstants;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let kind = match a[1].as_str() { "PanelDoorFactory" => DoorKind::Panel, "GlassPanelDoorFactory" => DoorKind::GlassPanel, "LouverDoorFactory" => DoorKind::Louver, _ => DoorKind::Lite };

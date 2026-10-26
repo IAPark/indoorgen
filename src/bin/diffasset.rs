@@ -1,5 +1,5 @@
 //! diffasset file.jsonl : build each (class, fseed, inst) with the Rust factory and diff vertices/polygons against the python dump
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let mut n = 0;

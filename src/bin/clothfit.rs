@@ -1,7 +1,7 @@
 //! clothfit : run the Rust cloth solver on every python-dumped cloth_sim call of the cached Bed seeds (parallel) and report the similarity to Blender.
 //! env: SEEDS="1 2 3 4 5 6" KINDS="sheet cover pillow wrapped"  + CL_* calibration vars. Output: one line per case + summary.
-use infinigen::assets::cloth::*;
-use infinigen::assets::pydump::*;
+use indoorgen::assets::cloth::*;
+use indoorgen::assets::pydump::*;
 use rayon::prelude::*;
 
 fn params_from_kw(kw: &serde_json::Value, pre: &PyMesh) -> ClothParams {

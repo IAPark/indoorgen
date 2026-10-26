@@ -1,14 +1,14 @@
 // messbench CLASS N : build time / size of the first N factory seeds (clutter asset cost survey)
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let n: u64 = a[2].parse().unwrap();
     for s in 0..n {
         let t = std::time::Instant::now();
         let tc = std::time::Instant::now();
-        let dr = infinigen::assets::ctor_draws::ctor_draws(&a[1], &mut infinigen::rng::Rng::seeded(s));
+        let dr = indoorgen::assets::ctor_draws::ctor_draws(&a[1], &mut indoorgen::rng::Rng::seeded(s));
         let dt = tc.elapsed().as_secs_f64();
-        infinigen::assets::ctor_draws::set_unseeded(dr);
+        indoorgen::assets::ctor_draws::set_unseeded(dr);
         let t = std::time::Instant::now();
         let Some(f) = make_factory(&a[1], s) else { println!("{} none", a[1]); return };
         let asset = scene_asset(&*f, s + 1000);

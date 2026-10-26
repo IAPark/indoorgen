@@ -1,4 +1,4 @@
-use infinigen::assets::cabnodes::*;
+use indoorgen::assets::cabnodes::*;
 fn main() {
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/tmp/stor_ngon32.json").unwrap()).unwrap();
     let cases: Vec<(&str, GMesh)> = vec![

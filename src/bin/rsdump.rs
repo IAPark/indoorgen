@@ -1,5 +1,5 @@
 //! rsdump CLASS FSEED_START N INST OUT.jsonl : dump Factory::exact (or placeholder) meshes as pydump-compatible jsonl
-use infinigen::assets::*;
+use indoorgen::assets::*;
 use std::io::Write;
 fn main() {
     let a: Vec<String> = std::env::args().collect();

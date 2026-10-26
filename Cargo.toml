@@ -1,7 +1,11 @@
 [package]
-name = "infinigen"
+name = "indoorgen"
 version = "0.1.0"
 edition = "2021"
+description = "Procedural indoor scene generator in Rust (derived from Princeton Infinigen Indoors)"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/OWNER/indoorgen"
+readme = "README.md"
 
 [workspace]
 members = ["crates/*"]

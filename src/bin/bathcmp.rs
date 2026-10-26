@@ -1,7 +1,7 @@
-use infinigen::assets::bathroom::Bathtub;
-use infinigen::assets::bathtub;
-use infinigen::assets::stagecmp::surface_dist;
-use infinigen::rng::Rng;
+use indoorgen::assets::bathroom::Bathtub;
+use indoorgen::assets::bathtub;
+use indoorgen::assets::stagecmp::surface_dist;
+use indoorgen::rng::Rng;
 use serde_json::Value;
 
 fn load(j: &Value, k: &str) -> Option<(Vec<[f64; 3]>, Vec<Vec<u32>>)> {
@@ -11,14 +11,14 @@ fn load(j: &Value, k: &str) -> Option<(Vec<[f64; 3]>, Vec<Vec<u32>>)> {
     Some((v, f))
 }
 
-fn report(name: &str, got: &infinigen::mesh::Mesh, j: &Value, key: &str) {
+fn report(name: &str, got: &indoorgen::mesh::Mesh, j: &Value, key: &str) {
     if let Ok(d) = std::env::var("DUMP") {
         let js = serde_json::json!({"v": got.pos, "p": got.faces});
         std::fs::write(format!("{d}/{name}.json"), js.to_string()).unwrap();
     }
     let Some((v, f)) = load(j, key) else { println!("{name}: no stage {key}"); return };
     let ok_counts = format!("verts {}/{} faces {}/{}", got.pos.len(), v.len(), got.faces.len(), f.len());
-    let vn = infinigen::assets::bathkit::nn_max(&got.pos, &v).max(infinigen::assets::bathkit::nn_max(&v, &got.pos));
+    let vn = indoorgen::assets::bathkit::nn_max(&got.pos, &v).max(indoorgen::assets::bathkit::nn_max(&v, &got.pos));
     print!("vnn {vn:.2e} ");
     match surface_dist(&got.pos, &got.faces, &v, &f, 3000) {
         Some((mean, mx)) => println!("{name:12} {ok_counts} mean {mean:.3e} max {mx:.3e} {}", if mean < 1e-5 && mx < 1e-4 { "OK" } else { "FAIL" }),
@@ -34,7 +34,7 @@ fn main() {
     let mut rng = Rng::seeded(seed);
     let mut t = Bathtub::new(&mut rng);
     t.fseed = seed;
-    let mut r = infinigen::assets::inst_rng(seed, inst);
+    let mut r = indoorgen::assets::inst_rng(seed, inst);
     let t0 = std::time::Instant::now();
     let st = bathtub::build(&t, &mut r);
     println!("build {:.2}s alcove={}", t0.elapsed().as_secs_f64(), t.alcove);

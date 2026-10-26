@@ -1,5 +1,5 @@
-use infinigen::furn::program::*;
-use infinigen::dhash::HashMap;
+use indoorgen::furn::program::*;
+use indoorgen::dhash::HashMap;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();

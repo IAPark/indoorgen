@@ -1,6 +1,6 @@
-use infinigen::furn::assets::TableAssets;
-use infinigen::furn::solver::{Assets, PlaceholderKind};
-use infinigen::furn::solver::Usage;
+use indoorgen::furn::assets::TableAssets;
+use indoorgen::furn::solver::{Assets, PlaceholderKind};
+use indoorgen::furn::solver::Usage;
 use std::collections::BTreeMap;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
@@ -8,7 +8,7 @@ fn main() {
     let usage = Usage::from_json(&prog["used_as"]);
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
-    let assets = infinigen::assets::RealAssets { fallback };
+    let assets = indoorgen::assets::RealAssets { fallback };
     let mut stats: BTreeMap<String, (usize, usize, f64, usize)> = BTreeMap::new();
     for line in std::fs::read_to_string(path).unwrap().lines() {
         let j: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -22,21 +22,21 @@ fn main() {
         if std::env::var_os("PHKIND").is_some() { eprintln!("KIND {} {:?}", class, kind as u8); }
         let e = stats.entry(class.clone()).or_default();
         e.0 += 1;
-        let real = infinigen::assets::make_factory(&class, fs).is_some();
+        let real = indoorgen::assets::make_factory(&class, fs).is_some();
         // Side/Coffee tables take their dimensions from constructor draws on the global stream (not in the oracle): fit them to the python bounds
         let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2]];
         let fitted = if real && (class == "SideTableFactory" || class == "CoffeeTableFactory") {
             let side = class == "SideTableFactory";
             let mut u = if side { vec![1.0, 1.0] } else { vec![1.2, 0.7, 0.45] };
             for _ in 0..40 {
-                infinigen::assets::set_unseeded(Some(u.clone()));
+                indoorgen::assets::set_unseeded(Some(u.clone()));
                 let Some(g) = assets.placeholder(&class, fs, inst, kind) else { break };
                 let e = [g.hi[0] - g.lo[0], g.hi[1] - g.lo[1], g.hi[2]];
                 if side { u[0] *= ext[0] / e[0]; u[1] *= ext[2] / e[2]; } else { for k in 0..3 { u[k] *= ext[k] / e[k]; } }
             }
-            infinigen::assets::set_unseeded(Some(u));
+            indoorgen::assets::set_unseeded(Some(u));
             let g = assets.placeholder(&class, fs, inst, kind);
-            infinigen::assets::set_unseeded(None);
+            indoorgen::assets::set_unseeded(None);
             g
         } else { None };
         let gopt = if fitted.is_some() { fitted } else { assets.placeholder(&class, fs, inst, kind) };
@@ -56,10 +56,10 @@ fn main() {
                     let ix: Vec<usize> = poly.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect();
                     let c: [f64; 3] = std::array::from_fn(|k| (verts[ix[0]][k] + verts[ix[1]][k] + verts[ix[2]][k]) / 3.0);
                     let mut bits = 0u32;
-                    if !names.is_empty() { for part in names[pi].as_str().unwrap().split('.') { let mut cc = part.to_string(); if let Some(f) = cc.get_mut(0..1) { f.make_ascii_uppercase(); } bits |= infinigen::furn::geom::subpart_bit(&cc); } }
-                    let m = bits & (infinigen::furn::geom::BACK | infinigen::furn::geom::FRONT | infinigen::furn::geom::TOP | infinigen::furn::geom::BOTTOM | infinigen::furn::geom::SIDE);
+                    if !names.is_empty() { for part in names[pi].as_str().unwrap().split('.') { let mut cc = part.to_string(); if let Some(f) = cc.get_mut(0..1) { f.make_ascii_uppercase(); } bits |= indoorgen::furn::geom::subpart_bit(&cc); } }
+                    let m = bits & (indoorgen::furn::geom::BACK | indoorgen::furn::geom::FRONT | indoorgen::furn::geom::TOP | indoorgen::furn::geom::BOTTOM | indoorgen::furn::geom::SIDE);
                     let found = g.tris.iter().find(|t| (0..3).all(|k| ((t.v[0][k] + t.v[1][k] + t.v[2][k]) / 3.0 - c[k]).abs() < 1e-5));
-                    match found { Some(t) => { if t.tags & (infinigen::furn::geom::BACK | infinigen::furn::geom::FRONT | infinigen::furn::geom::TOP | infinigen::furn::geom::BOTTOM | infinigen::furn::geom::SIDE) != m { bad += 1; } } None => bad += 1 }
+                    match found { Some(t) => { if t.tags & (indoorgen::furn::geom::BACK | indoorgen::furn::geom::FRONT | indoorgen::furn::geom::TOP | indoorgen::furn::geom::BOTTOM | indoorgen::furn::geom::SIDE) != m { bad += 1; } } None => bad += 1 }
                 }
                 if bad > 0 && std::env::var_os("PHTAGS").unwrap() == "2" { for (pi, poly) in polys.iter().enumerate() { let ix: Vec<usize> = poly.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(); let c: [f64; 3] = std::array::from_fn(|k| (verts[ix[0]][k] + verts[ix[1]][k] + verts[ix[2]][k]) / 3.0); let f = g.tris.iter().find(|t| (0..3).all(|k| ((t.v[0][k] + t.v[1][k] + t.v[2][k]) / 3.0 - c[k]).abs() < 1e-5)); eprintln!("  py {:?} c {:?} rust {:?}", names.get(pi), c, f.map(|t| t.tags)); } }
                 if bad > 0 { eprintln!("TAGDIFF {} fs {} inst {} bad {}/{}", class, fs, inst, bad, polys.len()); }

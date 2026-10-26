@@ -1,6 +1,6 @@
 //! clothexp3 [KEYFILTER] : Rust solver on the double-layer disc calibration scenes of tools/clothexp3.py vs Blender (z range at frames 10/25/50)
-use infinigen::assets::cloth::*;
-use infinigen::assets::clothes::*;
+use indoorgen::assets::cloth::*;
+use indoorgen::assets::clothes::*;
 fn main() {
     let filt = std::env::args().nth(1).unwrap_or_default();
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("EXP3").unwrap_or("/Users/lume/work/agents/rng/cache/clothexp3.json".into())).unwrap()).unwrap();

@@ -1,4 +1,4 @@
-use infinigen::bl32::*;
+use indoorgen::bl32::*;
 fn f(v: &serde_json::Value) -> f32 { v.as_f64().unwrap() as f32 }
 fn v3(v: &serde_json::Value) -> [f32; 3] { let a = v.as_array().unwrap(); [f(&a[0]), f(&a[1]), f(&a[2])] }
 fn main() {

@@ -1,5 +1,5 @@
-use infinigen::assets::cabdoor::*;
-use infinigen::assets::cabnodes::*;
+use indoorgen::assets::cabdoor::*;
+use indoorgen::assets::cabnodes::*;
 use std::io::Write;
 fn main() {
     let a: Vec<String> = std::env::args().collect();

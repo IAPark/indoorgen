@@ -1,5 +1,5 @@
-//! infinigen-rs: Rust port of Infinigen Indoors scene generation. The code lives in the workspace crates under crates/;
-//! this root crate re-exports them under the historical module paths (infinigen::assets, ::gn, ::furn, ...) and holds the pipeline.
+//! indoorgen: Rust indoor scene generator derived from Infinigen Indoors. The code lives in the workspace crates under crates/;
+//! this root crate re-exports them under the historical module paths (indoorgen::assets, ::gn, ::furn, ...) and holds the pipeline.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub use ig_core::*;

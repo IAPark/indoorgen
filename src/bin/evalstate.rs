@@ -1,9 +1,9 @@
-use infinigen::furn::eval::*;
-use infinigen::furn::geom::*;
-use infinigen::furn::relations::*;
-use infinigen::furn::state::*;
-use infinigen::furn::tags::*;
-use infinigen::pipeline::*;
+use indoorgen::furn::eval::*;
+use indoorgen::furn::geom::*;
+use indoorgen::furn::relations::*;
+use indoorgen::furn::state::*;
+use indoorgen::furn::tags::*;
+use indoorgen::pipeline::*;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -52,8 +52,8 @@ fn main() {
     if std::env::var("VALID").is_ok() {
         for (k, o) in state.objs.iter() {
             if o.generator.is_some() && !o.relations.is_empty() {
-                let rel = infinigen::furn::dof::all_relations_valid(&state, k);
-                let post = infinigen::furn::dof::check_post_move_validity(&state, k);
+                let rel = indoorgen::furn::dof::all_relations_valid(&state, k);
+                let post = indoorgen::furn::dof::check_post_move_validity(&state, k);
                 if !rel || !post {
                     println!("INVALID {k} relations_ok={rel} post_ok={post}");
                 }

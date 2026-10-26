@@ -13,8 +13,8 @@
 //! not supported by the Rust port or a Rust error.  The last stdout line is machine readable:
 //!   RESULT <op> <case-name> level=<exact|surface|none> required=<..> status=<OK|MISMATCH|UNSUPPORTED> ...
 //! Add an op: write `fn r_name(c:&Case,p:&Value)->Res` and add a row to OPS.
-use infinigen::dhash::HashMap;
-use infinigen::mesh::Mesh;
+use indoorgen::dhash::HashMap;
+use indoorgen::mesh::Mesh;
 use serde_json::{json, Value};
 
 type Res = Result<Mesh, String>;
@@ -133,7 +133,7 @@ fn sel_idx(c: &Case, key: &str, n: usize) -> Vec<usize> {
     }
 }
 
-fn bm_out(bm: &infinigen::bm::BMesh) -> Mesh {
+fn bm_out(bm: &indoorgen::bm::BMesh) -> Mesh {
     let (p, _e, f) = bm.to_mesh();
     let mut out = Mesh::new();
     out.pos = p.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
@@ -141,8 +141,8 @@ fn bm_out(bm: &infinigen::bm::BMesh) -> Mesh {
     out
 }
 
-fn bevel_otype(s: &str) -> Result<infinigen::bm::bevel::OffsetType, String> {
-    use infinigen::bm::bevel::OffsetType::*;
+fn bevel_otype(s: &str) -> Result<indoorgen::bm::bevel::OffsetType, String> {
+    use indoorgen::bm::bevel::OffsetType::*;
     Ok(match s {
         "OFFSET" => Offset,
         "WIDTH" => Width,
@@ -154,12 +154,12 @@ fn bevel_otype(s: &str) -> Result<infinigen::bm::bevel::OffsetType, String> {
 }
 
 fn r_bevel(c: &Case, p: &Value) -> Res {
-    use infinigen::bm::bevel::*;
-    use infinigen::bm::*;
+    use indoorgen::bm::bevel::*;
+    use indoorgen::bm::*;
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
     let (edges, ce, ef) = edge_list(&c.mesh, &c.edges);
     let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
-    infinigen::assets::bevmod::set_mesh_vert_normals(&mut bm, &pos, &c.mesh.faces);
+    indoorgen::assets::bevmod::set_mesh_vert_normals(&mut bm, &pos, &c.mesh.faces);
     let o = BevelOpts {
         offset: if ps(p, "offset_type", "OFFSET") == "PERCENT" { pf(p, "offset_pct", 0.0) } else { pf(p, "offset", 0.1) } as f32,
         offset_type: bevel_otype(ps(p, "offset_type", "OFFSET"))?,
@@ -197,7 +197,7 @@ fn r_bevel_mod(c: &Case, p: &Value) -> Res {
     if ps(p, "offset_type", "OFFSET") != "OFFSET" {
         return Err("offset_type != OFFSET".into());
     }
-    infinigen::assets::bevmod::bevel_modifier_ex(&c.mesh, pf(p, "width", 0.1), seg, angle, pb(p, "use_clamp_overlap", true), pf(p, "profile", 0.5) as f32, c.edges.as_deref())
+    indoorgen::assets::bevmod::bevel_modifier_ex(&c.mesh, pf(p, "width", 0.1), seg, angle, pb(p, "use_clamp_overlap", true), pf(p, "profile", 0.5) as f32, c.edges.as_deref())
 }
 
 fn r_solidify(c: &Case, p: &Value) -> Res {
@@ -206,18 +206,18 @@ fn r_solidify(c: &Case, p: &Value) -> Res {
     match ps(p, "solidify_mode", "EXTRUDE") {
         "EXTRUDE" => {
             if pb(p, "use_even_offset", false) || pf(p, "thickness_clamp", 0.0) != 0.0 || pb(p, "use_flip_normals", false) {
-                return Ok(infinigen::assets::bpyops::solidify(&c.mesh, th, off));
+                return Ok(indoorgen::assets::bpyops::solidify(&c.mesh, th, off));
             }
             let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
             let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
-            let s = infinigen::assets::solidx::solidify_extrude(&pos, &edges, &c.mesh.faces, &ce, th as f32, off as f32, pb(p, "use_rim", true));
+            let s = indoorgen::assets::solidx::solidify_extrude(&pos, &edges, &c.mesh.faces, &ce, th as f32, off as f32, pb(p, "use_rim", true));
             let mut m = Mesh::new();
             m.pos = s.pos.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
             m.faces = s.faces;
             Ok(m)
         }
         "NON_MANIFOLD" => {
-            use infinigen::assets::solidnm::*;
+            use indoorgen::assets::solidnm::*;
             let b = match ps(p, "nonmanifold_boundary_mode", "NONE") {
                 "NONE" => Boundary::None,
                 "ROUND" => Boundary::Round,
@@ -247,11 +247,11 @@ fn r_bridge(c: &Case, p: &Value) -> Res {
     let cuts = pi(p, "number_cuts", 0) as usize;
     let shape = pf(p, "profile_shape_factor", 0.0);
     let mode = match ps(p, "interpolation", "PATH") {
-        "LINEAR" => infinigen::assets::bridge::Interp::Linear,
-        "SURFACE" => infinigen::assets::bridge::Interp::Surface,
-        _ => infinigen::assets::bridge::Interp::Path,
+        "LINEAR" => indoorgen::assets::bridge::Interp::Linear,
+        "SURFACE" => indoorgen::assets::bridge::Interp::Surface,
+        _ => indoorgen::assets::bridge::Interp::Path,
     };
-    infinigen::assets::bridge::bridge_bm(&c.mesh, &l[0], &l[1], cuts, shape, mode, pf(p, "smoothness", 1.0), ps(p, "profile_shape", "SMOOTH"), c.edges.as_deref())
+    indoorgen::assets::bridge::bridge_bm(&c.mesh, &l[0], &l[1], cuts, shape, mode, pf(p, "smoothness", 1.0), ps(p, "profile_shape", "SMOOTH"), c.edges.as_deref())
 }
 
 fn r_fill_grid(c: &Case, p: &Value) -> Res {
@@ -263,7 +263,7 @@ fn r_fill_grid(c: &Case, p: &Value) -> Res {
         return Err("fill_grid: exactly one loop".into());
     }
     let lp: Vec<[f64; 3]> = l[0].iter().map(|&i| c.mesh.pos[i as usize]).collect();
-    Ok(infinigen::assets::bpyops::fill_grid_loop(&lp))
+    Ok(indoorgen::assets::bpyops::fill_grid_loop(&lp))
 }
 
 fn r_subsurf(c: &Case, p: &Value) -> Res {
@@ -274,7 +274,7 @@ fn r_subsurf(c: &Case, p: &Value) -> Res {
         t => return Err(format!("subdivision_type {t}")),
     };
     if std::env::var("SUBSURF_OLD").is_ok() {
-        return Ok(infinigen::assets::subsurf::subsurf(&c.mesh, lv, simple));
+        return Ok(indoorgen::assets::subsurf::subsurf(&c.mesh, lv, simple));
     }
     // optional per-loop UV (case key "uv", from tools/stagedump_uv): Blender refines UV-carrying meshes with a face-varying channel
     let uvids: Option<Vec<i32>> = c.j.get("uv").and_then(|u| u.as_array()).map(|u| {
@@ -292,9 +292,9 @@ fn r_subsurf(c: &Case, p: &Value) -> Res {
         out
     });
     if uvids.is_some() {
-        return infinigen::assets::subsurf::subsurf_osd_uv(&c.mesh, lv, simple, true, pi(p, "quality", 3) as usize, c.edges.as_deref(), uvids.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string());
+        return indoorgen::assets::subsurf::subsurf_osd_uv(&c.mesh, lv, simple, true, pi(p, "quality", 3) as usize, c.edges.as_deref(), uvids.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string());
     }
-    infinigen::assets::subsurf::subsurf_osd(&c.mesh, lv, simple, c.edges.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string())
+    indoorgen::assets::subsurf::subsurf_osd(&c.mesh, lv, simple, c.edges.as_deref()).ok_or_else(|| "OpenSubdiv refiner failed".to_string())
 }
 
 fn r_subdivide(c: &Case, p: &Value) -> Res {
@@ -304,13 +304,13 @@ fn r_subdivide(c: &Case, p: &Value) -> Res {
     if c.mesh.faces.iter().any(|f| f.len() != 4) {
         return Err("subdivide: quads only".into());
     }
-    Ok(infinigen::assets::bathkit::simple_subsurf(&c.mesh, 1))
+    Ok(indoorgen::assets::bathkit::simple_subsurf(&c.mesh, 1))
 }
 
-fn gn_of(m: &Mesh) -> infinigen::gn::geom::Mesh {
-    infinigen::gn::geom::Mesh::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[])
+fn gn_of(m: &Mesh) -> indoorgen::gn::geom::Mesh {
+    indoorgen::gn::geom::Mesh::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[])
 }
-fn from_gn(r: &infinigen::gn::geom::Mesh) -> Mesh {
+fn from_gn(r: &indoorgen::gn::geom::Mesh) -> Mesh {
     let mut o = Mesh::new();
     o.pos = r.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
     o.faces = r.faces_vec();
@@ -318,7 +318,7 @@ fn from_gn(r: &infinigen::gn::geom::Mesh) -> Mesh {
 }
 
 fn r_boolean(c: &Case, p: &Value) -> Res {
-    use infinigen::exbool::exact_boolean::*;
+    use indoorgen::exbool::exact_boolean::*;
     let o = c.j.get("other").ok_or("case needs \"other\"")?;
     let mut om = mesh_of(&o["verts"], &o["polys"], true);
     if let Some(l) = o.get("loc") {
@@ -345,9 +345,9 @@ fn r_boolean(c: &Case, p: &Value) -> Res {
             Ok(m)
         }
         "FAST" => {
-            let id = infinigen::gn::geom::M4_ID;
+            let id = indoorgen::gn::geom::M4_ID;
             let (a, b) = (gn_of(&c.mesh), gn_of(&om));
-            Ok(from_gn(&infinigen::gn::fbool::mesh_boolean_float(op, &[(&a, id), (&b, id)])))
+            Ok(from_gn(&indoorgen::gn::fbool::mesh_boolean_float(op, &[(&a, id), (&b, id)])))
         }
         s => Err(format!("solver {s}")),
     }
@@ -359,7 +359,7 @@ fn r_triangulate(c: &Case, p: &Value) -> Res {
     }
     let qm = ps(p, "quad_method", "BEAUTY");
     let sel = vec![true; c.mesh.faces.len()];
-    let r = infinigen::gn::nodes_mesh::triangulate(&gn_of(&c.mesh), &sel, pi(p, "min_vertices", 4) as usize, qm);
+    let r = indoorgen::gn::nodes_mesh::triangulate(&gn_of(&c.mesh), &sel, pi(p, "min_vertices", 4) as usize, qm);
     Ok(from_gn(&r))
 }
 
@@ -373,7 +373,7 @@ fn r_triangulate_op(c: &Case, p: &Value) -> Res {
     for i in sel_idx(c, "sel_faces", n) {
         sel[i] = true;
     }
-    let r = infinigen::gn::nodes_mesh::triangulate(&gn_of(&c.mesh), &sel, 4, qm);
+    let r = indoorgen::gn::nodes_mesh::triangulate(&gn_of(&c.mesh), &sel, 4, qm);
     Ok(from_gn(&r))
 }
 
@@ -391,7 +391,7 @@ fn r_beautify_fill(c: &Case, p: &Value) -> Res {
         return Err("beautify_fill: triangle meshes only".into());
     }
     let tris: Vec<[u32; 3]> = c.mesh.faces.iter().map(|f| [f[0], f[1], f[2]]).collect();
-    let r = infinigen::assets::bridge::beautify_loop(&c.mesh.pos, tris, &HashMap::default(), c.edges.as_deref(), true, Some(&is_sel));
+    let r = indoorgen::assets::bridge::beautify_loop(&c.mesh.pos, tris, &HashMap::default(), c.edges.as_deref(), true, Some(&is_sel));
     let mut m = c.mesh.clone();
     m.faces = r.iter().map(|t| t.to_vec()).collect();
     Ok(m)
@@ -401,12 +401,12 @@ fn r_remove_doubles(c: &Case, p: &Value) -> Res {
     if c.j.get("sel_verts").map_or(false, |s| s.as_str() != Some("all")) {
         return Err("remove_doubles: all verts only".into());
     }
-    Ok(infinigen::assets::blops::remove_doubles(&c.mesh, pf(p, "threshold", 1e-4) as f32))
+    Ok(indoorgen::assets::blops::remove_doubles(&c.mesh, pf(p, "threshold", 1e-4) as f32))
 }
 
 fn r_displace(c: &Case, p: &Value) -> Res {
-    use infinigen::assets::bpymod::*;
-    use infinigen::assets::legtex::{Tex, TexKind};
+    use indoorgen::assets::bpymod::*;
+    use indoorgen::assets::legtex::{Tex, TexKind};
     let t = p.get("texture").ok_or("displace: texture spec")?;
     let basis = match t["noise_basis"].as_str().unwrap_or("BLENDER_ORIGINAL") {
         "BLENDER_ORIGINAL" => 0,
@@ -439,29 +439,29 @@ fn r_displace(c: &Case, p: &Value) -> Res {
 }
 
 fn r_convex_hull(c: &Case, p: &Value) -> Res {
-    use infinigen::bm::*;
+    use indoorgen::bm::*;
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
     let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
     let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
-    let mut hp = infinigen::bm::hull::HullParams::default();
+    let mut hp = indoorgen::bm::hull::HullParams::default();
     hp.use_existing_faces = pb(p, "use_existing_faces", true);
     hp.delete_unused = pb(p, "delete_unused", true);
     hp.make_holes = pb(p, "make_holes", false);
     hp.join_triangles = pb(p, "join_triangles", true);
-    if !infinigen::bm::hull::convex_hull(&mut bm, &hp) {
+    if !indoorgen::bm::hull::convex_hull(&mut bm, &hp) {
         return Err("convex_hull: cancelled".into());
     }
     Ok(bm_out(&bm))
 }
 
 fn r_bm_op(c: &Case, which: u8) -> Res {
-    use infinigen::bm::*;
+    use indoorgen::bm::*;
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
     let (edges, ce, _ef) = edge_list(&c.mesh, &c.edges);
     let mut bm = BMesh::from_mesh(&pos, &edges, &c.mesh.faces, &ce);
     if which == 2 {
         // make_coiled's first four ops in ONE edit session (the mempool free lists carry over)
-        use infinigen::bm::hull::*;
+        use indoorgen::bm::hull::*;
         poke_all(&mut bm);
         tris_to_quads_all(&mut bm);
         if std::env::var("COIL2").is_err() {
@@ -469,9 +469,9 @@ fn r_bm_op(c: &Case, which: u8) -> Res {
             poke_all(&mut bm);
         }
     } else if which == 0 {
-        infinigen::bm::hull::poke_all(&mut bm);
+        indoorgen::bm::hull::poke_all(&mut bm);
     } else {
-        infinigen::bm::hull::tris_to_quads_all(&mut bm);
+        indoorgen::bm::hull::tris_to_quads_all(&mut bm);
     }
     Ok(bm_out(&bm))
 }
@@ -496,7 +496,7 @@ fn r_remesh(c: &Case, p: &Value) -> Res {
                 tris.push([f[0], f[k], f[k + 1]]);
             }
         }
-        let r = infinigen::assets::voxelremesh::voxel_remesh(&pos, &tris, pf(p, "voxel_size", 0.1) as f32);
+        let r = indoorgen::assets::voxelremesh::voxel_remesh(&pos, &tris, pf(p, "voxel_size", 0.1) as f32);
         let mut m = Mesh::new();
         m.pos = r.v.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
         m.faces = r.f;
@@ -506,7 +506,7 @@ fn r_remesh(c: &Case, p: &Value) -> Res {
         return Err(format!("remesh: mode {mode} not ported"));
     }
     let pos: Vec<[f32; 3]> = c.mesh.pos.iter().map(|q| [q[0] as f32, q[1] as f32, q[2] as f32]).collect();
-    let (v, q) = infinigen::assets::dualcon::dualcon(&pos, &c.mesh.faces, 2, pi(p, "octree_depth", 4) as i32, pf(p, "scale", 0.9) as f32, pf(p, "sharpness", 1.0) as f32);
+    let (v, q) = indoorgen::assets::dualcon::dualcon(&pos, &c.mesh.faces, 2, pi(p, "octree_depth", 4) as i32, pf(p, "scale", 0.9) as f32, pf(p, "sharpness", 1.0) as f32);
     let mut m = Mesh::new();
     m.pos = v.iter().map(|q| [q[0] as f64, q[1] as f64, q[2] as f64]).collect();
     m.faces = q.iter().map(|x| x.iter().map(|&i| i as u32).collect()).collect();
@@ -571,7 +571,7 @@ fn tris_of(m: &Mesh) -> Vec<[[f64; 3]; 3]> {
             }
             _ => {
                 let co: Vec<[f32; 3]> = f.iter().map(|&i| [m.pos[i as usize][0] as f32, m.pos[i as usize][1] as f32, m.pos[i as usize][2] as f32]).collect();
-                for tr in infinigen::assets::polyfill::triangulate_ngon_plain(&co) {
+                for tr in indoorgen::assets::polyfill::triangulate_ngon_plain(&co) {
                     t.push([p(tr[0] as usize), p(tr[1] as usize), p(tr[2] as usize)]);
                 }
             }

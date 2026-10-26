@@ -1,6 +1,6 @@
 //! clothstand CLASS SEED DUMP.json : standalone Rust factory (stub-material draw order) vs python pydump (verts/polys)
-use infinigen::assets::clothes::*;
-use infinigen::rng::Rng;
+use indoorgen::assets::clothes::*;
+use indoorgen::rng::Rng;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let seed: u64 = a[2].parse().unwrap();

@@ -6,7 +6,7 @@ fn main() {
         let nums: Vec<f64> = line.replace(['[', ']', ','], " ").split_whitespace().filter_map(|t| t.parse().ok()).collect();
         let seed = nums[0] as u64;
         let (lo, hi) = (&nums[1..4], &nums[4..7]);
-        let f = infinigen::assets::make_factory(&a[1], seed).unwrap();
+        let f = indoorgen::assets::make_factory(&a[1], seed).unwrap();
         let (rl, rh) = match f.bounds_hint(0) { Some(b) => b, None => { println!("seed {seed}: no hint"); continue; } };
         let d = (0..3).map(|k| (rl[k] - lo[k]).abs().max((rh[k] - hi[k]).abs())).fold(0.0, f64::max);
         worst = worst.max(d);

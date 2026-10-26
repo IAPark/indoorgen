@@ -1,9 +1,9 @@
-use infinigen::int_hash;
-use infinigen::mesh::*;
-use infinigen::rng::Rng;
-use infinigen::rooms::consts::RoomConstants;
-use infinigen::rooms::plan::{FloorPlanSolver, PlanConfig};
-use infinigen::rooms::{shell, solidify};
+use indoorgen::int_hash;
+use indoorgen::mesh::*;
+use indoorgen::rng::Rng;
+use indoorgen::rooms::consts::RoomConstants;
+use indoorgen::rooms::plan::{FloorPlanSolver, PlanConfig};
+use indoorgen::rooms::{shell, solidify};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

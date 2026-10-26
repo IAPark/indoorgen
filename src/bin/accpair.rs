@@ -1,4 +1,4 @@
-use infinigen::furn::mpr::*;
+use indoorgen::furn::mpr::*;
 fn v3(v: &serde_json::Value) -> [f64; 3] { let a = v.as_array().unwrap(); [a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap()] }
 fn m3(v: &serde_json::Value) -> [[f64; 3]; 3] { let a = v.as_array().unwrap(); [v3(&a[0]), v3(&a[1]), v3(&a[2])] }
 fn main() {

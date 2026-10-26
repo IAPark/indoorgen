@@ -1,5 +1,5 @@
 //! bedpts SEED: prints the leg / back post vertices of BedFrameFactory(SEED) as JSON (float32 values) to compare with tools/stagedump.py dumps.
-use infinigen::assets::bed::BedSpec;
+use indoorgen::assets::bed::BedSpec;
 fn main() {
     let seed: u64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let s = BedSpec::frame(seed);

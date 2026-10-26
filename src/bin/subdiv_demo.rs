@@ -1,6 +1,6 @@
 //! Builds a unit cube, applies bevel_then_subsurf(0.05, 3 segments, 30 deg, 1 level) and writes
 //! it as OBJ to /tmp/subdiv_demo.obj.
-use infinigen::subdiv::{bevel_then_subsurf, QMesh};
+use indoorgen::subdiv::{bevel_then_subsurf, QMesh};
 
 fn main() {
     let cube = QMesh::cuboid([0.0; 3], [1.0; 3]);

@@ -1,5 +1,5 @@
 //! phcmp PH.jsonl : bounds of Factory::placeholder(inst) vs python placeholder meshes (pydump ph)
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     let mut stats: std::collections::BTreeMap<String, (usize, usize, f64)> = Default::default();

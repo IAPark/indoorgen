@@ -1,4 +1,4 @@
-use infinigen::assets::bed::BedSpec;
+use indoorgen::assets::bed::BedSpec;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let s: u64 = a[1].parse().unwrap();

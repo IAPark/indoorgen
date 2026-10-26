@@ -1,5 +1,5 @@
 //! bevtest in.json width segs out.json [angle_deg] : run the bevelfull port on {"in": mesh}
-use infinigen::mesh::Mesh;
+use indoorgen::mesh::Mesh;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();
@@ -14,7 +14,7 @@ fn main() {
     let width: f64 = a[2].parse().unwrap();
     let segs: usize = a[3].parse().unwrap();
     let ang: f64 = a.get(5).map(|x| x.parse().unwrap()).unwrap_or(30.0);
-    match infinigen::assets::bevelfull::bevel_angle(&m, width, segs, ang.to_radians(), std::env::var("WIDTH").is_ok()) {
+    match indoorgen::assets::bevelfull::bevel_angle(&m, width, segs, ang.to_radians(), std::env::var("WIDTH").is_ok()) {
         Ok(o) => {
             let verts: Vec<_> = o.pos.iter().map(|v| serde_json::json!([v[0], v[1], v[2]])).collect();
             let polys: Vec<_> = o.faces.iter().map(|f| serde_json::json!(f)).collect();

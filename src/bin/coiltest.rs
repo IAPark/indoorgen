@@ -1,7 +1,7 @@
 //! coiltest out.json [w d t dd ds dp] [stage] : make_coiled on a subdivided box; dumps stage meshes
-use infinigen::assets::coil::*;
-use infinigen::assets::towel::subdivide_edge_ring;
-use infinigen::mesh::Mesh;
+use indoorgen::assets::coil::*;
+use indoorgen::assets::towel::subdivide_edge_ring;
+use indoorgen::mesh::Mesh;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let p: Vec<f64> = if a.len() > 7 { a[2..8].iter().map(|x| x.parse().unwrap()).collect() } else { vec![0.6, 0.7, 0.3, 0.17, 0.01, 0.06] };

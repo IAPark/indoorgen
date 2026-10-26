@@ -1,5 +1,5 @@
 //! bbcheck PYASSET.jsonl : compare bounds of python spawn_asset meshes (pydump asset) with Rust bbox_of_asset
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     let mut stats: std::collections::BTreeMap<String, (usize, usize, f64)> = Default::default();

@@ -1,6 +1,6 @@
 //! bedtable /tmp/f_solall.json out.json : edge order of Blender's SOLIDIFY NON_MANIFOLD output for the bed seat lattice, expressed in
 //! the vertex indices of bed::seat_solid_params
-use infinigen::assets::bed::seat_solid_params;
+use indoorgen::assets::bed::seat_solid_params;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();

@@ -1,6 +1,6 @@
 //! clothexp4 [KEYFILTER] : Rust solver on comforter-on-box scenes of tools/clothexp4.py vs Blender
-use infinigen::assets::cloth::*;
-use infinigen::assets::clothes::*;
+use indoorgen::assets::cloth::*;
+use indoorgen::assets::clothes::*;
 fn main() {
     let filt = std::env::args().nth(1).unwrap_or_default();
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/Users/lume/work/agents/rng/cache/clothexp4.json").unwrap()).unwrap();

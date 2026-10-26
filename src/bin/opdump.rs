@@ -1,7 +1,7 @@
 //! opdump SEED out.json : rooms-only generation, dumps constants + cutters and the openings pieces (world coordinates)
-use infinigen::furn::assets::TableAssets;
-use infinigen::pipeline::*;
-use infinigen::rooms::solidify::CutKind;
+use indoorgen::furn::assets::TableAssets;
+use indoorgen::pipeline::*;
+use indoorgen::rooms::solidify::CutKind;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let seed: u64 = a[1].parse().unwrap();
@@ -11,7 +11,7 @@ fn main() {
     let c = &g.c;
     let cut: Vec<_> = g.cutters.iter().map(|k| serde_json::json!({"kind": match k.kind { CutKind::Door => "door", CutKind::Window => "window", CutKind::Entrance => "entrance" }, "loc": k.loc, "rot_z": k.rot_z, "dims": k.dims, "rooms": k.rooms})).collect();
     let t0 = std::time::Instant::now();
-    let ps = infinigen::openings::make_openings(c, &g.cutters, seed);
+    let ps = indoorgen::openings::make_openings(c, &g.cutters, seed);
     eprintln!("make_openings {:?}", t0.elapsed());
     let pieces: Vec<_> = ps.iter().map(|p| {
         serde_json::json!({"name": p.name, "verts": p.mesh.pos, "polys": p.mesh.faces, "cls": p.mat.spec})

@@ -1,4 +1,4 @@
-use infinigen::furn::fcl::*;
+use indoorgen::furn::fcl::*;
 fn tf(t: &Vec<Vec<f64>>, p: [f64; 3]) -> [f64; 3] {
     [0, 1, 2].map(|i| t[i][0] * p[0] + t[i][1] * p[1] + t[i][2] * p[2] + t[i][3])
 }

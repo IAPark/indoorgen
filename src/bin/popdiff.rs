@@ -1,4 +1,4 @@
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();

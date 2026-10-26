@@ -1,6 +1,6 @@
 //! bevsub in.json out.json [width segments]: the BEVEL modifier (python defaults) on a {"v","p"} mesh with the exact bmesh port
-use infinigen::assets::bathkit::bevel_def;
-use infinigen::mesh::Mesh;
+use indoorgen::assets::bathkit::bevel_def;
+use indoorgen::mesh::Mesh;
 use serde_json::Value;
 
 fn main() {

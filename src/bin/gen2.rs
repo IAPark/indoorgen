@@ -3,9 +3,9 @@
 //   --people N: up to N posed photoreal avatars placed after the solve (crates/ig_people); 0 (default) = unchanged output
 //   --mess LEVEL: lived-in disorder 0..1 added after the solve (crates/ig_mess); 0 (default) = unchanged output
 //   --rust-cloth: also run the native cloth sim for bed cloth that is exported as a sidecar job (default: skip, Blender re-simulates it)
-use infinigen::furn::assets::TableAssets;
-use infinigen::mesh::*;
-use infinigen::pipeline::*;
+use indoorgen::furn::assets::TableAssets;
+use indoorgen::mesh::*;
+use indoorgen::pipeline::*;
 
 fn main() {
     let mut args: Vec<String> = std::env::args().collect();
@@ -13,7 +13,7 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--rust-cloth") {
         args.remove(i);
     } else {
-        infinigen::assets::cloth::SKIP_JOB_SIM.store(true, std::sync::atomic::Ordering::Relaxed);
+        indoorgen::assets::cloth::SKIP_JOB_SIM.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let mess_level: f64 = match args.iter().position(|a| a == "--mess") {
         Some(i) => {
@@ -40,20 +40,20 @@ fn main() {
         None => 0,
     };
     let seed: u64 = args[1].parse().unwrap();
-    let mess = infinigen::mess::MessCfg { level: mess_level, seed };
+    let mess = indoorgen::mess::MessCfg { level: mess_level, seed };
     let room = args.get(2).cloned();
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
-    let assets = infinigen::assets::RealAssets { fallback };
+    let assets = indoorgen::assets::RealAssets { fallback };
     let t = std::time::Instant::now();
     let mut g = generate(&Options { seed, restrict_room: room, steps_large: std::env::var("STEPS_L").ok().and_then(|v| v.parse().ok()).unwrap_or(100), steps_medium: std::env::var("STEPS_M").ok().and_then(|v| v.parse().ok()).unwrap_or(40), steps_small: 5 }, &assets, &prog);
-    eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, infinigen::assets::thread_cpu());
+    eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if std::env::var("EVAL").is_ok() {
-        let (prog, _) = infinigen::pipeline::load_program(seed, &prog);
-        let mut memo = infinigen::furn::eval::Memo::new(&prog, None);
-        let mut ev = infinigen::furn::eval::Evaluator::new(&prog, &g.state, &mut memo);
+        let (prog, _) = indoorgen::pipeline::load_program(seed, &prog);
+        let mut memo = indoorgen::furn::eval::Memo::new(&prog, None);
+        let mut ev = indoorgen::furn::eval::Evaluator::new(&prog, &g.state, &mut memo);
         let r = ev.evaluate_problem(true, true);
         eprintln!("FINAL loss {:.3} viol {:.1}", r.loss(), r.viol_count());
         eprintln!("terms {:?}", r.loss_vals.iter().filter(|x| x.1.abs() > 0.01).map(|x| (x.0.clone(), (x.1 * 100.0).round() / 100.0)).collect::<Vec<_>>());
@@ -62,11 +62,11 @@ fn main() {
     let t_scene = std::time::Instant::now();
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
-    let decos = infinigen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), infinigen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
+    let decos = indoorgen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
     // the doorway reveal (shell.rs `reveal`) has a bottom quad at floor height in the WALL material: it showed as a white strip across
     // every doorway. Move those quads to the room's floor mesh so the floor runs continuously through the opening.
     let floor_z0 = g.c.wall_thickness / 2.0;
-    let mut shells_fix: Vec<(infinigen::mesh::Mesh, infinigen::mesh::Mesh)> = vec![];
+    let mut shells_fix: Vec<(indoorgen::mesh::Mesh, indoorgen::mesh::Mesh)> = vec![];
     for s in g.shells.iter() {
         let (mut wall, mut floor) = (s.wall.clone(), s.floor.clone());
         let is_sill = |f: &Vec<u32>| f.iter().all(|&i| (s.wall.pos[i as usize][2] - floor_z0).abs() < 1e-9);
@@ -78,12 +78,12 @@ fn main() {
         shells_fix.push((wall, floor));
     }
     for ((s, rm), (swall, sfloor)) in g.shells.iter().zip(decos).zip(shells_fix) {
-        use infinigen::materials::WallAlt;
+        use indoorgen::materials::WallAlt;
         let (w, f, c) = (scene.material(rm.wall), scene.material(rm.floor), scene.material(rm.ceiling));
         let split = match rm.alt {
             WallAlt::None => None,
-            WallAlt::Half { frac } => Some(infinigen::rooms::walldeco::apply_half(&swall, g.c.wall_height, frac)),
-            WallAlt::Aligned => Some(infinigen::rooms::walldeco::apply_aligned(&swall)),
+            WallAlt::Half { frac } => Some(indoorgen::rooms::walldeco::apply_half(&swall, g.c.wall_height, frac)),
+            WallAlt::Aligned => Some(indoorgen::rooms::walldeco::apply_aligned(&swall)),
         };
         match (split, rm.alt_wall) {
             (Some((base, alt)), Some(am)) => {
@@ -97,25 +97,25 @@ fn main() {
         scene.add(&format!("{}.ceiling", s.name), "room", s.ceiling.clone(), c);
     }
     let wt = g.c.wall_thickness;
-    let polys: Vec<_> = g.room_polys.iter().map(|x| infinigen::shp::buffer_mitre(&x.1, -wt / 2.0)).collect();
+    let polys: Vec<_> = g.room_polys.iter().map(|x| indoorgen::shp::buffer_mitre(&x.1, -wt / 2.0)).collect();
     // floor boards: python's contour is the union of the floor faces, which include the floor strip through every doorway;
     // the ring is then split at door-jamb (wall thickness) and opening (door width) segments, so no board runs across doors
     let mut floor_polys = polys.clone();
     for ct in &g.cutters {
-        if !matches!(ct.kind, infinigen::rooms::solidify::CutKind::Door | infinigen::rooms::solidify::CutKind::Entrance) {
+        if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance) {
             continue;
         }
         let (hw, hd) = (g.c.door_width / 2.0, wt / 2.0 + 1e-4);
         let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
         let pt = |x: f64, y: f64| [ct.loc[0] + c * x - s_ * y, ct.loc[1] + s_ * x + c * y];
-        floor_polys.push(infinigen::shp::polygon(&[pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd), pt(-hw, -hd)], &[]).unwrap());
+        floor_polys.push(indoorgen::shp::polygon(&[pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd), pt(-hw, -hd)], &[]).unwrap());
     }
     for (nm, ceil, z) in [("skirting_floor", false, wt / 2.0), ("skirting_ceiling", true, g.c.wall_height - wt / 2.0)] {
-        let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), nm]));
-        let sk = if ceil { infinigen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { infinigen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &[wt, g.c.door_width]) };
+        let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), nm]));
+        let sk = if ceil { indoorgen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { indoorgen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &[wt, g.c.door_width]) };
         if let (Some(sk), true) = (&sk, std::env::var("SKIRTDBG").is_ok()) {
             for ct in &g.cutters {
-                if !matches!(ct.kind, infinigen::rooms::solidify::CutKind::Door | infinigen::rooms::solidify::CutKind::Entrance) { continue }
+                if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance) { continue }
                 let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
                 let inside = sk.mesh.pos.iter().filter(|p| {
                     let (dx, dy) = (p[0] - ct.loc[0], p[1] - ct.loc[1]);
@@ -128,7 +128,7 @@ fn main() {
         if let Some(sk) = sk {
             // skirting_board.py: shader_rough_plastic(base_color=hsv2rgba(white_hsv()), roughness=uniform(0.5, 1)) from the same FixedSeed stream
             // (thickness, height, white_hsv = (0, U(0, .1), U(.8, 1)), roughness)
-            let mut pr = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), nm]));
+            let mut pr = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), nm]));
             pr.uniform(0.02, 0.05);
             pr.uniform(0.08, 0.15);
             let (sat, val) = (pr.uniform(0.0, 0.1), pr.uniform(0.8, 1.0));
@@ -141,17 +141,17 @@ fn main() {
         }
     }
     // mess pass, part 1 (before openings, whose doors avoid the moved furniture): furniture states on the solved layout (no-op at --mess 0)
-    infinigen::mess::states::apply(&mut g.state, &mess);
-    let mut ops = infinigen::openings::make_openings(&g.c, &g.cutters, &g.room_polys, seed);
+    indoorgen::mess::states::apply(&mut g.state, &mess);
+    let mut ops = indoorgen::openings::make_openings(&g.c, &g.cutters, &g.room_polys, seed);
     if mess.on() {
         // mess pass: room door desired open angles varied (the opening pass limits them against furniture / walls below)
         let mut ang: Vec<(usize, f64)> = ops.doors.iter().map(|d| (d.ci, d.desired)).collect();
-        let (n, tot) = infinigen::mess::doors::vary_angles(&mut ang, &mess);
+        let (n, tot) = indoorgen::mess::doors::vary_angles(&mut ang, &mess);
         for (d, (_, a)) in ops.doors.iter_mut().zip(&ang) {
             d.desired = *a;
         }
-        let mut it: Vec<(&str, &mut infinigen::mesh::Mesh)> = ops.pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
-        let (cn, ctot) = infinigen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
+        let mut it: Vec<(&str, &mut indoorgen::mesh::Mesh)> = ops.pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
+        let (cn, ctot) = indoorgen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
         eprintln!("MESS doors changed {n} of {tot}; curtains changed {cn} of {ctot}");
     }
     for p in std::mem::take(&mut ops.pieces) {
@@ -159,7 +159,7 @@ fn main() {
         scene.add(&p.name, &p.class, p.mesh, m);
     }
     // lights_off stage: chance 0.2 (python: stage runs when uniform() <= chance)
-    let lights_off = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "lights_off", "0"])).f64() <= 0.2;
+    let lights_off = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "lights_off", "0"])).f64() <= 0.2;
     if std::env::var("TILTCHECK").is_ok() {
         // every placed object must only be rotated about the vertical axis (python's solver never tilts furniture)
         let mut tilted = 0;
@@ -187,23 +187,23 @@ fn main() {
     }
     // build the final assets of all generated objects in parallel (each build is independent and deterministic; results are consumed in
     // the original order below)
-    let mut visuals: std::collections::HashMap<String, infinigen::assets::Asset> = {
+    let mut visuals: std::collections::HashMap<String, indoorgen::assets::Asset> = {
         use rayon::prelude::*;
-        let items: Vec<(&String, &infinigen::furn::state::GenRef)> = g.state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen))).collect();
+        let items: Vec<(&String, &indoorgen::furn::state::GenRef)> = g.state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen))).collect();
         items
             .par_iter()
             .map(|(k, gen)| {
-                infinigen::assets::set_unseeded(gen.unseeded.clone());
+                indoorgen::assets::set_unseeded(gen.unseeded.clone());
                 let a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
-                infinigen::assets::set_unseeded(None);
+                indoorgen::assets::set_unseeded(None);
                 ((*k).clone(), a)
             })
             .collect()
     };
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
-    infinigen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
+    indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
-    infinigen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
+    indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
     let door_zones: Vec<([f64; 3], [f64; 3], f64)> = ops.doors.iter().flat_map(|d| d.zones(&g.cutters[d.ci], 0.08)).collect();
     for d in std::mem::take(&mut ops.doors) {
         let ct = g.cutters[d.ci].clone();
@@ -213,7 +213,7 @@ fn main() {
         }
     }
     // python apply_cutter: the world-space cutter of each object is boolean-differenced from every part of its relation targets
-    let mut cutters: std::collections::HashMap<String, Vec<infinigen::mesh::Mesh>> = Default::default();
+    let mut cutters: std::collections::HashMap<String, Vec<indoorgen::mesh::Mesh>> = Default::default();
     for (k, o) in &g.state.objs {
         let Some(a) = visuals.get(k) else { continue };
         if a.cutters.is_empty() { continue }
@@ -245,7 +245,7 @@ fn main() {
                 "DeskLampFactory" | "FloorLampFactory" | "LampFactory" => {
                     // python lamp.py create_asset: `if np.random.uniform() < 0.6` (first draw of the spawn_asset instance stream) adds the
                     // bulb at local (0, 0, bound_box max z - ShadeHeight / 2), i.e. inside the shade
-                    if infinigen::assets::inst_rng(gen.factory_seed, gen.inst_seed).f64() < 0.6 {
+                    if indoorgen::assets::inst_rng(gen.factory_seed, gen.inst_seed).f64() < 0.6 {
                         let a = &visuals[k];
                         let zmax = a.parts.iter().flat_map(|p| p.mesh.pos.iter()).map(|q| q[2]).fold(f64::MIN, f64::max);
                         let (slo, shi) = a.parts[0].mesh.bounds(); // part 0 = shade
@@ -257,7 +257,7 @@ fn main() {
                 _ => None,
             };
             if let Some(l) = local {
-                let mut r = infinigen::rng::Rng::seeded(gen.factory_seed);
+                let mut r = indoorgen::rng::Rng::seeded(gen.factory_seed);
                 let watt = r.uniform(40.0, 100.0) * if gen.class.contains("Lamp") && !gen.class.contains("Ceiling") { 0.5 } else { 1.0 };
                 let radius = r.uniform(0.02, 0.03);
                 let mut temp;
@@ -270,7 +270,7 @@ fn main() {
                 let temp = temp.clamp(3500.0, 6500.0);
                 // LampFactory: bulb_fac Temperature = max(T * 0.6, 2500)
                 let temp = if gen.class.contains("Lamp") && !gen.class.contains("Ceiling") { (temp * 0.6).max(2500.0) } else { temp };
-                scene.lights.push(infinigen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() });
+                scene.lights.push(indoorgen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() });
             }
         }
         let asset = &visuals[k];
@@ -304,7 +304,7 @@ fn main() {
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = std::time::Instant::now();
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
-    let people = infinigen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &infinigen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
+    let people = indoorgen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &indoorgen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
     for (pi, pl) in people.iter().enumerate() {
         let mut a = pl.build();
         if a.parts.is_empty() && std::env::var_os("PEOPLE_PROXY").is_some() {
@@ -317,9 +317,9 @@ fn main() {
             scene.add_posed(&format!("person{pi}_{:?}#{k}", pl.kind), "Person", m, mi, pl.pose.0);
         }
     }
-    infinigen::people::cover::apply(&people, &mut scene, g.c.wall_thickness / 2.0);
+    indoorgen::people::cover::apply(&people, &mut scene, g.c.wall_thickness / 2.0);
     // the clutter pass keeps off the people (their occupied boxes, padded 4 cm)
-    let mut keepout: Vec<infinigen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
+    let mut keepout: Vec<indoorgen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
     // ... and off the swept area of the room doors
     for (c, h, yaw) in &door_zones {
         let mut m = Mesh::cuboid([-h[0], -h[1], -h[2]], [h[0], h[1], h[2]]);
@@ -327,19 +327,19 @@ fn main() {
         keepout.push(m);
     }
     // mess pass, part 2: clutter (no-op at --mess 0)
-    infinigen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
+    indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
     scene.write_glb(&out).unwrap();
     if cams_k > 0 { add_cameras(&scene, &g.room_polys, cams_k, seed, g.c.wall_thickness, &out); }
-    if infinigen::assets::prof_on() {
+    if indoorgen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());
-        infinigen::assets::prof_report();
+        indoorgen::assets::prof_report();
     }
 }
 
 /// `--cams K`: photographer-like camera poses (crates/ig_cams) appended to the sidecar json as "cameras"
-fn add_cameras(scene: &Scene, polys: &[(String, infinigen::shp::G)], k: usize, seed: u64, wall_t: f64, glb: &std::path::Path) {
+fn add_cameras(scene: &Scene, polys: &[(String, indoorgen::shp::G)], k: usize, seed: u64, wall_t: f64, glb: &std::path::Path) {
     let t = std::time::Instant::now();
-    let cams = infinigen::cams::generate(scene, polys, &infinigen::cams::Cfg { k, seed, wall_t });
+    let cams = indoorgen::cams::generate(scene, polys, &indoorgen::cams::Cfg { k, seed, wall_t });
     let sp = glb.with_extension("json");
     if let Ok(txt) = std::fs::read_to_string(&sp) {
         let mut j: serde_json::Value = serde_json::from_str(&txt).unwrap();
@@ -352,7 +352,7 @@ fn add_cameras(scene: &Scene, polys: &[(String, infinigen::shp::G)], k: usize, s
 /// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through
 /// the boolean; the others are copied unchanged (keeps big counter tops cheap).
 fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
-    use infinigen::gn::geom::Mesh as GM;
+    use indoorgen::gn::geom::Mesh as GM;
     let (blo, bhi) = b.bounds();
     let e = 1e-3;
     let near: Vec<bool> = a.faces.iter().map(|f| {
@@ -378,7 +378,7 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
         }
     }
     let conv = |m: &Mesh| GM::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[]);
-    let r = infinigen::gn::csg::mesh_boolean("DIFFERENCE", &conv(&sub), &[&conv(b)]);
+    let r = indoorgen::gn::csg::mesh_boolean("DIFFERENCE", &conv(&sub), &[&conv(b)]);
     let base = o.pos.len() as u32;
     o.pos.extend(r.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]));
     o.faces.extend(r.faces_vec().into_iter().map(|f| f.into_iter().map(|x| x + base).collect::<Vec<u32>>()));

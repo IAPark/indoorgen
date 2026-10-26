@@ -1,5 +1,5 @@
 //! stagetest OP DIR TAG [args]: run one ported op on a python stage input (tools/pytrace.py dump) and compare with the python output.
-use infinigen::assets::stagefile::*;
+use indoorgen::assets::stagefile::*;
 
 fn dir_s(a: &[String]) -> String {
     a[2].clone()
@@ -11,7 +11,7 @@ fn main() {
         let fs: u64 = a[2].parse().unwrap();
         let inst: u64 = a[3].parse().unwrap();
         let t0 = std::time::Instant::now();
-        let f = infinigen::assets::monocot::MonocotFactory::new(fs);
+        let f = indoorgen::assets::monocot::MonocotFactory::new(fs);
         let m = f.mesh(inst);
         println!("monocot {fs}: {} verts {} faces in {:.1}s", m.v.len(), m.f.len(), t0.elapsed().as_secs_f64());
         if let Ok(d) = std::env::var("MONOTRACE").or(std::env::var("MONOFINAL")) {
@@ -23,7 +23,7 @@ fn main() {
         // argsort FILE_A.f32 (raw) -> prints first indices
         let raw = std::fs::read(&a[2]).unwrap();
         let v: Vec<f32> = raw.chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-        let idx = infinigen::assets::leafkit::np_argsort_f32(&v);
+        let idx = indoorgen::assets::leafkit::np_argsort_f32(&v);
         println!("{:?}", &idx[..12.min(idx.len())]);
         if let Ok(o) = std::env::var("ARGOUT") { std::fs::write(o, idx.iter().flat_map(|&i| (i as i64).to_le_bytes()).collect::<Vec<u8>>()).unwrap(); }
         return;
@@ -34,17 +34,17 @@ fn main() {
         let src = read(&format!("{d}/{}_out.bin", a[3])).unwrap();
         let at = read(&format!("{d}/{}_out.bin", a[4])).unwrap();
         let ex = read(&format!("{d}/{}_out.bin", a[5])).unwrap();
-        let lm = infinigen::assets::leafkit::LMesh { v: src.v.clone(), f: src.f.clone(), e: vec![] };
+        let lm = indoorgen::assets::leafkit::LMesh { v: src.v.clone(), f: src.f.clone(), e: vec![] };
         let n = lm.v.len() / 2;
         let top: Vec<f32> = (0..lm.v.len()).map(|i| if i >= n { 1.0 } else { 0.0 }).collect();
-        let r = infinigen::assets::leafkit::sample_nearest_surface(&lm, &top, &at.v);
+        let r = indoorgen::assets::leafkit::sample_nearest_surface(&lm, &top, &at.v);
         let bad: Vec<usize> = (0..r.len()).filter(|&i| r[i].1 != ex.v[i]).take(6).collect();
-        let tris0 = infinigen::assets::dualcon::corner_tris(&lm.v, &lm.f);
+        let tris0 = indoorgen::assets::dualcon::corner_tris(&lm.v, &lm.f);
         for &bi in &bad {
             let q = at.v[bi];
             let mut cands: Vec<(f32, usize)> = vec![];
             for (ti, t) in tris0.iter().enumerate() {
-                let cp = infinigen::assets::leafkit::closest_on_tri_f32(q, lm.v[t[0] as usize], lm.v[t[1] as usize], lm.v[t[2] as usize]);
+                let cp = indoorgen::assets::leafkit::closest_on_tri_f32(q, lm.v[t[0] as usize], lm.v[t[1] as usize], lm.v[t[2] as usize]);
                 let d = (cp[0]-q[0]).powi(2)+(cp[1]-q[1]).powi(2)+(cp[2]-q[2]).powi(2);
                 cands.push((d, ti));
             }
@@ -59,11 +59,11 @@ fn main() {
         let nex = (0..r.len()).filter(|&i| r[i].1 == ex.v[i]).count();
         println!("exact {} of {}", nex, r.len());
         println!("worst {} at {} p {:?} mine {:?} blender {:?}", worst.0, worst.1, at.v[worst.1], r[worst.1].1, ex.v[worst.1]);
-        let tris = infinigen::assets::dualcon::corner_tris(&lm.v, &lm.f);
+        let tris = indoorgen::assets::dualcon::corner_tris(&lm.v, &lm.f);
         let q = at.v[worst.1];
         for (ti, t) in tris.iter().enumerate() {
             let (a, b, c) = (lm.v[t[0] as usize], lm.v[t[1] as usize], lm.v[t[2] as usize]);
-            let cp = infinigen::assets::leafkit::closest_on_tri_f32(q, a, b, c);
+            let cp = indoorgen::assets::leafkit::closest_on_tri_f32(q, a, b, c);
             let d = ((cp[0]-q[0]).powi(2)+(cp[1]-q[1]).powi(2)+(cp[2]-q[2]).powi(2)).sqrt();
             if d < 3e-4 { println!("tri {ti} {:?} d {d:e} cp {:?} verts {:?} {:?} {:?}", t, cp, a, b, c); }
         }
@@ -72,7 +72,7 @@ fn main() {
     if a[1] == "container" {
         let fs: u64 = a[2].parse().unwrap();
         let inst: u64 = a[3].parse().unwrap();
-        let f = infinigen::assets::make_factory("LargePlantContainerFactory", fs).unwrap();
+        let f = indoorgen::assets::make_factory("LargePlantContainerFactory", fs).unwrap();
         let asset = f.asset(inst);
         let d = &a[4];
         for (k, pi) in [(0usize, 0usize), (2, 1), (1, 2)] {
@@ -88,7 +88,7 @@ fn main() {
         for sd in a[3].split(',') {
             let fs: u64 = sd.parse().unwrap();
             let t0 = std::time::Instant::now();
-            let f = infinigen::assets::make_factory(&a[2], fs).unwrap();
+            let f = indoorgen::assets::make_factory(&a[2], fs).unwrap();
             let asset = f.asset(0);
             let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
             let mut nv = 0;
@@ -105,7 +105,7 @@ fn main() {
     if a[1] == "leaf" {
         let xs: Vec<f64> = a[2].split(',').map(|x| x.parse().unwrap()).collect();
         let ys: Vec<f64> = a[3].split(',').map(|x| x.parse().unwrap()).collect();
-        let l = infinigen::assets::leafkit::leaf(&xs, &ys, Some(0.003));
+        let l = indoorgen::assets::leafkit::leaf(&xs, &ys, Some(0.003));
         println!("leaf: {} verts {} faces", l.v.len(), l.f.len());
         return;
     }
@@ -116,7 +116,7 @@ fn main() {
     match op {
         "remesh" => {
             let depth = meta["kwargs"]["octree_depth"].as_i64().unwrap() as i32;
-            let (v, q) = infinigen::assets::dualcon::dualcon(&inp.v, &inp.f, 2, depth, 0.9, 1.0);
+            let (v, q) = indoorgen::assets::dualcon::dualcon(&inp.v, &inp.f, 2, depth, 0.9, 1.0);
             let f: Vec<Vec<u32>> = q.iter().map(|x| x.iter().map(|&i| i as u32).collect()).collect();
             if let Ok(d) = std::env::var("DUMPOUT") { write(&d, &v, &f, &[]); }
             compare(tag, &v, &f, &out, 1e-6);
@@ -125,8 +125,8 @@ fn main() {
             // fillcmp DIR 002_WELD(out=welded outline) : compare fill_outline(outline) with the python SOLIDIFY input
             let outline = read(&format!("{dir}/002_WELD_out.bin")).unwrap();
             let want = read(&format!("{dir}/003_SOLIDIFY_in.bin")).unwrap();
-            let m = infinigen::assets::leafkit::LMesh { v: outline.v.clone(), f: vec![], e: outline.e.clone() };
-            let f = infinigen::assets::leafkit::fill_outline(&m);
+            let m = indoorgen::assets::leafkit::LMesh { v: outline.v.clone(), f: vec![], e: outline.e.clone() };
+            let f = indoorgen::assets::leafkit::fill_outline(&m);
             println!("faces {} vs {}; identical lists {}", f.f.len(), want.f.len(), f.f == want.f);
             let first = f.f.iter().zip(&want.f).position(|(a, b)| a != b);
             println!("first diff {:?} {:?}", first, first.map(|i| (&f.f[i], &want.f[i])));
@@ -134,8 +134,8 @@ fn main() {
         "solidcmp" => {
             let outline = read(&format!("{dir}/003_SOLIDIFY_in.bin")).unwrap();
             let want = read(&format!("{dir}/003_SOLIDIFY_out.bin")).unwrap();
-            let m = infinigen::assets::leafkit::LMesh { v: outline.v.clone(), f: outline.f.clone(), e: outline.e.clone() };
-            let s = infinigen::assets::leafkit::solidify(&m, 0.1);
+            let m = indoorgen::assets::leafkit::LMesh { v: outline.v.clone(), f: outline.f.clone(), e: outline.e.clone() };
+            let s = indoorgen::assets::leafkit::solidify(&m, 0.1);
             println!("verts {} vs {} exact {}", s.v.len(), want.v.len(), s.v == want.v);
             println!("faces {} vs {} identical {}", s.f.len(), want.f.len(), s.f == want.f);
             let first = s.f.iter().zip(&want.f).position(|(a, b)| a != b);
@@ -145,8 +145,8 @@ fn main() {
             println!("same sets (as stored) {}", a == b);
         }
         "fill" => {
-            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: inp.e.clone() };
-            let f = infinigen::assets::leafkit::fill_outline(&m);
+            let m = indoorgen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: inp.e.clone() };
+            let f = indoorgen::assets::leafkit::fill_outline(&m);
             let mut neg = 0;
             let mut tot = 0.0f64;
             for t in &f.f {
@@ -166,31 +166,31 @@ fn main() {
                 }
             }
             println!("fill: {} tris, neg {}, area {} ; python area:", f.f.len(), neg, tot);
-            let s = infinigen::assets::leafkit::solidify(&f, 0.1);
+            let s = indoorgen::assets::leafkit::solidify(&f, 0.1);
             let zs: std::collections::BTreeSet<i64> = s.v.iter().map(|p| (p[2] * 1000.0).round() as i64).collect();
             println!("solidify z levels (mm): {:?}", zs);
         }
         "voxel" => {
             let vs: f64 = a.get(4).map(|x| x.parse().unwrap()).unwrap_or(0.02);
-            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
-            let tris = infinigen::assets::dualcon::corner_tris(&m.v, &m.f);
-            let r = infinigen::assets::voxelremesh::voxel_remesh(&m.v, &tris, vs as f32);
+            let m = indoorgen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
+            let tris = indoorgen::assets::dualcon::corner_tris(&m.v, &m.f);
+            let r = indoorgen::assets::voxelremesh::voxel_remesh(&m.v, &tris, vs as f32);
             compare(tag, &r.v, &r.f, &out, 1e-4);
         }
         "rwa" => {
             let vs: f64 = a.get(4).map(|x| x.parse().unwrap()).unwrap_or(0.02);
-            let m = infinigen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
-            let r = infinigen::assets::voxelremesh::remesh_with_attrs(&m, vs);
+            let m = indoorgen::assets::leafkit::LMesh { v: inp.v.clone(), f: inp.f.clone(), e: vec![] };
+            let r = indoorgen::assets::voxelremesh::remesh_with_attrs(&m, vs);
             compare(tag, &r.v, &r.f, &out, 1e-4);
         }
         "weld" => {
             let th = meta["kwargs"]["merge_threshold"].as_f64().unwrap() as f32;
-            let m = infinigen::assets::cabnodes::GMesh { v: inp.v.clone(), p: inp.f.clone(), tag: vec![0; inp.f.len()], e: inp.e.clone() };
-            let r = infinigen::assets::gweld::merge_by_distance(&m, th);
+            let m = indoorgen::assets::cabnodes::GMesh { v: inp.v.clone(), p: inp.f.clone(), tag: vec![0; inp.f.len()], e: inp.e.clone() };
+            let r = indoorgen::assets::gweld::merge_by_distance(&m, th);
             compare(tag, &r.v, &r.p, &out, 1e-6);
         }
         "simple_deform" => {
-            use infinigen::assets::bpymod::*;
+            use indoorgen::assets::bpymod::*;
             let k = &meta["kwargs"];
             let m = if k["deform_method"] == "TWIST" { Deform::Twist } else { Deform::Bend };
             let ax = match k["deform_axis"].as_str().unwrap_or("Z") { "X" => 0, "Y" => 1, _ => 2 };
@@ -199,8 +199,8 @@ fn main() {
             compare(tag, &v, &inp.f, &out, 1e-6);
         }
         "displace" => {
-            use infinigen::assets::bpymod::*;
-            use infinigen::assets::legtex::{Tex, TexKind};
+            use indoorgen::assets::bpymod::*;
+            use indoorgen::assets::legtex::{Tex, TexKind};
             let k = &meta["kwargs"];
             let t = &k["texture"];
             let basis = match t["noise_basis"].as_str().unwrap_or("BLENDER_ORIGINAL") { "BLENDER_ORIGINAL" => 0, "ORIGINAL_PERLIN" => 1, "IMPROVED_PERLIN" => 2, b => panic!("basis {b}") };

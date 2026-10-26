@@ -5,7 +5,7 @@ fn main() {
         let j: serde_json::Value = serde_json::from_str(line).unwrap();
         if j["class"] != "KitchenIslandFactory" { continue; }
         let fs = j["fseed"].as_u64().unwrap();
-        let f = infinigen::assets::make_factory("KitchenIslandFactory", fs).unwrap();
+        let f = indoorgen::assets::make_factory("KitchenIslandFactory", fs).unwrap();
         let b = f.bounds_hint(0).unwrap();
         let v = j["verts"].as_array().unwrap();
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);

@@ -1,5 +1,5 @@
 //! pancap n pystages.json : which ring start reproduces python's fill_grid cap (pre-rotation `filled` stage), and angle table
-use infinigen::assets::bpyops::fill_grid_loop_ex;
+use indoorgen::assets::bpyops::fill_grid_loop_ex;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let n: usize = a[1].parse().unwrap();
@@ -10,7 +10,7 @@ fn main() {
     let phid = 2.0f32 * std::f32::consts::PI / n as f32;
     let mut phi = 0.0f32;
     let _ = (&mut phi, phid);
-    let c32: Vec<[f32; 3]> = (0..n).map(|i| { let (s, c) = infinigen::assets::cabnodes::sin_cos_from_fraction(i, n); [-s, c, 0.0f32] }).collect();
+    let c32: Vec<[f32; 3]> = (0..n).map(|i| { let (s, c) = indoorgen::assets::cabnodes::sin_cos_from_fraction(i, n); [-s, c, 0.0f32] }).collect();
     let c: Vec<[f64; 3]> = c32.iter().map(|v| [v[0] as f64, v[1] as f64, 0.0]).collect();
     let jv: Vec<[f32; 3]> = j["joined"]["v"].as_array().unwrap().iter().map(|v| [v[0].as_f64().unwrap() as f32, v[1].as_f64().unwrap() as f32, 0.0]).collect();
     let bad = (0..n).filter(|&i| jv[i][0] != c32[i][0] || jv[i][1] != c32[i][1]).count();
@@ -38,7 +38,7 @@ fn main() {
         }
         println!("grid f32 vs python: exact {exact}, worst {worst:e}");
     }
-    let ang: Vec<f32> = (0..n).map(|i| (std::f32::consts::PI - infinigen::bm::query::angle_v3v3v3(c32[(i + n - 1) % n], c32[i], c32[(i + 1) % n])).abs()).collect();
+    let ang: Vec<f32> = (0..n).map(|i| (std::f32::consts::PI - indoorgen::bm::query::angle_v3v3v3(c32[(i + n - 1) % n], c32[i], c32[(i + 1) % n])).abs()).collect();
     for i in 0..n { println!("ang {i} {:e}", ang[i] as f64 - ang[0] as f64); }
     let _ = off;
 }

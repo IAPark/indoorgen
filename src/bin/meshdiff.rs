@@ -1,10 +1,10 @@
 //! meshdiff DUMP.jsonl [kind=asset]: compare python spawn_asset meshes (pydump.py) against Rust `Factory::exact`.
-use infinigen::assets::*;
+use indoorgen::assets::*;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
     let kind = std::env::args().nth(2).unwrap_or("asset".into());
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
-    let usage = infinigen::furn::solver::Usage::from_json(&prog["used_as"]);
+    let usage = indoorgen::furn::solver::Usage::from_json(&prog["used_as"]);
     let verbose = std::env::var("V").is_ok();
     let mut stats: std::collections::BTreeMap<String, (usize, usize, usize, usize, usize, f64, usize)> = Default::default();
     for line in std::fs::read_to_string(path).unwrap().lines() {
@@ -20,7 +20,7 @@ fn main() {
             let phb = usage.has_usage(&class, "PlaceholderBBox");
             let eb = f.bounds_hint(inst).or_else(|| None).or_else(|| f.exact(inst).map(|e| { let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]); for v in &e.verts { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } } (lo, hi) }));
             let a = if real || phb { f.placeholder(inst) } else { Some(f.asset(inst)) };
-            a.map(|a| { let (lo, hi) = if !real && !phb && eb.is_some() { eb.unwrap() } else { a.bounds() }; if real { infinigen::assets::cabnodes::new_bbox_exact(lo, hi) } else { infinigen::assets::cabnodes::box_exact(lo, hi) } })
+            a.map(|a| { let (lo, hi) = if !real && !phb && eb.is_some() { eb.unwrap() } else { a.bounds() }; if real { indoorgen::assets::cabnodes::new_bbox_exact(lo, hi) } else { indoorgen::assets::cabnodes::box_exact(lo, hi) } })
         } else { f.exact(inst).map(|e| if kind == "populated" { e.triangulated().with_canonical_tags() } else { e }) };
         let ex = match ex { Some(x) => x, None => { println!("{class} {fs}: no exact()"); continue; } };
         let pv: Vec<[f64; 3]> = j["verts"].as_array().unwrap().iter().map(|v| { let a = v.as_array().unwrap(); [a[0].as_f64().unwrap(), a[1].as_f64().unwrap(), a[2].as_f64().unwrap()] }).collect();
@@ -29,7 +29,7 @@ fn main() {
         let (pv, pp, pn) = if kind == "ph" && pv.len() != ex.verts.len() && usage.has_usage(&class, "PlaceholderBBox") {
             let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
             for v in &pv { for k in 0..3 { lo[k] = lo[k].min(v[k]); hi[k] = hi[k].max(v[k]); } }
-            let b = infinigen::assets::cabnodes::box_exact(lo, hi);
+            let b = indoorgen::assets::cabnodes::box_exact(lo, hi);
             (b.verts, b.polys, b.names)
         } else { (pv, pp, pn) };
         let vcount = pv.len() == ex.verts.len();

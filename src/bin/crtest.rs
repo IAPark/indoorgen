@@ -1,4 +1,4 @@
-use infinigen::assets::curvekit::*;
+use indoorgen::assets::curvekit::*;
 fn rd(p: &str) -> Vec<[f64; 3]> {
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
     let v = if j.is_array() { j.clone() } else { j["verts"].clone() };

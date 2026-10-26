@@ -1,6 +1,6 @@
 //! roomcmp: compare the Rust python-exact room mesh pipeline with stage dumps (tools/pyroom.py) / state0 fixtures.
 //! usage: roomcmp stage <fixture_state0.json> <room> <pystages.json>
-use infinigen::rooms::pyroom::*;
+use indoorgen::rooms::pyroom::*;
 use serde_json::Value;
 
 fn load(p: &str) -> Value {
@@ -38,15 +38,15 @@ fn cmp_stage(name: &str, m: &RawMesh, py: &Value) -> bool {
     ok
 }
 
-fn consts(seed: u64) -> infinigen::rooms::consts::RoomConstants {
-    let mut rng0 = infinigen::rng::Rng::seeded(seed);
+fn consts(seed: u64) -> indoorgen::rooms::consts::RoomConstants {
+    let mut rng0 = indoorgen::rng::Rng::seeded(seed);
     for _ in 0..42 {
         rng0.next_u32();
     }
-    infinigen::rooms::consts::RoomConstants::sample(&mut rng0, 1)
+    indoorgen::rooms::consts::RoomConstants::sample(&mut rng0, 1)
 }
 
-fn smesh_to_raw(m: &infinigen::rooms::pysolid::SMesh) -> RawMesh {
+fn smesh_to_raw(m: &indoorgen::rooms::pysolid::SMesh) -> RawMesh {
     RawMesh { pos: m.pos.clone(), edges: m.edges.clone(), faces: m.faces.clone() }
 }
 
@@ -99,19 +99,19 @@ fn main() {
         }
         "all" => {
             // roomcmp all <Room> <seed>: full Rust pipeline (plan -> solidify -> exact room meshes) vs the fixture
-            use infinigen::furn::geom::{CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
+            use indoorgen::furn::geom::{CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
             let (room, seed): (&str, u64) = (a[2].as_str(), a[3].parse().unwrap());
             let c = consts(seed);
-            let cfg = infinigen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
-            let solver = infinigen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
-            let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "solve_rooms"]));
+            let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+            let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
+            let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));
             let st = solver.solve(&mut r);
             let fx = load(&a.get(4).cloned().unwrap_or_else(|| format!("{}/work/ref/traces/case_{}_{}_state0.json", std::env::var("HOME").unwrap(), room, seed)));
             let mut all_ok = true;
             for (name, obj) in st.valid_rooms() {
                 let poly = obj.polygon.as_ref().unwrap();
-                let ext = infinigen::rooms::shell::ext_centers(&st, &name);
-                let tris = infinigen::rooms::shell::solid_room_exact(&c, poly, &ext);
+                let ext = indoorgen::rooms::shell::ext_centers(&st, &name);
+                let tris = indoorgen::rooms::shell::solid_room_exact(&c, poly, &ext);
                 let o = &fx["objs"][name.as_str()];
                 if o.is_null() { println!("{name}: not in fixture"); all_ok = false; continue; }
                 let Some(tris) = tris else { println!("{name}: solid_room_exact failed"); all_ok = false; continue };
@@ -139,16 +139,16 @@ fn main() {
             // roomcmp try <seed0> <seed1>: does the exact builder succeed for these floor plans?
             for seed in a[2].parse::<u64>().unwrap()..a[3].parse::<u64>().unwrap() {
                 let c = consts(seed);
-                let cfg = infinigen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
-                let solver = infinigen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
-                let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "solve_rooms"]));
+                let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+                let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
+                let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));
                 let st = solver.solve(&mut r);
                 let mut fails = vec![];
                 let mut n = 0;
                 for (name, obj) in st.valid_rooms() {
-                    let ext = infinigen::rooms::shell::ext_centers(&st, &name);
+                    let ext = indoorgen::rooms::shell::ext_centers(&st, &name);
                     let t0 = std::time::Instant::now();
-                    match infinigen::rooms::shell::solid_room_exact(&c, obj.polygon.as_ref().unwrap(), &ext) { Some(_) => n += 1, None => fails.push(name.clone()) }
+                    match indoorgen::rooms::shell::solid_room_exact(&c, obj.polygon.as_ref().unwrap(), &ext) { Some(_) => n += 1, None => fails.push(name.clone()) }
                     if t0.elapsed().as_secs_f64() > 0.5 { println!("seed {seed} {name} slow {:?}", t0.elapsed()); }
                 }
                 println!("seed {seed}: {n} ok, failed {:?}", fails);
@@ -159,15 +159,15 @@ fn main() {
             let mut out = serde_json::Map::new();
             for seed in a[2].parse::<u64>().unwrap()..a[3].parse::<u64>().unwrap() {
                 let c = consts(seed);
-                let cfg = infinigen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+                let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
                 let Ok(st) = std::panic::catch_unwind(|| {
-                    let solver = infinigen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
-                    let mut r = infinigen::rng::Rng::seeded(infinigen::int_hash(&[&seed.to_string(), "solve_rooms"]));
+                    let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
+                    let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));
                     solver.solve(&mut r)
                 }) else { eprintln!("seed {seed}: plan solver panicked, skipped"); continue };
                 let mut rooms = serde_json::Map::new();
                 for (name, obj) in st.valid_rooms() {
-                    if let Some(rings) = infinigen::rooms::shell::room_rings(&c, obj.polygon.as_ref().unwrap()) {
+                    if let Some(rings) = indoorgen::rooms::shell::room_rings(&c, obj.polygon.as_ref().unwrap()) {
                         rooms.insert(name.clone(), serde_json::json!(rings));
                     }
                 }
@@ -204,7 +204,7 @@ fn main() {
             let py = load(&a[3]);
             let nbits: u32 = a[4].parse().unwrap();
             for mask in 0..(1u32 << nbits) {
-                infinigen::rooms::pysolid::FMA.store(mask, std::sync::atomic::Ordering::Relaxed);
+                indoorgen::rooms::pysolid::FMA.store(mask, std::sync::atomic::Ordering::Relaxed);
                 let (mut ok, mut bad) = (0, 0);
                 for (seed, sd) in inp.as_object().unwrap() {
                     for (name, rings) in sd["rooms"].as_object().unwrap() {
@@ -222,7 +222,7 @@ fn main() {
         }
         "normals" => {
             // roomcmp normals in.json py.json : sol1 face / vertex normals vs bpy
-            use infinigen::rooms::pysolid::*;
+            use indoorgen::rooms::pysolid::*;
             let inp = load(&a[2]);
             let py = load(&a[3]);
             let (mut nf, mut nv, mut tot) = (0, 0, 0);

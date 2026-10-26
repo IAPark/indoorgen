@@ -1,7 +1,7 @@
 //! clothexp CASE FRAME : run the Rust cloth solver on the small calibration scenes of tools/clothexp2.py and compare with Blender.
 //! CASE: hang_k2_m005 | hang_k15_m03 | hang_k30_m005 | ... | drop | drop_nodamp
-use infinigen::assets::cloth::*;
-use infinigen::assets::clothes::grid;
+use indoorgen::assets::cloth::*;
+use indoorgen::assets::clothes::grid;
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();

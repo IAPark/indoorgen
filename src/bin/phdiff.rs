@@ -1,6 +1,6 @@
-use infinigen::furn::assets::TableAssets;
-use infinigen::furn::solver::{Assets, PlaceholderKind};
-use infinigen::furn::solver::Usage;
+use indoorgen::furn::assets::TableAssets;
+use indoorgen::furn::solver::{Assets, PlaceholderKind};
+use indoorgen::furn::solver::Usage;
 use std::collections::BTreeMap;
 fn main() {
     let path = std::env::args().nth(1).unwrap();
@@ -8,7 +8,7 @@ fn main() {
     let usage = Usage::from_json(&prog["used_as"]);
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
-    let assets = infinigen::assets::RealAssets { fallback };
+    let assets = indoorgen::assets::RealAssets { fallback };
     let mut stats: BTreeMap<String, (usize, usize, f64, usize)> = BTreeMap::new();
     for line in std::fs::read_to_string(path).unwrap().lines() {
         let j: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -21,7 +21,7 @@ fn main() {
         let kind = if usage.has_usage(&class, "RealPlaceholder") { PlaceholderKind::Real } else if usage.has_usage(&class, "AssetAsPlaceholder") { PlaceholderKind::AssetAsPlaceholder } else if usage.has_usage(&class, "PlaceholderBBox") { PlaceholderKind::BboxOfPlaceholder } else { PlaceholderKind::BboxOfAsset };
         let e = stats.entry(class.clone()).or_default();
         e.0 += 1;
-        let real = infinigen::assets::make_factory(&class, fs).is_some();
+        let real = indoorgen::assets::make_factory(&class, fs).is_some();
         if let (true, Some(g)) = (real, assets.placeholder(&class, fs, inst, kind)) {
             let d = (0..3).map(|k| (g.lo[k] - lo[k]).abs().max((g.hi[k] - hi[k]).abs())).fold(0.0, f64::max);
             if let Some(f) = std::env::args().nth(2) { if class == f && d >= 1e-5 { println!("{} fs={} inst={} d={:.6} rust lo {:?} hi {:?} py lo {:?} hi {:?}", class, fs, inst, d, g.lo, g.hi, lo, hi); } }

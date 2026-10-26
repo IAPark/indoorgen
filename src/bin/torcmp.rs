@@ -1,4 +1,4 @@
-use infinigen::assets::hwexact::*;
+use indoorgen::assets::hwexact::*;
 fn main() {
     let d: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/tmp/stor_prims.json").unwrap()).unwrap();
     let t = &d["torus"];

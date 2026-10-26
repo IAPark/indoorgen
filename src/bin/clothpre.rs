@@ -1,6 +1,6 @@
 //! clothpre DUMPDIR KEY : rebuild the pre-sim sheet/cover mesh (blanket family) from the bounds of the python dump and compare vertex by vertex.
-use infinigen::assets::clothes::*;
-use infinigen::assets::pydump::*;
+use indoorgen::assets::clothes::*;
+use indoorgen::assets::pydump::*;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let d = PyDump::load(&a[1]);

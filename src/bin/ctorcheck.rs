@@ -1,7 +1,7 @@
 //! ctorcheck CLASS NSEEDS : for global seeds g in 0..N run the emulated constructor draws and print `CLASS words gauss` per seed
 //! (compare with tools/ctorlog.py --all, which seeds np.random.seed(g) and measures the real python constructors).
-use infinigen::assets::ctor_draws::{ctor_draws, words_between};
-use infinigen::rng::Rng;
+use indoorgen::assets::ctor_draws::{ctor_draws, words_between};
+use indoorgen::rng::Rng;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let class = &a[1];

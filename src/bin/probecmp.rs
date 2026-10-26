@@ -1,4 +1,4 @@
-use infinigen::assets::cabnodes::*;
+use indoorgen::assets::cabnodes::*;
 fn main() {
     let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string("/tmp/stor_probe3.json").unwrap()).unwrap();
     let rot = [0.0f32, 0.0, -1.5708];
