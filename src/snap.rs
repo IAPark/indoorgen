@@ -350,3 +350,30 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
     }
     gone
 }
+
+/// Two rugs lying on top of each other read as a thick slab: keep the larger one. Returns the removed keys.
+pub fn remove_overlapping_rugs(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, min_ov: f64) -> Vec<String> {
+    let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
+    let mut rugs: Vec<(String, [f64; 2], [f64; 2])> = vec![];
+    for (k, o) in state.objs.iter() {
+        if !o.generator.as_ref().map_or(false, |g| g.class.contains("Rug")) { continue }
+        let Some(a) = visuals.get(k) else { continue };
+        let m = mat_of(&o.pose);
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in &a.parts { for q in &p.mesh.pos { let w = m.apply(*q); for d in 0..2 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); } } }
+        if lo[0] < hi[0] { rugs.push((k.clone(), lo, hi)); }
+    }
+    let area = |r: &(String, [f64; 2], [f64; 2])| (r.2[0] - r.1[0]) * (r.2[1] - r.1[1]);
+    let mut dead: Vec<String> = vec![];
+    for i in 0..rugs.len() {
+        for j in i + 1..rugs.len() {
+            let (a, b) = (&rugs[i], &rugs[j]);
+            if dead.contains(&a.0) || dead.contains(&b.0) { continue }
+            if (0..2).all(|d| a.2[d].min(b.2[d]) - a.1[d].max(b.1[d]) > min_ov) {
+                dead.push(if area(a) < area(b) { a.0.clone() } else { b.0.clone() });
+            }
+        }
+    }
+    for k in &dead { state.objs.shift_remove(k); }
+    dead
+}

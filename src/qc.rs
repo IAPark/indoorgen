@@ -547,7 +547,22 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
             *counts.entry(cls.to_string()).or_default() += 1;
         }
     }
-    let rep = json!({"scene": label, "objects": results.len(), "counts": counts, "door_swing_limited": swing, "results": results, "qc_secs": t0.elapsed().as_secs_f64()});
+    // furniture density per room: floor-standing objects > 50 cm (AABB footprint / room area) and the number of small items
+    let shoelace = |p: &Vec<[f64; 2]>| -> f64 { (0..p.len()).map(|i| { let (a, b) = (p[i], p[(i + 1) % p.len()]); a[0] * b[1] - b[0] * a[1] }).sum::<f64>().abs() / 2.0 };
+    let rooms_sum: Vec<serde_json::Value> = inner.iter().enumerate().map(|(ri, (name, poly))| {
+        let area = if poly.len() > 2 { shoelace(poly) } else { 0.0 };
+        let (mut nf, mut ns, mut foot) = (0, 0, 0.0);
+        for o in &objs {
+            if o.kind == Kind::Person { continue }
+            let c = [(o.lo[0] + o.hi[0]) / 2.0, (o.lo[1] + o.hi[1]) / 2.0];
+            if room_of(c) != Some(ri) { continue }
+            let sz = [o.hi[0] - o.lo[0], o.hi[1] - o.lo[1], o.hi[2] - o.lo[2]];
+            if sz.iter().cloned().fold(0.0, f64::max) < 0.5 { ns += 1; continue }
+            if o.lo[2] < wall_t / 2.0 + 0.3 && o.kind == Kind::Furn && !o.class.contains("Rug") { nf += 1; foot += sz[0] * sz[1]; }
+        }
+        json!({"room": name, "area": (area * 100.0).round() / 100.0, "furniture": nf, "small_items": ns, "footprint_frac": if area > 0.0 { (foot / area * 1000.0).round() / 1000.0 } else { 0.0 }})
+    }).collect();
+    let rep = json!({"scene": label, "rooms": rooms_sum, "objects": results.len(), "counts": counts, "door_swing_limited": swing, "results": results, "qc_secs": t0.elapsed().as_secs_f64()});
     if !out.as_os_str().is_empty() {
         std::fs::write(out, serde_json::to_vec_pretty(&rep).unwrap()).unwrap();
     }
