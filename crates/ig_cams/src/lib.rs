@@ -491,11 +491,11 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                             let lo_ok = match (kind, lv) { (1, 0) => 0.33, (1, _) => 0.25, (_, 0) => 0.5, _ => 0.35 };
                             if sz < lo_ok && !(lv > 1) { rej[5] += 1; continue }
                         }
-                        if s.person && lv < 5 && (by1 > 0.93 || by0 < -0.97 || bx0 < -0.97 || bx1 > 0.97) { rej[15] += 1; continue }
+                        if s.person && lv < 5 && (by1 > 0.93 || by0 < -0.92 || bx0 < -0.97 || bx1 > 0.97) { rej[15] += 1; continue }
                         if s.person && lv < 5 && (by1 - by0) / 2.0 < if lv == 0 { 0.42 } else { 0.28 } { rej[16] += 1; continue }
                     }
                     // other people must not be cut by the frame edge
-                    if lv < 5 {
+                    if lv < 6 {
                         let mut cut = false;
                         for q in cand.iter().filter(|q| q.person && q.key != s.key) {
                             let (mut ins, mut tot_p) = (0, 0);
@@ -569,7 +569,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                     if got.iter().any(|(p, ff, sk)| {
                         let dd = ((p[0] - o[0]).powi(2) + (p[1] - o[1]).powi(2)).sqrt();
                         let ang = (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees();
-                        dd < sp_d && ang < sp_a || (*sk == s.key && ang < 1.6 * sp_a && dd < 2.0 * sp_d) || ang < 8.0
+                        dd < sp_d && ang < sp_a || (*sk == s.key && ang < 35.0 && dd < 2.5) || ang < 8.0
                     }) { rej[11] += 1; continue }
                     let px = proj(c).map_or(0.0, |p| p.0);
                     let lead = match s.face { Some(fc) if s.person && !s.lie => if px * (fc[0] * r[0] + fc[1] * r[1]) < 0.0 { 0.3 } else { 0.0 }, _ => 0.0 };
@@ -606,6 +606,20 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                             let r = [r[0] / rn, r[1] / rn, 0.0];
                             let (th, tv) = (18.0 / flens, 18.0 / flens * 9.0 / 16.0);
                             let (mut wl, mut nr, mut ds, mut fu) = (0, 0, 0.0, 0);
+                            let mut cutp = 0.0;
+                            for q in cand.iter().filter(|q| q.person) {
+                                let (mut ins, mut vis_n) = (0, 0);
+                                for k in 0..8 {
+                                    let pq = [if k & 1 == 0 { q.lo[0] } else { q.hi[0] }, if k & 2 == 0 { q.lo[1] } else { q.hi[1] }, if k & 4 == 0 { q.lo[2] } else { q.hi[2] }];
+                                    let dq = [pq[0] - o[0], pq[1] - o[1], pq[2] - o[2]];
+                                    let zq = dq[0] * f[0] + dq[1] * f[1] + dq[2] * f[2];
+                                    if zq < 0.1 { continue }
+                                    vis_n += 1;
+                                    let (px, py) = ((dq[0] * r[0] + dq[1] * r[1]) / zq / th, (dq[0] * u[0] + dq[1] * u[1] + dq[2] * u[2]) / zq / tv);
+                                    if px.abs() < 1.0 && py.abs() < 1.0 { ins += 1 }
+                                }
+                                if ins > 0 && ins < 8 { cutp += 1.0 } else if vis_n > 0 && vis_n < 8 { cutp += 1.0 }
+                            }
                             for iy in 0..5 { for ix in 0..8 {
                                 let nx = ((ix as f64 + 0.5) / 8.0) * 2.0 - 1.0;
                                 let ny = 1.0 - ((iy as f64 + 0.5) / 5.0) * 2.0;
@@ -618,7 +632,7 @@ pub fn generate(scene: &Scene, room_polys: &[(String, ig_core::shp::G)], cfg: &C
                                 } else { ds += 6.0 }
                             } }
                             let dmin = got.iter().map(|(q, ff, _)| if (q[0] - p[0]).hypot(q[1] - p[1]) < 0.8 && (ff[0] * f[0] + ff[1] * f[1]).clamp(-1.0, 1.0).acos().to_degrees() < 25.0 { 0.0 } else { 1.0 }).fold(1.0, f64::min);
-                            let sc = -1.5 * wl as f64 / 40.0 - 3.0 * nr as f64 / 40.0 + ds / 40.0 / 6.0 + 0.8 * (fu as f64 / 40.0).min(0.4) - 2.0 * (1.0 - dmin);
+                            let sc = -3.0 * cutp - 3.0 * wl as f64 / 40.0 - 3.0 * nr as f64 / 40.0 + ds / 40.0 / 6.0 + 0.8 * (fu as f64 / 40.0).min(0.4) - 2.0 * (1.0 - dmin);
                             if bestp.map_or(true, |b| sc > b.0) { bestp = Some((sc, [p[0], p[1]], f)) }
                         }
                     }
