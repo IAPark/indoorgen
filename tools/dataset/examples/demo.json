@@ -1,20 +1,120 @@
 {
-  "name": "demo",
-  "defaults": {"width": 640, "height": 480, "views": 4, "samples": 16, "engine": "cycles", "depth_format": "npy",
-               "extras": ["normal", "instance"], "gen": {"cloth": {"on": false}, "geometry": {"mesh_budget": true}},
-               "cameras": {"focal_mm": [18, 35], "eye_height_m": [1.0, 1.8], "traj_frac": 0.4, "cluster_len": 3}},
-  "houses": [
-    {"name": "bedroom5", "seed": 5, "room": "Bedroom", "camera_seed": 1,
-     "variants": [
-       {"name": "base", "vary": []},
-       {"name": "doors", "vary": ["doors"]},
-       {"name": "walls", "vary": ["walls"]},
-       {"name": "mess", "vary": ["mess"]},
-       {"name": "lighting", "vary": ["lighting"]},
-       {"name": "furniture", "vary": ["furniture"]},
-       {"name": "people", "vary": ["people"]},
-       {"name": "rm_class_all", "vary": [], "remove": {"classes": ["Bed"], "views": "all", "with_children": true}},
-       {"name": "rm_random_subset", "vary": [], "remove": {"random": {"count": 1, "classes": ["Shelf", "Table", "Desk", "Bookcase", "Cabinet", "Plant"]}, "views": "random_subset", "views_count": 2}}
-     ]}
-  ]
+ "name": "demo",
+ "defaults": {
+  "width": 640,
+  "height": 480,
+  "views": 4,
+  "samples": 16,
+  "engine": "cycles",
+  "depth_format": "npy",
+  "extras": [
+   "normal",
+   "instance"
+  ],
+  "gen": {
+   "cloth": {
+    "on": false
+   },
+   "geometry": {
+    "mesh_budget": true
+   }
+  },
+  "cameras": {
+   "focal_mm": [
+    18,
+    35
+   ],
+   "eye_height_m": [
+    1.0,
+    1.8
+   ],
+   "traj_frac": 0.4,
+   "cluster_len": 3
+  }
+ },
+ "houses": [
+  {
+   "name": "bedroom5",
+   "seed": 5,
+   "room": "Bedroom",
+   "camera_seed": 1,
+   "variants": [
+    {
+     "name": "base",
+     "vary": []
+    },
+    {
+     "name": "doors",
+     "vary": [
+      "doors"
+     ]
+    },
+    {
+     "name": "walls",
+     "vary": [
+      "walls"
+     ]
+    },
+    {
+     "name": "mess",
+     "vary": [
+      "mess"
+     ]
+    },
+    {
+     "name": "lighting",
+     "vary": [
+      "lighting"
+     ]
+    },
+    {
+     "name": "furniture",
+     "vary": [
+      "furniture"
+     ]
+    },
+    {
+     "name": "people",
+     "vary": [
+      "people"
+     ]
+    },
+    {
+     "name": "rm_class_all",
+     "vary": [],
+     "remove": {
+      "classes": [
+       "Bed"
+      ],
+      "views": "all",
+      "with_children": true
+     }
+    },
+    {
+     "name": "rm_random_subset",
+     "vary": [],
+     "remove": {
+      "random": {
+       "count": 1,
+       "classes": [
+        "Shelf",
+        "Table",
+        "Desk",
+        "Bookcase",
+        "Cabinet",
+        "Plant"
+       ]
+      },
+      "views": "random_subset",
+      "views_count": 2
+     }
+    },
+    {
+     "name": "all",
+     "vary": "all",
+     "count": 2
+    }
+   ]
+  }
+ ]
 }

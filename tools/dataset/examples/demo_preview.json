@@ -1,0 +1,72 @@
+{
+ "name": "demo",
+ "defaults": {
+  "width": 640,
+  "height": 480,
+  "views": 6,
+  "samples": 16,
+  "engine": "preview",
+  "depth_format": "npy",
+  "extras": [
+   "normal",
+   "instance"
+  ],
+  "gen": {
+   "cloth": {
+    "on": false
+   },
+   "geometry": {
+    "mesh_budget": true
+   }
+  },
+  "cameras": {
+   "focal_mm": [
+    18,
+    35
+   ],
+   "eye_height_m": [
+    1.0,
+    1.8
+   ],
+   "traj_frac": 0.4,
+   "cluster_len": 3
+  }
+ },
+ "houses": [
+  {
+   "name": "bedroom5",
+   "seed": 5,
+   "room": "Bedroom",
+   "camera_seed": 1,
+   "variants": [
+    {
+     "name": "base",
+     "vary": []
+    },
+    {
+     "name": "lighting",
+     "vary": [
+      "lighting"
+     ],
+     "count": 3
+    },
+    {
+     "name": "walls",
+     "vary": [
+      "walls"
+     ]
+    },
+    {
+     "name": "rm_class_all",
+     "vary": [],
+     "remove": {
+      "classes": [
+       "Bed"
+      ],
+      "views": "all"
+     }
+    }
+   ]
+  }
+ ]
+}

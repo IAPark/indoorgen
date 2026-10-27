@@ -189,6 +189,7 @@ def main():
                 meta.update(render_s=t_r, **{"dscap_" + k: v for k, v in res.items()})
             else:
                 from_preview = importlib_preview()
+                if rem: print("WARNING: 'remove' is not supported by the preview engine (ignored for %s)" % variant["name"]); meta["remove_ignored_by_preview"] = True
                 meta.update(from_preview(a, vdir, glb, house, variant, variation, room, W, H, K, opt, out, hname))
             if not a.keep_glb:
                 for p in (glb, side): os.path.exists(p) and os.remove(p)

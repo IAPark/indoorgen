@@ -68,14 +68,43 @@ here; the per-dataset plumbing (file naming, annotation container) is the only d
 (`filepath`, `depth`, `extri` 3x4, `intri` 3x3) per variant. Depth is `.npy` instead of 16-bit PNG (lossless, metres); `depth_format: "exr"` writes
 OpenEXR. Differences to note: no per-pixel confidence mask file (use depth > 0), the images are not square-cropped.
 
+## Object removal ("guess the depth of what is missing")
+Per variant (or per variant group) `"remove": {...}`:
+```jsonc
+"remove": { "keys": ["82404_BedFactory"],                  // object keys (glb node "<key>#<part>", sidecar `objects`)
+            "classes": ["Bed", "SofaFactory"],              // class names, case-insensitive substring of the key's class
+            "random": { "count": 1, "classes": ["Shelf"], "seed": 3 },   // pick count objects (default: any furnishing > 25 cm)
+            "with_children": true,                          // everything resting on a removed object goes too (sidecar `objects[].parent` chain)
+            "views": "all"                                  // "all" | "random_subset" (+ "views_fraction" 0.5 | "views_count" n) | [view indices]
+            "seed": 0 }                                     // view-subset seed (default derived from house/variant)
+```
+The removed objects (and their point lights / emissive lamp shaders) are hidden for Cycles in the selected views (one Blender import, visibility is
+toggled per view; the cameras are identical for removed and untouched views).  Outputs per view when a variant has `remove`:
+`depth/NNN.npy` = what the camera sees WITH the removal, `depth_full/NNN.npy` = depth of the full scene (the "what was there" target, equal
+to `depth` outside the mask), `removed_mask/NNN.png` (255 = pixels covered by a removed object in the full scene; all 0 for views without removal),
+and in `cameras.json` per view `removed_keys`, `removed_classes`, `removed_frac`, `depth_full`, `removed_mask`; `meta.json` has `dscap_removed_keys`
+and `dscap_removed_views`, `variation.json` the resolved spec (`remove_spec`).  `normal/` and `instance/` describe the visible (removed) render.
+The preview engine ignores `remove` (flagged in meta.json).
+
 ## Variation applied by the renderers
-Cycles (`tools/render/render_rust.py --dataset SPEC`, module `dscap.py`): `variation.lighting` -> sky texture sun rotation/elevation/intensity,
-world strength, colour temperature (multiply tint relative to 6500 K), point lights x `lamp_strength_scale`, switched-off lamps / ceiling lights
-(light removed and emissive shader strength 0); `variation.walls` (and ceiling/floor when recorded) -> base colour of that room's wall materials
-(texture, bump and roughness kept). Preview engine: sun direction + glb base colours only (colours come from the glb; no GI, no lamps toggling).
+Cycles (`tools/render/render_rust.py --dataset SPEC`, module `dscap.py`): gen2's sidecar `variation` record (factors worker schema) ->
+`lighting.sun_dir` (z-up unit vector toward the sun) -> sky texture sun rotation/elevation (Blender convention measured with a shadow test:
+rotation r puts the sun toward (sin r, -cos r), i.e. compass bearing 180 deg - r), `sun_strength` -> sky sun intensity, `sky_strength` -> world
+strength, `color_temp_k` -> multiply tint relative to 6500 K, point lights x `lamp_strength_scale`, per-lamp `lamps{key:{on}}` (off lamps: light absent
+and emissive shader strength 0); `walls.colors` / `ceiling.colors` / `floor.colors` (linear rgb per room) -> base colour of that room's surface
+materials (texture, bump and roughness kept). A gen2 without the record gets a driver-side sampler (`variation.json` `_source`). Preview engine:
+`--sidecar-lighting` sun + glb base colours only (no GI, no procedural materials; the window pane does not write depth, so windows are holes = 0).
 
 ## Validation (`validate.py`)
 Per ordered view pair: depth i is unprojected with K/c2w and projected into view j: (1) depth consistency |z - depth_j| (median relative error,
 inlier fraction; the remainder is occlusion), (2) round-trip reprojection error in pixels, (3) photometric warp error of RGB against a 4 px shifted
 control, (4) per view: depth-edge map vs RGB gradient shifted by -4..4 px: the best shift must be (0, 0), which proves the Cycles camera is the
 camera described by K and c2w. Exit code 0 when every pair with >= 5 % overlap has reprojection < 1 px and depth error < 1 %, and all shifts are <= 1 px.
+
+## Throughput (Cycles, 640x480, 16 spp + OIDN, 4 views, this 4-core VM while other workers run; demo bedroom seed 5)
+Per variant: gen2 10-17 s (only_target, mesh budget on, 2 people, mess 0.4) + Blender import/materials/BVH ~26 s + 4 x ~16.5 s render (+1.5 s
+ray-cast depth/normals/ids each) = ~105 s, 15 MB (20 MB with the removal outputs); validation <5 s. => ~135 views/h at K=4; K=16 per variant ~300 s
+= ~190 views/h (the fixed ~40 s per variant amortises over K). Machine noise is large (the "walls" variant of the demo took 1197 s because
+something else saturated the cores; "doors" 198 s). Suggested settings: 16 spp with denoise (denoised 16 spp is visually clean at 640x480; 64 spp
+~3-4x the render time), K >= 8 views per variant, `extras` on (cheap), keep glbs off (`--keep-glb` only for debugging; a glb is ~50 MB).
+Preview engine: ~12 s per variant (gen2 dominates, rasterising 6 views + depth ~1 s), RGB is flat-shaded (no procedural materials / GI).
