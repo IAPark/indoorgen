@@ -53,3 +53,18 @@ pub fn var(k: &str) -> Option<String> {
     }
     std::env::var(k).ok()
 }
+
+/// `std::env::var_os(k).is_some()`-style check that also sees the `set_var` overrides (value as a String)
+pub fn var_os(k: &str) -> Option<String> {
+    var(k)
+}
+
+/// drop-in for `std::env::var(k)` (Result) that also sees the `set_var` overrides
+pub fn var_r(k: &str) -> Result<String, ()> {
+    var(k).ok_or(())
+}
+
+/// remove every `set_var` override (the wasm host calls this before applying a new run's settings)
+pub fn clear_vars() {
+    OVERRIDES.lock().unwrap().clear();
+}

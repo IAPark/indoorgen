@@ -40,10 +40,10 @@ pub fn build_scene(p: &Params) -> Built {
     // INFINIGEN_PROGRAM=1: the program exactly as exported from python home.py + the fast_solve.gin steps 100/40/5 (selfcheck/lockstep semantics).
     let prog = &p.prog;
     let steps = |k: &str, d: usize| ig_core::envx::var(k).and_then(|v| v.parse().ok()).unwrap_or(d);
-    indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && std::env::var_os("NO_PH_REUSE").is_none());
+    indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && ig_core::envx::var_os("NO_PH_REUSE").is_none());
     if !orig_prog { indoorgen::furn::dof::set_place_tries(steps("PLACE_TRIES", 40)); }
-    indoorgen::furn::dof::set_constructive(!orig_prog && std::env::var_os("CONSTRUCTIVE").is_some(), steps("PLACE_CAND", 64));
-    indoorgen::furn::dof::set_counter_over_windows(!orig_prog && std::env::var_os("NO_COUNTER_WIN").is_none());
+    indoorgen::furn::dof::set_constructive(!orig_prog && ig_core::envx::var_os("CONSTRUCTIVE").is_some(), steps("PLACE_CAND", 64));
+    indoorgen::furn::dof::set_counter_over_windows(!orig_prog && ig_core::envx::var_os("NO_COUNTER_WIN").is_none());
     if !orig_prog {
         #[cfg(not(target_arch = "wasm32"))]
         std::env::set_var("INFINIGEN_DENSE", "1");
@@ -82,7 +82,7 @@ pub fn build_scene(p: &Params) -> Built {
         }
         if gone > 0 { eprintln!("TRINKETS kept {kept}, removed {gone}"); }
     }
-    if std::env::var("EVAL").is_ok() {
+    if ig_core::envx::var_r("EVAL").is_ok() {
         let (prog, _) = indoorgen::pipeline::load_program(seed, prog);
         let mut memo = indoorgen::furn::eval::Memo::new(&prog, None);
         let mut ev = indoorgen::furn::eval::Evaluator::new(&prog, &g.state, &mut memo);
@@ -92,7 +92,7 @@ pub fn build_scene(p: &Params) -> Built {
         eprintln!("viol {:?}", r.violations.iter().filter(|x| x.1 > 0.0).collect::<Vec<_>>());
     }
     let t_scene = web_time::Instant::now();
-    let lap = |what: &str| { ig_core::envx::progress(what); if std::env::var_os("LAPS").is_some() { eprintln!("LAP {what} {:.1}s since scene start", t_scene.elapsed().as_secs_f64()); } };
+    let lap = |what: &str| { ig_core::envx::progress(what); if ig_core::envx::var_os("LAPS").is_some() { eprintln!("LAP {what} {:.1}s since scene start", t_scene.elapsed().as_secs_f64()); } };
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
     let decos = indoorgen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
@@ -146,7 +146,7 @@ pub fn build_scene(p: &Params) -> Built {
     for (nm, ceil, z) in [("skirting_floor", false, wt / 2.0), ("skirting_ceiling", true, g.c.wall_height - wt / 2.0)] {
         let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), nm]));
         let sk = if ceil { indoorgen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { indoorgen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &[wt, g.c.door_width]) };
-        if let (Some(sk), true) = (&sk, std::env::var("SKIRTDBG").is_ok()) {
+        if let (Some(sk), true) = (&sk, ig_core::envx::var_r("SKIRTDBG").is_ok()) {
             for ct in &g.cutters {
                 if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance) { continue }
                 let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
@@ -193,7 +193,7 @@ pub fn build_scene(p: &Params) -> Built {
     }
     // lights_off stage: chance 0.2 (python: stage runs when uniform() <= chance)
     let lights_off = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "lights_off", "0"])).f64() <= 0.2;
-    if std::env::var("TILTCHECK").is_ok() {
+    if ig_core::envx::var_r("TILTCHECK").is_ok() {
         // every placed object must only be rotated about the vertical axis (python's solver never tilts furniture)
         let mut tilted = 0;
         for (k, o) in &g.state.objs {
@@ -209,7 +209,7 @@ pub fn build_scene(p: &Params) -> Built {
         }
         eprintln!("TILTCHECK {} objects tilted", tilted);
     }
-    if std::env::var("POSES").is_ok() {
+    if ig_core::envx::var_r("POSES").is_ok() {
         for (k, o) in &g.state.objs {
             if let Some(gen) = &o.generator {
                 if matches!(gen.class.as_str(), "SofaFactory" | "TVStandFactory" | "CoffeeTableFactory" | "ArmChairFactory") {
@@ -228,7 +228,7 @@ pub fn build_scene(p: &Params) -> Built {
             .map(|(k, gen)| {
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
-                if std::env::var_os("BUDGETLOG").is_some() {
+                if ig_core::envx::var_os("BUDGETLOG").is_some() {
                     let tc = |a: &indoorgen::assets::Asset| a.parts.iter().map(|p| p.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
                     let t0 = web_time::Instant::now();
                     let before = tc(&a);
@@ -244,7 +244,7 @@ pub fn build_scene(p: &Params) -> Built {
     };
     lap("visuals built");
     // python's KitchenCabinet visual starts at local y = 0 while its solver box is centred: align them (see snap.rs)
-    if std::env::var_os("NO_SNAP").is_none() {
+    if ig_core::envx::var_os("NO_SNAP").is_none() {
         let mv = indoorgen::snap::recenter_visuals(&g.state, &mut visuals, &["KitchenCabinetFactory"]);
         eprintln!("RECENTER {} KitchenCabinet visuals aligned with their solver box", mv.len());
         let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
@@ -257,7 +257,7 @@ pub fn build_scene(p: &Params) -> Built {
     // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)
     {
         let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
-        if std::env::var_os("NO_SNAP").is_none() {
+        if ig_core::envx::var_os("NO_SNAP").is_none() {
             // repeated: an item buried in a double board first rests on the inner board, the next pass finds the real top
             let mut sn = vec![];
             for _ in 0..3 {
@@ -266,11 +266,11 @@ pub fn build_scene(p: &Params) -> Built {
                 sn.extend(one);
                 if !moved { break }
             }
-            if std::env::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm{}", s.key, s.dz * 1000.0, if s.removed { " REMOVED" } else { "" }); } }
+            if ig_core::envx::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm{}", s.key, s.dz * 1000.0, if s.removed { " REMOVED" } else { "" }); } }
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }
     }
-    if std::env::var_os("NO_SNAP").is_none() && std::env::var_os("NO_WALLPUSH").is_none() {
+    if ig_core::envx::var_os("NO_SNAP").is_none() && ig_core::envx::var_os("NO_WALLPUSH").is_none() {
         let wt = g.c.wall_thickness;
         let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();
         for (k, dx, dy) in indoorgen::snap::push_out_of_walls(&mut g.state, &visuals, &inner, 0.35) { eprintln!("WALLPUSH {k} by ({:+.3},{:+.3})", dx, dy); }
@@ -314,7 +314,7 @@ pub fn build_scene(p: &Params) -> Built {
         let room = (s_back - c_back - 0.005).max(0.0);
         let shift = want.min(room);
         if shift > 1e-4 {
-            if std::env::var_os("CUTDBG").is_some() { eprintln!("SINKSHIFT {k} back {:.3} m (wanted {:.3}, room {:.3})", shift, want, room); }
+            if ig_core::envx::var_os("CUTDBG").is_some() { eprintln!("SINKSHIFT {k} back {:.3} m (wanted {:.3}, room {:.3})", shift, want, room); }
             let o = g.state.objs.get_mut(&k).unwrap();
             let mut p = o.pose.clone();
             for d in 0..3 { p.t[d] -= fdir[d] * shift; }
@@ -340,7 +340,7 @@ pub fn build_scene(p: &Params) -> Built {
             for c in &a.cutters {
                 let mut w = c.clone();
                 w.transform(&pm);
-                if std::env::var("CUTDBG").is_ok() { let (l, h) = w.bounds(); eprintln!("CUTTER {k} -> {} lo {:?} hi {:?}", rs.target, l, h); }
+                if ig_core::envx::var_r("CUTDBG").is_ok() { let (l, h) = w.bounds(); eprintln!("CUTTER {k} -> {} lo {:?} hi {:?}", rs.target, l, h); }
                 cutters.entry(rs.target.clone()).or_default().push(w);
             }
         }
@@ -415,7 +415,7 @@ pub fn build_scene(p: &Params) -> Built {
                         let tb = web_time::Instant::now();
                         let nv0 = m.pos.len();
                         m = mesh_diff(&m, c);
-                        if std::env::var_os("CUTLOG").is_some() { eprintln!("CUT {k}#{pi} nv {nv0} -> {} cutter nv {} {:?}", m.pos.len(), c.pos.len(), tb.elapsed()); }
+                        if ig_core::envx::var_os("CUTLOG").is_some() { eprintln!("CUT {k}#{pi} nv {nv0} -> {} cutter nv {} {:?}", m.pos.len(), c.pos.len(), tb.elapsed()); }
                     }
                 }
             }
@@ -430,7 +430,7 @@ pub fn build_scene(p: &Params) -> Built {
     let people = indoorgen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &indoorgen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
     for (pi, pl) in people.iter().enumerate() {
         let mut a = pl.build();
-        if a.parts.is_empty() && std::env::var_os("PEOPLE_PROXY").is_some() {
+        if a.parts.is_empty() && ig_core::envx::var_os("PEOPLE_PROXY").is_some() {
             a = pl.proxy();
         }
         for (k, part) in a.parts.iter().enumerate() {
@@ -455,7 +455,7 @@ pub fn build_scene(p: &Params) -> Built {
     let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
     fn qcin<'a>(scene: &'a Scene, g: &'a indoorgen::pipeline::Generated, door_infos: &'a [indoorgen::qc::DoorInfo], cut_keys: &'a [String]) -> indoorgen::qc::QcIn<'a> { indoorgen::qc::QcIn { scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: door_infos, wall_t: g.c.wall_thickness, cut_keys } }
     // clutter that ended up inside furniture / other clutter is removed (the placement works on convex hulls)
-    if mess.on() && std::env::var_os("NO_SNAP").is_none() {
+    if mess.on() && ig_core::envx::var_os("NO_SNAP").is_none() {
         let rep = indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(""), "");
         let gone = indoorgen::qc::prune_clutter(&mut scene, &rep);
         eprintln!("PRUNE {} clutter items removed for interpenetration", gone.len());
@@ -472,7 +472,7 @@ pub fn build_scene(p: &Params) -> Built {
         rep["people"] = pa;
         std::fs::write(qp, serde_json::to_vec_pretty(&rep).unwrap()).unwrap();
     }
-    if std::env::var_os("SCENESTAT").is_some() {
+    if ig_core::envx::var_os("SCENESTAT").is_some() {
         let mut by: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
         for n in &scene.nodes { let e = by.entry(n.class.clone()).or_default(); e.0 += 1; e.1 += n.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>(); }
         let mut v: Vec<_> = by.into_iter().collect();
@@ -490,11 +490,11 @@ pub fn build_scene(p: &Params) -> Built {
 fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
     use indoorgen::gn::geom::Mesh as GM;
     let (blo, bhi) = b.bounds();
-    let split = if std::env::var_os("CUT_NOSPLIT").is_none() { Some(grid_split(a, blo, bhi, 0.1)) } else { None };
+    let split = if ig_core::envx::var_os("CUT_NOSPLIT").is_none() { Some(grid_split(a, blo, bhi, 0.1)) } else { None };
     let a = split.as_ref().unwrap_or(a);
     let e = 1e-3;
     // the boolean needs the closed part: an open near-faces piece leaves an inverted lid (BSP) or patchy hole walls (exact)
-    let whole = std::env::var_os("CUT_PIECE").is_none();
+    let whole = ig_core::envx::var_os("CUT_PIECE").is_none();
     let near: Vec<bool> = a.faces.iter().map(|f| {
         if whole { return true }
         (0..3).all(|d| {
@@ -549,14 +549,14 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
         n % 2 == 1
     };
     let dist_b = |p: V3| -> f64 { btris.iter().map(|t| pt_tri_dist(p, t)).fold(f64::MAX, f64::min) };
-    let nofilter = std::env::var_os("CUT_NOFILTER").is_some();
+    let nofilter = ig_core::envx::var_os("CUT_NOFILTER").is_some();
     let ok = |f: &Vec<u32>| {
         if nofilter { return true }
         let n = f.len() as f64;
         let c: V3 = [0, 1, 2].map(|d| f.iter().map(|&i| r.pos[i as usize][d] as f64).sum::<f64>() / n);
         let in_bounds = (0..3).all(|d| c[d] >= slo[d] - 1e-3 && c[d] <= shi[d] + 1e-3) && f.iter().all(|&i| (0..3).all(|d| (r.pos[i as usize][d] as f64) >= slo[d] - 2e-3 && (r.pos[i as usize][d] as f64) <= shi[d] + 2e-3));
         let keep = in_bounds && !(inside_b(c) && dist_b(c) > 1e-3);
-        if keep && std::env::var_os("CUTDBG").is_some() {
+        if keep && ig_core::envx::var_os("CUTDBG").is_some() {
             let (blo, bhi) = b.bounds();
             if (0..3).all(|d| c[d] > blo[d] + 0.01 && c[d] < bhi[d] - 0.01) {
                 eprintln!("CUTKEEP c=({:.3},{:.3},{:.3}) inside={} dist={:.4}", c[0], c[1], c[2], inside_b(c), dist_b(c));

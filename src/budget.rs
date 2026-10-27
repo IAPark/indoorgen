@@ -92,8 +92,8 @@ pub fn simplify_mesh(m: &Mesh, target: usize) -> Option<Mesh> {
 
 /// Apply the budget to all nodes; returns (triangles before, after, nodes simplified).
 pub fn apply(scene: &mut Scene) -> (usize, usize, usize) {
-    let scale: f64 = std::env::var("MESH_BUDGET_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
-    if std::env::var("MESH_BUDGET").map_or(false, |v| v == "0") {
+    let scale: f64 = ig_core::envx::var_r("MESH_BUDGET_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    if ig_core::envx::var_r("MESH_BUDGET").map_or(false, |v| v == "0") {
         return (0, 0, 0);
     }
     let keep = cloth_names(scene);
@@ -115,7 +115,7 @@ pub fn apply(scene: &mut Scene) -> (usize, usize, usize) {
         a += t0; b += t1;
         if let Some(m) = m { n.mesh = m; k += 1; }
     }
-    if std::env::var_os("BUDGETSTAT").is_some() {
+    if ig_core::envx::var_os("BUDGETSTAT").is_some() {
         let mut by: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
         for n in &scene.nodes { let e = by.entry(n.class.clone()).or_default(); e.0 += 1; e.1 += n.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>(); }
         let mut v: Vec<_> = by.into_iter().collect();
@@ -128,7 +128,7 @@ pub fn apply(scene: &mut Scene) -> (usize, usize, usize) {
 /// Budget for the parts of one built asset (applied right after the build: later stages and memory get the small meshes).
 /// Assets with cloth jobs / followers are left alone (Blender re-simulates them against these parts).
 pub fn apply_asset(a: &mut ig_kit::api::Asset) {
-    if std::env::var("MESH_BUDGET").map_or(false, |v| v == "0") {
+    if ig_core::envx::var_r("MESH_BUDGET").map_or(false, |v| v == "0") {
         return;
     }
     let mut keep: HashSet<usize> = HashSet::new();
@@ -141,7 +141,7 @@ pub fn apply_asset(a: &mut ig_kit::api::Asset) {
         keep.insert(f.part);
         keep.extend(f.bases.iter().copied());
     }
-    let scale: f64 = std::env::var("MESH_BUDGET_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let scale: f64 = ig_core::envx::var_r("MESH_BUDGET_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
     for (pi, p) in a.parts.iter_mut().enumerate() {
         if keep.contains(&pi) { continue; }
         let (lo, hi) = p.mesh.bounds();

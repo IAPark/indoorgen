@@ -32,7 +32,15 @@
     <span id="messv">0.5</span>
   </div>
   <div class="row"><label>Cloth</label><input id="cloth" type="checkbox" checked></div>
-  <div class="row"><label>Quality</label><select id="quality"><option value="fast" selected>Fast (~25 s)</option><option value="full">Full (~45 s)</option></select></div>
+  <div class="row"><label>Preset</label><select id="quality"><option value="fast" selected>Fast (~25 s)</option><option value="full">Full (~45 s)</option><option value="draft">Draft (~10 s)</option><option value="custom">Custom</option></select></div>
+  <details id="cfg">
+    <summary>Generation settings</summary>
+    <div id="cfgbody"></div>
+    <label class="sub">Extra JSON (merged last; native env names under "env")</label>
+    <textarea id="cfgjson" rows="3" spellcheck="false" placeholder='{"env": {"STEPS_L": 120}}'></textarea>
+    <div class="btns"><button id="cfgreset">Reset to preset</button><button id="cfglink">Copy link</button></div>
+    <pre id="cfgout"></pre>
+  </details>
   <button id="gen" class="primary">Generate</button>
   <div id="status">idle</div>
   <hr>

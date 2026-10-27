@@ -283,7 +283,15 @@ fn tri_fan(faces: &[Vec<u32>]) -> Vec<[u32; 3]> {
 /// REMESH modifier VOXEL (OpenVDB, adaptivity 0) + SMOOTH (8 iterations, factor 1)
 fn remesh_smooth(m: &Mesh, voxel: f32) -> Option<Mesh> {
     let pos: Vec<[f32; 3]> = m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
-    let (v, f) = crate::vdb::remesh_voxel(&pos, &tri_fan(&m.faces), voxel)?;
+    let tris = tri_fan(&m.faces);
+    // OpenVDB when linked (native), else the pure-Rust surface-nets remesh (wasm, or builds without OpenVDB)
+    let (v, f) = match crate::vdb::remesh_voxel(&pos, &tris, voxel) {
+        Some(r) => r,
+        None => {
+            let n = ig_shared::voxelremesh::voxel_remesh_nets(&pos, &tris, voxel);
+            (n.v, n.f)
+        }
+    };
     let mut r = Mesh::new();
     r.pos = v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect();
     r.faces = f;

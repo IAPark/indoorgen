@@ -66,10 +66,13 @@ struct Opts {
     cloth_cg: u32,
     /// web preset default 0.6: multiplier for the solver steps (dense program: 300 large / 200 medium / 50 small); 1.0 = gen2 quality (about 1.4x slower, ~25% more objects)
     steps_scale: f64,
+    /// extra tunables by their native environment-variable name (STEPS_L, PLACE_TRIES, TRINKETS_MAX, MESH_BUDGET_SCALE, NO_SNAP, ...),
+    /// applied after the options above so they win; cleared before every run
+    env: std::collections::BTreeMap<String, serde_json::Value>,
 }
 impl Default for Opts {
     fn default() -> Self {
-        Opts { mess: 0.5, cloth: true, cams: 4, dense: true, only_target: true, cloth_steps: 1, cloth_cg: 20, steps_scale: 0.6 }
+        Opts { mess: 0.5, cloth: true, cams: 4, dense: true, only_target: true, cloth_steps: 1, cloth_cg: 20, steps_scale: 0.6, env: Default::default() }
     }
 }
 
@@ -91,11 +94,21 @@ pub fn set_progress(f: Option<js_sys::Function>) {
 pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsValue> {
     let opts: Opts = if opts_json.trim().is_empty() { Opts::default() } else { serde_json::from_str(opts_json).map_err(|e| JsValue::from_str(&format!("bad options: {e}")))? };
     indoorgen::assets::cloth::SKIP_JOB_SIM.store(!opts.cloth, std::sync::atomic::Ordering::Relaxed);
+    ig_core::envx::clear_vars();
     ig_core::envx::set_var("CL_STEPS", &opts.cloth_steps.to_string());
     ig_core::envx::set_var("CL_CG", &opts.cloth_cg.to_string());
     let (dl, dm, ds) = if opts.dense { (300.0, 200.0, 50.0) } else { (100.0, 40.0, 5.0) };
     for (k, d) in [("STEPS_L", dl), ("STEPS_M", dm), ("STEPS_S", ds)] {
         ig_core::envx::set_var(k, &(((d * opts.steps_scale).round() as usize).max(1)).to_string());
+    }
+    for (k, v) in &opts.env {
+        // flags: true / "1" set them, false / null leave them unset
+        match v {
+            serde_json::Value::Bool(false) | serde_json::Value::Null => {}
+            serde_json::Value::Bool(true) => ig_core::envx::set_var(k, "1"),
+            serde_json::Value::String(t) => ig_core::envx::set_var(k, t),
+            other => ig_core::envx::set_var(k, &other.to_string()),
+        }
     }
     let orig_prog = !opts.dense;
     let prog: serde_json::Value = serde_json::from_str(&unpack(if orig_prog { PROGRAM_ORIG } else { PROGRAM_DENSE })).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;

@@ -321,7 +321,7 @@ function busy(b) { $('gen').disabled = b || !workerReady; if (!b && tick) { clea
 
 async function onWorker(ev) {
   const m = ev.data;
-  if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('mess')) $('mess').value = u.get('mess'); if (u.has('quality')) $('quality').value = u.get('quality'); if (u.has('auto')) generate(); } }
+  if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('mess')) { $('mess').value = u.get('mess'); cfgVals.mess = +u.get('mess'); cfgShow(); } if (u.has('auto')) generate(); } }
   else if (m.type === 'initfail') { workerErr = m.error; setStatus('wasm init failed: ' + m.error, true); }
   else if (m.type === 'status') setStatus(m.text);
   else if (m.type === 'fail') { setStatus('generation failed: ' + m.error, true); busy(false); }
@@ -342,6 +342,108 @@ async function onWorker(ev) {
   }
 }
 
+// ---------------------------------------------------------------- generation settings
+// k: option key in generate(opts) or "env.NAME" for a native tunable; inv: checkbox ON means the env flag is NOT set
+const CFG = [
+  { grp: 'Furnishing' },
+  { k: 'dense', label: 'Dense furniture rules', type: 'bool', def: true, tip: 'off = the program exactly as exported from Infinigen (fewer objects)' },
+  { k: 'only_target', label: 'Only target room', type: 'bool', def: true, tip: 'off = furnish every room of the house (much slower)' },
+  { k: 'env.TRINKETS_PER_SHELF', label: 'Trinkets / shelf', type: 'int', def: 3, min: 0, max: 20 },
+  { k: 'env.TRINKETS_MAX', label: 'Trinkets / house', type: 'int', def: 40, min: 0, max: 400 },
+  { k: 'env.NO_COUNTER_WIN', label: 'Counters may cover windows', type: 'bool', def: true, inv: true },
+  { grp: 'Solver' },
+  { k: 'steps_scale', label: 'Steps scale', type: 'range', def: 0.6, min: 0.1, max: 2, step: 0.05, tip: 'x 300/200/50 annealing steps (large/medium/small)' },
+  { k: 'env.STEPS_L', label: 'Large steps (blank=scale)', type: 'int', def: null, min: 1, max: 2000 },
+  { k: 'env.STEPS_M', label: 'Medium steps', type: 'int', def: null, min: 1, max: 2000 },
+  { k: 'env.STEPS_S', label: 'Small steps', type: 'int', def: null, min: 1, max: 1000 },
+  { k: 'env.PLACE_TRIES', label: 'Pose tries (big items)', type: 'int', def: 40, min: 1, max: 200 },
+  { k: 'env.CONSTRUCTIVE', label: 'Constructive placement', type: 'bool', def: false },
+  { grp: 'Clutter & cloth' },
+  { k: 'mess', label: 'Clutter level', type: 'range', def: 0.5, min: 0, max: 1, step: 0.05, mirror: 'mess' },
+  { k: 'cloth', label: 'Cloth simulation', type: 'bool', def: true, mirror: 'cloth' },
+  { k: 'cloth_steps', label: 'Cloth substeps', type: 'int', def: 1, min: 1, max: 8 },
+  { k: 'cloth_cg', label: 'Cloth CG iterations', type: 'int', def: 20, min: 5, max: 200 },
+  { grp: 'Geometry & post' },
+  { k: 'env.MESH_BUDGET_SCALE', label: 'Mesh detail x', type: 'range', def: 1, min: 0.25, max: 4, step: 0.25 },
+  { k: 'env.MESH_BUDGET', label: 'Triangle budget', type: 'bool', def: true, offval: '0', tip: 'off = keep full Infinigen mesh density (huge)' },
+  { k: 'env.NO_SNAP', label: 'Snap to visible surfaces', type: 'bool', def: true, inv: true },
+  { k: 'env.NO_WALLPUSH', label: 'Push out of walls', type: 'bool', def: true, inv: true },
+  { k: 'cams', label: 'Cameras', type: 'int', def: 4, min: 0, max: 12 },
+];
+const PRESETS = {
+  fast: { steps_scale: 0.6, cloth_steps: 1, cloth_cg: 20 },
+  full: { steps_scale: 1.0, cloth_steps: 2, cloth_cg: 40 },
+  draft: { steps_scale: 0.25, cloth_steps: 1, cloth_cg: 10, mess: 0.3, 'env.MESH_BUDGET_SCALE': 0.5, cams: 2 },
+};
+function cfgDefaults() { const d = {}; for (const f of CFG) if (f.k) d[f.k] = f.def; return d; }
+let cfgVals = cfgDefaults();
+function cfgRender() {
+  const body = $('cfgbody'); body.innerHTML = '';
+  for (const f of CFG) {
+    if (f.grp) { const g = document.createElement('div'); g.className = 'grp'; g.textContent = f.grp; body.appendChild(g); continue; }
+    const row = document.createElement('div'); row.className = 'row'; if (f.tip) row.title = f.tip;
+    const lab = document.createElement('label'); lab.textContent = f.label; row.appendChild(lab);
+    let inp; const v = cfgVals[f.k];
+    if (f.type === 'bool') { inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = !!v; inp.onchange = () => cfgSet(f, inp.checked); row.appendChild(inp); }
+    else if (f.type === 'range') {
+      inp = document.createElement('input'); inp.type = 'range'; Object.assign(inp, { min: f.min, max: f.max, step: f.step }); inp.value = v;
+      const out = document.createElement('span'); out.className = 'v'; out.textContent = (+v).toFixed(2);
+      inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); cfgSet(f, +inp.value); }; row.appendChild(inp); row.appendChild(out);
+    } else { inp = document.createElement('input'); inp.type = 'number'; Object.assign(inp, { min: f.min, max: f.max, step: 1 }); inp.value = v == null ? '' : v; inp.placeholder = 'auto'; inp.onchange = () => cfgSet(f, inp.value === '' ? null : Math.round(+inp.value)); row.appendChild(inp); }
+    body.appendChild(row);
+  }
+  cfgShow();
+}
+function cfgSet(f, v, noCustom) {
+  cfgVals[f.k] = v;
+  if (f.mirror === 'mess') { $('mess').value = v; $('messv').textContent = (+v).toFixed(2); }
+  if (f.mirror === 'cloth') $('cloth').checked = !!v;
+  if (!noCustom) $('quality').value = 'custom';
+  cfgShow();
+}
+function applyQuality(name) {
+  if (!PRESETS[name]) return;
+  for (const [k, v] of Object.entries(PRESETS[name])) cfgVals[k] = v;
+  $('mess').value = cfgVals.mess; $('messv').textContent = (+cfgVals.mess).toFixed(2); $('cloth').checked = cfgVals.cloth;
+  cfgRender();
+}
+function buildOpts() {
+  const o = { env: {} };
+  for (const f of CFG) {
+    if (!f.k) continue;
+    let v = cfgVals[f.k];
+    if (f.k.startsWith('env.')) {
+      const name = f.k.slice(4);
+      if (f.type === 'bool') { if (f.inv) { if (!v) o.env[name] = true; } else if (f.offval !== undefined) { if (!v) o.env[name] = f.offval; } else if (v) o.env[name] = true; }
+      else if (v != null && v !== '') o.env[name] = String(v);
+    } else o[f.k] = v;
+  }
+  const t = $('cfgjson').value.trim();
+  if (t) { try { const x = JSON.parse(t); Object.assign(o.env, x.env || {}); delete x.env; Object.assign(o, x); $('cfgjson').style.borderColor = ''; } catch (_) { $('cfgjson').style.borderColor = '#f98'; } }
+  return o;
+}
+function cfgShow() { $('cfgout').textContent = JSON.stringify(buildOpts()); try { localStorage.setItem('indoorgen.cfg', JSON.stringify({ v: cfgVals, j: $('cfgjson').value, q: $('quality').value })); } catch (_) {} }
+$('quality').onchange = () => { if ($('quality').value !== 'custom') { cfgVals = cfgDefaults(); applyQuality($('quality').value); cfgShow(); } };
+$('cfgreset').onclick = () => { cfgVals = cfgDefaults(); $('cfgjson').value = ''; const q = $('quality').value === 'custom' ? 'fast' : $('quality').value; $('quality').value = q; applyQuality(q); };
+$('cfgjson').oninput = cfgShow;
+$('cfglink').onclick = async () => {
+  const u = new URL(location.href); u.search = '';
+  u.searchParams.set('seed', $('seed').value); u.searchParams.set('room', $('room').value);
+  u.searchParams.set('cfg', btoa(JSON.stringify(buildOpts())));
+  try { await navigator.clipboard.writeText(u.toString()); $('cfglink').textContent = 'Copied'; } catch (_) { prompt('Link', u.toString()); }
+  setTimeout(() => ($('cfglink').textContent = 'Copy link'), 1500);
+};
+$('mess').addEventListener('input', () => cfgSet(CFG.find((f) => f.k === 'mess'), +$('mess').value, true));
+$('cloth').addEventListener('change', () => cfgSet(CFG.find((f) => f.k === 'cloth'), $('cloth').checked, true));
+(() => {
+  try { const st = JSON.parse(localStorage.getItem('indoorgen.cfg') || 'null'); if (st) { Object.assign(cfgVals, st.v); $('cfgjson').value = st.j || ''; $('quality').value = st.q || 'fast'; } } catch (_) {}
+  const u = new URLSearchParams(location.search);
+  if (u.has('cfg')) { try { const o = JSON.parse(atob(u.get('cfg'))); cfgVals = cfgDefaults(); $('cfgjson').value = JSON.stringify(o); $('quality').value = 'custom'; } catch (_) {} }
+  if (u.has('quality') && PRESETS[u.get('quality')]) { $('quality').value = u.get('quality'); cfgVals = cfgDefaults(); applyQuality(u.get('quality')); }
+  $('mess').value = cfgVals.mess; $('messv').textContent = (+cfgVals.mess).toFixed(2); $('cloth').checked = cfgVals.cloth;
+  cfgRender();
+})();
+
 function generate() {
   if (!workerReady) return;
   busy(true);
@@ -349,7 +451,7 @@ function generate() {
   tick = setInterval(() => { $('status').dataset.t = ((performance.now() - t0) / 1000).toFixed(1); if (!$('status').classList.contains('err') && /\.\.\.$/.test($('status').textContent.replace(/ \(\d+\.\ds\)$/, ''))) $('status').textContent = $('status').textContent.replace(/ \(\d+\.\ds\)$/, '') + ` (${$('status').dataset.t}s)`; }, 200);
   worker.postMessage({
     type: 'gen', id: ++jobId, seed: +$('seed').value, room: $('room').value,
-    opts: Object.assign({ mess: +$('mess').value, cloth: $('cloth').checked, cams: 4, dense: true }, $('quality').value === 'full' ? { cloth_steps: 2, cloth_cg: 40, steps_scale: 1.0 } : {}),
+    opts: buildOpts(),
   });
 }
 $('gen').onclick = generate;
