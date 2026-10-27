@@ -20,6 +20,5 @@ pub mod rules;
 pub mod openings;
 pub mod pipeline;
 pub mod qc;
-pub mod rules;
 pub mod scenegen;
 pub mod snap;
