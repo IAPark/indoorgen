@@ -54,3 +54,6 @@ details.sec>summary{cursor:pointer;color:#9fb0c8;font-size:11px;text-transform:u
 #rulesjson{width:100%;box-sizing:border-box;background:#1d2027;color:#dde;border:1px solid #4a4f5c;border-radius:6px;font:10px ui-monospace,Menlo,monospace}
 #rules-editor .rerr{color:#f98;font-size:11px;white-space:pre-wrap}
 #panel:has(#rules-sec[open]){width:350px}
+#rules-editor .rtbl{table-layout:fixed}
+#rules-editor .rtbl th:nth-child(1){width:33%}#rules-editor .rtbl th:nth-child(2){width:25%}#rules-editor .rtbl th:nth-child(3),#rules-editor .rtbl th:nth-child(4){width:11%}#rules-editor .rtbl th:nth-child(5){width:16%}#rules-editor .rtbl th:nth-child(6){width:4%}
+#rules-editor .rtbl input[type=number]{width:100%}

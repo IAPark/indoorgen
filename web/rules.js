@@ -6,7 +6,7 @@ let info = null, spec = { rooms: {}, disable: [] }, tab = 'Bedroom', errors = []
 let IG = null, mount = null;
 const REL_KINDS = ['on_floor', 'against_wall', 'on', 'ontop', 'beside'];
 
-const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
+const el = (tag, props = {}, ...kids) => { const { list, ...rest } = props; const e = Object.assign(document.createElement(tag), rest); if (list) e.setAttribute('list', list); for (const k of kids) e.append(k); return e; };
 const relKind = (r) => (r || 'on_floor').split(':')[0];
 const relParent = (r) => (r || '').includes(':') ? r.split(':')[1] : '';
 
