@@ -326,7 +326,7 @@ pub fn apply_keepout(scene: &mut Scene, state: &State, _visuals: &std::collectio
     if !cfg.on() {
         return;
     }
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut tot = Stats::default();
     for (rname, g) in rooms {
         let poly: Poly = ig_core::shp::exterior(g);
@@ -524,7 +524,7 @@ fn find_spec(specs: &'static [Spec], class: &str) -> &'static Spec {
 }
 
 fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &Poly, cfg: &MessCfg, keepout: &[Mesh]) -> Stats {
-    let t_room = std::time::Instant::now();
+    let t_room = web_time::Instant::now();
     let dbg = std::env::var_os("MESSDBG").is_some();
     let mut stats = Stats::default();
     let slot = room_slot(rt);
@@ -658,7 +658,7 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
             cands.push(Cand { spec, floor, seed: rng.next_u64(), handle: Some(false) });
         }
     }
-    let tb = std::time::Instant::now();
+    let tb = web_time::Instant::now();
     let mut built: Vec<Option<Item>> = {
         use rayon::prelude::*;
         cands.par_iter().map(|c| build_item(&mut Rng::seeded(c.seed), c.spec, c.handle)).collect()
@@ -694,7 +694,7 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
             eprintln!("MESSDBG body {k}: {} floor={} t={:.2?}", items[i].class, items[i].floor, bodies[k].t);
         }
     }
-    let ts = std::time::Instant::now();
+    let ts = web_time::Instant::now();
     let rest_rigid = world.settle(&bodies, 480);
     if dbg {
         eprintln!("MESSDBG {rname} build+place {t_build:.2}s settle {:.2}s total {:.2}s", ts.elapsed().as_secs_f64(), t_room.elapsed().as_secs_f64());

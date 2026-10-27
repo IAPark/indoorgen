@@ -4,7 +4,13 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
+[features]
+default = ["assimp"]
+# FBX import (builds the avatar caches); off for wasm
+assimp = ["dep:russimp"]
+
 [dependencies]
+web-time = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
@@ -14,5 +20,5 @@ ig_kit = { path = "../ig_kit" }
 ig_shared = { path = "../ig_shared" }
 ig_furn = { path = "../ig_furn" }
 ig_rooms = { path = "../ig_rooms" }
-russimp = { version = "3.2.1", default-features = false }
+russimp = { version = "3.2.1", default-features = false, optional = true }
 rapier3d-f64 = "0.36"

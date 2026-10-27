@@ -24,6 +24,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "allocator-api2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -364,7 +370,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
- "miniz_oxide",
+ "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
 
@@ -584,7 +590,7 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
- "allocator-api2",
+ "allocator-api2 0.2.21",
  "equivalent",
  "foldhash",
 ]
@@ -709,6 +715,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "i_float"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ecaff1ce29bcacd72cdf581ba6fce636ef4c4e0b2da7e7846dd0137d98141e2"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "i_key_sort"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14269ee362009550495e20650ff3c2bca14a8147fe251e216760381ffed90b6f"
+
+[[package]]
+name = "i_overlay"
+version = "9.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913fd692c02408adc76cead636f8e7e07c705f8b995a8b54b454b995e8e197d5"
+dependencies = [
+ "i_float",
+ "i_key_sort",
+ "i_shape",
+ "i_tree",
+]
+
+[[package]]
+name = "i_shape"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa1878f91ef7921feaf1b2346253ebc5e661878b22d5715195c1d5dcf0f20ae5"
+dependencies = [
+ "i_float",
+]
+
+[[package]]
+name = "i_tree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "048af31de955890c62a8506fec511335a5089e91e1c516537add16f96c507d84"
+
+[[package]]
 name = "icu_collections"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -818,7 +866,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_decor",
@@ -853,7 +900,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_core",
  "ig_exbool",
  "indexmap",
@@ -887,6 +933,7 @@ dependencies = [
  "cc",
  "earcutr",
  "geos",
+ "i_overlay",
  "indexmap",
  "md5",
  "nalgebra 0.33.3",
@@ -899,6 +946,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -907,7 +955,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -929,6 +976,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -937,7 +985,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_core",
  "indexmap",
  "md5",
@@ -951,6 +998,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -959,7 +1007,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_core",
  "ig_geom",
  "ig_kit",
@@ -975,6 +1022,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -983,7 +1031,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_core",
  "indexmap",
  "md5",
@@ -1005,7 +1052,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1023,6 +1069,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1031,7 +1078,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1048,13 +1094,13 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
 name = "ig_mess"
 version = "0.1.0"
 dependencies = [
- "geos",
  "ig_assets",
  "ig_core",
  "ig_furn",
@@ -1069,6 +1115,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1077,7 +1124,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1116,6 +1162,7 @@ dependencies = [
  "russimp",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1124,7 +1171,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_decor",
@@ -1147,6 +1193,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1155,7 +1202,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1180,7 +1226,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1201,6 +1246,7 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1209,7 +1255,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1237,7 +1282,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "earcutr",
- "geos",
  "ig_bm",
  "ig_core",
  "ig_exbool",
@@ -1258,6 +1302,22 @@ dependencies = [
  "robust",
  "serde",
  "serde_json",
+ "web-time",
+]
+
+[[package]]
+name = "ig_wasm"
+version = "0.1.0"
+dependencies = [
+ "ig_core",
+ "indoorgen",
+ "js-sys",
+ "miniz_oxide 0.8.9",
+ "serde",
+ "serde_json",
+ "talc",
+ "wasm-bindgen",
+ "web-time",
 ]
 
 [[package]]
@@ -1298,6 +1358,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1412,6 +1473,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1471,6 +1541,15 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -2490,6 +2569,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "talc"
+version = "5.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53f8ad14fa1c1b8635114abf9721076fe1e869572a5f26a52690f407292c80dc"
+dependencies = [
+ "allocator-api2 0.4.0",
+ "lock_api",
+]
+
+[[package]]
 name = "tar"
 version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2786,6 +2875,16 @@ name = "web-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

@@ -6,7 +6,6 @@
 //! shells; a move is only kept when no penetration depth grows beyond the original layout's (+4 mm).
 //! All randomness comes from `MessCfg::rng("states.<kind>")`.
 use crate::MessCfg;
-use geos::Geom;
 use ig_furn::col;
 use ig_furn::geom::Pose;
 use ig_furn::state::State;
@@ -271,7 +270,7 @@ fn inside_rooms(state: &State, k: &str, margin: f64) -> bool {
     footprint(state, k).iter().all(|c| {
         let sq = [[c[0] - margin, c[1] - margin], [c[0] + margin, c[1] - margin], [c[0] + margin, c[1] + margin], [c[0] - margin, c[1] + margin]];
         let Ok(sq) = ig_core::shp::polygon(&sq, &[]) else { return false };
-        state.objs.values().any(|o| o.polygon.as_ref().map_or(false, |p| p.contains(&sq).unwrap_or(false)))
+        state.objs.values().any(|o| o.polygon.as_ref().map_or(false, |p| ig_core::shp::try_contains(p, &sq)))
     })
 }
 

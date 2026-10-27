@@ -10,7 +10,7 @@ pub struct Sample {
     pub asset: Option<(V3, V3)>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TableAssets {
     pub table: HashMap<String, Vec<Sample>>,
 }
@@ -35,7 +35,12 @@ impl TableAssets {
 
     pub fn add_file(&mut self, path: &str) {
         let Ok(txt) = std::fs::read_to_string(path) else { return };
-        let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+        self.add_str(&txt);
+    }
+
+    /// as `add_file`, from the json text (the wasm build embeds the tables)
+    pub fn add_str(&mut self, txt: &str) {
+        let v: serde_json::Value = serde_json::from_str(txt).unwrap();
         for (k, list) in v.as_object().unwrap() {
             let e = self.table.entry(k.clone()).or_default();
             for row in list.as_array().unwrap() {

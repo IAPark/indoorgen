@@ -454,7 +454,7 @@ fn add_gas_grates_uncached(body: &GMesh, s: &Sampled) -> Result<GMesh, String> {
         center_ratio: n("CenterRatio")?,
         middle_ratio: n("MiddleRatio")?,
     };
-    let tg = std::time::Instant::now();
+    let tg = web_time::Instant::now();
     let grates = gas_grates(&p).ok_or("gas grates failed (voxel remesh unavailable?)")?;
     if std::env::var("GASDBG").is_ok() {
         eprintln!("gas_grates built in {:?}", tg.elapsed());

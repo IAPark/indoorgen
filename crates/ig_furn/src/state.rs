@@ -218,5 +218,5 @@ pub fn dist_to_plane(p: V3, origin: V3, n: V3) -> f64 {
 /// dense (non-parity) mode, set by gen2 via INFINIGEN_DENSE
 pub fn dense_mode() -> bool {
     static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *D.get_or_init(|| std::env::var_os("INFINIGEN_DENSE").is_some())
+    *D.get_or_init(|| ig_core::envx::dense_env())
 }

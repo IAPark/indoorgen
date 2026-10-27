@@ -158,6 +158,15 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     let proj_a = projected(&sa.tris, nb, origin_b);
     let proj_b = projected(&b_tris, nb, origin_b);
     let (Some(proj_a), Some(proj_b)) = (proj_a, proj_b) else { return false };
+    // wasm / FAST_STABLE: convex parent support -> half-plane test instead of buffer + within
+    if g.check_z && ig_core::envx::fast_stable() {
+        if let Some(r) = shp::within_convex_offset(&proj_a, &proj_b, 1e-2) {
+            if !r {
+                stab_fail(4); return false;
+            }
+            return true;
+        }
+    }
     let proj_b_buf = if g.check_z { crate::geom::projected_buffer(&b_tris, nb, origin_b, 1e-2) } else { None };
     let res = if g.check_z {
         if std::env::var("STAB").is_ok() && (name.contains("WallArt") || name.contains("KitchenSpace")) { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
@@ -604,8 +613,12 @@ fn constructive_pose(state: &mut State, name: &str, picks: &[PlanePick], dof: us
         let (pos2, neg2) = tag_masks(&p2.parent_tags);
         let m2 = plane_mask(&po2.geom, &po2.pose, pos2, neg2, p2.parent_plane);
         let w2 = state.world(&p2.parent);
-        let padded = shp::buffer(&proj1, 1e-1);
-        let all_in = m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::contains_pt(&padded, project_frame_origin(n1, *p))));
+        let all_in = if ig_core::envx::fast_stable() {
+            m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::within_distance_pt(&proj1, project_frame_origin(n1, *p), 1e-1)))
+        } else {
+            let padded = shp::buffer(&proj1, 1e-1);
+            m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::contains_pt(&padded, project_frame_origin(n1, *p))))
+        };
         let (first, _second) = if all_in && !is_coplanar_rel(&p2.relation) { (p2, p1) } else { (p1, p2) };
         // exact construction instead of two sequential snaps: check_init_valid already rotated the object and solved the contact of
         // both planes (translation `t0`); the remaining freedom is a slide `s` along the intersection line of the two planes
@@ -746,8 +759,12 @@ pub fn apply_relations_surfacesample(state: &mut State, name: &str, rng: &mut Rn
         let (pos2, neg2) = tag_masks(&p2.parent_tags);
         let m2 = plane_mask(&po2.geom, &po2.pose, pos2, neg2, p2.parent_plane);
         let w2 = state.world(&p2.parent);
-        let padded = shp::buffer(&proj1, 1e-1);
-        let all_in = m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::contains_pt(&padded, project_frame_origin(n1, *p))));
+        let all_in = if ig_core::envx::fast_stable() {
+            m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::within_distance_pt(&proj1, project_frame_origin(n1, *p), 1e-1)))
+        } else {
+            let padded = shp::buffer(&proj1, 1e-1);
+            m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::contains_pt(&padded, project_frame_origin(n1, *p))))
+        };
         if crate::rng::TRACE_ON.with(|t| t.get()) { eprintln!("RT   DOF1 all_in={all_in} p1plane={} p2plane={} n_m2={}", p1.parent_plane, p2.parent_plane, m2.len()); }
         let (first, second) = if all_in && !is_coplanar_rel(&p2.relation) { (p2, p1) } else { (p1, p2) };
         let rf = random_point_on(state, &first.parent, &first.parent_tags, first.parent_plane, rng);

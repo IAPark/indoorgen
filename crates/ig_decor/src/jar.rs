@@ -228,10 +228,10 @@ mod tests {
         let (mut worst, mut sum, mut tf, mut th) = (0.0f64, 0.0, 0.0, 0.0);
         for fs in 0..40u64 {
             let j = Jar::new(fs);
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             let a = j.asset(3).bounds();
             tf += t.elapsed().as_secs_f64();
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             let (lo, hi) = j.bounds_hint(3).unwrap();
             th += t.elapsed().as_secs_f64();
             let e = (0..3).map(|k| (lo[k] - a.0[k]).abs().max((hi[k] - a.1[k]).abs())).fold(0.0, f64::max);

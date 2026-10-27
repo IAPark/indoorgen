@@ -17,6 +17,10 @@ fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(has_openvdb)");
+    // wasm32: no C++ runtime there. OpenSubdiv / OpenVDB are left out (osd.rs / vdb.rs stubs; the pure-Rust subdivision and voxel remesh are used).
+    if std::env::var("CARGO_CFG_TARGET_ARCH").map_or(false, |a| a == "wasm32") {
+        return;
+    }
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=OSD_FLAGS");

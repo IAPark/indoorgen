@@ -387,7 +387,7 @@ impl FloorPlanSolver {
                         .unwrap_or_else(|_| panic!("decorate: canonicalize new"));
                     let ok = [0.0, 0.25, 0.5, 0.75].iter().all(|m| {
                         let b = buffer(&new, -m + 1e-2);
-                        matches!(gtype(&b), geos::GeometryTypes::Polygon)
+                        matches!(gtype(&b), GeometryTypes::Polygon)
                     });
                     if ok {
                         let (x, y, x_, y_) = max_segment(&exterior(&new));

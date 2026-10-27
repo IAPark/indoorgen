@@ -5,6 +5,7 @@ pub mod assets {
     pub use super::*;
 }
 pub mod bl32;
+pub mod envx;
 pub mod dhash;
 pub mod materials;
 pub mod mesh;

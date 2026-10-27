@@ -184,7 +184,7 @@ impl SegmentMaker {
                 l = difference(&l, ls);
             }
             if length(&l) > 0.0 {
-                let e = if matches!(gtype(&l), geos::GeometryTypes::LineString | geos::GeometryTypes::LinearRing) {
+                let e = if matches!(gtype(&l), GeometryTypes::LineString | GeometryTypes::LinearRing) {
                     multilinestring(vec![l.clone()]).unwrap()
                 } else {
                     l.clone()

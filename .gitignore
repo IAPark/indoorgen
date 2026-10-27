@@ -9,3 +9,6 @@ STATUS.txt
 /local-data/
 /assets/
 __pycache__/
+/target-wasm
+/web/pkg
+/web/pkg-node

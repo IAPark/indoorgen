@@ -1,7 +1,9 @@
 //! indoorgen: Rust indoor scene generator derived from Infinigen Indoors. The code lives in the workspace crates under crates/;
 //! this root crate re-exports them under the historical module paths (indoorgen::assets, ::gn, ::furn, ...) and holds the pipeline.
+#[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+extern crate self as indoorgen;
 pub use ig_core::*;
 pub use ig_exbool as exbool;
 pub use ig_bm as bm;
@@ -16,4 +18,5 @@ pub mod budget;
 pub mod openings;
 pub mod pipeline;
 pub mod qc;
+pub mod scenegen;
 pub mod snap;

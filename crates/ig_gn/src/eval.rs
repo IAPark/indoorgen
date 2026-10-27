@@ -162,7 +162,7 @@ impl<'a> Ev<'a> {
         }
         let node = &self.g.nodes[ni];
         let prof = prof_enabled();
-        let t0 = if prof { Some(std::time::Instant::now()) } else { None };
+        let t0 = if prof { Some(web_time::Instant::now()) } else { None };
         if prof {
             PROF_STACK.with(|s| s.borrow_mut().push(0.0));
         }

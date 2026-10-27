@@ -4,7 +4,6 @@ use super::consts::*;
 use super::state::*;
 use crate::rng::Rng;
 use crate::shp::*;
-use geos::GeometryTypes;
 use indexmap::IndexMap;
 use std::collections::VecDeque;
 use crate::dhash::{HashMap};

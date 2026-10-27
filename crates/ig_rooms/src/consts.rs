@@ -1,7 +1,6 @@
 //! RoomConstants (infinigen/core/constraints/constraint_language/constants.py), n_stories fixed to 1.
 use crate::rng::Rng;
 use crate::shp::*;
-use geos::Geom;
 
 #[derive(Clone, Debug)]
 pub struct RoomConstants {
@@ -139,7 +138,7 @@ impl RoomConstants {
 // ---- infinigen/assets/utils/shapes.py ----
 
 pub fn is_valid_polygon(p: &G) -> bool {
-    is_polygon(p) && area(p) > 0.0 && is_valid(p) && p.get_num_interior_rings().unwrap_or(1) == 0
+    is_polygon(p) && area(p) > 0.0 && is_valid(p) && interiors(p).is_empty()
 }
 
 pub fn simplify_polygon(p: &G) -> G {
@@ -171,7 +170,6 @@ pub fn cut_polygon_by_line(polygon: &G, line: &G) -> Vec<G> {
     let mut lines = parts(&boundary(polygon));
     lines.push(Clone::clone(line));
     let merged = line_merge(&multilinestring(lines).unwrap());
-    let borders = merged.unary_union().unwrap();
-    let polys = geos::Geometry::polygonize(&[borders]).unwrap();
-    parts(&polys)
+    let borders = unary_union(&merged);
+    polygonize(&borders)
 }

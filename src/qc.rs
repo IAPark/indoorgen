@@ -224,7 +224,7 @@ fn bad_support(c: &str) -> bool {
 }
 
 pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value {
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let nodes = &inp.scene.nodes;
     let bb: Vec<(V3, V3)> = nodes.iter().map(|n| n.mesh.bounds()).collect();
     // group nodes into objects

@@ -154,7 +154,7 @@ impl Factory for Trinkets {
             a.mesh(o, &mollusk_mat("elements.nature_shelf_trinkets.generate.NatureShelfTrinketsFactory", "base_factory.body_material", self.fs), Some(b));
             return a;
         }
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let m = self.base_mesh(i2).unwrap();
         if std::env::var("TRDBG").is_ok() { eprintln!("i2 {} base mesh {} verts {:?}", i2, m.pos.len(), t0.elapsed()); }
         let tris = triangulate_beauty(&m);

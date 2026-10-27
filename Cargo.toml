@@ -30,8 +30,8 @@ robust = "1.2"
 cc = "1"
 
 [dependencies]
+web-time = "1"
 meshopt = "0.7"
-geos = { workspace = true }
 indexmap = { workspace = true }
 nalgebra = { workspace = true }
 rayon = { workspace = true }
@@ -41,7 +41,6 @@ anyhow = { workspace = true }
 md5 = { workspace = true }
 earcutr = { workspace = true }
 parry3d-f64 = { workspace = true }
-mimalloc = { version = "0.1", default-features = false }
 ig_core = { path = "crates/ig_core" }
 ig_exbool = { path = "crates/ig_exbool" }
 ig_bm = { path = "crates/ig_bm" }
@@ -52,12 +51,32 @@ ig_furn = { path = "crates/ig_furn" }
 ig_rooms = { path = "crates/ig_rooms" }
 ig_assets = { path = "crates/ig_assets" }
 ig_mess = { path = "crates/ig_mess" }
-ig_people = { path = "crates/ig_people" }
+ig_people = { path = "crates/ig_people", default-features = false }
 ig_cams = { path = "crates/ig_cams" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+geos = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
 
 [profile.release]
 opt-level = 3
 debug = 0
+
+# wasm module (tools/wasm/build.sh): speed-optimised, one unit per crate pair is enough, no unwinding
+[profile.wasm]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = 0
+strip = "debuginfo"
+
+# profiling variant of the wasm profile: keeps symbol names (use with WASM_PROFILE=wasm-prof WASM_KEEP_DEBUG=1 tools/wasm/build.sh)
+[profile.wasm-prof]
+inherits = "wasm"
+strip = "none"
+debug = "line-tables-only"
 
 # fast edit-compile loop: incremental, many codegen units (runtime ~10-30% slower than release)
 [profile.fast]

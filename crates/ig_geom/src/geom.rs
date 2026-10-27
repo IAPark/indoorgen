@@ -482,7 +482,7 @@ pub fn plane_frame(n: V3) -> (V3, V3) {
 
 fn dense_fast() -> bool {
     static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *D.get_or_init(|| std::env::var_os("INFINIGEN_DENSE").is_some() && std::env::var_os("NO_CHEAP_PH").is_none())
+    *D.get_or_init(|| ig_core::envx::dense_env() && std::env::var_os("NO_CHEAP_PH").is_none())
 }
 
 /// `projected(..)` followed by shp::buffer(d), memoised on the exact input bits (the parent surface of a stability test is static while
@@ -787,7 +787,7 @@ fn projected_raw(tris: &[[V3; 3]], normal: V3, origin: V3) -> Option<shp::G> {
     let u_ = shp::union_all(&polys);
     // dense mode: the triangles of a projected solid share exactly projected vertices, so their union has no slivers to close;
     // skip the buffer(pad).buffer(-pad) round trip (it changes the polygon by ~1e-5 relative only)
-    if dense_fast() && matches!(geos::Geom::geometry_type(&u_), Ok(geos::GeometryTypes::Polygon)) {
+    if dense_fast() && shp::is_polygon(&u_) {
         return Some(u_);
     }
     let pad = 1e-5 * (2.0 * scale_);

@@ -158,7 +158,7 @@ pub fn update_exterior(state: &mut RoomState, i: &str) {
             v = difference(&v, &q.value);
         }
     }
-    let val = if matches!(gtype(&v), geos::GeometryTypes::MultiLineString) {
+    let val = if matches!(gtype(&v), GeometryTypes::MultiLineString) {
         v
     } else if length(&v) > 0.0 {
         multilinestring(vec![v]).unwrap()

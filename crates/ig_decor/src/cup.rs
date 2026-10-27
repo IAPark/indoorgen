@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn cup_asset_dense_vs_exact_timing() {
         std::env::set_var("INFINIGEN_DENSE", "1");
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         let mut tris = 0;
         for fs in 0..12u64 {
             let a = Cup::new(fs).asset(7);
@@ -390,14 +390,14 @@ mod tests {
     fn cup_hint_matches_asset() {
         std::env::set_var("INFINIGEN_DENSE", "1");
         let (mut worst, mut sum, mut n) = (0.0f64, 0.0f64, 0);
-        let t_full = std::time::Instant::now();
+        let t_full = web_time::Instant::now();
         let mut full = vec![];
         for fs in 0..40u64 {
             let c = Cup::new(fs);
             full.push(c.asset(7).bounds());
         }
         let tf = t_full.elapsed();
-        let t_h = std::time::Instant::now();
+        let t_h = web_time::Instant::now();
         for fs in 0..40u64 {
             let c = Cup::new(fs);
             let (lo, hi) = c.bounds_hint(7).unwrap();

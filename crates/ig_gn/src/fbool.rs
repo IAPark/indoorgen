@@ -324,7 +324,7 @@ pub fn mesh_boolean_float(op: &str, operands: &[(&Mesh, M4)]) -> Mesh {
         _ => BOOLEAN_DIFFERENCE,
     };
     let first = operands[0].0;
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     if operands.len() == 1 {
         return first.clone();
     }

@@ -349,7 +349,7 @@ pub struct Calib {
 
 impl Default for Calib {
     fn default() -> Self {
-        let e = |k: &str, d: f64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+        let e = |k: &str, d: f64| ig_core::envx::var(k).and_then(|s| s.parse().ok()).unwrap_or(d);
         Calib {
             g: e("CL_G", 0.00981),
             drag_scale: e("CL_DRAG", 0.01),
@@ -463,7 +463,7 @@ pub fn simulate_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders:
 }
 
 pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let r = simulate_inner(pos0, faces, p, colliders, cal);
     if std::env::var_os("CLOTH_T").is_some() {
         eprintln!("CLOTH_T {} verts {} frames {:.2}s", pos0.len(), p.end_frame, t0.elapsed().as_secs_f64());

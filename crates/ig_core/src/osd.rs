@@ -1,6 +1,29 @@
 //! OpenSubdiv 3.6.0 limit evaluation as Blender 4.2's CPU subsurf modifier does it (csrc/osd_shim.cpp).
+#[cfg(target_arch = "wasm32")]
+use std::os::raw::c_void;
+#[cfg(not(target_arch = "wasm32"))]
 use std::os::raw::{c_float, c_int, c_void};
 
+/// wasm32: OpenSubdiv (C++) is not linked; `Osd::new*` returns None and callers use the pure-Rust Catmull-Clark (`subdiv.rs` / `subsurf`).
+#[cfg(target_arch = "wasm32")]
+pub struct Osd {
+    pub face_ptex_offset: Vec<i32>,
+    _h: *mut c_void,
+}
+#[cfg(target_arch = "wasm32")]
+impl Osd {
+    pub fn new(_pos: &[[f32; 3]], _faces: &[Vec<u32>], _level: usize, _adaptive: bool, _simple: bool) -> Option<Osd> {
+        None
+    }
+    pub fn new_uv(_pos: &[[f32; 3]], _faces: &[Vec<u32>], _level: usize, _adaptive: bool, _simple: bool, _uv: Option<&[i32]>) -> Option<Osd> {
+        None
+    }
+    pub fn eval(&self, _q: &[(i32, f32, f32)]) -> Vec<[f32; 3]> {
+        unreachable!("no OpenSubdiv on wasm32")
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 extern "C" {
     fn osd_create(nv: c_int, pos: *const c_float, nf: c_int, fsz: *const c_int, fv: *const c_int, level: c_int, adaptive: c_int, simple: c_int, corner: c_int) -> *mut c_void;
     fn osd_create_uv(nv: c_int, pos: *const c_float, nf: c_int, fsz: *const c_int, fv: *const c_int, level: c_int, adaptive: c_int, simple: c_int, corner: c_int, fvar: *const c_int, nfvar: c_int) -> *mut c_void;
@@ -8,12 +31,14 @@ extern "C" {
     fn osd_free(h: *mut c_void);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Osd {
     h: *mut c_void,
     /// ptex face index of the first ptex face of every coarse face
     pub face_ptex_offset: Vec<i32>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Osd {
     /// `pos`: float32 coarse positions, `faces`: polygons. `simple`: SIMPLE subdivision (Catmull-Clark with all edges / vertices infinitely sharp,
     /// Blender's BUGGY_SIMPLE_SCHEME_WORKAROUND). Loose vertices / edges must have been removed by the caller.
@@ -53,6 +78,7 @@ impl Osd {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Osd {
     fn drop(&mut self) {
         unsafe { osd_free(self.h) }

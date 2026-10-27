@@ -78,7 +78,7 @@ fn calc_edges(faces: &[Vec<u32>]) -> Vec<[u32; 2]> {
 pub use crate::boolean::{set_patch_vote, set_slow_paths};
 
 pub fn exact_boolean(meshes: &[BoolInput], op: BoolOp, use_self: bool, hole_tolerant: bool) -> BoolOutput {
-    let tsetup = std::time::Instant::now();
+    let tsetup = web_time::Instant::now();
     let mut arena = Arena::new();
     let nmeshes = meshes.len();
     let mut face_offset = vec![0usize; nmeshes];
@@ -125,7 +125,7 @@ pub fn exact_boolean(meshes: &[BoolInput], op: BoolOp, use_self: bool, hole_tole
         BoolOp::Union => BoolOpType::Union,
         BoolOp::Difference => BoolOpType::Difference,
     };
-    let tprof = std::time::Instant::now();
+    let tprof = web_time::Instant::now();
     let out_faces = boolean_mesh(&mut arena, &imesh, bop, nmeshes, &shape_fn, use_self, hole_tolerant);
     let t_after = tprof.elapsed();
 

@@ -980,7 +980,7 @@ mod island_tests {
     use super::*;
     #[test]
     fn island_cabinet_bounds_vs_dims() {
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         for seed in 0..40u64 {
             let ks = KitchenSpace::new(&mut Rng::seeded(seed), true, seed);
             let e = ks.bottom_cabinet();

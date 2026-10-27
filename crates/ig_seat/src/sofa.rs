@@ -716,10 +716,10 @@ mod tests {
         for seed in 0..24u64 {
             for arm in [false, true] {
                 let s = Sofa::new(&mut Rng::seeded(seed), arm);
-                let t = std::time::Instant::now();
+                let t = web_time::Instant::now();
                 let (full, _) = sofa_geometry_gn_lvl(&s.params, None).unwrap();
                 tf += t.elapsed().as_secs_f64();
-                let t = std::time::Instant::now();
+                let t = web_time::Instant::now();
                 let (cheap, _) = sofa_geometry_gn_lvl(&s.params, Some(0)).unwrap();
                 tc += t.elapsed().as_secs_f64();
                 let (a, b) = (full.bounds(), cheap.bounds());

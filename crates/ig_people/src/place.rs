@@ -686,7 +686,7 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
     if n == 0 {
         return vec![];
     }
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut world = World::new(state, room_polys, ctx.visuals, ctx.floor_z, ctx.wall_t);
     world.extra = ctx.keepout.iter().map(|(c, h, yaw)| crate::pworld::WBox { c: *c, h: *h, yaw: *yaw }).collect();
     if world.rooms.is_empty() {
@@ -781,7 +781,7 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
         }
     }
     if crate::ragdoll::enabled() {
-        let tr = std::time::Instant::now();
+        let tr = web_time::Instant::now();
         let mut pl_placed = std::mem::take(&mut pl.placed);
         for p in pl_placed.iter_mut() {
             if crate::ragdoll::wants(p.kind) {

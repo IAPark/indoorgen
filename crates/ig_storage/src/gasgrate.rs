@@ -195,7 +195,7 @@ fn append(a: &mut Mesh, b: &Mesh) {
 /// butil.boolean(objs): the first object absorbs the others one by one (BOOLEAN modifier UNION, EXACT); result in the first object's local space
 fn union_all(objs: &[Obj]) -> Mesh {
     use crate::exbool::exact_boolean::*;
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut keep = objs[0].mesh.clone();
     f32m(&mut keep);
     for o in &objs[1..] {
@@ -247,7 +247,7 @@ fn union_all(objs: &[Obj]) -> Mesh {
 /// n-ary variant: all operands in ONE exact boolean (a union is associative), saves the repeated arena construction of the chain
 fn union_nary(objs: &[Obj]) -> Mesh {
     use crate::exbool::exact_boolean::*;
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut inputs = vec![];
     for (i, o) in objs.iter().enumerate() {
         let mut m = Mesh::new();
@@ -373,7 +373,7 @@ pub fn gas_grates(p: &GrateParams) -> Option<Mesh> {
             grates.push(Obj { mesh: cylinder(center_dist + t, t / 2.0), xf: Xf::new([center[0], center[1], height], 0.0, [1.0; 3]) });
         }
         let u = if std::env::var("GAS_CUBES_CHAIN").is_ok() { union_all(&cubes) } else { union_nary(&cubes) };
-        let t1 = std::time::Instant::now();
+        let t1 = web_time::Instant::now();
         let r = remesh_smooth(&u, 0.004)?;
         if std::env::var("GASDBG").is_ok() {
             eprintln!("remesh+smooth {} -> {} verts in {:?}", u.pos.len(), r.pos.len(), t1.elapsed());
@@ -381,10 +381,13 @@ pub fn gas_grates(p: &GrateParams) -> Option<Mesh> {
         grates.push(Obj { mesh: r, xf: cubes[0].xf });
         Some(grates)
     };
+    #[cfg(not(target_arch = "wasm32"))]
     let per_grid: Vec<Option<Vec<Obj>>> = std::thread::scope(|sc| {
         let hs: Vec<_> = p.grids.iter().enumerate().map(|(i, &n)| sc.spawn(move || grid_fn(i, n))).collect();
         hs.into_iter().map(|h| h.join().unwrap()).collect()
     });
+    #[cfg(target_arch = "wasm32")]
+    let per_grid: Vec<Option<Vec<Obj>>> = p.grids.iter().enumerate().map(|(i, &n)| grid_fn(i, n)).collect();
     let mut grates: Vec<Obj> = vec![];
     for g in per_grid {
         grates.extend(g?);

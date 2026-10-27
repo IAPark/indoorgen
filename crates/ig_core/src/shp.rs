@@ -1,162 +1,7 @@
-//! Shapely-flavoured helpers over GEOS, so ports of the Python geometry code stay line-for-line.
-use anyhow::{anyhow, Result};
-use geos::{BufferParams, CapStyle, CoordSeq, Geom, Geometry, GeometryTypes, JoinStyle};
-
-pub type G = Geometry;
+//! Shapely-flavoured 2D geometry helpers, so ports of the Python geometry code stay line-for-line.
+//! Backend: GEOS (C++) natively (`shp_geos.rs`); on wasm32 (or with the `pure_geom` feature) the pure-Rust backend `shp_pure.rs`
+//! (i_overlay + own line work). Both export the same functions; everything below the re-export is backend independent.
 pub type P2 = [f64; 2];
-
-pub fn err<T>(r: geos::GResult<T>) -> Result<T> {
-    r.map_err(|e| anyhow!("geos: {e}"))
-}
-
-fn seq(coords: &[P2]) -> Result<CoordSeq> {
-    let v: Vec<Vec<f64>> = coords.iter().map(|c| c.to_vec()).collect();
-    err(CoordSeq::new_from_vec(&v))
-}
-
-pub fn polygon(ext: &[P2], holes: &[Vec<P2>]) -> Result<G> {
-    let mut e = ext.to_vec();
-    if e.first() != e.last() {
-        e.push(e[0]);
-    }
-    let shell = err(Geometry::create_linear_ring(seq(&e)?))?;
-    let mut hs = vec![];
-    for h in holes {
-        let mut hh = h.clone();
-        if hh.first() != hh.last() {
-            hh.push(hh[0]);
-        }
-        hs.push(err(Geometry::create_linear_ring(seq(&hh)?))?);
-    }
-    err(Geometry::create_polygon(shell, hs))
-}
-
-pub fn bbox(x0: f64, y0: f64, x1: f64, y1: f64) -> G {
-    polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]], &[]).unwrap()
-}
-
-pub fn linestring(c: &[P2]) -> Result<G> {
-    err(Geometry::create_line_string(seq(c)?))
-}
-
-pub fn multilinestring(lines: Vec<G>) -> Result<G> {
-    err(Geometry::create_multiline_string(lines))
-}
-
-pub fn empty_mls() -> G {
-    Geometry::create_multiline_string(vec![]).unwrap()
-}
-
-pub fn point(x: f64, y: f64) -> G {
-    Geometry::create_point(CoordSeq::new_from_vec(&[vec![x, y]]).unwrap()).unwrap()
-}
-
-pub fn coords_of(g: &G) -> Vec<P2> {
-    let cs = g.get_coord_seq().unwrap();
-    let n = cs.size().unwrap();
-    (0..n).map(|i| [cs.get_x(i).unwrap(), cs.get_y(i).unwrap()]).collect()
-}
-
-pub fn exterior(g: &G) -> Vec<P2> {
-    coords_of(&Geom::clone(&g.get_exterior_ring().unwrap()).unwrap())
-}
-
-pub fn interiors(g: &G) -> Vec<Vec<P2>> {
-    let n = g.get_num_interior_rings().unwrap();
-    (0..n).map(|i| coords_of(&Geom::clone(&g.get_interior_ring_n(i).unwrap()).unwrap())).collect()
-}
-
-pub fn gtype(g: &G) -> GeometryTypes {
-    g.geometry_type().unwrap()
-}
-
-pub fn is_polygon(g: &G) -> bool {
-    matches!(gtype(g), GeometryTypes::Polygon)
-}
-
-/// Sub-geometries of a multi/collection (or the geometry itself).
-pub fn parts(g: &G) -> Vec<G> {
-    match gtype(g) {
-        GeometryTypes::MultiPolygon
-        | GeometryTypes::MultiLineString
-        | GeometryTypes::GeometryCollection
-        | GeometryTypes::MultiPoint => {
-            let n = g.get_num_geometries().unwrap();
-            (0..n).map(|i| Geom::clone(&g.get_geometry_n(i).unwrap()).unwrap()).collect()
-        }
-        _ => vec![Clone::clone(g)],
-    }
-}
-
-pub fn bounds(g: &G) -> (f64, f64, f64, f64) {
-    (
-        g.get_x_min().unwrap(),
-        g.get_y_min().unwrap(),
-        g.get_x_max().unwrap(),
-        g.get_y_max().unwrap(),
-    )
-}
-
-pub fn area(g: &G) -> f64 {
-    g.area().unwrap()
-}
-pub fn length(g: &G) -> f64 {
-    g.length().unwrap()
-}
-pub fn union(a: &G, b: &G) -> G {
-    a.union(b).unwrap()
-}
-pub fn difference(a: &G, b: &G) -> G {
-    a.difference(b).unwrap()
-}
-pub fn intersection(a: &G, b: &G) -> G {
-    a.intersection(b).unwrap()
-}
-pub fn union_all(gs: &[G]) -> G {
-    if gs.is_empty() {
-        return Geometry::create_geometry_collection(vec![]).unwrap();
-    }
-    let coll = Geometry::create_geometry_collection(gs.to_vec()).unwrap();
-    coll.unary_union().unwrap()
-}
-
-pub fn boundary(g: &G) -> G {
-    g.boundary().unwrap()
-}
-pub fn centroid(g: &G) -> P2 {
-    let c = g.get_centroid().unwrap();
-    [c.get_x().unwrap(), c.get_y().unwrap()]
-}
-pub fn convex_hull(g: &G) -> G {
-    g.convex_hull().unwrap()
-}
-pub fn is_valid(g: &G) -> bool {
-    g.is_valid().unwrap_or(false)
-}
-pub fn contains(a: &G, b: &G) -> bool {
-    a.contains(b).unwrap()
-}
-pub fn distance(a: &G, b: &G) -> f64 {
-    a.distance(b).unwrap()
-}
-pub fn normalize(g: &G) -> G {
-    let mut c = Clone::clone(g);
-    c.normalize().unwrap();
-    c
-}
-
-/// shapely.simplify(g, tol) (preserve_topology=True)
-pub fn simplify(g: &G, tol: f64) -> G {
-    g.topology_preserve_simplify(tol).unwrap()
-}
-
-pub fn remove_repeated_points(g: &G, tol: f64) -> G {
-    g.remove_repeated_points(tol).unwrap()
-}
-
-pub fn segmentize(g: &G, max_len: f64) -> G {
-    g.densify(max_len).unwrap()
-}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Join {
@@ -171,32 +16,19 @@ pub enum Cap {
     Square,
 }
 
-pub fn buffer_full(g: &G, d: f64, join: Join, cap: Cap, quad_segs: i32, single_sided: bool) -> G {
-    let p = BufferParams::builder()
-        .quadrant_segments(quad_segs)
-        .end_cap_style(match cap {
-            Cap::Round => CapStyle::Round,
-            Cap::Flat => CapStyle::Flat,
-            Cap::Square => CapStyle::Square,
-        })
-        .join_style(match join {
-            Join::Round => JoinStyle::Round,
-            Join::Mitre => JoinStyle::Mitre,
-            Join::Bevel => JoinStyle::Bevel,
-        })
-        .mitre_limit(5.0)
-        .single_sided(single_sided)
-        .build()
-        .unwrap();
-    g.buffer_with_params(d, &p).unwrap()
-}
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "shp_geos.rs"]
+pub mod geos_backend;
+#[path = "shp_pure.rs"]
+pub mod pure;
 
-/// shapely default buffer(d)
-pub fn buffer(g: &G, d: f64) -> G {
-    buffer_full(g, d, Join::Round, Cap::Round, 16, false)
-}
-pub fn buffer_mitre(g: &G, d: f64) -> G {
-    buffer_full(g, d, Join::Mitre, Cap::Flat, 16, false)
+#[cfg(not(any(target_arch = "wasm32", feature = "pure_geom")))]
+pub use geos_backend::*;
+#[cfg(any(target_arch = "wasm32", feature = "pure_geom"))]
+pub use pure::*;
+
+pub fn bbox(x0: f64, y0: f64, x1: f64, y1: f64) -> G {
+    polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]], &[]).unwrap()
 }
 
 pub fn signed_area(c: &[P2]) -> f64 {
@@ -258,39 +90,15 @@ pub fn map_coords(g: &G, f: impl Fn(P2) -> P2 + Copy) -> G {
         }
         GeometryTypes::MultiPolygon => {
             let ps: Vec<G> = parts(g).iter().map(|p| map_coords(p, f)).collect();
-            Geometry::create_multipolygon(ps).unwrap()
+            multipolygon(ps).unwrap()
         }
         GeometryTypes::Point => {
             let c = coords_of(g)[0];
             let q = f(c);
             point(q[0], q[1])
         }
-        _ => Clone::clone(g),
+        _ => g.clone(),
     }
-}
-
-pub fn line_merge(g: &G) -> G {
-    g.line_merge().unwrap()
-}
-
-/// shapely.ops.shared_paths(a, b) -> (forward, backward)
-pub fn shared_paths(a: &G, b: &G) -> (G, G) {
-    let r = a.shared_paths(b).unwrap();
-    let f = Geom::clone(&r.get_geometry_n(0).unwrap()).unwrap();
-    let bk = Geom::clone(&r.get_geometry_n(1).unwrap()).unwrap();
-    (f, bk)
-}
-
-pub fn is_empty(g: &G) -> bool {
-    g.is_empty().unwrap()
-}
-
-pub fn within(a: &G, b: &G) -> bool {
-    a.within(b).unwrap_or(false)
-}
-
-pub fn contains_pt(poly: &G, p: P2) -> bool {
-    poly.contains(&point(p[0], p[1])).unwrap_or(false)
 }
 
 /// shapely.affinity.rotate(g, deg, origin=(0,0))
@@ -298,4 +106,88 @@ pub fn rotate_origin(g: &G, deg: f64) -> G {
     let a = deg.to_radians();
     let (s, c) = a.sin_cos();
     map_coords(g, |p| [p[0] * c - p[1] * s, p[0] * s + p[1] * c])
+}
+
+/// Fast path of `within(a, buffer(b, d))`: when `b` is a single convex polygon without holes, `a` lies within the d-offset of `b` iff all
+/// vertices of `a` satisfy the offset half-planes of `b` (the rounded buffer corners are ignored: <= 0.41 d more permissive at corners).
+/// `None` when `b` is not a convex polygon (caller falls back to the exact test).
+pub fn within_convex_offset(a: &G, b: &G, d: f64) -> Option<bool> {
+    if !matches!(gtype(b), GeometryTypes::Polygon) || !interiors(b).is_empty() {
+        return None;
+    }
+    let mut r = exterior(b);
+    if r.len() > 1 && r.first() == r.last() {
+        r.pop();
+    }
+    let n = r.len();
+    if n < 3 {
+        return None;
+    }
+    let mut area2 = 0.0;
+    for i in 0..n {
+        let (p, q) = (r[i], r[(i + 1) % n]);
+        area2 += p[0] * q[1] - q[0] * p[1];
+    }
+    if area2 == 0.0 {
+        return None;
+    }
+    let sgn = if area2 > 0.0 { 1.0 } else { -1.0 };
+    // convexity: all turns have the sign of the area
+    for i in 0..n {
+        let (p, q, w) = (r[i], r[(i + 1) % n], r[(i + 2) % n]);
+        let c = (q[0] - p[0]) * (w[1] - q[1]) - (q[1] - p[1]) * (w[0] - q[0]);
+        if c * sgn < -1e-12 {
+            return None;
+        }
+    }
+    let pts: Vec<P2> = match gtype(a) {
+        GeometryTypes::Polygon => exterior(a),
+        GeometryTypes::MultiPolygon => parts(a).iter().flat_map(|p| exterior(p)).collect(),
+        _ => return None,
+    };
+    for &v in &pts {
+        for i in 0..n {
+            let (p, q) = (r[i], r[(i + 1) % n]);
+            let (ex, ey) = (q[0] - p[0], q[1] - p[1]);
+            let len = (ex * ex + ey * ey).sqrt();
+            if len == 0.0 {
+                continue;
+            }
+            // signed distance to the left of the edge (inside for CCW), flipped for CW
+            let dist = sgn * (ex * (v[1] - p[1]) - ey * (v[0] - p[0])) / len;
+            if dist < -d - 1e-9 {
+                return Some(false);
+            }
+        }
+    }
+    Some(true)
+}
+
+/// `contains_pt(buffer(g, d), p)` without building the buffer: p inside the polygon(s) or within `d` of a ring (exact distance instead of the
+/// polygonal approximation of the round join)
+pub fn within_distance_pt(g: &G, p: P2, d: f64) -> bool {
+    if contains_pt(g, p) {
+        return true;
+    }
+    let seg_dist = |a: P2, b: P2| -> f64 {
+        let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = ex * ex + ey * ey;
+        let t = if l2 == 0.0 { 0.0 } else { (((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / l2).clamp(0.0, 1.0) };
+        ((p[0] - a[0] - t * ex).powi(2) + (p[1] - a[1] - t * ey).powi(2)).sqrt()
+    };
+    for part in parts(g) {
+        if !matches!(gtype(&part), GeometryTypes::Polygon) {
+            continue;
+        }
+        let mut rings = vec![exterior(&part)];
+        rings.extend(interiors(&part));
+        for r in rings {
+            for w in r.windows(2) {
+                if seg_dist(w[0], w[1]) <= d {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }

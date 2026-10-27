@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
+[features]
+# use the pure-Rust 2D geometry backend (always on for wasm32) instead of GEOS
+pure_geom = []
+
 [dependencies]
-geos = { workspace = true }
+web-time = "1"
+i_overlay = "9"
 indexmap = { workspace = true }
 nalgebra = { workspace = true }
 rayon = { workspace = true }
@@ -23,3 +28,6 @@ robust = { workspace = true }
 
 [build-dependencies]
 cc = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+geos = { workspace = true }

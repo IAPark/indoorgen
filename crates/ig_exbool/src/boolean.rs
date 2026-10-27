@@ -1092,7 +1092,7 @@ fn finish_patch_cell_graph(arena: &mut Arena, tm: &[usize], cells: &mut Vec<Cell
         return;
     }
     let prof = std::env::var_os("EXBOOL_PROF").is_some();
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let mut ambient_cell = vec![0i32; components.len()];
     for comp in 0..components.len() {
         ambient_cell[comp] = find_ambient_cell(arena, tm, Some(&components[comp]), topo, pinfo);
@@ -1512,7 +1512,7 @@ fn test_tri_inside_shapes(arena: &mut Arena, tm: &[usize], shape_fn: &dyn Fn(i32
     };
     let (d0, d1, d2) = (arena.verts[v0 as usize].d, arena.verts[v1 as usize].d, arena.verts[v2 as usize].d);
     let test_point = [d0[0] / 3.0 + d1[0] / 3.0 + d2[0] / 3.0, d0[1] / 3.0 + d1[1] / 3.0 + d2[1] / 3.0, d0[2] / 3.0 + d1[2] / 3.0 + d2[2] / 3.0];
-    let tp0 = std::time::Instant::now();
+    let tp0 = web_time::Instant::now();
     arena.populate_plane(tri_test, false);
     PLANE_NS.fetch_add(tp0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
     let pn = arena.faces[tri_test].plane.as_ref().unwrap().norm;
@@ -2088,7 +2088,7 @@ pub fn boolean_trimesh(arena: &mut Arena, tm_in: &[usize], op: BoolOpType, nshap
         return vec![];
     }
     let prof = std::env::var_os("EXBOOL_PROF").is_some();
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let tm_si = trimesh_nary_intersect(arena, tm_in, nshapes, shape_fn, use_self);
     if prof {
         eprintln!("exbool: intersect {} -> {} tris {:?}", tm_in.len(), tm_si.len(), t0.elapsed());
@@ -2144,7 +2144,7 @@ pub fn boolean_trimesh(arena: &mut Arena, tm_in: &[usize], op: BoolOpType, nshap
 /// `boolean_mesh`: returns the output polygon mesh faces (arena face indices).
 pub fn boolean_mesh(arena: &mut Arena, imesh: &[usize], op: BoolOpType, nshapes: usize, shape_fn: &dyn Fn(i32) -> i32, use_self: bool, hole_tolerant: bool) -> Vec<usize> {
     let prof = std::env::var_os("EXBOOL_PROF").is_some();
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let tm_in = triangulate_polymesh(arena, imesh);
     let tm_out = boolean_trimesh(arena, &tm_in, op, nshapes, shape_fn, use_self, hole_tolerant);
     let r = polymesh_from_trimesh_with_dissolve(arena, &tm_out, imesh);

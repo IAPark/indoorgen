@@ -345,6 +345,11 @@ pub fn prof_on() -> bool {
 }
 
 /// CPU seconds of the calling thread (immune to machine load; 0 off macOS/linux)
+#[cfg(target_arch = "wasm32")]
+pub fn thread_cpu() -> f64 {
+    0.0
+}
+#[cfg(not(target_arch = "wasm32"))]
 pub fn thread_cpu() -> f64 {
     #[repr(C)]
     struct Ts {
@@ -533,5 +538,5 @@ pub const CUBE_QUADS_XFAST: [[u32; 4]; 6] = [[0, 2, 3, 1], [0, 1, 5, 4], [4, 5, 
 /// placeholders / bounds instead of building the full mesh. NO_CHEAP_PH=1 turns the shortcuts off.
 pub fn dense() -> bool {
     static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *D.get_or_init(|| std::env::var_os("INFINIGEN_DENSE").is_some() && std::env::var_os("NO_CHEAP_PH").is_none())
+    *D.get_or_init(|| ig_core::envx::dense_env() && std::env::var_os("NO_CHEAP_PH").is_none())
 }

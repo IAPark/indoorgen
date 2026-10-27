@@ -1605,7 +1605,7 @@ mod tests {
         }
         let m = QMesh { pos, faces };
         assert!(m.faces.len() > 50_000);
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         let c = catmull_clark(&m, 1, None);
         let dt = t.elapsed().as_secs_f64();
         eprintln!("catmull_clark 1 level of {} quads: {:.3}s -> {} quads", m.faces.len(), dt, c.faces.len());

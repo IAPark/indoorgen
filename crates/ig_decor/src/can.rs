@@ -2,7 +2,6 @@
 use super::gnlite::{self, F3};
 use super::*;
 use crate::materials::*;
-use geos::{Geom, Geometry};
 use serde_json::json;
 
 pub fn handles(c: &str) -> bool {
@@ -29,21 +28,16 @@ impl Can {
 
     /// make_coords(): shapely buffer -> affinity.scale -> boundary.segmentize(0.01) -> coords[:-1]
     fn coords(&self, r: &mut Rng) -> Vec<(f64, f64)> {
-        let poly: Geometry = if !self.rect {
-            let pt = Geometry::new_from_wkt("POINT (0 0)").unwrap();
-            pt.buffer(self.x_length, 64).unwrap()
+        let poly = if !self.rect {
+            ig_core::shp::buffer_quad(&ig_core::shp::point(0.0, 0.0), self.x_length, 64)
         } else {
             let side = self.x_length * r.uniform(0.2, 0.8);
             // shapely.box(-side, -side, side, side) (ccw): ring starts at (xmax, ymin)
-            let wkt = format!("POLYGON (({s:?} {ns:?}, {s:?} {s:?}, {ns:?} {s:?}, {ns:?} {ns:?}, {s:?} {ns:?}))", s = side, ns = -side);
-            let bx = Geometry::new_from_wkt(&wkt).unwrap();
-            bx.buffer(self.x_length - side, 16).unwrap()
+            let bx = ig_core::shp::polygon(&[[side, -side], [side, side], [-side, side], [-side, -side], [side, -side]], &[]).unwrap();
+            ig_core::shp::buffer_quad(&bx, self.x_length - side, 16)
         };
         // affinity.scale(p, yfact=1/skewness) about the bounding box centre
-        let ring = poly.get_exterior_ring().unwrap();
-        let cs = ring.get_coord_seq().unwrap();
-        let n = cs.size().unwrap();
-        let mut pts: Vec<(f64, f64)> = (0..n).map(|i| (cs.get_x(i).unwrap(), cs.get_y(i).unwrap())).collect();
+        let mut pts: Vec<(f64, f64)> = ig_core::shp::exterior(&poly).into_iter().map(|p| (p[0], p[1])).collect();
         let (mut minx, mut maxx, mut miny, mut maxy) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
         for p in &pts {
             minx = minx.min(p.0);
@@ -59,19 +53,11 @@ impl Can {
             *p = (xf * p.0 + 0.0 * p.1 + xoff, 0.0 * p.0 + yf * p.1 + yoff);
         }
         // segmentize(0.01) via GEOS densify on the closed ring
-        let mut wkt = String::from("LINEARRING (");
-        for (i, p) in pts.iter().enumerate() {
-            if i > 0 {
-                wkt.push_str(", ");
-            }
-            wkt.push_str(&format!("{:?} {:?}", p.0, p.1));
-        }
-        wkt.push(')');
-        let lr = Geometry::new_from_wkt(&wkt).unwrap();
-        let dens = lr.densify(0.01).unwrap();
-        let cs = dens.get_coord_seq().unwrap();
-        let n = cs.size().unwrap();
-        (0..n - 1).map(|i| (cs.get_x(i).unwrap(), cs.get_y(i).unwrap())).collect()
+        let ring: Vec<[f64; 2]> = pts.iter().map(|p| [p.0, p.1]).collect();
+        let lr = ig_core::shp::linearring(&ring).unwrap();
+        let dens = ig_core::shp::coords_of(&ig_core::shp::segmentize(&lr, 0.01));
+        let n = dens.len();
+        (0..n - 1).map(|i| (dens[i][0], dens[i][1])).collect()
     }
 }
 

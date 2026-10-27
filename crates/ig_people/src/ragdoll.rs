@@ -301,7 +301,7 @@ impl Opts {
 /// `soft` scales the allowed joint deviation (larger = looser motors)
 pub fn settle_k(av: &Avatar, m: &Model, g_key: &[Xf], pose: &Mat4, statics: &[StaticTris], floor_z: f64, lift: f64, opt: &Opts) -> Option<Settled> {
     let soft = opt.soft;
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let rig = Rig::new(av);
     let segs = &m.segs;
     if segs.len() < 16 {

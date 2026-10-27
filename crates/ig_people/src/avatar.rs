@@ -1,6 +1,8 @@
 //! Rocketbox avatar loading: FBX (assimp) -> compact binary cache (`avatar.bin`). Body frame: metres, z up, facing +y, +x = the
 //! avatar's right hand side, origin at the pelvis rest height below the pelvis (feet soles ~ z=0 in the rest pose).
+#[cfg(feature = "assimp")]
 use russimp::node::Node;
+#[cfg(feature = "assimp")]
 use russimp::scene::{PostProcess, Scene};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,6 +44,7 @@ pub fn inv_affine(m: &M4) -> M4 {
     }
     r
 }
+#[cfg(feature = "assimp")]
 fn conv(m: &russimp::Matrix4x4) -> M4 {
     [[m.a1 as f64, m.a2 as f64, m.a3 as f64, m.a4 as f64], [m.b1 as f64, m.b2 as f64, m.b3 as f64, m.b4 as f64], [m.c1 as f64, m.c2 as f64, m.c3 as f64, m.c4 as f64], [m.d1 as f64, m.d2 as f64, m.d3 as f64, m.d4 as f64]]
 }
@@ -117,6 +120,7 @@ pub fn list_avatars() -> Vec<String> {
 }
 
 // ---------------------------------------------------------------- FBX import
+#[cfg(feature = "assimp")]
 fn collect_nodes(n: &Rc<Node>, parent: Option<usize>, parent_g: &M4, out: &mut Vec<(String, Option<usize>, M4)>) {
     let g = mul(parent_g, &conv(&n.transformation));
     let idx = out.len();
@@ -126,6 +130,7 @@ fn collect_nodes(n: &Rc<Node>, parent: Option<usize>, parent_g: &M4, out: &mut V
     }
 }
 
+#[cfg(feature = "assimp")]
 fn tex_name(files: &[String], key: &str, ext: &str, dir: &Path) -> String {
     for f in files {
         let base = f.rsplit(['\\', '/']).next().unwrap_or(f);
@@ -143,6 +148,7 @@ fn tex_name(files: &[String], key: &str, ext: &str, dir: &Path) -> String {
     String::new()
 }
 
+#[cfg(feature = "assimp")]
 pub fn import_fbx(dir: &Path, name: &str) -> Result<Avatar, String> {
     let path = dir.join("Export").join(format!("{name}.fbx"));
     let sc = Scene::from_file(path.to_str().unwrap(), vec![PostProcess::Triangulate, PostProcess::LimitBoneWeights]).map_err(|e| format!("{e:?}"))?;
@@ -396,6 +402,11 @@ pub fn load_bin(dir: &Path, name: &str) -> Option<Avatar> {
         parts.push(AvPart { name: pname, kind, color, normal, spec, pos, nrm, uv, joints, weights, tris });
     }
     Some(Avatar { name: name.to_string(), dir: dir.to_path_buf(), bones, parts })
+}
+
+#[cfg(not(feature = "assimp"))]
+pub fn import_fbx(_dir: &Path, _name: &str) -> Result<Avatar, String> {
+    Err("built without the assimp feature (no FBX import)".into())
 }
 
 /// load from the cache, importing the FBX (and writing the cache) on a miss

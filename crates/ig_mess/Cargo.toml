@@ -5,6 +5,7 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [dependencies]
+web-time = "1"
 indexmap = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
@@ -18,5 +19,4 @@ ig_furn = { path = "../ig_furn" }
 ig_rooms = { path = "../ig_rooms" }
 ig_assets = { path = "../ig_assets" }
 ig_gn = { path = "../ig_gn" }
-geos = { workspace = true }
 ig_storage = { path = "../ig_storage" }

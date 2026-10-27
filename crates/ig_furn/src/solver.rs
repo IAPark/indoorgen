@@ -248,7 +248,7 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
                 eprintln!("ORACLE MISS {class} {fac_seed} {inst_seed}");
             }
             let _t = ProfGuard::new(3);
-            let t0 = std::time::Instant::now();
+            let t0 = web_time::Instant::now();
             let r = ctx.assets.placeholder(class, fac_seed, inst_seed, kind);
             if std::env::var_os("PHTIME").is_some() { eprintln!("PHTIME {class} {kind:?} {:.3}", t0.elapsed().as_secs_f64()); }
             r?
@@ -824,8 +824,8 @@ pub fn move_weights(restrict: Option<&[MoveKind]>, add_scalar: f64) -> Vec<(Move
 
 thread_local! { pub static PROF: std::cell::Cell<[f64; 8]> = std::cell::Cell::new([0.0; 8]); }
 /// scoped wall timer: 0 evaluate, 1 apply_move, 2 move generation (printed with DBG=1)
-struct ProfGuard(usize, std::time::Instant);
-impl ProfGuard { fn new(i: usize) -> Self { ProfGuard(i, std::time::Instant::now()) } }
+struct ProfGuard(usize, web_time::Instant);
+impl ProfGuard { fn new(i: usize) -> Self { ProfGuard(i, web_time::Instant::now()) } }
 impl Drop for ProfGuard {
     fn drop(&mut self) { PROF.with(|p| { let mut a = p.get(); a[self.0] += self.1.elapsed().as_secs_f64(); p.set(a); }); }
 }

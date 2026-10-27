@@ -579,14 +579,24 @@ impl Scene {
 
     /// Write a binary glTF 2.0 (.glb). Z-up scene is converted to glTF's Y-up with a root rotation node.
     pub fn write_glb(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let sidecar = self.write_glb_to(|| Ok(std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?)))?;
+        if let Some(sp) = path.parent() {
+            let _ = std::fs::write(sp.join(format!("{}.json", path.file_stem().unwrap().to_string_lossy())), serde_json::to_vec_pretty(&sidecar).unwrap());
+        }
+        Ok(())
+    }
+
+    /// The glb bytes of `write_glb` streamed into the writer returned by `open` (called once the size is known); returns the sidecar json
+    /// (nodes, lights, cloth jobs) that `write_glb` stores next to the file.
+    pub fn write_glb_to<W: std::io::Write>(&self, open: impl FnOnce() -> std::io::Result<W>) -> std::io::Result<serde_json::Value> {
         use rayon::prelude::*;
-        let t_glb = std::time::Instant::now();
+        let t_glb = web_time::Instant::now();
         // per-node blobs are built in parallel (pure functions of the node), then concatenated in node order: deterministic
         struct Blob { lo: V3, hi: V3, nv: usize, ntri: usize, pos: Vec<u8>, nrm: Vec<u8>, uv: Option<Vec<u8>>, idx: Vec<u8> }
         let ph: [std::sync::atomic::AtomicU64; 4] = Default::default();
-        let lapn = |i: usize, t: &mut std::time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = std::time::Instant::now(); };
+        let lapn = |i: usize, t: &mut web_time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = web_time::Instant::now(); };
         let blobs: Vec<Blob> = self.nodes.par_iter().map(|n| {
-            let mut tt = std::time::Instant::now();
+            let mut tt = web_time::Instant::now();
             let (xpos, xuv, xtris) = n.mesh.export_tris();
             lapn(0, &mut tt);
             let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
@@ -729,9 +739,6 @@ impl Scene {
         let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec, "pose": n.pose})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
         let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth});
-        if let Some(sp) = path.parent() {
-            let _ = std::fs::write(sp.join(format!("{}.json", path.file_stem().unwrap().to_string_lossy())), serde_json::to_vec_pretty(&sidecar).unwrap());
-        }
         let gltf = json!({
             "asset":{"version":"2.0","generator":"infinigen-rs"},
             "extensionsUsed":["KHR_materials_emissive_strength"],
@@ -747,7 +754,7 @@ impl Scene {
         let total = 12 + 8 + js.len() + 8 + bin;
         if total > u32::MAX as usize { return Err(std::io::Error::new(std::io::ErrorKind::Other, "glb larger than 4 GiB")); }
         use std::io::Write;
-        let mut out = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
+        let mut out = open()?;
         out.write_all(b"glTF")?;
         out.write_all(&2u32.to_le_bytes())?;
         out.write_all(&(total as u32).to_le_bytes())?;
@@ -762,7 +769,8 @@ impl Scene {
             if let Some(u) = &bl.uv { out.write_all(u)?; }
             out.write_all(&bl.idx)?;
         }
-        out.flush()
+        out.flush()?;
+        Ok(sidecar)
     }
 }
 

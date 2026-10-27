@@ -5,7 +5,7 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [dependencies]
-geos = { workspace = true }
+web-time = "1"
 indexmap = { workspace = true }
 nalgebra = { workspace = true }
 rayon = { workspace = true }

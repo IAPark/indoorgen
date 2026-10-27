@@ -17,7 +17,7 @@ use crate::rooms::state::*;
 use indexmap::IndexMap;
 use crate::dhash::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 pub struct Generated {
     pub c: RoomConstants,
