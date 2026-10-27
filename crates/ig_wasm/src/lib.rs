@@ -10,7 +10,7 @@
 //! Pipeline = `indoorgen::scenegen::build_scene` (the same code as `gen2 SEED ROOM --only-target`), data files embedded.
 use indoorgen::furn::assets::TableAssets;
 use indoorgen::scenegen::{build_scene, Params};
-use serde::Deserialize;
+use indoorgen::config::GenConfig;
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
@@ -48,34 +48,35 @@ fn progress_hook(msg: &str) {
     });
 }
 
-#[derive(Deserialize)]
-#[serde(default)]
-struct Opts {
-    /// lived-in disorder 0..1 (clutter, open doors, moved furniture)
-    mess: f64,
-    /// run the Rust cloth simulation for bed linen
-    cloth: bool,
-    /// photographer-like camera poses written to the sidecar json
-    cams: usize,
-    /// dense furnishing program (false: the program exactly as exported from python, fewer objects)
-    dense: bool,
-    /// furnish only the first room of the requested type (the only mode the browser build ships)
-    only_target: bool,
-    /// web preset defaults: cloth substeps per frame 1 (native 2) and CG iterations 20 (native 40): faster, looser drape
-    cloth_steps: u32,
-    cloth_cg: u32,
-    /// web preset default 0.6: multiplier for the solver steps (dense program: 300 large / 200 medium / 50 small); 1.0 = gen2 quality (about 1.4x slower, ~25% more objects)
-    steps_scale: f64,
-    /// extra tunables by their native environment-variable name (STEPS_L, PLACE_TRIES, TRINKETS_MAX, MESH_BUDGET_SCALE, NO_SNAP, ...),
-    /// applied after the options above so they win; cleared before every run
-    env: std::collections::BTreeMap<String, serde_json::Value>,
-    /// furniture rules (indoorgen::rules::RuleSpec: per room type class / relation / min / max / prefer); absent = built-in rules
-    rules: Option<indoorgen::rules::RuleSpec>,
-}
-impl Default for Opts {
-    fn default() -> Self {
-        Opts { mess: 0.5, cloth: true, cams: 4, dense: true, only_target: true, cloth_steps: 1, cloth_cg: 20, steps_scale: 0.6, env: Default::default(), rules: None }
+/// Legacy flat options (kept for backwards compatibility): mess (number), cloth (bool), cams (number), dense, only_target,
+/// cloth_steps, cloth_cg, steps_scale, env. They are mapped onto the config; the rest of the JSON is a (partial) GenConfig.
+fn config_from_opts(opts_json: &str) -> Result<GenConfig, String> {
+    let mut cfg = GenConfig::web_default();
+    if opts_json.trim().is_empty() { return Ok(cfg); }
+    let mut j: serde_json::Value = serde_json::from_str(opts_json).map_err(|e| e.to_string())?;
+    let Some(o) = j.as_object_mut() else { return Err("options must be a JSON object".into()) };
+    if let Some(v) = o.get("mess").and_then(|v| v.as_f64()) { cfg.mess.level = v; o.remove("mess"); }
+    if let Some(v) = o.get("cloth").and_then(|v| v.as_bool()) { cfg.cloth.on = v; o.remove("cloth"); }
+    if let Some(v) = o.get("cams").and_then(|v| v.as_u64()) { cfg.cameras.count = v as usize; o.remove("cams"); }
+    if let Some(v) = o.remove("dense").and_then(|v| v.as_bool()) { cfg.program.dense = v; }
+    if let Some(v) = o.remove("only_target").and_then(|v| v.as_bool()) { cfg.house.only_target = v; }
+    if let Some(v) = o.remove("cloth_steps").and_then(|v| v.as_u64()) { cfg.cloth.steps = v as u32; }
+    if let Some(v) = o.remove("cloth_cg").and_then(|v| v.as_u64()) { cfg.cloth.cg_iters = v as usize; }
+    if let Some(v) = o.remove("steps_scale").and_then(|v| v.as_f64()) { cfg.solver.steps_scale = v; }
+    if let Some(serde_json::Value::Object(env)) = o.remove("env") {
+        // flags: true / "1" set them, false / null leave them unset; known names map onto fields, the rest stay tunables
+        let get = |k: &str| -> Option<String> {
+            match env.get(k)? {
+                serde_json::Value::Bool(false) | serde_json::Value::Null => None,
+                serde_json::Value::Bool(true) => Some("1".into()),
+                serde_json::Value::String(t) => Some(t.clone()),
+                other => Some(other.to_string()),
+            }
+        };
+        cfg.apply_vars(&get);
+        for (k, v) in env { cfg.advanced.env.insert(k, v); }
     }
+    GenConfig::from_partial(&cfg, &j)
 }
 
 #[wasm_bindgen(start)]
@@ -91,49 +92,46 @@ pub fn set_progress(f: Option<js_sys::Function>) {
 }
 
 /// Generate the scene of `seed` and return the GLB bytes of room type `room` ("Bedroom", "Kitchen", "LivingRoom", ...).
-/// `opts_json`: `{"mess":0.5,"cloth":true,"cams":4,"dense":true}` (all optional). The sidecar json is available from `last_scene_json()`.
+/// `opts_json`: a (partial) GenConfig, e.g. `{"mess":{"level":0.5},"cloth":{"on":true}}`; the legacy flat keys `{"mess":0.5,"cloth":true,"cams":4,"dense":true,...}` still work (all optional, defaults = `default_config()`). The sidecar json is available from `last_scene_json()`.
 #[wasm_bindgen]
 pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsValue> {
-    let opts: Opts = if opts_json.trim().is_empty() { Opts::default() } else { serde_json::from_str(opts_json).map_err(|e| JsValue::from_str(&format!("bad options: {e}")))? };
-    indoorgen::assets::cloth::SKIP_JOB_SIM.store(!opts.cloth, std::sync::atomic::Ordering::Relaxed);
+    let mut cfg = config_from_opts(opts_json).map_err(|e| JsValue::from_str(&format!("bad options: {e}")))?;
+    cfg.house.seed = seed as u64;
+    cfg.house.room = if room.is_empty() { None } else { Some(room.to_string()) };
+    cfg.people.count = 0;
+    cfg.output = Default::default();
     ig_core::envx::clear_vars();
-    ig_core::envx::set_var("CL_STEPS", &opts.cloth_steps.to_string());
-    ig_core::envx::set_var("CL_CG", &opts.cloth_cg.to_string());
-    let (dl, dm, ds) = if opts.dense { (300.0, 200.0, 50.0) } else { (100.0, 40.0, 5.0) };
-    for (k, d) in [("STEPS_L", dl), ("STEPS_M", dm), ("STEPS_S", ds)] {
-        ig_core::envx::set_var(k, &(((d * opts.steps_scale).round() as usize).max(1)).to_string());
-    }
-    for (k, v) in &opts.env {
-        // flags: true / "1" set them, false / null leave them unset
-        match v {
-            serde_json::Value::Bool(false) | serde_json::Value::Null => {}
-            serde_json::Value::Bool(true) => ig_core::envx::set_var(k, "1"),
-            serde_json::Value::String(t) => ig_core::envx::set_var(k, t),
-            other => ig_core::envx::set_var(k, &other.to_string()),
-        }
-    }
-    let orig_prog = !opts.dense;
-    let mut prog: serde_json::Value = serde_json::from_str(&unpack(if orig_prog { PROGRAM_ORIG } else { PROGRAM_DENSE })).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
-    if let Some(r) = &opts.rules {
-        indoorgen::rules::try_apply(&mut prog, r).map_err(|e| JsValue::from_str(&format!("rules: {}", e.join("; "))))?;
-    }
+    let orig_prog = !cfg.program.dense;
+    let prog: serde_json::Value = serde_json::from_str(&unpack(if orig_prog { PROGRAM_ORIG } else { PROGRAM_DENSE })).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
     let mut fallback = TableAssets::default();
     fallback.add_str(&unpack(BBOX_TABLE));
     fallback.add_str(&unpack(SAMPLES));
     let room_opt = if room.is_empty() { None } else { Some(room.to_string()) };
-    let p = Params { seed: seed as u64, room: room_opt.clone(), only_target: opts.only_target, mess_level: opts.mess, people_n: 0, qc_out: None, no_glb: false, orig_prog, prog, fallback };
-    let built = build_scene(&p);
+    let (cams_k, room_opt) = (cfg.cameras.count, cfg.house.room.clone());
+    let built = build_scene(&Params { cfg, prog, fallback });
     ig_core::envx::progress("writing glb");
     let mut glb: Vec<u8> = Vec::new();
     let mut side = built.scene.write_glb_to(|| Ok(&mut glb)).map_err(|e| JsValue::from_str(&format!("glb: {e}")))?;
-    if opts.cams > 0 {
+    if cams_k > 0 {
         ig_core::envx::progress("cameras");
-        let cams = indoorgen::cams::generate(&built.scene, &built.room_polys, &indoorgen::cams::Cfg { k: opts.cams, seed: seed as u64, wall_t: built.wall_t, target: room_opt });
+        let cams = indoorgen::cams::generate(&built.scene, &built.room_polys, &indoorgen::cams::Cfg { k: cams_k, seed: seed as u64, wall_t: built.wall_t, target: room_opt });
         side["cameras"] = serde_json::Value::Array(cams);
     }
     LAST_JSON.with(|j| *j.borrow_mut() = side.to_string());
     ig_core::envx::progress("done");
     Ok(glb)
+}
+
+/// JSON Schema (draft-07) of the generation config: sections, field types, ranges, descriptions
+#[wasm_bindgen]
+pub fn config_schema() -> String {
+    GenConfig::schema().to_string()
+}
+
+/// the default config of the browser build as JSON (fast web preset); `generate` merges its options over it
+#[wasm_bindgen]
+pub fn default_config() -> String {
+    serde_json::to_string(&GenConfig::web_default()).unwrap()
 }
 
 /// JSON for the rules editor: `{rooms, classes:{factories,tags}, relations, defaults: RuleSpec, constraint_names}` (dense program)

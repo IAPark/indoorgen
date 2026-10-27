@@ -3,14 +3,14 @@
 // API: rulesInit(info) with the JSON of wasm rules_info(); getRules() -> spec | null (null = nothing set) ; rulesErrors() -> [string]
 const $ = (id) => document.getElementById(id);
 let info = null, spec = { rooms: {}, disable: [] }, tab = 'Bedroom', errors = [];
-const KEY = 'indoorgen.rules';
+let IG = null, mount = null;
 const REL_KINDS = ['on_floor', 'against_wall', 'on', 'ontop', 'beside'];
 
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); for (const k of kids) e.append(k); return e; };
 const relKind = (r) => (r || 'on_floor').split(':')[0];
 const relParent = (r) => (r || '').includes(':') ? r.split(':')[1] : '';
 
-function save() { try { localStorage.setItem(KEY, JSON.stringify(spec)); } catch (_) {} }
+function save() { if (IG) IG.set('rules', getRules(), true); }
 function room(t) { return (spec.rooms[t] ||= { replace: false, rules: [] }); }
 
 export function rulesErrors() { return errors; }
@@ -30,7 +30,6 @@ export function getRules() {
   }
   return Object.keys(out.rooms).length || out.disable.length ? out : null;
 }
-export function setRules(s) { spec = { rooms: s.rooms || {}, disable: s.disable || [] }; save(); render(); }
 
 function known(c) { return info && (info.classes.factories.includes(c) || info.classes.tags.includes(c) || c === 'Plant'); }
 function validate() {
@@ -51,7 +50,7 @@ function validate() {
 }
 
 function render() {
-  const root = $('rulesbody'); if (!root || !info) return;
+  const root = mount; if (!root || !info) return;
   validate();
   root.textContent = '';
   const tabs = el('div', { className: 'rtabs' });
@@ -110,16 +109,16 @@ function render() {
 }
 function show() {
   const e = $('ruleserr'); if (e) e.textContent = errors.join('\n');
-  const s = $('rulessum'); if (s) { const g = getRules(); const n = g ? Object.values(g.rooms).reduce((a, r) => a + r.rules.length, 0) : 0; s.textContent = `Furniture rules${n ? ` (${n} custom)` : ''}${errors.length ? ' - errors' : ''}`; }
+  const s = document.querySelector('#rules-sec > summary'); if (s) { const g = getRules(); const n = g ? Object.values(g.rooms).reduce((a, r) => a + r.rules.length, 0) : 0; s.textContent = `Rules${n ? ` (${n} custom)` : ''}${errors.length ? ' - errors' : ''}`; }
   const ta = $('rulesjson'); if (ta && document.activeElement !== ta) { ta.value = JSON.stringify(getRules() || {}, null, 1); ta.style.borderColor = ''; }
 }
 
-export function rulesInit(infoJson) {
+export function rulesInit(infoJson, ig) {
   info = typeof infoJson === 'string' ? JSON.parse(infoJson) : infoJson;
-  try { const s = JSON.parse(localStorage.getItem(KEY) || 'null'); if (s) spec = { rooms: s.rooms || {}, disable: s.disable || [] }; } catch (_) {}
-  const u = new URLSearchParams(location.search);
-  if (u.has('rules')) { try { const s = JSON.parse(atob(u.get('rules'))); spec = { rooms: s.rooms || {}, disable: s.disable || [] }; $('rules').open = true; } catch (_) {} }
-  if (u.has('rulestab') && info.rooms.includes(u.get('rulestab'))) tab = u.get('rulestab');
+  IG = ig; mount = ig.rulesMount;
+  const load = (r) => { spec = { rooms: structuredClone(r?.rooms || {}), disable: [...(r?.disable || [])] }; };
+  load(IG.get().rules);
+  if (Object.keys(spec.rooms).length || spec.disable.length) { const d = document.getElementById('cfg'); if (d) d.open = true; document.getElementById('rules-sec').open = true; }
+  IG.onChange((cfg) => { if (JSON.stringify(cfg.rules ?? null) !== JSON.stringify(getRules())) { load(cfg.rules); render(); } });
   render();
 }
-export function rulesLinkParam() { const g = getRules(); return g ? btoa(JSON.stringify(g)) : null; }

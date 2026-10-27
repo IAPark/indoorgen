@@ -37,6 +37,7 @@ nalgebra = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { version = "0.8", features = ["preserve_order"] }
 anyhow = { workspace = true }
 md5 = { workspace = true }
 earcutr = { workspace = true }
@@ -53,7 +54,6 @@ ig_assets = { path = "crates/ig_assets" }
 ig_mess = { path = "crates/ig_mess" }
 ig_people = { path = "crates/ig_people", default-features = false }
 ig_cams = { path = "crates/ig_cams" }
-schemars = "0.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 geos = { workspace = true }
