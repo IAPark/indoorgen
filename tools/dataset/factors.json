@@ -1,0 +1,17 @@
+{
+  "_doc": "How a varied factor becomes a GenConfig override. 'always' is merged into every variant (same distribution for base and varied variants, needs a gen2 with the variation section); 'seeded' is merged only when the factor is varied ({seed} = the factor seed). 'fallback' replaces both for a gen2 without variation (older binaries).",
+  "doors":     {"always": {"variation": {"doors": {"mode": "random", "open_prob": 0.5}}},
+                "seeded": {"variation": {"doors": {"seed": "{seed}"}}}},
+  "walls":     {"always": {"variation": {"walls": {"mode": "random_hsv"}}},
+                "seeded": {"variation": {"walls": {"seed": "{seed}"}}}},
+  "mess":      {"always": {"mess": {"level": 0.4}},
+                "seeded": {"mess": {"seed": "{seed}"}},
+                "fallback": {"mess": {"level": 0.4}}},
+  "lighting":  {"always": {"variation": {"lighting": {"mode": "random", "lamps": "auto"}}},
+                "seeded": {"variation": {"lighting": {"seed": "{seed}"}}}},
+  "furniture": {"always": {},
+                "seeded": {"variation": {"furniture": {"seed": "{seed}"}}}},
+  "people":    {"always": {"people": {"count": 2}},
+                "seeded": {"people": {"seed": "{seed}"}},
+                "fallback": {"people": {"count": 2}}}
+}

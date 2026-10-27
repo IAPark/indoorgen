@@ -27,7 +27,7 @@ struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32> }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
-    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>,
+    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>, depth: bool,
 }
 #[derive(Clone)]
 enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String) }
@@ -35,7 +35,7 @@ enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(Strin
 fn parse_args() -> Opts {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
-        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None };
+        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None, depth: false };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -60,6 +60,7 @@ fn parse_args() -> Opts {
             "--light-scale" => o.light_scale = val().parse().unwrap(),
             "--no-ceiling" => o.no_ceiling = true,
             "--cloth" => o.cloth = Some(PathBuf::from(val())),
+            "--depth" => o.depth = true, // also write <scene>_<cam>.depth.npy (float32 z-depth in metres along the optical axis, 0 = no surface) next to the pngs (OUT_DIR mode)
             "-v" => o.verbose = true,
             _ => o.inputs.push(PathBuf::from(k)),
         }
@@ -371,11 +372,11 @@ fn resolve_cams(s: &Scene, o: &Opts) -> Vec<Cam> {
 }
 
 // ---------------- renderer ----------------
-struct Targets { hdr: wgpu::TextureView, nrm: wgpu::TextureView, depth: wgpu::TextureView, out: wgpu::Texture, readback: wgpu::Buffer, w: u32, h: u32, bpr: u32 }
+struct Targets { hdr: wgpu::TextureView, nrm: wgpu::TextureView, depth: wgpu::TextureView, depth_tex: wgpu::Texture, dbuf: wgpu::Buffer, dbpr: u32, out: wgpu::Texture, readback: wgpu::Buffer, w: u32, h: u32, bpr: u32 }
 struct Renderer {
     gpu: Gpu, ubuf: wgpu::Buffer, g_bgl: wgpu::BindGroupLayout, mat_bgl: wgpu::BindGroupLayout, post_bgl: wgpu::BindGroupLayout,
     shadow_pipe: wgpu::RenderPipeline, main_pipe: wgpu::RenderPipeline, glass_pipe: wgpu::RenderPipeline, post_pipe: wgpu::RenderPipeline,
-    cmp_smp: wgpu::Sampler, white: wgpu::TextureView, smp: wgpu::Sampler, tg: Targets,
+    cmp_smp: wgpu::Sampler, white: wgpu::TextureView, smp: wgpu::Sampler, tg: Targets, last_depth: Option<Vec<f32>>,
 }
 fn vbuf_layouts() -> [wgpu::VertexBufferLayout<'static>; 3] {
     [wgpu::VertexBufferLayout { array_stride: 12, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x3] },
@@ -388,12 +389,15 @@ fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets {
     let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
     let hdr = mk(wgpu::TextureFormat::Rgba16Float, rt).create_view(&Default::default());
     let nrm = mk(wgpu::TextureFormat::Rgba16Float, rt).create_view(&Default::default());
-    let depth = mk(wgpu::TextureFormat::Depth32Float, rt).create_view(&Default::default());
+    let depth_tex = mk(wgpu::TextureFormat::Depth32Float, rt | wgpu::TextureUsages::COPY_SRC);
+    let depth = depth_tex.create_view(&Default::default());
+    let dbpr = (w * 4 + 255) / 256 * 256;
+    let dbuf = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dbpr * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
     let out = dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
     let bpr = (o.res.0 * 4 + 255) / 256 * 256;
     let readback = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (bpr * o.res.1) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-    Targets { hdr, nrm, depth, out, readback, w, h, bpr }
+    Targets { hdr, nrm, depth, depth_tex, dbuf, dbpr, out, readback, w, h, bpr }
 }
 
 fn init(o: &Opts) -> Renderer {
@@ -441,7 +445,7 @@ fn init(o: &Opts) -> Renderer {
         format: wgpu::TextureFormat::Rgba8UnormSrgb, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] }, wgpu::util::TextureDataOrder::LayerMajor, &[255, 255, 255, 255]);
     let white = wt.create_view(&Default::default());
     let tg = make_targets(&dev, o);
-    Renderer { gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg }
+    Renderer { gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
 }
 
 fn frustum(vp: Mat4) -> [Vec4; 6] {
@@ -527,7 +531,24 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaIm
     }
     enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &tg.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.bpr), rows_per_image: Some(o.res.1) } }, wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 });
+    if o.depth {
+        enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.depth_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::DepthOnly },
+            wgpu::TexelCopyBufferInfo { buffer: &tg.dbuf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.dbpr), rows_per_image: Some(tg.h) } }, wgpu::Extent3d { width: tg.w, height: tg.h, depth_or_array_layers: 1 });
+    }
     q.submit([enc.finish()]);
+    if o.depth {
+        let ds = tg.dbuf.slice(..); ds.map_async(wgpu::MapMode::Read, |_| {});
+        dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let data = ds.get_mapped_range().unwrap();
+        let (n, f) = (0.05f32, 200.0f32); let ss = o.ss as usize; let mut out = vec![0f32; (o.res.0 * o.res.1) as usize];
+        for y in 0..o.res.1 as usize { for x in 0..o.res.0 as usize {
+            // the supersampled texel nearest the pixel centre (ss even: the texel just right/below of the centre)
+            let (sx, sy) = (x * ss + ss / 2, y * ss + ss / 2); let off = sy * tg.dbpr as usize + sx * 4;
+            let d = f32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+            out[y * o.res.0 as usize + x] = if d >= 1.0 { 0.0 } else { n * f / (f - d * (f - n)) };
+        } }
+        drop(data); tg.dbuf.unmap(); r.last_depth = Some(out);
+    }
     let sl = tg.readback.slice(..);
     sl.map_async(wgpu::MapMode::Read, |_| {});
     dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
@@ -536,6 +557,16 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaIm
     for y in 0..o.res.1 as usize { let row = &data[y * tg.bpr as usize..y * tg.bpr as usize + o.res.0 as usize * 4]; img.as_mut()[y * o.res.0 as usize * 4..(y + 1) * o.res.0 as usize * 4].copy_from_slice(row); }
     drop(data); tg.readback.unmap();
     img
+}
+
+fn write_npy(p: &Path, res: (u32, u32), d: &[f32]) {
+    use std::io::Write;
+    if let Some(pp) = p.parent() { std::fs::create_dir_all(pp).ok(); }
+    let mut hdr = format!("{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}), }}", res.1, res.0);
+    while (10 + hdr.len() + 1) % 64 != 0 { hdr.push(' '); } hdr.push('\n');
+    let mut f = std::io::BufWriter::new(std::fs::File::create(p).unwrap());
+    f.write_all(b"\x93NUMPY\x01\x00").unwrap(); f.write_all(&(hdr.len() as u16).to_le_bytes()).unwrap(); f.write_all(hdr.as_bytes()).unwrap();
+    f.write_all(bytemuck::cast_slice(d)).unwrap();
 }
 
 fn save_png(img: &image::RgbaImage, p: &Path) {
@@ -561,6 +592,7 @@ fn main() {
             let img = render(&mut r, &mut s, c, &o);
             if o.verbose { eprintln!("  cam {} {:.3}s", c.name, t.elapsed().as_secs_f32()); }
             let nm = if c.name.is_empty() { format!("cam{i}") } else { c.name.clone() };
+            if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, nm)), o.res, r.last_depth.as_ref().unwrap()); }
             frames.push((format!("{}_{}", s.name, nm), img));
         }
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();

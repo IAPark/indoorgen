@@ -5,7 +5,7 @@ import bpy, mathutils
 ap = argparse.ArgumentParser()
 ap.add_argument("glb"); ap.add_argument("out")
 ap.add_argument("--cam"); ap.add_argument("--samples", type=int, default=16); ap.add_argument("--top", action="store_true"); ap.add_argument("--showcase", action="store_true")
-ap.add_argument("--seed", type=int, default=0); ap.add_argument("--clay", action="store_true"); ap.add_argument("--room"); ap.add_argument("--light-scale", type=float, default=1.0); ap.add_argument("--view"); ap.add_argument("--norender", action="store_true"); ap.add_argument("--no-cloth", action="store_true", help="keep the Rust cloth approximation instead of re-simulating in Blender")
+ap.add_argument("--seed", type=int, default=0); ap.add_argument("--clay", action="store_true"); ap.add_argument("--room"); ap.add_argument("--light-scale", type=float, default=1.0); ap.add_argument("--view"); ap.add_argument("--norender", action="store_true"); ap.add_argument("--dataset", help="tools/dataset capture spec json: multi-view RGB+depth+cameras for one variant (see tools/dataset/README.md)"); ap.add_argument("--no-cloth", action="store_true", help="keep the Rust cloth approximation instead of re-simulating in Blender")
 args = ap.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:])
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=args.glb, merge_vertices=True)
@@ -134,6 +134,11 @@ if not args.clay and not os.environ.get("NO_ROOMMATS"):
         print("ROOMMATS", roommats.apply_room_materials(args.seed, [n['name'] for n in sidecar['nodes']]))
     except Exception as _e:
         import traceback; traceback.print_exc(); print("ROOMMATS FAILED, keeping the Rust spec materials:", repr(_e))
+DS = None
+if args.dataset:
+    DS = json.load(open(args.dataset))
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")); import dscap
+    print("DSWALLS", dscap.apply_walls(DS.get("variation")))
 if os.environ.get("DUMPMATS"):
     import roommats; json.dump(roommats.dump_room_materials(), open(os.environ["DUMPMATS"], "w")); print("DUMPMATS done"); sys.exit(0)
 sc = bpy.context.scene
@@ -159,6 +164,8 @@ try:
         lighting.sky_lighting.add_lighting()
 except Exception as e:
     print("SKY FAIL", repr(e))
+if DS:
+    print("DSLIGHT", dscap.apply_lighting(sc, DS.get("variation")), "lamp meshes", dscap.switch_lamp_meshes(DS.get("variation"), sidecar))
 if args.top:
     for o in list(bpy.data.objects):
         n = o.name.lower()
@@ -190,8 +197,11 @@ if args.showcase:
     sc.render.resolution_x, sc.render.resolution_y = 1200, 500; sc.render.filepath = args.out
     bpy.ops.render.render(write_still=True); sys.exit(0)
 # point lights (PointLampFactory)
+_lamp = dscap.lamp_state(DS.get("variation"), sidecar) if DS else (lambda L: (True, 1.0))
 for L in sidecar.get("lights", []):
-    ld = bpy.data.lights.new(L["name"], "POINT"); ld.energy = L["watt"] * args.light_scale; ld.shadow_soft_size = L["radius"]
+    _on, _ls = _lamp(L)
+    if not _on: continue
+    ld = bpy.data.lights.new(L["name"], "POINT"); ld.energy = L["watt"] * args.light_scale * _ls; ld.shadow_soft_size = L["radius"]
     ld.use_nodes = True
     nt = ld.node_tree; nt.nodes.clear()
     bb = nt.nodes.new("ShaderNodeBlackbody"); bb.inputs["Temperature"].default_value = L["temperature"]
@@ -289,6 +299,10 @@ for _o in list(bpy.data.objects):
         _po = bpy.data.objects.new("portal", _ld); sc.collection.objects.link(_po)
         _po.matrix_world = _m; _po.scale = (_w, _d.z, 1)
 # camera
+if DS:
+    sc.cycles.film_exposure = 3.0
+    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True; sc.cycles.use_adaptive_sampling = True
+    _r = dscap.run(sc, sidecar, DS); print("DSRESULT", json.dumps(_r)); sys.exit(0)
 if args.view in ("cornerA", "cornerB"):
     import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import viewcam; viewcam.view_camera(sc, args.room, args.view); co = sc.camera; cam = co.data
 elif args.view and args.view.startswith("cam"):
