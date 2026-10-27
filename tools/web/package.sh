@@ -22,15 +22,16 @@ ALIAS=(--alias:three="$W/vendor/three.module.js" --alias:three/addons="$W/vendor
 "$ESB" "$W/main.js" --bundle --format=iife --minify "${ALIAS[@]}" --outfile="$TMPDIR/main.bundle.js" --log-level=warning
 if [ -f "$W/pkg/ig_wasm.js" ]; then
   "$ESB" "$W/worker.js" --bundle --format=iife --minify --outfile="$TMPDIR/worker.bundle.js" --log-level=error --define:import.meta.url='"http://localhost/"' --target=es2020
-  WASM_B64=$(base64 < "$W/pkg/ig_wasm_bg.wasm" | tr -d '\n')
+  base64 < "$W/pkg/ig_wasm_bg.wasm" | tr -d '\n' > "$TMPDIR/wasm.b64"
 else
   echo "note: no wasm pkg; single file will be viewer-only" >&2
-  echo "self.onmessage=()=>postMessage({type:'initfail',error:'wasm not built'})" > "$TMPDIR/worker.bundle.js"; WASM_B64=""
+  echo "self.onmessage=()=>postMessage({type:'initfail',error:'wasm not built'})" > "$TMPDIR/worker.bundle.js"; : > "$TMPDIR/wasm.b64"
 fi
-WORKER_B64=$(base64 < "$TMPDIR/worker.bundle.js" | tr -d '\n')
-python3 - "$W/index.html" "$W/style.css" "$TMPDIR/main.bundle.js" "$WORKER_B64" "$WASM_B64" "$D/indoorgen.html" <<'PY'
+base64 < "$TMPDIR/worker.bundle.js" | tr -d '\n' > "$TMPDIR/worker.b64"
+python3 - "$W/index.html" "$W/style.css" "$TMPDIR/main.bundle.js" "$TMPDIR/worker.b64" "$TMPDIR/wasm.b64" "$D/indoorgen.html" <<'PY'
 import sys,re
-html,css,js,wk,wasm,out=sys.argv[1:7]
+html,css,js,wkf,wasmf,out=sys.argv[1:7]
+wk=open(wkf).read(); wasm=open(wasmf).read()
 h=open(html).read()
 h=re.sub(r'<script type="importmap">.*?</script>\s*','',h,flags=re.S)
 h=h.replace('<link rel="stylesheet" href="style.css">','<style>'+open(css).read()+'</style>')

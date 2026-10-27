@@ -331,7 +331,9 @@ async function onWorker(ev) {
     try {
       const t1 = performance.now();
       const room = $('room').value, seed = $('seed').value;
-      await showGlb(m.glb, `${room}_${seed}.glb`, null);
+      let sc = null;
+      try { sc = m.scene ? (typeof m.scene === 'string' ? JSON.parse(m.scene) : m.scene) : null; } catch (_) {}
+      await showGlb(m.glb, `${room}_${seed}.glb`, sc);
       const loadMs = performance.now() - t1;
       window.__lastTiming = { generate_ms: genMs, load_ms: loadMs, total_ms: performance.now() - t0 };
       setStatus(`done: generate ${(genMs / 1000).toFixed(2)} s + load ${(loadMs / 1000).toFixed(2)} s`);

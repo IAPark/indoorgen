@@ -1,12 +1,14 @@
 // Generation worker. Messages in:  {type:'init', wasm?:ArrayBuffer}  {type:'gen', id, seed, room, opts}
 // Messages out: {type:'status', text} {type:'ready'} {type:'initfail', error} {type:'done', id, glb:ArrayBuffer, ms} {type:'fail', id, error}
-let gen = null;
+let gen = null, sceneJson = null;
 
 async function init(wasmBytes) {
   const mod = await import('./pkg/ig_wasm.js');
   postMessage({ type: 'status', text: 'compiling wasm...' });
   await mod.default(wasmBytes ? { module_or_path: wasmBytes } : undefined);
   gen = mod.generate;
+  sceneJson = mod.last_scene_json || null;
+  if (mod.set_progress) mod.set_progress((t) => postMessage({ type: 'status', text: String(t) }));
 }
 
 self.onmessage = async (e) => {
@@ -20,7 +22,9 @@ self.onmessage = async (e) => {
       postMessage({ type: 'status', text: `generating ${m.room} seed ${m.seed}...` });
       const out = gen(m.seed >>> 0, m.room, JSON.stringify(m.opts));
       const buf = out.buffer.byteLength === out.byteLength ? out.buffer : out.slice().buffer;
-      postMessage({ type: 'done', id: m.id, glb: buf, ms: performance.now() - t0 }, [buf]);
+      let scene = null;
+      try { scene = sceneJson ? sceneJson() : null; } catch (_) {}
+      postMessage({ type: 'done', id: m.id, glb: buf, scene, ms: performance.now() - t0 }, [buf]);
     }
   } catch (err) {
     postMessage({ type: m.type === 'init' ? 'initfail' : 'fail', id: m.id, error: String(err && err.message || err) });
