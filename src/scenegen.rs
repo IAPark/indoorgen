@@ -329,6 +329,11 @@ pub fn build_scene(p: &Params) -> Built {
         let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();
         for (k, dx, dy) in indoorgen::snap::push_out_of_walls(&mut g.state, &visuals, &inner, 0.35) { eprintln!("WALLPUSH {k} by ({:+.3},{:+.3})", dx, dy); }
     }
+    // bookcases / bookshelf walls fill some of their bays with rows of books (dense program; sized to each bay on the final meshes)
+    if !orig_prog {
+        let rows = crate::shelffill::fill(&mut g.state, &mut visuals, furn_seed, cfg.post.shelf_books);
+        if !rows.is_empty() { eprintln!("SHELFFILL {} rows of books", rows.len()); }
+    }
     lap("snap done");
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
     if cfg.post.door_settle { indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys); }

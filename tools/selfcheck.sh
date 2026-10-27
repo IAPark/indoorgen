@@ -37,7 +37,8 @@ phc() {
 tags() {  # python face tags (back/front/top/bottom) must equal the Rust placeholder's for every oracle placeholder
   local PHD=$SCW/ph; mkdir -p $PHD; local i=0
   for f in $INDOORGEN_ORACLES/ph_LR3_hs0b.jsonl $INDOORGEN_ORACLES/traces/case_*_ph.jsonl; do i=$((i+1)); (PHTAGS=1 $B/phcheck $f > /dev/null 2> $PHD/$i.err) & done; wait
-  local nt=$(cat $PHD/*.err | grep -c '^TAGDIFF'); [ "$nt" = 0 ] && echo "placeholder tags: OK (0 TAGDIFF)" || { echo "FAIL placeholder tags: $nt TAGDIFF"; cat $PHD/*.err | grep '^TAGDIFF' | awk '{print $2}' | sort | uniq -c; }
+  # BookColumnFactory: its placeholder is the exact row bounds on purpose (python's box assumed every book leaned, 1.3-4x too wide)
+  local nt=$(cat $PHD/*.err | grep '^TAGDIFF' | grep -vc 'BookColumnFactory'); [ "$nt" = 0 ] && echo "placeholder tags: OK (0 TAGDIFF)" || { echo "FAIL placeholder tags: $nt TAGDIFF"; cat $PHD/*.err | grep '^TAGDIFF' | grep -v BookColumnFactory | awk '{print $2}' | sort | uniq -c; }
 }
 # lockstep placement vs python traces (tools/lockstep.sh) is no longer part of the gate: python parity is not a goal (run it by hand if needed)
 for c in "5 Bedroom" "6 Kitchen" "3 LivingRoom"; do job det dense ${=c}; done

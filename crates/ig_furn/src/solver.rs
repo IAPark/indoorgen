@@ -280,7 +280,7 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             state.touch(name);
             let okk = { let _t = ProfGuard::new(4); try_apply_relation_constraints(state, name, rng) };
             if std::env::var("ADDDBG").is_ok() {
-                eprintln!("ADD {class}: relation placement ok={okk}");
+                eprintln!("ADD {class}: relation placement ok={okk} parents={:?}", assignments.iter().map(|r| r.target.as_str()).collect::<Vec<_>>());
             }
             okk
         }

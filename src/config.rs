@@ -196,9 +196,13 @@ pub struct Post {
     pub wall_push: bool,
     /// Sweep door leaves against furniture and walls and limit their opening angle.
     pub door_settle: bool,
+    /// Bookcases (living rooms, bedrooms) and built-in bookshelf walls fill this mean share of their boards with rows of books
+    /// (each unit draws its own share within +-0.25). 0: off, shelves only hold what the solver placed.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub shelf_books: f64,
 }
 impl Default for Post {
-    fn default() -> Self { Post { snap: true, wall_push: true, door_settle: true } }
+    fn default() -> Self { Post { snap: true, wall_push: true, door_settle: true, shelf_books: 0.7 } }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

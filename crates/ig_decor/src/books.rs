@@ -551,8 +551,10 @@ impl Factory for Books {
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let mesh = match self.kind {
             2 => {
-                let height = 0.15 * self.max_rel_scale * self.max_skew;
-                new_bbox(0.0, (0.02 + self.max_angle.sin() * height) * self.n_books as f64 * self.max_rel_scale, -0.15 * self.max_rel_scale, 0.0, 0.0, height)
+                // the exact bounds of this column: Infinigen's box assumed every book leaned at the largest angle, 1.3-4x wider than the
+                // real row (up to 3 m), so most columns fit no shelf bay and the solver could hardly ever place one
+                let (lo, hi) = self.asset(_i).bounds();
+                new_bbox(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
             }
             1 => {
                 let x_lo = -0.15 * self.max_rel_scale / 2.0;
@@ -597,4 +599,69 @@ pub fn solidify_offset(m: &Mesh, t: f64, offset: f64) -> Mesh {
         }
     }
     s
+}
+
+/// A row of standing books (BookColumnFactory meshes) that fits a shelf bay: at most `max_w` long (x), `max_h` tall (z) and `max_d` deep
+/// (y), as wide as it can be within `max_w`. Base books whose height exceeds `max_h` by up to 20 % are scaled down; another factory draw
+/// is tried otherwise. Returned asset: x in [0, w], z in [0, h], y in its own range (see the bounds). None if nothing fits.
+pub fn fit_column(seed: u64, max_w: f64, max_h: f64, max_d: f64) -> Option<Asset> {
+    for attempt in 0..6u64 {
+        let fseed = seed.wrapping_mul(6364136223846793005).wrapping_add(attempt * 7919 + 1);
+        let mut rng = Rng::seeded(fseed);
+        let mut b = Books::new("BookColumnFactory", &mut rng, fseed);
+        // shelved rows stand mostly upright (the factory leans books up to 20 degrees, ragged over a whole wall of shelves)
+        b.max_angle *= 0.3;
+        let probe = b.asset(0);
+        let (lo, hi) = probe.bounds();
+        let (w, h, d) = (hi[0] - lo[0], hi[2] - lo[2], hi[1] - lo[1]);
+        if w <= 0.0 || h <= 0.0 { continue }
+        let s = (max_h / h).min(max_d / d).min(1.0);
+        if s < 0.8 { continue }
+        // books are added one by one along x with the same draws, so the first n books of a longer row are this row's books
+        let per = w * s / b.n_books as f64;
+        let mut n = ((max_w / per).floor() as usize).clamp(1, 60);
+        loop {
+            b.n_books = n;
+            let mut a = b.asset(0);
+            // the scale is re-derived on the final row: books added past the probe's count can be taller
+            let (lo, hi) = a.bounds();
+            let s = (max_h / (hi[2] - lo[2])).min(max_d / (hi[1] - lo[1])).min(1.0);
+            if s < 0.75 { break }
+            if s < 1.0 { for p in a.parts.iter_mut() { for q in p.mesh.pos.iter_mut() { for v in q.iter_mut() { *v *= s } } } }
+            let (lo, hi) = a.bounds();
+            if hi[0] - lo[0] <= max_w || n == 1 {
+                if hi[0] - lo[0] > max_w { break }
+                // x from 0, z from 0
+                for p in a.parts.iter_mut() { for q in p.mesh.pos.iter_mut() { q[0] -= lo[0]; q[2] -= lo[2]; } }
+                // spines in a few colours per row (the factory gives every book of a row the same cover), then one part per material
+                // instead of one per book: a full shelf is a handful of scene nodes
+                const SPINES: [[f32; 3]; 12] = [
+                    [0.42, 0.06, 0.05], [0.08, 0.12, 0.30], [0.10, 0.24, 0.14], [0.80, 0.74, 0.60], [0.05, 0.05, 0.05], [0.62, 0.42, 0.10],
+                    [0.55, 0.14, 0.10], [0.20, 0.32, 0.45], [0.70, 0.68, 0.66], [0.32, 0.18, 0.10], [0.62, 0.52, 0.20], [0.30, 0.10, 0.22],
+                ];
+                let mut cr = Rng::seeded(fseed ^ 0x5b1e);
+                let k = 3 + cr.choice_idx(4);
+                let pal: Vec<usize> = (0..k).map(|_| cr.choice_idx(SPINES.len())).collect();
+                for p in a.parts.iter_mut() {
+                    if cr.f64() < 0.25 { continue } // keep the factory's cover
+                    let c = SPINES[pal[cr.choice_idx(k)]];
+                    let j = |v: f32, r: &mut Rng| (v * r.uniform(0.85, 1.15) as f32).clamp(0.0, 1.0);
+                    let rgb = [j(c[0], &mut cr), j(c[1], &mut cr), j(c[2], &mut cr)];
+                    p.mat = mat(&format!("book_spine_{}", pal.iter().position(|&q| SPINES[q] == c).unwrap()), rgb, 0.6);
+                }
+                let mut merged: Vec<ig_kit::api::Part> = vec![];
+                for p in a.parts.drain(..) {
+                    match merged.iter_mut().find(|m| m.mat.name == p.mat.name) {
+                        Some(m) => m.mesh = join(&m.mesh, &p.mesh),
+                        None => merged.push(p),
+                    }
+                }
+                for m in merged.iter_mut() { m.col = Some(m.mesh.bounds()); }
+                a.parts = merged;
+                return Some(a);
+            }
+            n -= 1;
+        }
+    }
+    None
 }
