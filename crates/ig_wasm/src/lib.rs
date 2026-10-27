@@ -117,6 +117,7 @@ pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsVal
         let cams = indoorgen::cams::generate(&built.scene, &built.room_polys, &indoorgen::cams::Cfg { k: cams_k, seed: seed as u64, wall_t: built.wall_t, target: room_opt });
         side["cameras"] = serde_json::Value::Array(cams);
     }
+    built.merge_sidecar(&mut side);
     LAST_JSON.with(|j| *j.borrow_mut() = side.to_string());
     ig_core::envx::progress("done");
     Ok(glb)

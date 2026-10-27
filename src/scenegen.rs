@@ -19,6 +19,18 @@ pub struct Built {
     pub t_scene: web_time::Instant,
     /// false after `no_glb`
     pub done: bool,
+    /// the sidecar `variation` record (every factor's effective seed/settings and computed values); None when all factors are default
+    pub variation: Option<serde_json::Value>,
+    /// sidecar `objects` list (key, class, parent, room per generated object)
+    pub objects: Vec<serde_json::Value>,
+}
+
+impl Built {
+    /// add the variation record to the sidecar json (no-op when there is none)
+    pub fn merge_sidecar(&self, side: &mut serde_json::Value) {
+        side["objects"] = serde_json::Value::Array(self.objects.clone());
+        if let Some(v) = &self.variation { side["variation"] = v.clone(); }
+    }
 }
 
 pub fn build_scene(p: &Params) -> Built {
@@ -29,7 +41,10 @@ pub fn build_scene(p: &Params) -> Built {
     indoorgen::assets::cloth::SKIP_JOB_SIM.store(!cfg.cloth.on, std::sync::atomic::Ordering::Relaxed);
     let seed = cfg.house.seed;
     let only_target = cfg.house.only_target;
-    let mess = indoorgen::mess::MessCfg { level: cfg.mess.level, seed };
+    let var = &cfg.variation;
+    let mess = indoorgen::mess::MessCfg { level: cfg.mess.level, seed: cfg.mess.seed.unwrap_or(seed) };
+    let furn_seed = var.furniture.seed.unwrap_or(seed);
+    let people_seed = cfg.people.seed.unwrap_or(seed);
     let room = cfg.house.room.clone();
     let (people_n, mess_level, no_glb, qc_out, orig_prog) = (cfg.people.count, cfg.mess.level, cfg.output.no_glb, cfg.output.qc_path.clone(), !cfg.program.dense);
     // default: the dense-furnishing program + Infinigen's own solver steps 300/200/50 (realistic, lived-in rooms).
@@ -54,7 +69,7 @@ pub fn build_scene(p: &Params) -> Built {
     let assets = indoorgen::assets::RealAssets { fallback: p.fallback.clone() };
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
-    let mut g = generate(&Options { seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s }, &assets, prog);
+    let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s }, &assets, prog);
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {
@@ -96,7 +111,20 @@ pub fn build_scene(p: &Params) -> Built {
     let lap = |what: &str| { ig_core::envx::progress(what); if ig_core::envx::var_os("LAPS").is_some() { eprintln!("LAP {what} {:.1}s since scene start", t_scene.elapsed().as_secs_f64()); } };
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
-    let decos = indoorgen::materials::decorate_rooms(seed, &g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect::<Vec<_>>());
+    let room_list: Vec<(String, String)> = g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect();
+    let mut decos = indoorgen::materials::decorate_rooms(seed, &room_list);
+    // variation: wall / ceiling / floor base colours (own seeds; the procedural material specs are untouched, the renderer reads `variation.walls` etc.)
+    let (wall_cols, ceil_cols, floor_cols) = (var.walls.pick_all(seed, "walls", &room_list), var.ceiling.pick_all(seed, "ceiling", &room_list), var.floor.pick_all(seed, "floor", &room_list));
+    for ((name, _), rm) in room_list.iter().zip(decos.iter_mut()) {
+        let set = |m: &mut Material, c: [f64; 3]| m.color = [c[0] as f32, c[1] as f32, c[2] as f32, 1.0];
+        if let Some(c) = wall_cols.get(name) {
+            set(&mut rm.wall, c.1);
+            // a plaster half-wall / second material follows the wall colour; art / dark-art alternatives keep theirs
+            if let Some(am) = rm.alt_wall.as_mut() { if am.spec.as_ref().map_or(false, |sp| sp["cls"] == "ceramic.Plaster") { set(am, c.1) } }
+        }
+        if let Some(c) = ceil_cols.get(name) { set(&mut rm.ceiling, c.1); }
+        if let Some(c) = floor_cols.get(name) { set(&mut rm.floor, c.1); }
+    }
     // the doorway reveal (shell.rs `reveal`) has a bottom quad at floor height in the WALL material: it showed as a white strip across
     // every doorway. Move those quads to the room's floor mesh so the floor runs continuously through the opening.
     let floor_z0 = g.c.wall_thickness / 2.0;
@@ -175,9 +203,15 @@ pub fn build_scene(p: &Params) -> Built {
         }
     }
     // mess pass, part 1 (before openings, whose doors avoid the moved furniture): furniture states on the solved layout (no-op at --mess 0)
+    let jit = indoorgen::variation::jitter_furniture(&mut g.state, &var.furniture, seed);
+    if jit.1 > 0 { eprintln!("JITTER {} of {} floor furniture groups moved", jit.0, jit.1); }
     indoorgen::mess::states::apply(&mut g.state, &mess);
     let mut ops = indoorgen::openings::make_openings(&g.c, &g.cutters, &g.room_polys, seed);
-    if mess.on() {
+    // variation: door open status from its own stream (replaces Infinigen's draw; the mess pass then leaves the doors alone)
+    if var.doors.active() {
+        for d in ops.doors.iter_mut() { d.desired = var.doors.angle(seed, d.ci, d.desired); }
+    }
+    if mess.on() && !var.doors.active() {
         // mess pass: room door desired open angles varied (the opening pass limits them against furniture / walls below)
         let mut ang: Vec<(usize, f64)> = ops.doors.iter().map(|d| (d.ci, d.desired)).collect();
         let (n, tot) = indoorgen::mess::doors::vary_angles(&mut ang, &mess);
@@ -187,6 +221,10 @@ pub fn build_scene(p: &Params) -> Built {
         let mut it: Vec<(&str, &mut indoorgen::mesh::Mesh)> = ops.pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
         let (cn, ctot) = indoorgen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
         eprintln!("MESS doors changed {n} of {tot}; curtains changed {cn} of {ctot}");
+    } else if mess.on() {
+        let mut it: Vec<(&str, &mut indoorgen::mesh::Mesh)> = ops.pieces.iter_mut().map(|p| (p.name.as_str(), &mut p.mesh)).collect();
+        let (cn, ctot) = indoorgen::mess::doors::draw_curtains(&mut it, &g.cutters, &mess);
+        eprintln!("MESS curtains changed {cn} of {ctot} (door angles come from variation.doors)");
     }
     for p in std::mem::take(&mut ops.pieces) {
         let m = scene.material(p.mat);
@@ -194,6 +232,9 @@ pub fn build_scene(p: &Params) -> Built {
     }
     // lights_off stage: chance 0.2 (python: stage runs when uniform() <= chance)
     let lights_off = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "lights_off", "0"])).f64() <= 0.2;
+    let sun = var.lighting.solve(seed);
+    let night = sun.as_ref().map_or(false, |s| s.night);
+    let mut lamp_rec: Vec<(String, bool, f64)> = vec![];
     if ig_core::envx::var_r("TILTCHECK").is_ok() {
         // every placed object must only be rotated about the vertical axis (python's solver never tilts furniture)
         let mut tilted = 0;
@@ -350,7 +391,10 @@ pub fn build_scene(p: &Params) -> Built {
     for (k, o) in &g.state.objs {
         let Some(gen) = &o.generator else { continue };
         *counts.entry(gen.class.clone()).or_insert(0) += 1;
-        if !lights_off {
+        {
+            // python's lights_off outcome is the default; variation.lighting decides otherwise. The bulb draws below are pure functions of the
+            // factory seed, so computing them for lamps that stay off changes nothing.
+            let on = var.lighting.lamp_on(seed, k, &gen.class, !lights_off, night);
             let local = match gen.class.as_str() {
                 "CeilingLightFactory" => Some([0.0, 0.0, -0.03]),
                 "CeilingClassicLampFactory" => Some([0.0, 0.0, o.geom.lo[2] - 0.03]),
@@ -382,7 +426,9 @@ pub fn build_scene(p: &Params) -> Built {
                 let temp = temp.clamp(3500.0, 6500.0);
                 // LampFactory: bulb_fac Temperature = max(T * 0.6, 2500)
                 let temp = if gen.class.contains("Lamp") && !gen.class.contains("Ceiling") { (temp * 0.6).max(2500.0) } else { temp };
-                scene.lights.push(indoorgen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() });
+                let watt = watt * var.lighting.lamp_strength_scale;
+                lamp_rec.push((k.clone(), on, watt));
+                if on { scene.lights.push(indoorgen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() }); }
             }
         }
         let asset = &visuals[k];
@@ -428,7 +474,7 @@ pub fn build_scene(p: &Params) -> Built {
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = web_time::Instant::now();
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
-    let people = indoorgen::people::place::place_ctx(&g.state, &g.room_polys, people_n, seed, &indoorgen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
+    let people = indoorgen::people::place::place_ctx(&g.state, &g.room_polys, people_n, people_seed, &indoorgen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
     for (pi, pl) in people.iter().enumerate() {
         let mut a = pl.build();
         if a.parts.is_empty() && ig_core::envx::var_os("PEOPLE_PROXY").is_some() {
@@ -480,10 +526,54 @@ pub fn build_scene(p: &Params) -> Built {
         v.sort_by_key(|x| std::cmp::Reverse((x.1).1));
         for (c, (n, t)) in v.iter().take(25) { eprintln!("SCENESTAT {c} nodes {n} tris {t}"); }
     }
-    if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false }; }
+    // sidecar `objects`: one entry per generated object (node-name prefix before '#', or door/window id before '.'), so a consumer can remove an object with
+    // its children or select by class exactly
+    let objects = {
+        let mut order: Vec<String> = vec![];
+        let mut info: std::collections::HashMap<String, (String, [f64; 3], [f64; 3])> = Default::default();
+        for n in &scene.nodes {
+            let key = if let Some((k, _)) = n.name.split_once('#') { k.to_string() } else if n.class == "Door" || n.class == "Window" { n.name.split('.').next().unwrap().to_string() } else { continue };
+            if n.mesh.pos.is_empty() { continue }
+            let (lo, hi) = n.mesh.bounds();
+            let e = info.entry(key.clone()).or_insert_with(|| { order.push(key.clone()); (n.class.clone(), lo, hi) });
+            for d in 0..3 { e.1[d] = e.1[d].min(lo[d]); e.2[d] = e.2[d].max(hi[d]); }
+        }
+        let room_of = |lo: [f64; 3], hi: [f64; 3]| -> serde_json::Value {
+            let p = indoorgen::shp::point((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+            g.room_polys.iter().find(|(_, gg)| indoorgen::shp::contains(gg, &p)).map(|(n, _)| serde_json::json!(n)).unwrap_or(serde_json::Value::Null)
+        };
+        order.iter().map(|k| {
+            let (cls, lo, hi) = &info[k];
+            let (class, parent, room) = match g.state.objs.get(k) {
+                Some(o) if o.generator.is_some() => {
+                    let parent = o.relations.iter().map(|r| r.target.clone()).find(|t| g.state.objs.get(t).map_or(false, |x| x.generator.is_some()));
+                    let room = o.relations.iter().map(|r| r.target.clone()).find(|t| g.state.objs.get(t).map_or(false, |x| x.polygon.is_some()));
+                    (o.generator.as_ref().unwrap().class.clone(), parent.map_or(serde_json::Value::Null, |p| serde_json::json!(p)), room.map_or_else(|| room_of(*lo, *hi), |r| serde_json::json!(r)))
+                }
+                _ => (cls.clone(), serde_json::Value::Null, room_of(*lo, *hi)),
+            };
+            serde_json::json!({"key": k, "class": class, "parent": parent, "room": room})
+        }).collect::<Vec<_>>()
+    };
+    // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
+    let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {
+        Some(serde_json::json!({
+            "house": {"seed": seed, "room": room},
+            "doors": {"mode": var.doors.mode, "seed": var.doors.seed.unwrap_or(seed), "open_prob": var.doors.open_prob, "angle_deg_range": var.doors.angle_deg_range,
+                "state": door_infos.iter().map(|d| (format!("door{}", d.ci), serde_json::json!({"desired_deg": d.desired.to_degrees(), "angle_deg": d.angle.to_degrees(), "open": d.angle.to_degrees() > 2.0, "limiter": d.limiter}))).collect::<serde_json::Map<_, _>>()},
+            "walls": var.walls.record(seed, &wall_cols),
+            "ceiling": var.ceiling.record(seed, &ceil_cols),
+            "floor": var.floor.record(seed, &floor_cols),
+            "mess": {"level": cfg.mess.level, "seed": mess.seed},
+            "lighting": var.lighting.record(seed, &sun, &lamp_rec),
+            "furniture": {"seed": furn_seed, "jitter": var.furniture.jitter, "jitter_moved": jit.0, "jitter_candidates": jit.1},
+            "people": {"count": people_n, "seed": people_seed, "placed": people.len()},
+        }))
+    } else { None };
+    if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false, variation, objects }; }
     lap("qc done");
     { let tb = web_time::Instant::now(); let (a, b, k) = indoorgen::budget::apply(&mut scene, &cfg.geometry); if a > 0 { eprintln!("BUDGET tris {a} -> {b} ({k} nodes simplified) in {:.1}s", tb.elapsed().as_secs_f64()); } }
-    Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true }
+    Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true, variation, objects }
 }
 
 /// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through

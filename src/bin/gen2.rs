@@ -108,13 +108,24 @@ fn main() {
         }
     }
     let params = indoorgen::scenegen::Params { cfg, prog, fallback };
-    let indoorgen::scenegen::Built { scene, room_polys, wall_t, t_scene, done } = indoorgen::scenegen::build_scene(&params);
+    let built = indoorgen::scenegen::build_scene(&params);
+    let indoorgen::scenegen::Built { scene, room_polys, wall_t, t_scene, done, .. } = &built;
+    let (wall_t, t_scene, done) = (*wall_t, *t_scene, *done);
     if !done { return; }
     let lap = |what: &str| { if std::env::var_os("LAPS").is_some() { eprintln!("LAP {what} {:.1}s since scene start", t_scene.elapsed().as_secs_f64()); } };
     let tw = std::time::Instant::now();
     scene.write_glb(&out).unwrap();
     lap("glb written");
-    if cams_k > 0 { add_cameras(&room, &scene, &room_polys, cams_k, seed, wall_t, &out); }
+    if cams_k > 0 { add_cameras(&room, scene, room_polys, cams_k, seed, wall_t, &out); }
+    {
+        // sidecar `objects` (always) and `variation` record (only when some factor is not default)
+        let sp = out.with_extension("json");
+        if let Ok(txt) = std::fs::read_to_string(&sp) {
+            let mut j: serde_json::Value = serde_json::from_str(&txt).unwrap();
+            built.merge_sidecar(&mut j);
+            std::fs::write(&sp, serde_json::to_vec_pretty(&j).unwrap()).unwrap();
+        }
+    }
     if indoorgen::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());
         indoorgen::assets::prof_report();
