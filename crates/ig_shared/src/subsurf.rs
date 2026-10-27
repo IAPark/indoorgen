@@ -72,7 +72,7 @@ fn limit_positions(m: &QMesh) -> Vec<[f64; 3]> {
     let n = m.pos.len();
     // adjacency: per vertex the list of (face index, corner)
     let mut vf: Vec<Vec<(usize, usize)>> = vec![vec![]; n];
-    let mut ecount: HashMap<(u32, u32), u32> = HashMap::default();
+    let mut ecount: crate::dhash::FxMap<(u32, u32), u32> = Default::default();
     for (fi, f) in m.faces.iter().enumerate() {
         for (c, &v) in f.iter().enumerate() {
             vf[v as usize].push((fi, c));
@@ -137,7 +137,7 @@ fn simple_subdiv(m: &Mesh, levels: usize) -> Mesh {
     for _ in 0..levels {
         let mut out = Mesh::new();
         out.pos = cur.pos.clone();
-        let mut emid: HashMap<(u32, u32), u32> = HashMap::default();
+        let mut emid: crate::dhash::FxMap<(u32, u32), u32> = Default::default();
         let mut mid = |out: &mut Mesh, a: u32, b: u32| -> u32 {
             let k = (a.min(b), a.max(b));
             *emid.entry(k).or_insert_with(|| {
@@ -193,7 +193,7 @@ pub fn subsurf_bl(m: &Mesh, levels: usize, simple: bool) -> Mesh {
     assert_eq!(sp.len(), gb.v.len(), "subsurf_bl: layouts differ in size");
     let cell = 1e-4f64;
     let key = |p: [f64; 3]| [(p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64, (p[2] / cell).floor() as i64];
-    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::default();
+    let mut grid: crate::dhash::FxMap<[i64; 3], Vec<u32>> = Default::default();
     for (i, p) in sp.iter().enumerate() {
         grid.entry(key(*p)).or_default().push(i as u32);
     }

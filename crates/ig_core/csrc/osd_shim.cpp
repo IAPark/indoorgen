@@ -5,6 +5,7 @@
 #include <opensubdiv/far/patchMap.h>
 #include <opensubdiv/far/patchTable.h>
 #include <opensubdiv/far/patchTableFactory.h>
+#include <opensubdiv/far/primvarRefiner.h>
 #include <opensubdiv/far/stencilTable.h>
 #include <opensubdiv/far/stencilTableFactory.h>
 #include <opensubdiv/far/topologyRefiner.h>
@@ -122,6 +123,13 @@ struct PatchCoordBuf {
   int GetNumVertices() { return n; }
 };
 
+// a point for PrimvarRefiner / PatchTable::ComputeLocalPointValues
+struct P3 {
+  float p[3];
+  void Clear(void * = nullptr) { p[0] = p[1] = p[2] = 0.0f; }
+  void AddWithWeight(P3 const &s, float w) { p[0] += w * s.p[0]; p[1] += w * s.p[1]; p[2] += w * s.p[2]; }
+};
+
 struct Evaluator {
   Far::TopologyRefiner *refiner = nullptr;
   Far::PatchTable *patch_table = nullptr;
@@ -175,6 +183,45 @@ void *osd_create_uv(int num_verts, const float *positions, int num_faces, const 
   else {
     Far::TopologyRefiner::UniformOptions uo(level);
     refiner->RefineUniform(uo);
+  }
+
+  // adaptive (the limit-surface path): refine the points level by level with PrimvarRefiner and compute the patch table's local points
+  // directly. Same points as the stencil tables below (built for every level, then factorised over the coarse vertices), which cost
+  // most of the time; the sums run in a different order, so the last float bits can differ. OSD_STENCIL=1: the stencil path.
+  if (adaptive && !getenv("OSD_STENCIL")) {
+    Far::PatchTableFactory::Options po(level);
+    po.SetEndCapType((Far::PatchTableFactory::Options::EndCapType)ev("OSD_ENDCAP", Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS));
+    po.useInfSharpPatch = ev("OSD_INFSHARP", 1);
+    po.useSingleCreasePatch = ev("OSD_SINGLECREASE", 0);
+    po.generateLegacySharpCornerPatches = ev("OSD_LEGACYCORNER", 1);
+    po.triangulateQuads = ev("OSD_TRI", 0);
+    po.shareEndCapPatchPoints = ev("OSD_SHARE", 1);
+    po.generateFVarTables = false;
+    po.generateFVarLegacyLinearPatches = false;
+    Far::PatchTable *pt = Far::PatchTableFactory::Create(*refiner, po);
+    int nref = refiner->GetNumVerticesTotal();
+    int nlocal = pt->GetNumLocalPoints();
+    std::vector<P3> buf(nref + nlocal);
+    for (int i = 0; i < num_verts; ++i) { buf[i].p[0] = positions[3 * i]; buf[i].p[1] = positions[3 * i + 1]; buf[i].p[2] = positions[3 * i + 2]; }
+    Far::PrimvarRefiner pr(*refiner);
+    P3 *src = buf.data();
+    for (int l = 1; l <= refiner->GetMaxLevel(); ++l) {
+      P3 *dst = src + refiner->GetLevel(l - 1).GetNumVertices();
+      pr.Interpolate(l, src, dst);
+      src = dst;
+    }
+    if (nlocal) pt->ComputeLocalPointValues(buf.data(), buf.data() + nref);
+    Evaluator *e = new Evaluator();
+    e->refiner = refiner;
+    e->patch_table = pt;
+    e->patch_map = new Far::PatchMap(*pt);
+    e->stencils = nullptr;
+    e->cpu_patch_table = Osd::CpuPatchTable::Create(pt);
+    e->num_coarse = num_verts;
+    e->src = Osd::CpuVertexBuffer::Create(3, nref + nlocal);
+    e->src_desc = Osd::BufferDescriptor(0, 3, 3);
+    e->src->UpdateData(&buf[0].p[0], 0, nref + nlocal);
+    return e;
   }
 
   Far::StencilTableFactory::Options so;

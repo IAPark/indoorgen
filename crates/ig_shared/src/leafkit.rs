@@ -26,7 +26,7 @@ impl LMesh {
     }
     /// edges of the faces in order of first appearance, appended after the explicit ones that are not yet present
     pub fn ensure_face_edges(&mut self) {
-        let mut seen: HashMap<(u32, u32), ()> = HashMap::default();
+        let mut seen: crate::dhash::FxMap<(u32, u32), ()> = Default::default();
         for e in &self.e {
             seen.insert((e[0].min(e[1]), e[0].max(e[1])), ());
         }

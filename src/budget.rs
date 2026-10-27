@@ -35,7 +35,7 @@ pub fn simplify_mesh(m: &Mesh, target: usize) -> Option<Mesh> {
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
     let has_uv = m.uv.len() == m.pos.len();
     // weld by (position 0.1 um, uv): uv seams stay separate vertices, so they stay borders for the simplifier
-    let mut ids: HashMap<[i64; 5], u32> = HashMap::default();
+    let mut ids: crate::dhash::FxMap<[i64; 5], u32> = Default::default();
     let mut remap = Vec::with_capacity(m.pos.len());
     let mut vpos: Vec<[f32; 3]> = vec![];
     let mut vorig: Vec<u32> = vec![];

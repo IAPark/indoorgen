@@ -106,7 +106,7 @@ impl Mesh {
     }
     /// (Re)compute corner edges; add any missing edges after the existing ones (BKE mesh_calc_edges order).
     pub fn rebuild_corner_edges(&mut self) {
-        let mut map: HashMap<(u32, u32), u32> = HashMap::with_capacity_and_hasher(self.edges.len() * 2, Default::default());
+        let mut map: crate::dhash::FxMap<(u32, u32), u32> = crate::dhash::FxMap::with_capacity_and_hasher(self.edges.len() * 2, Default::default());
         for (i, e) in self.edges.iter().enumerate() {
             map.entry((e[0].min(e[1]), e[0].max(e[1]))).or_insert(i as u32);
         }

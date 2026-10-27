@@ -180,6 +180,7 @@ impl RealAssets {
         memo_put(&VISUAL_MEMO, key, &r);
         if prof_on() {
             prof_add(format!("visual {class}"), thread_cpu() - t);
+            if std::env::var_os("VISDBG").is_some() { eprintln!("VISDBG {class} {factory_seed} {inst_seed} {:.3}s faces {}", thread_cpu() - t, r.parts.iter().map(|p| p.mesh.faces.len()).sum::<usize>()); }
         }
         r
     }
