@@ -33,3 +33,21 @@ label.sub{display:block;color:#7f8aa0;font-size:11px;margin-top:8px}
 #cfgjson{width:100%;box-sizing:border-box;background:#1d2027;color:#dde;border:1px solid #4a4f5c;border-radius:6px;font:11px ui-monospace,Menlo,monospace}
 #cfgout{white-space:pre-wrap;word-break:break-all;color:#778;font-size:10px;max-height:8em;overflow:auto;margin:4px 0 0}
 #panel{width:270px}
+
+details#rules{margin:8px 0;border:1px solid #3a3e48;border-radius:8px;padding:4px 8px}
+details#rules summary{cursor:pointer;color:#bcd;padding:3px 0}
+#rulesbody .rtabs{display:flex;flex-wrap:wrap;gap:3px;margin:4px 0}
+#rulesbody .rtabs button{flex:1 1 auto;padding:3px 5px;font-size:11px}
+#rulesbody .rtabs button.on{background:#2f6fdf;border-color:#4b8bff}
+#rulesbody .rrep{display:block;font-size:11px;color:#9aa;margin:4px 0}
+#rulesbody .rtbl{width:100%;border-collapse:collapse;font-size:11px}
+#rulesbody .rtbl th{color:#7f8aa0;font-weight:normal;text-align:left;padding:0 2px}
+#rulesbody .rtbl td{padding:2px;vertical-align:top}
+#rulesbody .rtbl input,#rulesbody .rtbl select{width:100%;box-sizing:border-box;padding:2px 3px;font-size:11px}
+#rulesbody .rtbl input[type=number]{width:38px}
+#rulesbody .rtbl td button{padding:1px 6px}
+#rulesbody .rtbl tr.bad input,#rulesbody .rtbl tr.bad select{border-color:#f98}
+#rulesbody input.dis{width:100%;box-sizing:border-box;font-size:11px}
+#rulesjson{width:100%;box-sizing:border-box;background:#1d2027;color:#dde;border:1px solid #4a4f5c;border-radius:6px;font:10px ui-monospace,Menlo,monospace}
+#rulesbody .rerr{color:#f98;font-size:11px;white-space:pre-wrap}
+#panel:has(details#rules[open]){width:340px}

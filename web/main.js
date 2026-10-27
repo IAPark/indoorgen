@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import { rulesInit, getRules, rulesErrors, rulesLinkParam } from './rules.js';
+
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
 const EMBED = window.__INDOORGEN || null; // set by the single-file packager
@@ -322,6 +324,7 @@ function busy(b) { $('gen').disabled = b || !workerReady; if (!b && tick) { clea
 async function onWorker(ev) {
   const m = ev.data;
   if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('mess')) { $('mess').value = u.get('mess'); cfgVals.mess = +u.get('mess'); cfgShow(); } if (u.has('auto')) generate(); } }
+  else if (m.type === 'rulesinfo') rulesInit(m.info);
   else if (m.type === 'initfail') { workerErr = m.error; setStatus('wasm init failed: ' + m.error, true); }
   else if (m.type === 'status') setStatus(m.text);
   else if (m.type === 'fail') { setStatus('generation failed: ' + m.error, true); busy(false); }
@@ -430,6 +433,7 @@ $('cfglink').onclick = async () => {
   const u = new URL(location.href); u.search = '';
   u.searchParams.set('seed', $('seed').value); u.searchParams.set('room', $('room').value);
   u.searchParams.set('cfg', btoa(JSON.stringify(buildOpts())));
+  if (rulesLinkParam()) u.searchParams.set('rules', rulesLinkParam());
   try { await navigator.clipboard.writeText(u.toString()); $('cfglink').textContent = 'Copied'; } catch (_) { prompt('Link', u.toString()); }
   setTimeout(() => ($('cfglink').textContent = 'Copy link'), 1500);
 };
@@ -446,12 +450,13 @@ $('cloth').addEventListener('change', () => cfgSet(CFG.find((f) => f.k === 'clot
 
 function generate() {
   if (!workerReady) return;
+  if (rulesErrors().length) { $('rules').open = true; setStatus('fix the furniture rules first: ' + rulesErrors()[0], true); return; }
   busy(true);
   t0 = performance.now();
   tick = setInterval(() => { $('status').dataset.t = ((performance.now() - t0) / 1000).toFixed(1); if (!$('status').classList.contains('err') && /\.\.\.$/.test($('status').textContent.replace(/ \(\d+\.\ds\)$/, ''))) $('status').textContent = $('status').textContent.replace(/ \(\d+\.\ds\)$/, '') + ` (${$('status').dataset.t}s)`; }, 200);
   worker.postMessage({
     type: 'gen', id: ++jobId, seed: +$('seed').value, room: $('room').value,
-    opts: buildOpts(),
+    opts: { ...buildOpts(), ...(getRules() ? { rules: getRules() } : {}) },
   });
 }
 $('gen').onclick = generate;

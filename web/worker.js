@@ -8,6 +8,7 @@ async function init(wasmBytes) {
   await mod.default(wasmBytes ? { module_or_path: wasmBytes } : undefined);
   gen = mod.generate;
   sceneJson = mod.last_scene_json || null;
+  if (mod.rules_info) { try { postMessage({ type: 'rulesinfo', info: mod.rules_info() }); } catch (e) { postMessage({ type: 'status', text: 'rules info: ' + e }); } }
   if (mod.set_progress) mod.set_progress((t) => postMessage({ type: 'status', text: String(t) }));
 }
 

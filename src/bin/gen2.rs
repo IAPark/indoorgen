@@ -72,6 +72,13 @@ fn main() {
         eprintln!("WARNING: --people {people_n} requested but no avatars found in {:?}: run tools/people/fetch_rocketbox.sh or set INDOORGEN_ASSETS (e.g. in .indoorgen.env); no people will be placed", indoorgen::people::avatar::root_dir());
     }
     let rules_file: Option<String> = args.iter().position(|a| a == "--rules").map(|i| { let v = args[i + 1].clone(); args.drain(i..i + 2); v }).or_else(|| std::env::var("RULES").ok());
+    if args.iter().any(|a| a == "--print-default-rules" || a == "--rules-info") {
+        // the built-in rules of the dense program as a RuleSpec (edit it and pass it back with --rules); --rules-info: + vocabulary
+        let p: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/home_program_dense.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+        let v = if args.iter().any(|a| a == "--rules-info") { indoorgen::rules::rules_info(&p) } else { serde_json::to_value(indoorgen::rules::default_rules(&p)).unwrap() };
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return;
+    }
     let seed: u64 = args[1].parse().unwrap();
     let room = args.get(2).cloned();
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));
