@@ -37,6 +37,8 @@ pub struct GenConfig {
     pub output: Output,
     /// Independently randomizable factors (doors, wall/ceiling/floor colours, lighting, furniture seed + jitter); see src/variation.rs. Mess and people seeds are in their sections.
     pub variation: crate::variation::Variation,
+    /// Room features (fireplaces with chimney breasts, bookshelf walls, window seats) built into the shells before the furniture solve. Off by default.
+    pub features: crate::features::Features,
     /// Editable furniture rules (applied to the furnishing program before the solve).
     pub rules: Option<crate::rules::RuleSpec>,
     /// Escape hatch for rarely used tunables.

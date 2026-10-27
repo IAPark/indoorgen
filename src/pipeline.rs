@@ -26,6 +26,8 @@ pub struct Generated {
     pub state: State,
     pub timings: Vec<(String, f64)>,
     pub room_polys: Vec<(String, crate::shp::G)>,
+    /// room features built before the solve (also present in `state` as fixed objects)
+    pub features: Vec<crate::features::PlacedFeature>,
 }
 
 fn sem_room_tag(rt: &str) -> Tag {
@@ -44,6 +46,8 @@ pub struct Options {
     pub steps_large: usize,
     pub steps_medium: usize,
     pub steps_small: usize,
+    /// room features (fireplaces, ...) decided per room before the solve; empty table = none
+    pub features: crate::features::FeatureCfg,
 }
 
 /// constraint program for a scene seed (params drawn from the global numpy stream like the python)
@@ -228,6 +232,26 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         state.objs.insert(name.clone(), o);
         state.touch(&name);
     }
+    // --- room features: decided after the floor plan, before the solve; fixed obstacles + support surfaces for the solver ---
+    let features = crate::features::plan(&opt.features, &c, &room_polys, &res.cutters);
+    for pf in &features {
+        let mut tags = TagSet::from([Tag::sem("Feature"), Tag::gen(pf.class), Tag::obj(&pf.key)]);
+        tags.insert(Tag::sem(pf.class));
+        let mut o = ObjState::new(Arc::new(pf.asset.solver_geom()), pf.pose(), tags);
+        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None });
+        o.active = true;
+        state.objs.insert(pf.key.clone(), o);
+        state.touch(&pf.key);
+        // hearth clearance: an invisible box that furniture must not intrude on
+        for (i, (lo, hi)) in pf.keepout.iter().enumerate() {
+            let name = format!("{}.keepout{}", pf.key, i);
+            let kt = TagSet::from([Tag::sem("FeatureKeepout"), Tag::obj(&name)]);
+            let mut ko = ObjState::new(Arc::new(ObjGeom::cuboid(*lo, *hi, 0)), Pose::identity(), kt);
+            ko.active = true;
+            state.objs.insert(name.clone(), ko);
+            state.touch(&name);
+        }
+    }
     timings.push(("state".into(), t.elapsed().as_secs_f64()));
 
     // --- stages ---
@@ -251,14 +275,14 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         timings.push(("solve_medium".into(), tm));
         timings.push(("solve_small".into(), ts));
     }
-    Generated { c, shells, cutters: res.cutters, state, timings, room_polys }
+    Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features }
 }
 
 /// rooms + cutters only (no furniture): used for validation against reference dumps
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0 }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default() }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives

@@ -32,6 +32,8 @@ pub struct Variation {
     pub lighting: Lighting,
     /// Furniture layout: separate seed for the furniture solve and optional small post-solve position jitter.
     pub furniture: Furniture,
+    /// Room features factor (fireplaces, bookshelf walls, window seats): own seed, mode default | none | random | force (see the `features` section).
+    pub features: crate::features::FeatureVar,
     /// Always write the `variation` record (every factor's effective seed/settings) to the sidecar, even when everything is default.
     /// The record is also written whenever any factor is not default.
     pub record: bool,
@@ -384,7 +386,7 @@ use ig_furn::state::State;
 
 fn jitter_class_ok(c: &str) -> bool {
     const SKIP: &[&str] = &[
-        "Kitchen", "Wall", "Mirror", "Ceiling", "Sink", "Toilet", "Bathtub", "Shower", "Oven", "Dishwasher", "Fridge", "Microwave", "Hardware", "Balloon", "Curtain", "Window", "Door", "Rug", "Beverage",
+        "Feature", "Kitchen", "Wall", "Mirror", "Ceiling", "Sink", "Toilet", "Bathtub", "Shower", "Oven", "Dishwasher", "Fridge", "Microwave", "Hardware", "Balloon", "Curtain", "Window", "Door", "Rug", "Beverage",
     ];
     !SKIP.iter().any(|s| c.contains(s))
 }

@@ -8,6 +8,9 @@
 //!   z: up, 0 = finished floor, span.height = ceiling
 //! The placement code maps this frame to world space (rotation about z + translation).
 use ig_kit::api::Asset;
+pub mod boxes;
+pub mod fireplace;
+pub use fireplace::FireplaceFeature;
 
 /// An opening (door or window) on the wall span, in span coordinates.
 #[derive(Clone, Debug)]
