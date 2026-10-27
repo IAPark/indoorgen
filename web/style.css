@@ -1,0 +1,24 @@
+html,body{margin:0;height:100%;overflow:hidden;background:#15171b;color:#dde;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#view{position:fixed;inset:0;width:100%;height:100%;display:block;outline:none}
+#panel{position:fixed;top:10px;left:10px;width:236px;padding:12px;background:rgba(24,26,32,.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid #3a3e48;border-radius:10px;max-height:calc(100% - 40px);overflow:auto}
+h1{margin:0 0 8px;font-size:16px;letter-spacing:.5px}
+.row{display:flex;align-items:center;gap:6px;margin:6px 0}
+.row label{width:50px;color:#9aa}
+.row input[type=number],.row select{flex:1;min-width:0}
+.row input[type=range]{flex:1;min-width:0}
+input,select,button,.file{background:#2b2f39;color:#eef;border:1px solid #4a4f5c;border-radius:6px;padding:5px 7px;font:inherit}
+button,.file{cursor:pointer;text-align:center}
+button:hover,.file:hover{background:#3a4050}
+button:disabled{opacity:.4;cursor:default}
+button.primary{width:100%;background:#2f6fdf;border-color:#4b8bff;margin-top:6px;padding:8px;font-weight:600}
+button.primary:disabled{background:#2a3550}
+.btns{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.btns>*{flex:1 1 auto}
+.btns button.on{background:#2f6fdf}
+hr{border:0;border-top:1px solid #3a3e48;margin:10px 0}
+#status{margin-top:8px;color:#9fd;font-variant-numeric:tabular-nums;min-height:2.6em;word-break:break-word}
+#status.err{color:#f98}
+#info{color:#889;font-size:11px;white-space:pre-line}
+#help{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);color:#99a;font-size:11px;background:rgba(0,0,0,.4);padding:3px 10px;border-radius:10px;pointer-events:none}
+#cross{position:fixed;left:50%;top:50%;width:6px;height:6px;margin:-3px;border-radius:3px;background:rgba(255,255,255,.6);display:none;pointer-events:none}
+@media (max-width:600px){#panel{width:calc(100% - 44px)}}
