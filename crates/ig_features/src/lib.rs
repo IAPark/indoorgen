@@ -3,7 +3,7 @@
 //! (and, where it has shelves / a mantel / a seat, a support surface) for the furniture solver, mess clutter and people.
 //!
 //! Coordinates of a built feature are in the span's local frame:
-//!   x: along the wall, 0 .. span.length (left to right when facing the wall from inside the room)
+//!   x: along the wall, 0 .. span.length (right-handed frame: left to right when standing with your back to the wall)
 //!   y: into the room, 0 = the wall's inner face, positive = towards the room interior
 //!   z: up, 0 = finished floor, span.height = ceiling
 //! The placement code maps this frame to world space (rotation about z + translation).

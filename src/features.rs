@@ -49,7 +49,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         let rf = |fireplace, bookshelf_wall, window_seat, max| RoomFeatures { fireplace, bookshelf_wall, window_seat, max };
-        let rooms = [("LivingRoom", rf(0.5, 0.3, 0.15, 2)), ("Bedroom", rf(0.2, 0.2, 0.3, 2)), ("DiningRoom", rf(0.15, 0.0, 0.1, 1))]
+        let rooms = [("LivingRoom", rf(0.5, 0.3, 0.15, 3)), ("Bedroom", rf(0.2, 0.2, 0.3, 3)), ("DiningRoom", rf(0.15, 0.0, 0.1, 1))]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
@@ -97,7 +97,7 @@ impl FeatureCfg {
             FeatureMode::Random => if f.rooms.is_empty() { Features::default().rooms } else { f.rooms.clone() },
             FeatureMode::Force => {
                 let base = if f.rooms.is_empty() { Features::default().rooms } else { f.rooms.clone() };
-                base.into_iter().map(|(k, r)| (k, RoomFeatures { fireplace: 1.0, bookshelf_wall: 1.0, window_seat: 1.0, max: r.max.max(1) })).collect()
+                base.into_iter().map(|(k, r)| (k, RoomFeatures { fireplace: 1.0, bookshelf_wall: 1.0, window_seat: 1.0, max: r.max.max(3) })).collect()
             }
         };
         FeatureCfg { seed, rooms }
@@ -203,7 +203,14 @@ pub fn wall_spans(room_name: &str, room_poly: &G, c: &RoomConstants, cutters: &[
 }
 
 fn registry() -> Vec<(&'static str, Box<dyn Feature>)> {
-    vec![("fireplace", Box::new(FireplaceFeature) as Box<dyn Feature>)]
+    let mut v: Vec<(&'static str, Box<dyn Feature>)> = vec![("fireplace", Box::new(FireplaceFeature))];
+    for f in ig_features::builtin_features() {
+        let kind = match f.class() { "BookshelfWallFeature" => "bookshelf_wall", "WindowSeatFeature" => "window_seat", _ => continue };
+        v.push((kind, f));
+    }
+    // window seats before bookshelf walls: the seat needs its window wall, the bookshelf takes whatever wall is left
+    v.sort_by_key(|(k, _)| match *k { "fireplace" => 0, "window_seat" => 1, _ => 2 });
+    v
 }
 
 fn prob(rf: &RoomFeatures, kind: &str) -> f64 {
@@ -266,7 +273,7 @@ pub fn plan(cfg: &FeatureCfg, c: &RoomConstants, room_polys: &[(String, G)], cut
                     serde_json::json!({"style": format!("{:?}", l.style), "breast_x": l.breast, "depth": l.depth, "firebox_x": l.firebox, "firebox_z": l.firebox_z,
                         "hearth_x": l.hearth, "hearth_depth": l.hearth_depth, "hearth_h": l.hearth_h, "mantel_z": l.mantel_z, "alcoves_x": l.alcoves, "span_len": s.span.length})
                 }
-                _ => serde_json::Value::Null,
+                _ => serde_json::json!({"span_len": s.span.length, "x": iv}),
             };
             let key = format!("{}_{}_{}", fa.class, room.replace('/', "_"), n);
             out.push(PlacedFeature {

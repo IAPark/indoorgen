@@ -557,6 +557,14 @@ pub fn build_scene(p: &Params) -> Built {
             serde_json::json!({"key": k, "class": class, "parent": parent, "room": room})
         }).collect::<Vec<_>>()
     };
+    // room features: pose, wall span and per-class layout facts (breast extents / alcoves for a fireplace) next to the object entry
+    let mut objects = objects;
+    for o in objects.iter_mut() {
+        let key = o["key"].as_str().unwrap_or("").to_string();
+        if let Some(pf) = g.features.iter().find(|f| f.key == key) {
+            o["feature"] = serde_json::json!({"origin": pf.origin, "yaw": pf.yaw, "span_len": pf.span_len, "x": pf.x, "footprint": pf.footprint, "keepout": pf.keepout, "info": pf.info});
+        }
+    }
     // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
     let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {
         Some(serde_json::json!({
