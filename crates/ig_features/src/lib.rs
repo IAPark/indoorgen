@@ -55,3 +55,12 @@ pub trait Feature: Send + Sync {
     /// build the feature occupying `x` (one of the intervals returned by `fits`, possibly shrunk) on `span`, deterministically from `seed`
     fn build(&self, span: &WallSpan, x: [f64; 2], seed: u64) -> FeatureAsset;
 }
+
+pub mod bookshelf;
+pub mod util;
+pub mod windowseat;
+
+/// the built-in feature generators implemented in this crate (the fireplace worker adds FireplaceFeature to its own list)
+pub fn builtin_features() -> Vec<Box<dyn Feature>> {
+    vec![Box::new(bookshelf::BookshelfWallFeature), Box::new(windowseat::WindowSeatFeature)]
+}

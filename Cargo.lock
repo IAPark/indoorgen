@@ -1014,6 +1014,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ig_features"
+version = "0.1.0"
+dependencies = [
+ "ig_core",
+ "ig_kit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ig_furn"
 version = "0.1.0"
 dependencies = [
