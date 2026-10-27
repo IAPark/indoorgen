@@ -37,7 +37,7 @@ nalgebra = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-schemars = "0.8"
+schemars = { version = "0.8", features = ["preserve_order"] }
 anyhow = { workspace = true }
 md5 = { workspace = true }
 earcutr = { workspace = true }

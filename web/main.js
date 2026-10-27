@@ -350,7 +350,7 @@ const PRESETS = {
   full: { solver: { steps_scale: 1.0 }, cloth: { steps: 2, cg_iters: 40 } },
   draft: { solver: { steps_scale: 0.25 }, cloth: { steps: 1, cg_iters: 10 }, mess: { level: 0.3 }, geometry: { budget_scale: 0.5 }, cameras: { count: 2 } },
 };
-const SKIP_SECTIONS = new Set(['house', 'rules', 'advanced', 'people', 'output']); // house: seed/room controls above; rules: own editor; people/output: native only
+const SKIP_SECTIONS = new Set(['rules', 'advanced', 'people', 'output']); // house: only seed/room are hidden (controls above); rules: own editor; people/output: native only
 const SKIP_FIELDS = new Set(['house.seed', 'house.room']);
 let SCHEMA = null, DEFAULTS = {}, cfg = {};
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -392,8 +392,8 @@ function widget(path, f, onchange) {
     inp = document.createElement('select'); for (const e of f.enum) inp.add(new Option(e, e)); inp.value = v; inp.onchange = () => onchange(inp.value);
   } else if (num) {
     const lo = f.minimum, hi = f.maximum;
-    if (!isInt && lo != null && hi != null && !nullable) { // bounded real: slider
-      inp = document.createElement('input'); inp.type = 'range'; Object.assign(inp, { min: lo, max: hi, step: (hi - lo) / 100 >= 0.05 ? 0.05 : (hi - lo) / 100 }); inp.value = v;
+    if (!isInt && lo != null && hi != null && !nullable && hi - lo <= 100 && !(lo > 0 && hi / lo > 1000)) { // bounded real: slider
+      inp = document.createElement('input'); inp.type = 'range'; Object.assign(inp, { min: lo, max: hi, step: hi - lo >= 1 ? 0.05 : (hi - lo) / 100 }); inp.value = v;
       out = document.createElement('span'); out.className = 'v'; out.textContent = (+v).toFixed(3).replace(/\.?0+$/, '');
       inp.oninput = () => { out.textContent = (+inp.value).toFixed(3).replace(/\.?0+$/, ''); onchange(+inp.value); };
     } else {
@@ -411,7 +411,9 @@ function cfgRender() {
   const body = $('cfgbody'); body.innerHTML = '';
   if (!SCHEMA) { body.textContent = 'settings load with the wasm generator'; cfgShow(); return; }
   const root = resolve(SCHEMA);
-  for (const [sec, ssch] of Object.entries(root.properties)) {
+  const ORDER = ['house', 'program', 'solver', 'mess', 'cloth', 'geometry', 'post', 'cameras'];
+  const secs = Object.entries(root.properties).sort((a, b) => (ORDER.indexOf(a[0]) + 100) % 100 - (ORDER.indexOf(b[0]) + 100) % 100);
+  for (const [sec, ssch] of secs) {
     if (SKIP_SECTIONS.has(sec)) continue;
     const sd = resolve(ssch);
     if (!sd.properties) continue;
@@ -467,6 +469,7 @@ function legacyToCfg(x) { // old flat opts -> config sections (old shared links 
 }
 function cfgShow() {
   $('cfgout').textContent = JSON.stringify(diff(buildOpts(), DEFAULTS));
+  $('quality').value = cfgPreset;
   try { localStorage.setItem('indoorgen.cfg2', JSON.stringify({ cfg, j: extraJson, q: cfgPreset })); } catch (_) {}
   cfgListeners.forEach((fn) => { try { fn(cfg); } catch (_) {} });
 }
