@@ -69,10 +69,12 @@ struct Opts {
     /// extra tunables by their native environment-variable name (STEPS_L, PLACE_TRIES, TRINKETS_MAX, MESH_BUDGET_SCALE, NO_SNAP, ...),
     /// applied after the options above so they win; cleared before every run
     env: std::collections::BTreeMap<String, serde_json::Value>,
+    /// furniture rules (indoorgen::rules::RuleSpec: per room type class / relation / min / max / prefer); absent = built-in rules
+    rules: Option<indoorgen::rules::RuleSpec>,
 }
 impl Default for Opts {
     fn default() -> Self {
-        Opts { mess: 0.5, cloth: true, cams: 4, dense: true, only_target: true, cloth_steps: 1, cloth_cg: 20, steps_scale: 0.6, env: Default::default() }
+        Opts { mess: 0.5, cloth: true, cams: 4, dense: true, only_target: true, cloth_steps: 1, cloth_cg: 20, steps_scale: 0.6, env: Default::default(), rules: None }
     }
 }
 
@@ -111,7 +113,10 @@ pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsVal
         }
     }
     let orig_prog = !opts.dense;
-    let prog: serde_json::Value = serde_json::from_str(&unpack(if orig_prog { PROGRAM_ORIG } else { PROGRAM_DENSE })).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    let mut prog: serde_json::Value = serde_json::from_str(&unpack(if orig_prog { PROGRAM_ORIG } else { PROGRAM_DENSE })).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    if let Some(r) = &opts.rules {
+        indoorgen::rules::try_apply(&mut prog, r).map_err(|e| JsValue::from_str(&format!("rules: {}", e.join("; "))))?;
+    }
     let mut fallback = TableAssets::default();
     fallback.add_str(&unpack(BBOX_TABLE));
     fallback.add_str(&unpack(SAMPLES));
@@ -129,6 +134,28 @@ pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsVal
     LAST_JSON.with(|j| *j.borrow_mut() = side.to_string());
     ig_core::envx::progress("done");
     Ok(glb)
+}
+
+/// JSON for the rules editor: `{rooms, classes:{factories,tags}, relations, defaults: RuleSpec, constraint_names}` (dense program)
+#[wasm_bindgen]
+pub fn rules_info() -> Result<String, JsValue> {
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    Ok(indoorgen::rules::rules_info(&prog).to_string())
+}
+
+/// the built-in rules as a RuleSpec JSON string
+#[wasm_bindgen]
+pub fn default_rules() -> Result<String, JsValue> {
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    Ok(serde_json::to_string(&indoorgen::rules::default_rules(&prog)).unwrap())
+}
+
+/// validate a RuleSpec JSON string: returns "" when ok, else the error messages (one per line)
+#[wasm_bindgen]
+pub fn validate_rules(spec_json: &str) -> Result<String, JsValue> {
+    let spec = match indoorgen::rules::parse(spec_json) { Ok(s) => s, Err(e) => return Ok(e) };
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    Ok(indoorgen::rules::validate(&spec, &prog).join("\n"))
 }
 
 /// the sidecar json (nodes, lights, cloth jobs, cameras) of the last `generate` call

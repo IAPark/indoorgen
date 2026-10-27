@@ -4,6 +4,7 @@
 //   --cams K: K photographer-like camera poses per furnished room written to the sidecar json "cameras" (crates/ig_cams); 0 (default) = unchanged
 //   --people N: up to N posed photoreal avatars placed after the solve (crates/ig_people); 0 (default) = unchanged output
 //   --mess LEVEL: lived-in disorder 0..1 added after the solve (crates/ig_mess); 0 (default) = unchanged output
+//   --rules FILE.json (or RULES=FILE.json): furniture rules per room type (src/rules.rs RuleSpec)
 //   --rust-cloth: also run the native cloth sim for bed cloth that is exported as a sidecar job (default: skip, Blender re-simulates it)
 use indoorgen::furn::assets::TableAssets;
 use indoorgen::mesh::*;
@@ -70,6 +71,7 @@ fn main() {
     if people_n > 0 && indoorgen::people::avatar_count() == 0 {
         eprintln!("WARNING: --people {people_n} requested but no avatars found in {:?}: run tools/people/fetch_rocketbox.sh or set INDOORGEN_ASSETS (e.g. in .indoorgen.env); no people will be placed", indoorgen::people::avatar::root_dir());
     }
+    let rules_file: Option<String> = args.iter().position(|a| a == "--rules").map(|i| { let v = args[i + 1].clone(); args.drain(i..i + 2); v }).or_else(|| std::env::var("RULES").ok());
     let seed: u64 = args[1].parse().unwrap();
     let room = args.get(2).cloned();
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));
@@ -77,7 +79,16 @@ fn main() {
     // INFINIGEN_PROGRAM=1: the program exactly as exported from python home.py + the fast_solve.gin steps 100/40/5 (selfcheck/lockstep semantics).
     let orig_prog = std::env::var("INFINIGEN_PROGRAM").map_or(false, |v| v == "1");
     let prog_file = if orig_prog { "home_program.json" } else { "home_program_dense.json" };
-    let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/{}", env!("CARGO_MANIFEST_DIR"), prog_file)).unwrap()).unwrap();
+    let mut prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/{}", env!("CARGO_MANIFEST_DIR"), prog_file)).unwrap()).unwrap();
+    // furniture rules (JSON file, see src/rules.rs): what goes in each room type. Temporary hook until the config's `rules` field is merged.
+    if let Some(f) = rules_file {
+        let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("--rules {f}: {e}"));
+        let spec = indoorgen::rules::parse(&text).unwrap_or_else(|e| panic!("--rules {f}: {e}"));
+        if let Err(errs) = indoorgen::rules::try_apply(&mut prog, &spec) {
+            for e in errs { eprintln!("--rules {f}: {e}"); }
+            std::process::exit(2);
+        }
+    }
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
     let params = indoorgen::scenegen::Params { seed, room: room.clone(), only_target, mess_level, people_n, qc_out, no_glb, orig_prog, prog, fallback };
