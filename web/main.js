@@ -321,7 +321,7 @@ function busy(b) { $('gen').disabled = b || !workerReady; if (!b && tick) { clea
 
 async function onWorker(ev) {
   const m = ev.data;
-  if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); if (new URLSearchParams(location.search).has('auto')) generate(); }
+  if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('mess')) $('mess').value = u.get('mess'); if (u.has('quality')) $('quality').value = u.get('quality'); if (u.has('auto')) generate(); } }
   else if (m.type === 'initfail') { workerErr = m.error; setStatus('wasm init failed: ' + m.error, true); }
   else if (m.type === 'status') setStatus(m.text);
   else if (m.type === 'fail') { setStatus('generation failed: ' + m.error, true); busy(false); }
@@ -349,7 +349,7 @@ function generate() {
   tick = setInterval(() => { $('status').dataset.t = ((performance.now() - t0) / 1000).toFixed(1); if (!$('status').classList.contains('err') && /\.\.\.$/.test($('status').textContent.replace(/ \(\d+\.\ds\)$/, ''))) $('status').textContent = $('status').textContent.replace(/ \(\d+\.\ds\)$/, '') + ` (${$('status').dataset.t}s)`; }, 200);
   worker.postMessage({
     type: 'gen', id: ++jobId, seed: +$('seed').value, room: $('room').value,
-    opts: { mess: +$('mess').value, cloth: $('cloth').checked, cams: 4, dense: true },
+    opts: Object.assign({ mess: +$('mess').value, cloth: $('cloth').checked, cams: 4, dense: true }, $('quality').value === 'full' ? { cloth_steps: 2, cloth_cg: 40, steps_scale: 1.0 } : {}),
   });
 }
 $('gen').onclick = generate;
