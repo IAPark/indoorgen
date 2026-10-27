@@ -27,7 +27,7 @@ struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32> }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
-    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>, depth: bool,
+    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>, depth: bool, sidecar_lighting: bool,
 }
 #[derive(Clone)]
 enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String) }
@@ -35,7 +35,7 @@ enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(Strin
 fn parse_args() -> Opts {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
-        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None, depth: false };
+        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None, depth: false, sidecar_lighting: false };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -59,6 +59,7 @@ fn parse_args() -> Opts {
             "--sun-intensity" => o.sun_i = val().parse().unwrap(),
             "--light-scale" => o.light_scale = val().parse().unwrap(),
             "--no-ceiling" => o.no_ceiling = true,
+            "--sidecar-lighting" => o.sidecar_lighting = true,
             "--cloth" => o.cloth = Some(PathBuf::from(val())),
             "--depth" => o.depth = true, // also write <scene>_<cam>.depth.npy (float32 z-depth in metres along the optical axis, 0 = no surface) next to the pngs (OUT_DIR mode)
             "-v" => o.verbose = true,
@@ -74,6 +75,8 @@ fn parse_args() -> Opts {
 struct Draw { node: usize, pos: (usize, u64, u64), nrm: Option<(usize, u64, u64)>, uv: Option<(usize, u64, u64)>, idx: (usize, u64, u64), u16: bool, icount: u32, vcount: u32, mat_bg: usize, glass: bool, shadow: bool, bmin: Vec3, bmax: Vec3 }
 struct Light { pos: Vec3, color: Vec3 }
 struct Scene {
+    /// (azimuth deg, elevation deg, sun intensity, ambient) from the sidecar `variation.lighting` (--sidecar-lighting)
+    lit: Option<(f32, f32, f32, f32)>,
     name: String, bufs: Vec<wgpu::Buffer>, zeros: wgpu::Buffer, draws: Vec<Draw>, mat_bgs: Vec<wgpu::BindGroup>, lights: Vec<Light>,
     bmin: Vec3, bmax: Vec3, side: Value, glb: glb::Glb, sun_vp: Mat4, shadow_view: wgpu::TextureView, shadow_done: bool,
 }
@@ -183,7 +186,13 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
         Light { pos: Vec3::new(loc[0].as_f64().unwrap() as f32, loc[1].as_f64().unwrap() as f32, loc[2].as_f64().unwrap() as f32), color: c * (w / (4.0 * std::f32::consts::PI * std::f32::consts::PI)) * opts.light_scale }
     }).collect()).unwrap_or_default();
     // sun
-    let (az, el) = (opts.sun.0.to_radians(), opts.sun.1.to_radians());
+    let lit = if opts.sidecar_lighting { side["variation"]["lighting"]["sun_dir"].as_array().map(|d| {
+        let f = |i: usize| d[i].as_f64().unwrap() as f32;
+        let l = &side["variation"]["lighting"];
+        (f(1).atan2(f(0)).to_degrees(), f(2).asin().to_degrees(), l["sun_strength"].as_f64().unwrap_or(4.0) as f32 / 4.0, l["sky_strength"].as_f64().unwrap_or(1.0) as f32)
+    }) } else { None };
+    let sun = lit.map_or(opts.sun, |l| (l.0, l.1));
+    let (az, el) = (sun.0.to_radians(), sun.1.to_radians());
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
     let c = (bmin + bmax) * 0.5; let r = ((bmax - bmin) * 0.5).length();
     let sv = look_at_rh(c + sdir * r * 2.0, c, Vec3::Z);
@@ -191,7 +200,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
     let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: SHADOW, height: SHADOW, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] });
     if opts.verbose { eprintln!("  scene on GPU {:.2}s ({} draws, {} lights, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), draws.len(), lights.len(), bmin, bmax); }
-    Scene { name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, lights, bmin, bmax, side, glb,
+    Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, lights, bmin, bmax, side, glb,
         sun_vp: sp * sv, shadow_view: sh.create_view(&wgpu::TextureViewDescriptor::default()), shadow_done: false }
 }
 
@@ -479,11 +488,12 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaIm
     let proj = match cam.ortho { Some(w) => orthographic_rh(-w / 2.0, w / 2.0, -w / aspect / 2.0, w / aspect / 2.0, 0.05, 200.0),
         None => perspective_rh(2.0 * ((cam.fov_x / 2.0).tan() / aspect).atan(), aspect, 0.05, 200.0) };
     let view = cam.view.inverse(); let vp = proj * view; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
-    let (az, el) = (o.sun.0.to_radians(), o.sun.1.to_radians());
+    let (sun_az, sun_el, sun_i, ambient) = s.lit.map_or((o.sun.0, o.sun.1, o.sun_i, o.ambient), |l| (l.0, l.1, l.2, l.3));
+    let (az, el) = (sun_az.to_radians(), sun_el.to_radians());
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
-        sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * o.sun_i, 2.9 * o.sun_i, 2.5 * o.sun_i, 0.0], sky: [0.62 * o.ambient, 0.72 * o.ambient, 0.9 * o.ambient, 0.0], ground: [0.28 * o.ambient, 0.25 * o.ambient, 0.22 * o.ambient, 0.0],
+        sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.62 * ambient, 0.72 * ambient, 0.9 * ambient, 0.0], ground: [0.28 * ambient, 0.25 * ambient, 0.22 * ambient, 0.0],
         cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure, o.ao, 0.6], params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, sr],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }

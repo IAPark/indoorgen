@@ -116,8 +116,10 @@ def lamp_state(variation, sidecar):
 def switch_lamp_meshes(variation, sidecar):
     """emissive shaders of switched-off lamps / ceiling lights -> strength 0 (the point light is dropped in render_rust)"""
     fn = lamp_state(variation, sidecar)
-    off = [L["name"] for L in sidecar.get("lights", []) if not fn(L)[0]]
-    scale = {L["name"]: fn(L)[1] for L in sidecar.get("lights", [])}
+    lg = (variation or {}).get("lighting") or {}
+    rec = lg.get("lamps") if isinstance(lg.get("lamps"), dict) else {}  # gen2 drops switched-off lamps from `lights`; the record keeps them
+    off = [L["name"] for L in sidecar.get("lights", []) if not fn(L)[0]] + [k for k, v in rec.items() if not v.get("on", True)]
+    scale = {L["name"]: fn(L)[1] for L in sidecar.get("lights", [])}; scale.update({k: 1.0 for k in off})
     n = 0
     for o in bpy.data.objects:
         if o.type != "MESH": continue

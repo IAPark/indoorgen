@@ -35,6 +35,8 @@ pub struct GenConfig {
     pub cameras: Cameras,
     /// Output options (native).
     pub output: Output,
+    /// Independently randomizable factors (doors, wall/ceiling/floor colours, lighting, furniture seed + jitter); see src/variation.rs. Mess and people seeds are in their sections.
+    pub variation: crate::variation::Variation,
     /// Editable furniture rules (applied to the furnishing program before the solve).
     pub rules: Option<crate::rules::RuleSpec>,
     /// Escape hatch for rarely used tunables.
@@ -115,9 +117,11 @@ pub struct Mess {
     /// Lived-in disorder 0..1 (clutter, open doors, moved furniture). 0 leaves the scene untouched.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub level: f64,
+    /// Seed of the mess stream (null: house.seed). Furniture, floor plan and the other factors do not depend on it.
+    pub seed: Option<u64>,
 }
 impl Default for Mess {
-    fn default() -> Self { Mess { level: 0.0 } }
+    fn default() -> Self { Mess { level: 0.0, seed: None } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -161,6 +165,8 @@ impl Default for Cloth {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct People {
+    /// Seed of the people placement (null: house.seed).
+    pub seed: Option<u64>,
     /// Up to this many posed photoreal avatars placed after the solve (needs the Rocketbox assets; native only, ignored in the browser).
     #[schemars(range(min = 0, max = 12))]
     pub count: usize,

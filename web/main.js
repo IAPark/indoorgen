@@ -353,7 +353,7 @@ const PRESETS = {
   full: { solver: { steps_scale: 1.0 }, cloth: { steps: 2, cg_iters: 40 } },
   draft: { solver: { steps_scale: 0.25 }, cloth: { steps: 1, cg_iters: 10 }, mess: { level: 0.3 }, geometry: { budget_scale: 0.5 }, cameras: { count: 2 } },
 };
-const SKIP_SECTIONS = new Set(['rules', 'advanced', 'people', 'output']); // house: only seed/room are hidden (controls above); rules: own editor; people/output: native only
+const SKIP_SECTIONS = new Set(['rules', 'advanced', 'people', 'output', 'variation']); // house: only seed/room are hidden (controls above); rules: own editor; people/output: native only
 const SKIP_FIELDS = new Set(['house.seed', 'house.room']);
 let SCHEMA = null, DEFAULTS = {}, cfg = {};
 const clone = (o) => JSON.parse(JSON.stringify(o));

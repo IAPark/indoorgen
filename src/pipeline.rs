@@ -35,6 +35,8 @@ fn sem_room_tag(rt: &str) -> Tag {
 
 pub struct Options {
     pub seed: u64,
+    /// seed of the furniture solve (constraint-program parameters, annealing streams, asset factory seeds); `seed` keeps the floor plan, shells, doors and windows
+    pub furn_seed: u64,
     pub restrict_room: Option<String>, // e.g. "Bedroom": furnish only the first room of this type (old behaviour, `--only-target`)
     /// furnish every room of the house (each room solved independently with its own rng stream, in parallel); `restrict_room` then only
     /// names the target room type whose first room keeps the single-room rng stream
@@ -65,7 +67,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     let t0 = Instant::now();
     let seed = opt.seed;
     // --- constraint params (global stream, python's home_furniture_constraints draws) ---
-    let mut g = Rng::seeded(seed);
+    let mut g = Rng::seeded(opt.furn_seed);
     let p: Vec<f64> = vec![g.uniform(0.6, 0.9), g.uniform(0.5, 1.0), g.uniform(0.5, 1.0), g.uniform(0.2, 1.0), g.uniform(40.0, 100.0) / 40.0];
     let flags: Vec<bool> = [0.5, 0.15, 0.15, 0.15, 0.15].iter().map(|&q| g.f64() < q).collect();
     let margins = [g.uniform(0.1, 0.3), g.uniform(0.1, 0.3)];
@@ -256,7 +258,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0 }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0 }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives
@@ -286,7 +288,7 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
         }
         let _ = group;
     };
-    let seed = opt.seed;
+    let seed = opt.furn_seed;
     let seed_s = seed.to_string();
     let hs = |what: &str| -> u64 { match tag { None => int_hash(&[&seed_s, what]), Some(t) => int_hash(&[&seed_s, what, t]) } };
     let t = Instant::now();
