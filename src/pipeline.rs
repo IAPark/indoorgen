@@ -235,9 +235,13 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     // --- room features: decided after the floor plan, before the solve; fixed obstacles + support surfaces for the solver ---
     let features = crate::features::plan(&opt.features, &c, &room_polys, &res.cutters);
     for pf in &features {
-        let mut tags = TagSet::from([Tag::sem("Feature"), Tag::gen(pf.class), Tag::obj(&pf.key)]);
+        // Object + a non-geometric relation to the room: the obj stages (obj_on_support / obj_ontop_obj) then offer the feature as a
+        // parent for small items (mantel, hearth, shelves), while the floor / wall stages, which select by StableAgainst relations,
+        // never pick it for moves (it is fixed, built into the shell)
+        let mut tags = TagSet::from([Tag::sem("Feature"), Tag::sem("Object"), Tag::gen(pf.class), Tag::obj(&pf.key)]);
         tags.insert(Tag::sem(pf.class));
         let mut o = ObjState::new(Arc::new(pf.asset.solver_geom()), pf.pose(), tags);
+        o.relations.push(crate::furn::state::RelState { relation: crate::furn::relations::Relation::Traverse, target: pf.room.clone(), child_plane: 0, parent_plane: 0 });
         o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None });
         o.active = true;
         state.objs.insert(pf.key.clone(), o);

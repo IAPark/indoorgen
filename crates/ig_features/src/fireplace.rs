@@ -565,6 +565,13 @@ impl Feature for FireplaceFeature {
                 cols.push(([b0, 0.0, 0.0], [b1 + 0.02, by1 + 0.03, hz + top]));
             }
         }
+        // nothing is set down in front of the fire: the hearth / bench top only supports items beside the firebox opening
+        let keep = [l.firebox[0] - 0.08, l.firebox[1] + 0.08];
+        supports = supports.into_iter().flat_map(|(lo, hi)| {
+            [[lo[0], hi[0].min(keep[0])], [lo[0].max(keep[1]), hi[0]]].into_iter()
+                .filter(|x| x[1] - x[0] >= 0.12)
+                .map(move |x| ([x[0], lo[1], lo[2]], [x[1], hi[1], hi[2]]))
+        }).collect();
 
         // ---- logs, grate, screen, niche, over-mantel ----
         let mut logs = Mesh::new();
@@ -698,7 +705,7 @@ impl Feature for FireplaceFeature {
         }
         for p in parts.iter_mut() { pad_uv(&mut p.mesh); }
         if let Some((lo, hi)) = mantel_box { supports.insert(0, ([lo[0], d, lo[2]], hi)); }
-        let asset = Asset { cloth: vec![], followers: vec![], parts, supports, cutters: vec![] };
+        let asset = Asset { cloth: vec![], followers: vec![], parts, supports, cutters: vec![], cols: vec![] };
         let (fx_0, fx_1) = (l.hearth[0].min(l.bench[0]).min(bx0), l.hearth[1].max(l.bench[1]).max(bx1));
         let fy1 = if l.hearth_kind == HearthKind::Bench { d + l.hearth_depth + 0.03 } else { hy1 };
         let clear = 0.35; // keep-out in front of the hearth

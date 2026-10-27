@@ -6,6 +6,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("glb"); ap.add_argument("out")
 ap.add_argument("--cam"); ap.add_argument("--samples", type=int, default=16); ap.add_argument("--top", action="store_true"); ap.add_argument("--showcase", action="store_true")
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--clay", action="store_true"); ap.add_argument("--room"); ap.add_argument("--light-scale", type=float, default=1.0); ap.add_argument("--view"); ap.add_argument("--norender", action="store_true"); ap.add_argument("--dataset", help="tools/dataset capture spec json: multi-view RGB+depth+cameras for one variant (see tools/dataset/README.md)"); ap.add_argument("--no-cloth", action="store_true", help="keep the Rust cloth approximation instead of re-simulating in Blender")
+ap.add_argument("--exposure", type=float, default=3.0, help="Cycles film exposure (3.0 suits closed rooms lit by the scene lights; open test layouts such as featureshot grids need ~0.5-1)")
 args = ap.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:])
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=args.glb, merge_vertices=True)
@@ -194,7 +195,7 @@ if args.top:
     sun = bpy.data.lights.new("s", "SUN"); sun.energy = 4
     so = bpy.data.objects.new("s", sun); sc.collection.objects.link(so); so.rotation_euler = (0.3, 0.2, 0)
     w = bpy.data.worlds.new("w2"); w.use_nodes = True; w.node_tree.nodes["Background"].inputs[1].default_value = 1.0; sc.world = w
-    sc.cycles.film_exposure = 3.0
+    sc.cycles.film_exposure = args.exposure
     sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
     sc.render.resolution_x = sc.render.resolution_y = 640; sc.render.filepath = args.out
     bpy.ops.render.render(write_still=True); sys.exit(0)
@@ -315,7 +316,7 @@ for _o in list(bpy.data.objects):
         _po.matrix_world = _m; _po.scale = (_w, _d.z, 1)
 # camera
 if DS:
-    sc.cycles.film_exposure = 3.0
+    sc.cycles.film_exposure = args.exposure
     sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True; sc.cycles.use_adaptive_sampling = True
     _r = dscap.run(sc, sidecar, DS); print("DSRESULT", json.dumps(_r)); sys.exit(0)
 if args.view in ("cornerA", "cornerB"):
@@ -331,7 +332,7 @@ else:
   if args.cam:
     c = json.load(open(args.cam))
     co.matrix_world = mathutils.Matrix(c["matrix"]); cam.lens = c.get("lens", 15); cam.sensor_width = c.get("sensor_width", 36)
-sc.cycles.film_exposure = 3.0
+sc.cycles.film_exposure = args.exposure
 sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
 sc.render.resolution_x, sc.render.resolution_y = 960, 540
 import os as _os

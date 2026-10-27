@@ -51,9 +51,14 @@ pub fn build_scene(p: &Params) -> Built {
     // program.dense=false (INFINIGEN_PROGRAM=1): the program exactly as exported from python home.py + the fast_solve.gin steps 100/40/5 (selfcheck/lockstep semantics).
     let mut prog_owned;
     let mut prog = &p.prog;
-    if let Some(spec) = &cfg.rules {
+    let feat_cfg = crate::features::FeatureCfg::resolve(&cfg.features, &var.features, seed);
+    // with room features on, built-in rules fill them: decor on mantels / hearths, books and decor on bookshelf walls (user rules for the
+    // same class + relation win)
+    let rules = if feat_cfg.on() && !orig_prog { Some(crate::features::with_feature_rules(cfg.rules.clone().unwrap_or_default())) } else { cfg.rules.clone() };
+    if let Some(spec) = &rules {
         prog_owned = p.prog.clone();
         crate::rules::apply(&mut prog_owned, spec);
+        if feat_cfg.on() && !orig_prog { crate::rules::add_feature_scores(&mut prog_owned); }
         prog = &prog_owned;
     }
     indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && cfg.solver.placeholder_reuse);
@@ -69,7 +74,7 @@ pub fn build_scene(p: &Params) -> Built {
     let assets = indoorgen::assets::RealAssets { fallback: p.fallback.clone() };
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
-    let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: crate::features::FeatureCfg::resolve(&cfg.features, &var.features, seed) }, &assets, prog);
+    let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone() }, &assets, prog);
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {
@@ -285,11 +290,16 @@ pub fn build_scene(p: &Params) -> Built {
             .collect()
     };
     lap("visuals built");
+    // room features: their built meshes (span frame, posed by the state object) are visuals from here on, so the snap passes see mantels,
+    // hearths and shelves as the surfaces their children rest on; the features themselves are on every skip list (never moved / removed)
+    for pf in &g.features { visuals.insert(pf.key.clone(), pf.asset.clone()); }
+    let feature_keys: Vec<String> = g.features.iter().map(|f| f.key.clone()).collect();
     // python's KitchenCabinet visual starts at local y = 0 while its solver box is centred: align them (see snap.rs)
     if cfg.post.snap {
         let mv = indoorgen::snap::recenter_visuals(&g.state, &mut visuals, &["KitchenCabinetFactory"]);
         eprintln!("RECENTER {} KitchenCabinet visuals aligned with their solver box", mv.len());
-        let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        let mut cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        cut_keys.extend(feature_keys.iter().cloned());
         let gone = indoorgen::snap::remove_overlapping(&mut g.state, &visuals, &cut_keys, 0.08);
         for (k, o) in &gone { eprintln!("OVERLAP removed {k} (inside {o})"); }
         for k in indoorgen::snap::remove_overlapping_rugs(&mut g.state, &visuals, 0.10) { eprintln!("OVERLAP removed rug {k} (overlaps a larger rug)"); }
@@ -298,7 +308,8 @@ pub fn build_scene(p: &Params) -> Built {
     indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
     // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)
     {
-        let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        let mut cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+        cut_keys.extend(feature_keys.iter().cloned());
         if cfg.post.snap {
             // repeated: an item buried in a double board first rests on the inner board, the next pass finds the real top
             let mut sn = vec![];
@@ -311,14 +322,13 @@ pub fn build_scene(p: &Params) -> Built {
             if ig_core::envx::var_os("SNAPDBG").is_some() { for s in &sn { eprintln!("SNAP {} dz {:+.1} mm{}", s.key, s.dz * 1000.0, if s.removed { " REMOVED" } else { "" }); } }
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }
+        for k in crate::features::prune_feature_children(&mut g.state, &visuals, &g.features) { eprintln!("FEATURE removed {k} (taller than its shelf)"); }
     }
     if cfg.post.snap && cfg.post.wall_push {
         let wt = g.c.wall_thickness;
         let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();
         for (k, dx, dy) in indoorgen::snap::push_out_of_walls(&mut g.state, &visuals, &inner, 0.35) { eprintln!("WALLPUSH {k} by ({:+.3},{:+.3})", dx, dy); }
     }
-    // room features: their built meshes (span frame, posed by the state object) join the visuals after the snap passes, which must not touch them
-    for pf in &g.features { visuals.insert(pf.key.clone(), pf.asset.clone()); }
     lap("snap done");
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
     if cfg.post.door_settle { indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys); }

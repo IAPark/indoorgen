@@ -232,6 +232,8 @@ pub fn all_relations_valid(state: &State, name: &str) -> bool {
                     return false;
                 }
             }
+            // non-geometric relations (room features hold a Traverse relation to their room): nothing to check
+            Relation::Traverse | Relation::Any => {}
             r => panic!("Unhandled relation {r:?}"),
         }
     }

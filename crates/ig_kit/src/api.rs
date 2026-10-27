@@ -55,6 +55,8 @@ pub struct Asset {
     pub supports: Vec<(V3, V3)>,
     /// boolean cutters (local space): difference-ed from the parts of every relation-target object (python apply_cutter)
     pub cutters: Vec<Mesh>,
+    /// extra solver collision boxes (local space) not tied to a part (e.g. every board / divider of a built-in bookshelf)
+    pub cols: Vec<(V3, V3)>,
 }
 
 impl Asset {
@@ -140,6 +142,10 @@ impl Asset {
                 tris.extend(box_tris(a, b, 0));
                 proxies.push((Proxy::Box { center: [(a[0] + b[0]) / 2., (a[1] + b[1]) / 2., (a[2] + b[2]) / 2.], half: [(b[0] - a[0]) / 2., (b[1] - a[1]) / 2., (b[2] - a[2]) / 2.] }, u32::MAX));
             }
+        }
+        for (a, b) in &self.cols {
+            tris.extend(box_tris(*a, *b, 0));
+            proxies.push((Proxy::Box { center: [(a[0] + b[0]) / 2., (a[1] + b[1]) / 2., (a[2] + b[2]) / 2.], half: [(b[0] - a[0]) / 2., (b[1] - a[1]) / 2., (b[2] - a[2]) / 2.] }, u32::MAX));
         }
         canonical_tag(&mut tris, lo, hi);
         // support surfaces: upward triangles of support boards

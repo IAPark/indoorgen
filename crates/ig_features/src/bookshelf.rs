@@ -303,8 +303,17 @@ impl Feature for BookshelfWallFeature {
         out
     }
     fn build(&self, span: &WallSpan, x: [f64; 2], seed: u64) -> FeatureAsset {
+        self.build_max_depth(span, x, seed, f64::MAX)
+    }
+}
+
+impl BookshelfWallFeature {
+    /// alcove shelving beside a chimney breast: any width >= this (the free-wall minimum of [`Feature::fits`] is 1.2 m)
+    pub const MIN_ALCOVE: f64 = 0.5;
+    /// [`Feature::build`] with the shelf depth capped at `max_depth` (flush with a chimney breast); the random stream is the same
+    pub fn build_max_depth(&self, span: &WallSpan, x: [f64; 2], seed: u64, max_depth: f64) -> FeatureAsset {
         let mut rng = Rng::seeded(seed ^ 0xb00c_5e1f);
-        let d = rng.uniform(0.28, 0.4);
+        let d = rng.uniform(0.28, 0.4).min(max_depth);
         let st = Style::random(&mut rng, d);
         let top = if span.height > 2.6 && rng.bool(0.15) { rng.uniform(2.0, 2.4) } else { span.height };
         let (x0, x1) = (x[0], x[1]);

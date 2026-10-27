@@ -388,7 +388,7 @@ pub fn remove_overlapping_rugs(state: &mut State, visuals: &HashMap<String, crat
 /// overlap other furniture. Objects resting on it move along. `rooms` = inner room polygons (wall faces). Returns (key, dx, dy).
 pub fn push_out_of_walls(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, rooms: &[Vec<[f64; 2]>], max_push: f64) -> Vec<(String, f64, f64)> {
     let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
-    let wall_bound = |c: &str| ["Rug", "Door", "Window", "Curtain", "WallArt", "Mirror", "Light", "Lamp", "Shelf", "Cabinet", "KitchenSpace", "Bookcase"].iter().any(|e| c.contains(e));
+    let wall_bound = |c: &str| ["Rug", "Door", "Window", "Curtain", "WallArt", "Mirror", "Light", "Lamp", "Shelf", "Cabinet", "KitchenSpace", "Bookcase", "Feature"].iter().any(|e| c.contains(e));
     let in_poly = |p: [f64; 2], poly: &[[f64; 2]]| -> bool {
         let (mut c, n) = (false, poly.len());
         let mut j = n - 1;

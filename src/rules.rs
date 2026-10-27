@@ -396,6 +396,12 @@ impl Vocab {
         let c = alias(c);
         let t = self.tag_of(c);
         let rooms = b.rooms();
+        if c.ends_with("Feature") {
+            // room features are fixed objects built into the shell: they hold a non-geometric relation to their room, not on_floor
+            let o = b.objects();
+            let x = b.tagged(o, vec![t]);
+            return b.related_to(x, rooms, rel::any());
+        }
         if self.is_furniture(c) {
             let base = if wall { b.wallfurn() } else { b.furniture() };
             b.tagged(base, vec![t])
@@ -1124,5 +1130,42 @@ mod tests {
         let params: ig_furn::program::Params = ["furniture_fullness_pct", "obj_interior_obj_pct", "obj_on_storage_pct", "obj_on_nonstorage_pct", "painting_area_per_room_area"].iter().map(|k| (k.to_string(), 0.7)).chain([("sofa_back_margin".to_string(), 0.2), ("sofa_side_margin".to_string(), 0.2)]).collect();
         let prog = ig_furn::program::Program::load(&p, "00000", &params);
         assert!(prog.constraint_bounds().len() > 10);
+    }
+}
+
+/// Score term "feature_focus" (room features on): in living rooms, sofas (weight 4) and armchairs (weight 3) are rewarded for how directly
+/// they face the room's fireplace (Infinigen's focus_score, as its armchairs face the coffee table); rooms without a fireplace score 0.
+pub fn add_feature_scores(program: &mut Value) {
+    let Some(vars) = program.get_mut("variants").and_then(|v| v.as_object_mut()) else { return };
+    for (_, var) in vars.iter_mut() {
+        let mut nodes = std::mem::take(var["nodes"].as_array_mut().unwrap());
+        let term = {
+            let mut b = B::new(&mut nodes);
+            let living = b.rooms_of("LivingRoom");
+            b.mean_over(living, |b, r| {
+                let o = b.objects();
+                let fp = b.tagged(o, vec![json!({"gen": "FireplaceFeature"})]);
+                let fp_in = b.related_to(fp, r, rel::any());
+                let mut parts = vec![];
+                for (g, w) in [("SofaFactory", 4.0), ("ArmChairFactory", 3.0)] {
+                    let f = b.furniture();
+                    let c = b.tagged(f, vec![json!({"gen": g})]);
+                    let c_in = b.related_to(c, r, rel::any());
+                    // a reward per seat (1 - focus_score: 1 facing, 0 facing away): a seat facing something else just earns
+                    // nothing, so neither a sum nor a mean of penalties tempts the solver to delete seats
+                    let m = b.sum_over(c_in, |b, o| {
+                        let fs = b.add(json!({"_": "focus_score", "objs": rf(o), "others": rf(fp_in)}));
+                        let one = b.constant(1.0);
+                        b.scalar("sub", &[one, fs])
+                    });
+                    parts.push(b.maximize(m, w));
+                }
+                b.scalar("add", &parts)
+            })
+        };
+        var["nodes"] = Value::Array(nodes);
+        if let Some(st) = var.get_mut("score_terms").and_then(|v| v.as_object_mut()) {
+            st.insert("feature_focus".into(), json!({"ref": term}));
+        }
     }
 }
