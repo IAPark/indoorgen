@@ -24,7 +24,7 @@ Background docs: `FRAMEWORK.md` (geometry-nodes interpreter), `BACKLOG.md` (work
   see tools/refcases.txt). Prints PASS/FAIL, counts, order error, surface mean/p95/max, bbox, timings.
 - Node-graph assets: `tools/gn_check.py` (see FRAMEWORK.md; `--bisect` finds the first wrong node; results are cached).
 - Placeholders: `target/fast/phcheck <oracle.jsonl>` (oracles: `~/work/ref/ph_LR3_hs0b.jsonl`, `~/work/ref/traces/case_*_ph.jsonl`).
-- Whole pipeline gate before you finish: `tools/selfcheck.sh` (builds, determinism, lockstep placement, phcheck). It must stay green.
+- Whole pipeline gate before you finish: `tools/selfcheck.sh` (~75 s: build, determinism + tilt on 4 rooms, placeholder checks; run it with zsh). It must stay green.
 - RNG order of a python factory: `~/work/ref/scripts/rnglog.py module.Class seed`.
 - Only ONE python/Blender process at a time (4 shared cores).
 
