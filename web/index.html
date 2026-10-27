@@ -36,8 +36,9 @@
   <details id="cfg">
     <summary>Generation settings</summary>
     <div id="cfgbody"></div>
-    <label class="sub">Extra JSON (merged last; native env names under "env")</label>
-    <textarea id="cfgjson" rows="3" spellcheck="false" placeholder='{"env": {"STEPS_L": 120}}'></textarea>
+    <details class="sec" id="rules-sec"><summary title="Editable furniture rules (GenConfig.rules)">Rules</summary><div id="rules-editor"><span class="hint">rules editor not installed</span></div></details>
+    <label class="sub">Extra JSON (partial GenConfig, merged last; native env names under "advanced.env")</label>
+    <textarea id="cfgjson" rows="3" spellcheck="false" placeholder='{"advanced": {"env": {"STEPS_L": 120}}}'></textarea>
     <div class="btns"><button id="cfgreset">Reset to preset</button><button id="cfglink">Copy link</button></div>
     <pre id="cfgout"></pre>
   </details>

@@ -321,7 +321,7 @@ function busy(b) { $('gen').disabled = b || !workerReady; if (!b && tick) { clea
 
 async function onWorker(ev) {
   const m = ev.data;
-  if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('mess')) { $('mess').value = u.get('mess'); cfgVals.mess = +u.get('mess'); cfgShow(); } if (u.has('auto')) generate(); } }
+  if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); cfgInit(m.schema, m.defaults); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('auto')) generate(); } }
   else if (m.type === 'initfail') { workerErr = m.error; setStatus('wasm init failed: ' + m.error, true); }
   else if (m.type === 'status') setStatus(m.text);
   else if (m.type === 'fail') { setStatus('generation failed: ' + m.error, true); busy(false); }
@@ -343,106 +343,165 @@ async function onWorker(ev) {
 }
 
 // ---------------------------------------------------------------- generation settings
-// k: option key in generate(opts) or "env.NAME" for a native tunable; inv: checkbox ON means the env flag is NOT set
-const CFG = [
-  { grp: 'Furnishing' },
-  { k: 'dense', label: 'Dense furniture rules', type: 'bool', def: true, tip: 'off = the program exactly as exported from Infinigen (fewer objects)' },
-  { k: 'only_target', label: 'Only target room', type: 'bool', def: true, tip: 'off = furnish every room of the house (much slower)' },
-  { k: 'env.TRINKETS_PER_SHELF', label: 'Trinkets / shelf', type: 'int', def: 3, min: 0, max: 20 },
-  { k: 'env.TRINKETS_MAX', label: 'Trinkets / house', type: 'int', def: 40, min: 0, max: 400 },
-  { k: 'env.NO_COUNTER_WIN', label: 'Counters may cover windows', type: 'bool', def: true, inv: true },
-  { grp: 'Solver' },
-  { k: 'steps_scale', label: 'Steps scale', type: 'range', def: 0.6, min: 0.1, max: 2, step: 0.05, tip: 'x 300/200/50 annealing steps (large/medium/small)' },
-  { k: 'env.STEPS_L', label: 'Large steps (blank=scale)', type: 'int', def: null, min: 1, max: 2000 },
-  { k: 'env.STEPS_M', label: 'Medium steps', type: 'int', def: null, min: 1, max: 2000 },
-  { k: 'env.STEPS_S', label: 'Small steps', type: 'int', def: null, min: 1, max: 1000 },
-  { k: 'env.PLACE_TRIES', label: 'Pose tries (big items)', type: 'int', def: 40, min: 1, max: 200 },
-  { k: 'env.CONSTRUCTIVE', label: 'Constructive placement', type: 'bool', def: false },
-  { grp: 'Clutter & cloth' },
-  { k: 'mess', label: 'Clutter level', type: 'range', def: 0.5, min: 0, max: 1, step: 0.05, mirror: 'mess' },
-  { k: 'cloth', label: 'Cloth simulation', type: 'bool', def: true, mirror: 'cloth' },
-  { k: 'cloth_steps', label: 'Cloth substeps', type: 'int', def: 1, min: 1, max: 8 },
-  { k: 'cloth_cg', label: 'Cloth CG iterations', type: 'int', def: 20, min: 5, max: 200 },
-  { grp: 'Geometry & post' },
-  { k: 'env.MESH_BUDGET_SCALE', label: 'Mesh detail x', type: 'range', def: 1, min: 0.25, max: 4, step: 0.25 },
-  { k: 'env.MESH_BUDGET', label: 'Triangle budget', type: 'bool', def: true, offval: '0', tip: 'off = keep full Infinigen mesh density (huge)' },
-  { k: 'env.NO_SNAP', label: 'Snap to visible surfaces', type: 'bool', def: true, inv: true },
-  { k: 'env.NO_WALLPUSH', label: 'Push out of walls', type: 'bool', def: true, inv: true },
-  { k: 'cams', label: 'Cameras', type: 'int', def: 4, min: 0, max: 12 },
-];
+// The panel is generated from the JSON Schema of the Rust GenConfig (wasm config_schema()); defaults come from default_config().
+// cfg = the full effective config object; presets are partial configs merged over the defaults; "extra JSON" is merged last.
 const PRESETS = {
-  fast: { steps_scale: 0.6, cloth_steps: 1, cloth_cg: 20 },
-  full: { steps_scale: 1.0, cloth_steps: 2, cloth_cg: 40 },
-  draft: { steps_scale: 0.25, cloth_steps: 1, cloth_cg: 10, mess: 0.3, 'env.MESH_BUDGET_SCALE': 0.5, cams: 2 },
+  fast: {},
+  full: { solver: { steps_scale: 1.0 }, cloth: { steps: 2, cg_iters: 40 } },
+  draft: { solver: { steps_scale: 0.25 }, cloth: { steps: 1, cg_iters: 10 }, mess: { level: 0.3 }, geometry: { budget_scale: 0.5 }, cameras: { count: 2 } },
 };
-function cfgDefaults() { const d = {}; for (const f of CFG) if (f.k) d[f.k] = f.def; return d; }
-let cfgVals = cfgDefaults();
+const SKIP_SECTIONS = new Set(['house', 'rules', 'advanced', 'people', 'output']); // house: seed/room controls above; rules: own editor; people/output: native only
+const SKIP_FIELDS = new Set(['house.seed', 'house.room']);
+let SCHEMA = null, DEFAULTS = {}, cfg = {};
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+function merge(base, over) { // deep merge, objects key by key, everything else replaces
+  for (const [k, v] of Object.entries(over || {})) { if (isObj(v) && isObj(base[k])) merge(base[k], v); else base[k] = clone(v); }
+  return base;
+}
+function diff(cur, def) { // minimal partial config: what differs from def
+  const out = {};
+  for (const [k, v] of Object.entries(cur || {})) {
+    if (isObj(v) && isObj(def && def[k])) { const d = diff(v, def[k]); if (Object.keys(d).length) out[k] = d; }
+    else if (JSON.stringify(v) !== JSON.stringify(def ? def[k] : undefined)) out[k] = v;
+  }
+  return out;
+}
+function getPath(o, path) { return path.split('.').reduce((x, k) => (x == null ? x : x[k]), o); }
+function setPath(o, path, v) { const ks = path.split('.'); const last = ks.pop(); let x = o; for (const k of ks) { if (!isObj(x[k])) x[k] = {}; x = x[k]; } x[last] = v; }
+function resolve(sch) { // follow $ref / single allOf
+  if (!sch) return sch;
+  if (sch.$ref) return resolve(SCHEMA.definitions[sch.$ref.split('/').pop()]);
+  if (sch.allOf && sch.allOf.length === 1) return { ...resolve(sch.allOf[0]), ...(sch.description ? { description: sch.description } : {}) };
+  return sch;
+}
+function typesOf(f) { const t = f.type; return Array.isArray(t) ? t : t ? [t] : []; }
+const prettyName = (k) => k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+let cfgPreset = 'fast';
+let extraJson = '';
+const cfgListeners = [];
+
+function widget(path, f, onchange) {
+  const ts = typesOf(f), nullable = ts.includes('null');
+  const num = ts.includes('integer') || ts.includes('number'), isInt = ts.includes('integer');
+  const v = getPath(cfg, path);
+  let inp, out = null;
+  if (ts.includes('boolean')) {
+    inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = !!v; inp.onchange = () => onchange(inp.checked);
+  } else if (f.enum) {
+    inp = document.createElement('select'); for (const e of f.enum) inp.add(new Option(e, e)); inp.value = v; inp.onchange = () => onchange(inp.value);
+  } else if (num) {
+    const lo = f.minimum, hi = f.maximum;
+    if (!isInt && lo != null && hi != null && !nullable) { // bounded real: slider
+      inp = document.createElement('input'); inp.type = 'range'; Object.assign(inp, { min: lo, max: hi, step: (hi - lo) / 100 >= 0.05 ? 0.05 : (hi - lo) / 100 }); inp.value = v;
+      out = document.createElement('span'); out.className = 'v'; out.textContent = (+v).toFixed(3).replace(/\.?0+$/, '');
+      inp.oninput = () => { out.textContent = (+inp.value).toFixed(3).replace(/\.?0+$/, ''); onchange(+inp.value); };
+    } else {
+      inp = document.createElement('input'); inp.type = 'number'; if (lo != null) inp.min = lo; if (hi != null) inp.max = hi; inp.step = isInt ? 1 : 'any';
+      inp.value = v == null ? '' : v; if (nullable) inp.placeholder = 'auto';
+      inp.onchange = () => onchange(inp.value === '' ? null : isInt ? Math.round(+inp.value) : +inp.value);
+    }
+  } else {
+    inp = document.createElement('input'); inp.type = 'text'; inp.value = v == null ? '' : v; inp.placeholder = nullable ? 'none' : ''; inp.onchange = () => onchange(inp.value === '' ? null : inp.value);
+  }
+  return [inp, out];
+}
+
 function cfgRender() {
   const body = $('cfgbody'); body.innerHTML = '';
-  for (const f of CFG) {
-    if (f.grp) { const g = document.createElement('div'); g.className = 'grp'; g.textContent = f.grp; body.appendChild(g); continue; }
-    const row = document.createElement('div'); row.className = 'row'; if (f.tip) row.title = f.tip;
-    const lab = document.createElement('label'); lab.textContent = f.label; row.appendChild(lab);
-    let inp; const v = cfgVals[f.k];
-    if (f.type === 'bool') { inp = document.createElement('input'); inp.type = 'checkbox'; inp.checked = !!v; inp.onchange = () => cfgSet(f, inp.checked); row.appendChild(inp); }
-    else if (f.type === 'range') {
-      inp = document.createElement('input'); inp.type = 'range'; Object.assign(inp, { min: f.min, max: f.max, step: f.step }); inp.value = v;
-      const out = document.createElement('span'); out.className = 'v'; out.textContent = (+v).toFixed(2);
-      inp.oninput = () => { out.textContent = (+inp.value).toFixed(2); cfgSet(f, +inp.value); }; row.appendChild(inp); row.appendChild(out);
-    } else { inp = document.createElement('input'); inp.type = 'number'; Object.assign(inp, { min: f.min, max: f.max, step: 1 }); inp.value = v == null ? '' : v; inp.placeholder = 'auto'; inp.onchange = () => cfgSet(f, inp.value === '' ? null : Math.round(+inp.value)); row.appendChild(inp); }
-    body.appendChild(row);
+  if (!SCHEMA) { body.textContent = 'settings load with the wasm generator'; cfgShow(); return; }
+  const root = resolve(SCHEMA);
+  for (const [sec, ssch] of Object.entries(root.properties)) {
+    if (SKIP_SECTIONS.has(sec)) continue;
+    const sd = resolve(ssch);
+    if (!sd.properties) continue;
+    const det = document.createElement('details'); det.className = 'sec'; det.open = sec === 'solver';
+    const sum = document.createElement('summary'); sum.textContent = prettyName(sec); if (sd.description) sum.title = sd.description; det.appendChild(sum);
+    for (const [fk, fsch] of Object.entries(sd.properties)) {
+      const path = sec + '.' + fk; if (SKIP_FIELDS.has(path)) continue;
+      const f = resolve(fsch);
+      const row = document.createElement('div'); row.className = 'row'; row.dataset.path = path;
+      const tip = (f.description || '') + (f.minimum != null && f.maximum != null ? ` [${f.minimum} .. ${f.maximum}]` : '') + ` (${path})`;
+      row.title = tip;
+      const lab = document.createElement('label'); lab.textContent = prettyName(fk); row.appendChild(lab);
+      const [inp, out] = widget(path, f, (nv) => cfgSet(path, nv));
+      row.appendChild(inp); if (out) row.appendChild(out);
+      det.appendChild(row);
+    }
+    body.appendChild(det);
   }
+  cfgSync(); cfgShow();
+}
+// mirror the cfg values into the always-visible controls (clutter, cloth) and the generated rows' tooltips
+function cfgSync() {
+  const m = getPath(cfg, 'mess.level'), c = getPath(cfg, 'cloth.on');
+  if (m != null) { $('mess').value = m; $('messv').textContent = (+m).toFixed(2); }
+  if (c != null) $('cloth').checked = !!c;
+  $('quality').value = cfgPreset;
+}
+function cfgSet(path, v, keepPreset) {
+  setPath(cfg, path, v);
+  if (!keepPreset) cfgPreset = 'custom';
+  if (path === 'mess.level' || path === 'cloth.on') { cfgSync(); if (!keepPreset) { /* re-render so the generated row follows */ document.querySelectorAll(`#cfgbody [data-path="${path}"] input`).forEach((i) => { if (i.type === 'checkbox') i.checked = !!v; else { i.value = v; const o = i.parentNode.querySelector('.v'); if (o) o.textContent = (+v).toFixed(2); } }); } }
   cfgShow();
 }
-function cfgSet(f, v, noCustom) {
-  cfgVals[f.k] = v;
-  if (f.mirror === 'mess') { $('mess').value = v; $('messv').textContent = (+v).toFixed(2); }
-  if (f.mirror === 'cloth') $('cloth').checked = !!v;
-  if (!noCustom) $('quality').value = 'custom';
-  cfgShow();
-}
-function applyQuality(name) {
-  if (!PRESETS[name]) return;
-  for (const [k, v] of Object.entries(PRESETS[name])) cfgVals[k] = v;
-  $('mess').value = cfgVals.mess; $('messv').textContent = (+cfgVals.mess).toFixed(2); $('cloth').checked = cfgVals.cloth;
+function applyCfgPreset(name) {
+  cfgPreset = name;
+  cfg = merge(clone(DEFAULTS), PRESETS[name] || {});
   cfgRender();
 }
-function buildOpts() {
-  const o = { env: {} };
-  for (const f of CFG) {
-    if (!f.k) continue;
-    let v = cfgVals[f.k];
-    if (f.k.startsWith('env.')) {
-      const name = f.k.slice(4);
-      if (f.type === 'bool') { if (f.inv) { if (!v) o.env[name] = true; } else if (f.offval !== undefined) { if (!v) o.env[name] = f.offval; } else if (v) o.env[name] = true; }
-      else if (v != null && v !== '') o.env[name] = String(v);
-    } else o[f.k] = v;
-  }
-  const t = $('cfgjson').value.trim();
-  if (t) { try { const x = JSON.parse(t); Object.assign(o.env, x.env || {}); delete x.env; Object.assign(o, x); $('cfgjson').style.borderColor = ''; } catch (_) { $('cfgjson').style.borderColor = '#f98'; } }
-  return o;
+function extra() {
+  const t = extraJson.trim(); if (!t) return null;
+  try { const x = JSON.parse(t); $('cfgjson').style.borderColor = ''; return isObj(x) ? x : null; } catch (_) { $('cfgjson').style.borderColor = '#f98'; return null; }
 }
-function cfgShow() { $('cfgout').textContent = JSON.stringify(buildOpts()); try { localStorage.setItem('indoorgen.cfg', JSON.stringify({ v: cfgVals, j: $('cfgjson').value, q: $('quality').value })); } catch (_) {} }
-$('quality').onchange = () => { if ($('quality').value !== 'custom') { cfgVals = cfgDefaults(); applyQuality($('quality').value); cfgShow(); } };
-$('cfgreset').onclick = () => { cfgVals = cfgDefaults(); $('cfgjson').value = ''; const q = $('quality').value === 'custom' ? 'fast' : $('quality').value; $('quality').value = q; applyQuality(q); };
-$('cfgjson').oninput = cfgShow;
+// the config sent to generate(): the full effective config with the extra JSON merged last (legacy flat keys are accepted there too)
+function buildOpts() { const o = clone(cfg); const x = extra(); if (x) merge(o, legacyToCfg(x)); return o; }
+function legacyToCfg(x) { // old flat opts -> config sections (old shared links carried them)
+  x = clone(x); const o = {};
+  const put = (path, v) => setPath(o, path, v);
+  if (typeof x.mess === 'number') { put('mess.level', x.mess); delete x.mess; }
+  if (typeof x.cloth === 'boolean') { put('cloth.on', x.cloth); delete x.cloth; }
+  if (typeof x.cams === 'number') { put('cameras.count', x.cams); delete x.cams; }
+  for (const [k, p] of [['dense', 'program.dense'], ['only_target', 'house.only_target'], ['cloth_steps', 'cloth.steps'], ['cloth_cg', 'cloth.cg_iters'], ['steps_scale', 'solver.steps_scale']]) if (k in x) { put(p, x[k]); delete x[k]; }
+  return merge(o, x);
+}
+function cfgShow() {
+  $('cfgout').textContent = JSON.stringify(diff(buildOpts(), DEFAULTS));
+  try { localStorage.setItem('indoorgen.cfg2', JSON.stringify({ cfg, j: extraJson, q: cfgPreset })); } catch (_) {}
+  cfgListeners.forEach((fn) => { try { fn(cfg); } catch (_) {} });
+}
+$('quality').onchange = () => { if ($('quality').value !== 'custom') { applyCfgPreset($('quality').value); } else cfgPreset = 'custom'; };
+$('cfgreset').onclick = () => { extraJson = ''; $('cfgjson').value = ''; applyCfgPreset(cfgPreset === 'custom' ? 'fast' : cfgPreset); };
+$('cfgjson').oninput = () => { extraJson = $('cfgjson').value; cfgShow(); };
+$('mess').addEventListener('input', () => cfgSet('mess.level', +$('mess').value));
+$('cloth').addEventListener('change', () => cfgSet('cloth.on', $('cloth').checked));
 $('cfglink').onclick = async () => {
   const u = new URL(location.href); u.search = '';
   u.searchParams.set('seed', $('seed').value); u.searchParams.set('room', $('room').value);
-  u.searchParams.set('cfg', btoa(JSON.stringify(buildOpts())));
+  u.searchParams.set('cfg', btoa(JSON.stringify(diff(buildOpts(), DEFAULTS))));
   try { await navigator.clipboard.writeText(u.toString()); $('cfglink').textContent = 'Copied'; } catch (_) { prompt('Link', u.toString()); }
   setTimeout(() => ($('cfglink').textContent = 'Copy link'), 1500);
 };
-$('mess').addEventListener('input', () => cfgSet(CFG.find((f) => f.k === 'mess'), +$('mess').value, true));
-$('cloth').addEventListener('change', () => cfgSet(CFG.find((f) => f.k === 'cloth'), $('cloth').checked, true));
-(() => {
-  try { const st = JSON.parse(localStorage.getItem('indoorgen.cfg') || 'null'); if (st) { Object.assign(cfgVals, st.v); $('cfgjson').value = st.j || ''; $('quality').value = st.q || 'fast'; } } catch (_) {}
+// called once the wasm module reported its schema + defaults: restore localStorage / URL state, build the panel
+function cfgInit(schemaJson, defaultsJson) {
+  try { SCHEMA = schemaJson ? JSON.parse(schemaJson) : null; DEFAULTS = defaultsJson ? JSON.parse(defaultsJson) : {}; } catch (e) { SCHEMA = null; }
+  cfg = clone(DEFAULTS); cfgPreset = 'fast';
+  try {
+    const st = JSON.parse(localStorage.getItem('indoorgen.cfg2') || 'null');
+    if (st && isObj(st.cfg)) { cfg = merge(clone(DEFAULTS), st.cfg); extraJson = st.j || ''; cfgPreset = st.q || 'custom'; }
+  } catch (_) {}
   const u = new URLSearchParams(location.search);
-  if (u.has('cfg')) { try { const o = JSON.parse(atob(u.get('cfg'))); cfgVals = cfgDefaults(); $('cfgjson').value = JSON.stringify(o); $('quality').value = 'custom'; } catch (_) {} }
-  if (u.has('quality') && PRESETS[u.get('quality')]) { $('quality').value = u.get('quality'); cfgVals = cfgDefaults(); applyQuality(u.get('quality')); }
-  $('mess').value = cfgVals.mess; $('messv').textContent = (+cfgVals.mess).toFixed(2); $('cloth').checked = cfgVals.cloth;
+  if (u.has('quality') && PRESETS[u.get('quality')]) { cfgPreset = u.get('quality'); cfg = merge(clone(DEFAULTS), PRESETS[cfgPreset]); extraJson = ''; }
+  if (u.has('cfg')) { try { cfg = merge(clone(DEFAULTS), legacyToCfg(JSON.parse(atob(u.get('cfg'))))); extraJson = ''; cfgPreset = 'custom'; } catch (_) {} }
+  if (u.has('mess')) { setPath(cfg, 'mess.level', +u.get('mess')); }
+  $('cfgjson').value = extraJson;
   cfgRender();
-})();
+}
+// hook for the furniture-rules editor: it mounts into #rules-editor and reads/writes cfg.rules through this object
+window.IGConfig = {
+  get: () => clone(cfg), set: (path, v) => cfgSet(path, v), onChange: (fn) => cfgListeners.push(fn),
+  get schema() { return SCHEMA; }, get defaults() { return clone(DEFAULTS); }, rulesMount: $('rules-editor'),
+};
 
 function generate() {
   if (!workerReady) return;
@@ -451,7 +510,7 @@ function generate() {
   tick = setInterval(() => { $('status').dataset.t = ((performance.now() - t0) / 1000).toFixed(1); if (!$('status').classList.contains('err') && /\.\.\.$/.test($('status').textContent.replace(/ \(\d+\.\ds\)$/, ''))) $('status').textContent = $('status').textContent.replace(/ \(\d+\.\ds\)$/, '') + ` (${$('status').dataset.t}s)`; }, 200);
   worker.postMessage({
     type: 'gen', id: ++jobId, seed: +$('seed').value, room: $('room').value,
-    opts: buildOpts(),
+    opts: buildOpts(), // full GenConfig (seed/room are passed separately)
   });
 }
 $('gen').onclick = generate;

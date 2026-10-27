@@ -5,17 +5,9 @@ use crate::mesh::*;
 use crate::pipeline::*;
 
 pub struct Params {
-    pub seed: u64,
-    /// target room type (cameras favour it); with `only_target` also the single room that is furnished
-    pub room: Option<String>,
-    pub only_target: bool,
-    pub mess_level: f64,
-    pub people_n: usize,
-    pub qc_out: Option<String>,
-    /// stop before the budget / glb export (`--no-glb`)
-    pub no_glb: bool,
-    /// the program exactly as exported from python (INFINIGEN_PROGRAM=1) instead of the dense one
-    pub orig_prog: bool,
+    /// every generation setting (seed, room, mess, people, cloth, ... see `crate::config`)
+    pub cfg: crate::config::GenConfig,
+    /// the furnishing program json matching `cfg.program.dense` (rules are applied to it by `build_scene`)
     pub prog: serde_json::Value,
     pub fallback: TableAssets,
 }
@@ -31,29 +23,38 @@ pub struct Built {
 
 pub fn build_scene(p: &Params) -> Built {
     indoorgen::assets::bed::set_clean_geometry(true);
-    let seed = p.seed;
-    let only_target = p.only_target;
-    let mess = indoorgen::mess::MessCfg { level: p.mess_level, seed };
-    let room = p.room.clone();
-    let (people_n, mess_level, no_glb, qc_out, orig_prog) = (p.people_n, p.mess_level, p.no_glb, p.qc_out.clone(), p.orig_prog);
+    let cfg = &p.cfg;
+    cfg.install();
+    // cloth that is exported as a sidecar job is re-simulated in Blender at render time: skip the Rust sim unless cloth.on
+    indoorgen::assets::cloth::SKIP_JOB_SIM.store(!cfg.cloth.on, std::sync::atomic::Ordering::Relaxed);
+    let seed = cfg.house.seed;
+    let only_target = cfg.house.only_target;
+    let mess = indoorgen::mess::MessCfg { level: cfg.mess.level, seed };
+    let room = cfg.house.room.clone();
+    let (people_n, mess_level, no_glb, qc_out, orig_prog) = (cfg.people.count, cfg.mess.level, cfg.output.no_glb, cfg.output.qc_path.clone(), !cfg.program.dense);
     // default: the dense-furnishing program + Infinigen's own solver steps 300/200/50 (realistic, lived-in rooms).
-    // INFINIGEN_PROGRAM=1: the program exactly as exported from python home.py + the fast_solve.gin steps 100/40/5 (selfcheck/lockstep semantics).
-    let prog = &p.prog;
-    let steps = |k: &str, d: usize| ig_core::envx::var(k).and_then(|v| v.parse().ok()).unwrap_or(d);
-    indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && ig_core::envx::var_os("NO_PH_REUSE").is_none());
-    if !orig_prog { indoorgen::furn::dof::set_place_tries(steps("PLACE_TRIES", 40)); }
-    indoorgen::furn::dof::set_constructive(!orig_prog && ig_core::envx::var_os("CONSTRUCTIVE").is_some(), steps("PLACE_CAND", 64));
-    indoorgen::furn::dof::set_counter_over_windows(!orig_prog && ig_core::envx::var_os("NO_COUNTER_WIN").is_none());
+    // program.dense=false (INFINIGEN_PROGRAM=1): the program exactly as exported from python home.py + the fast_solve.gin steps 100/40/5 (selfcheck/lockstep semantics).
+    let mut prog_owned;
+    let mut prog = &p.prog;
+    if let Some(spec) = &cfg.rules {
+        prog_owned = p.prog.clone();
+        crate::rules::apply(&mut prog_owned, spec);
+        prog = &prog_owned;
+    }
+    indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && cfg.solver.placeholder_reuse);
+    if !orig_prog { indoorgen::furn::dof::set_place_tries(cfg.solver.place_tries); }
+    indoorgen::furn::dof::set_constructive(!orig_prog && cfg.solver.constructive, cfg.solver.place_cand);
+    indoorgen::furn::dof::set_counter_over_windows(!orig_prog && cfg.program.counter_over_windows);
     if !orig_prog {
         #[cfg(not(target_arch = "wasm32"))]
         std::env::set_var("INFINIGEN_DENSE", "1");
         ig_core::envx::set_dense(true);
     }
-    let (dl, dm, ds) = if orig_prog { (100, 40, 5) } else { (300, 200, 50) };
+    let (steps_l, steps_m, steps_s) = cfg.steps();
     let assets = indoorgen::assets::RealAssets { fallback: p.fallback.clone() };
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
-    let mut g = generate(&Options { seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps("STEPS_L", dl), steps_medium: steps("STEPS_M", dm), steps_small: steps("STEPS_S", ds) }, &assets, prog);
+    let mut g = generate(&Options { seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s }, &assets, prog);
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {
@@ -64,7 +65,7 @@ pub fn build_scene(p: &Params) -> Built {
     // dense program: every extra shelf gets filled with NatureShelfTrinkets (~250k triangles each; 120-200 per house took
     // 1-2 min of build time and most of the glb): at most 3 per shelf piece and 40 per house
     if !orig_prog {
-        let (per_parent, total) = (steps("TRINKETS_PER_SHELF", 3), steps("TRINKETS_MAX", 40));
+        let (per_parent, total) = (cfg.program.trinkets_per_shelf, cfg.program.trinkets_max);
         let mut keys: Vec<String> = g.state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |gg| gg.class == "NatureShelfTrinketsFactory")).map(|(k, _)| k.clone()).collect();
         keys.sort();
         let mut per: std::collections::BTreeMap<String, usize> = Default::default();
@@ -232,10 +233,10 @@ pub fn build_scene(p: &Params) -> Built {
                     let tc = |a: &indoorgen::assets::Asset| a.parts.iter().map(|p| p.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
                     let t0 = web_time::Instant::now();
                     let before = tc(&a);
-                    indoorgen::budget::apply_asset(&mut a);
+                    indoorgen::budget::apply_asset(&mut a, &cfg.geometry);
                     eprintln!("BUDGETLOG {} tris {} -> {} {:.3}s", gen.class, before, tc(&a), t0.elapsed().as_secs_f64());
                 } else {
-                    indoorgen::budget::apply_asset(&mut a);
+                    indoorgen::budget::apply_asset(&mut a, &cfg.geometry);
                 }
                 indoorgen::assets::set_unseeded(None);
                 ((*k).clone(), a)
@@ -244,7 +245,7 @@ pub fn build_scene(p: &Params) -> Built {
     };
     lap("visuals built");
     // python's KitchenCabinet visual starts at local y = 0 while its solver box is centred: align them (see snap.rs)
-    if ig_core::envx::var_os("NO_SNAP").is_none() {
+    if cfg.post.snap {
         let mv = indoorgen::snap::recenter_visuals(&g.state, &mut visuals, &["KitchenCabinetFactory"]);
         eprintln!("RECENTER {} KitchenCabinet visuals aligned with their solver box", mv.len());
         let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
@@ -257,7 +258,7 @@ pub fn build_scene(p: &Params) -> Built {
     // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)
     {
         let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
-        if ig_core::envx::var_os("NO_SNAP").is_none() {
+        if cfg.post.snap {
             // repeated: an item buried in a double board first rests on the inner board, the next pass finds the real top
             let mut sn = vec![];
             for _ in 0..3 {
@@ -270,14 +271,14 @@ pub fn build_scene(p: &Params) -> Built {
             eprintln!("SNAP {} supported objects moved to the visible support surface", sn.len());
         }
     }
-    if ig_core::envx::var_os("NO_SNAP").is_none() && ig_core::envx::var_os("NO_WALLPUSH").is_none() {
+    if cfg.post.snap && cfg.post.wall_push {
         let wt = g.c.wall_thickness;
         let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();
         for (k, dx, dy) in indoorgen::snap::push_out_of_walls(&mut g.state, &visuals, &inner, 0.35) { eprintln!("WALLPUSH {k} by ({:+.3},{:+.3})", dx, dy); }
     }
     lap("snap done");
     // door leaves: swept from closed to the desired angle against the solved furniture (visual meshes) and walls
-    indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys);
+    if cfg.post.door_settle { indoorgen::openings::settle_doors(&mut ops, &g.cutters, &g.c, &g.state, &visuals, &g.room_polys); }
     lap("doors settled");
     let door_zones: Vec<([f64; 3], [f64; 3], f64)> = ops.doors.iter().flat_map(|d| d.zones(&g.cutters[d.ci], 0.08)).collect();
     let door_infos: Vec<indoorgen::qc::DoorInfo> = ops.doors.iter().map(|d| indoorgen::qc::DoorInfo { ci: d.ci, desired: d.desired, angle: d.angle, limiter: d.limiter.clone() }).collect();
@@ -455,7 +456,7 @@ pub fn build_scene(p: &Params) -> Built {
     let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
     fn qcin<'a>(scene: &'a Scene, g: &'a indoorgen::pipeline::Generated, door_infos: &'a [indoorgen::qc::DoorInfo], cut_keys: &'a [String]) -> indoorgen::qc::QcIn<'a> { indoorgen::qc::QcIn { scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: door_infos, wall_t: g.c.wall_thickness, cut_keys } }
     // clutter that ended up inside furniture / other clutter is removed (the placement works on convex hulls)
-    if mess.on() && ig_core::envx::var_os("NO_SNAP").is_none() {
+    if mess.on() && cfg.post.snap {
         let rep = indoorgen::qc::run(&qcin(&scene, &g, &door_infos, &cut_keys), std::path::Path::new(""), "");
         let gone = indoorgen::qc::prune_clutter(&mut scene, &rep);
         eprintln!("PRUNE {} clutter items removed for interpenetration", gone.len());
@@ -481,7 +482,7 @@ pub fn build_scene(p: &Params) -> Built {
     }
     if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false }; }
     lap("qc done");
-    { let tb = web_time::Instant::now(); let (a, b, k) = indoorgen::budget::apply(&mut scene); if a > 0 { eprintln!("BUDGET tris {a} -> {b} ({k} nodes simplified) in {:.1}s", tb.elapsed().as_secs_f64()); } }
+    { let tb = web_time::Instant::now(); let (a, b, k) = indoorgen::budget::apply(&mut scene, &cfg.geometry); if a > 0 { eprintln!("BUDGET tris {a} -> {b} ({k} nodes simplified) in {:.1}s", tb.elapsed().as_secs_f64()); } }
     Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true }
 }
 

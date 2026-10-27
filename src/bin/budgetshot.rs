@@ -26,7 +26,7 @@ fn main() {
     }
     let tris = |s: &Scene| s.nodes.iter().map(|n| n.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
     let mut bud = Scene { nodes: full.nodes.clone(), materials: full.materials.clone(), ..Default::default() };
-    let (t0, t1, k) = indoorgen::budget::apply(&mut bud);
+    let (t0, t1, k) = indoorgen::budget::apply(&mut bud, &{ let mut c = indoorgen::config::GenConfig::default(); c.apply_env(); c.geometry });
     eprintln!("tris {} -> {} ({} simplified)", t0, t1, k);
     let _ = tris;
     full.write_glb(std::path::Path::new(&format!("{}_full.glb", a[1]))).unwrap();
