@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+import { rulesInit, rulesErrors } from './rules.js';
+
 const $ = (id) => document.getElementById(id);
 const canvas = $('view');
 const EMBED = window.__INDOORGEN || null; // set by the single-file packager
@@ -322,6 +324,7 @@ function busy(b) { $('gen').disabled = b || !workerReady; if (!b && tick) { clea
 async function onWorker(ev) {
   const m = ev.data;
   if (m.type === 'ready') { workerReady = true; $('gen').disabled = false; setStatus('ready'); cfgInit(m.schema, m.defaults); { const u = new URLSearchParams(location.search); if (u.has('seed')) $('seed').value = u.get('seed'); if (u.has('room')) $('room').value = u.get('room'); if (u.has('auto')) generate(); } }
+  else if (m.type === 'rulesinfo') rulesInit(m.info, window.IGConfig);
   else if (m.type === 'initfail') { workerErr = m.error; setStatus('wasm init failed: ' + m.error, true); }
   else if (m.type === 'status') setStatus(m.text);
   else if (m.type === 'fail') { setStatus('generation failed: ' + m.error, true); busy(false); }
@@ -449,7 +452,9 @@ function cfgSet(path, v, keepPreset) {
 }
 function applyCfgPreset(name) {
   cfgPreset = name;
+  const keepRules = cfg.rules;
   cfg = merge(clone(DEFAULTS), PRESETS[name] || {});
+  cfg.rules = keepRules ?? null; // presets do not touch the furniture rules
   cfgRender();
 }
 function extra() {
@@ -502,12 +507,13 @@ function cfgInit(schemaJson, defaultsJson) {
 }
 // hook for the furniture-rules editor: it mounts into #rules-editor and reads/writes cfg.rules through this object
 window.IGConfig = {
-  get: () => clone(cfg), set: (path, v) => cfgSet(path, v), onChange: (fn) => cfgListeners.push(fn),
+  get: () => clone(cfg), set: (path, v, keepPreset) => cfgSet(path, v, keepPreset), onChange: (fn) => cfgListeners.push(fn),
   get schema() { return SCHEMA; }, get defaults() { return clone(DEFAULTS); }, rulesMount: $('rules-editor'),
 };
 
 function generate() {
   if (!workerReady) return;
+  if (rulesErrors().length) { $('cfg').open = true; $('rules-sec').open = true; setStatus('fix the furniture rules first: ' + rulesErrors()[0], true); return; }
   busy(true);
   t0 = performance.now();
   tick = setInterval(() => { $('status').dataset.t = ((performance.now() - t0) / 1000).toFixed(1); if (!$('status').classList.contains('err') && /\.\.\.$/.test($('status').textContent.replace(/ \(\d+\.\ds\)$/, ''))) $('status').textContent = $('status').textContent.replace(/ \(\d+\.\ds\)$/, '') + ` (${$('status').dataset.t}s)`; }, 200);

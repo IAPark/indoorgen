@@ -13,7 +13,7 @@ if [ "$PKG" != "$W/pkg" ] && [ -d "$PKG" ]; then rm -rf "$W/pkg"; mkdir -p "$W/p
 
 # (a) static site
 rm -rf "$D"; mkdir -p "$D/site"
-cp "$W/index.html" "$W/main.js" "$W/worker.js" "$W/style.css" "$D/site/"
+cp "$W/index.html" "$W"/*.js "$W/style.css" "$D/site/"
 cp -R "$W/vendor" "$D/site/vendor"
 [ -d "$W/pkg" ] && mkdir -p "$D/site/pkg" && cp "$W/pkg/ig_wasm.js" "$W/pkg/ig_wasm_bg.wasm" "$D/site/pkg/"
 

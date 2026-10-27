@@ -1,6 +1,7 @@
 // usage: gen2 <seed> [room] [out.glb] [--only-target] [--rust-cloth]
 //   default: every room of the house is furnished; `room` is the target room (cameras favour it). --only-target / ONLY_TARGET=1: furnish only the first room of that type
 // usage: gen2 <seed> [room] [out.glb] [--rust-cloth] [--mess LEVEL] [--cams K]
+//   --rules FILE.json (furniture rules per room type), --print-default-rules, --rules-info
 //   --config FILE.json (partial GenConfig; env vars and flags win), --dump-config, --schema, --set section.key=JSON (see src/config.rs)
 //   --cams K: K photographer-like camera poses per furnished room written to the sidecar json "cameras" (crates/ig_cams); 0 (default) = unchanged
 //   --people N: up to N posed photoreal avatars placed after the solve (crates/ig_people); 0 (default) = unchanged output
@@ -56,6 +57,18 @@ fn main() {
         cfg = GenConfig::from_partial(&cfg, &j).unwrap_or_else(|e| panic!("--config {f}: {e}"));
     }
     cfg.apply_env();
+    if take_flag(&mut args, "--print-default-rules") || args.iter().any(|a| a == "--rules-info") {
+        // the built-in rules of the dense program as a RuleSpec (edit it and pass it back with --rules / config `rules`); --rules-info: + vocabulary
+        let p: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/home_program_dense.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+        let v = if take_flag(&mut args, "--rules-info") { indoorgen::rules::rules_info(&p) } else { serde_json::to_value(indoorgen::rules::default_rules(&p)).unwrap() };
+        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+        return;
+    }
+    // --rules FILE.json: shortcut for the config's `rules` field (furniture rules per room type, see src/rules.rs)
+    if let Some(f) = take_val(&mut args, "--rules") {
+        let text = std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("--rules {f}: {e}"));
+        cfg.rules = Some(indoorgen::rules::parse(&text).unwrap_or_else(|e| panic!("--rules {f}: {e}")));
+    }
     if take_flag(&mut args, "--rust-cloth") { cfg.cloth.on = true; }
     if let Some(v) = take_val(&mut args, "--mess") { cfg.mess.level = v.parse().expect("--mess LEVEL"); }
     if let Some(v) = take_val(&mut args, "--people") { cfg.people.count = v.parse().expect("--people N"); }
@@ -88,6 +101,12 @@ fn main() {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/{}", env!("CARGO_MANIFEST_DIR"), prog_file)).unwrap()).unwrap();
     let mut fallback = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
     fallback.add_file(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_samples.json"));
+    if let Some(spec) = &cfg.rules {
+        if let Err(errs) = indoorgen::rules::try_apply(&mut prog.clone(), spec) {
+            for e in errs { eprintln!("rules: {e}"); }
+            std::process::exit(2);
+        }
+    }
     let params = indoorgen::scenegen::Params { cfg, prog, fallback };
     let indoorgen::scenegen::Built { scene, room_polys, wall_t, t_scene, done } = indoorgen::scenegen::build_scene(&params);
     if !done { return; }

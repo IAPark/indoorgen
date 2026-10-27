@@ -134,6 +134,28 @@ pub fn default_config() -> String {
     serde_json::to_string(&GenConfig::web_default()).unwrap()
 }
 
+/// JSON for the rules editor: `{rooms, classes:{factories,tags}, relations, defaults: RuleSpec, constraint_names}` (dense program)
+#[wasm_bindgen]
+pub fn rules_info() -> Result<String, JsValue> {
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    Ok(indoorgen::rules::rules_info(&prog).to_string())
+}
+
+/// the built-in rules as a RuleSpec JSON string
+#[wasm_bindgen]
+pub fn default_rules() -> Result<String, JsValue> {
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    Ok(serde_json::to_string(&indoorgen::rules::default_rules(&prog)).unwrap())
+}
+
+/// validate a RuleSpec JSON string: returns "" when ok, else the error messages (one per line)
+#[wasm_bindgen]
+pub fn validate_rules(spec_json: &str) -> Result<String, JsValue> {
+    let spec = match indoorgen::rules::parse(spec_json) { Ok(s) => s, Err(e) => return Ok(e) };
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    Ok(indoorgen::rules::validate(&spec, &prog).join("\n"))
+}
+
 /// the sidecar json (nodes, lights, cloth jobs, cameras) of the last `generate` call
 #[wasm_bindgen]
 pub fn last_scene_json() -> String {
