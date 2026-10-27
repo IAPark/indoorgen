@@ -32,9 +32,9 @@ def run_variant(a, vdir, glb, house, variant, variation, room, W, H, K, opt, out
     for j, v in enumerate(pool):
         M = cam_pose_cv(np.array(v["pos"]), v["yaw"], v["pitch"])
         json.dump(dict(matrix=(M @ BL2CV).tolist(), lens=v["f_mm"], sensor_width=36.0), open(os.path.join(vdir, "_cams", "p%03d.json" % j), "w"))
-    lg = variation.get("lighting", {}); comp = float(lg.get("sun_azimuth_deg", 135.0))
+    lg = variation.get("lighting", {}); sd = lg.get("sun_dir") or [0.5, -0.5, 0.7071]; pv_az = math.degrees(math.atan2(sd[1], sd[0])); pv_el = math.degrees(math.asin(max(-1.0, min(1.0, sd[2]))))
     cmd = [os.path.join(ROOT, "tools/preview.sh"), glb] + sum([["--cam", os.path.join(vdir, "_cams", "p%03d.json" % j)] for j in range(len(pool))], []) + \
-          ["--res", "%dx%d" % (W, H), "--ss", "3", "--depth", "--sun", "%g,%g" % (90.0 - comp, max(float(lg.get("sun_elevation_deg", 45.0)), 1.0)), "-o", os.path.join(vdir, "_pv")]
+          ["--res", "%dx%d" % (W, H), "--ss", "3", "--depth", "--sun", "%g,%g" % (pv_az, max(pv_el, 1.0)), "-o", os.path.join(vdir, "_pv")]
     t = time.time(); r = subprocess.run(cmd, capture_output=True, text=True); res["preview_s"] = time.time() - t
     if r.returncode != 0: raise SystemExit("preview failed: " + r.stderr[-500:])
     stem = os.path.splitext(os.path.basename(glb))[0]

@@ -52,7 +52,7 @@ def expand_variants(house):
         for i in range(n):
             name = base if n == 1 else "%s_%02d" % (base, i)
             seeds = {f: (crc(hs, name, f) if f in vary else 0) for f in FACTORS}
-            out.append(dict(name=name, vary=vary, seeds=seeds, gen=g.get("gen", {}), index=i))
+            out.append(dict(name=name, vary=vary, seeds=seeds, gen=g.get("gen", {}), index=i, remove=g.get("remove")))
     return out
 
 
@@ -85,10 +85,10 @@ def fallback_variation(variant, room, sidecar_var):
             if ph < 0.65: lg = dict(sun_elevation_deg=r.uniform(15, 75), sun_strength=r.uniform(0.8, 1.2), sky_strength=r.uniform(0.18, 0.3), color_temp_K=r.uniform(5000, 7500), p_lamps=0.25, phase="day")
             elif ph < 0.85: lg = dict(sun_elevation_deg=r.uniform(-3, 8), sun_strength=r.uniform(0.5, 1.0), sky_strength=r.uniform(0.08, 0.15), color_temp_K=r.uniform(3500, 5000), p_lamps=0.7, phase="dusk")
             else: lg = dict(sun_elevation_deg=-25.0, sun_strength=0.0, sky_strength=0.01, color_temp_K=4000.0, p_lamps=1.0, phase="night")
-            on = r.random() < lg.pop("p_lamps")
-            lg.update(sun_azimuth_deg=r.uniform(0, 360), lamps_on=on, lamp_strength_scale=r.uniform(0.6, 1.4), ceiling_lights_on=on or r.random() < 0.3)
+            on = r.random() < lg.pop("p_lamps"); az = r.uniform(0, 360)
+            lg.update(sun_azimuth_deg=az, sun_dir=[math.sin(math.radians(az)) * math.cos(math.radians(lg["sun_elevation_deg"])), math.cos(math.radians(az)) * math.cos(math.radians(lg["sun_elevation_deg"])), math.sin(math.radians(lg["sun_elevation_deg"]))], lamps_on=on, lamp_strength_scale=r.uniform(0.6, 1.4), ceiling_lights_on=on or r.random() < 0.3)
         else:
-            lg = dict(sun_azimuth_deg=135.0, sun_elevation_deg=45.0, sun_strength=1.0, sky_strength=0.2, color_temp_K=6500.0, lamps_on=True, lamp_strength_scale=1.0, ceiling_lights_on=True, phase="default")
+            lg = dict(sun_azimuth_deg=135.0, sun_elevation_deg=45.0, sun_dir=[0.5, -0.5, 0.7071], sun_strength=1.0, sky_strength=0.2, color_temp_K=6500.0, lamps_on=True, lamp_strength_scale=1.0, ceiling_lights_on=True, phase="default")
         v["lighting"] = lg; src["lighting"] = "capture-fallback" if "lighting" in variant["vary"] else "capture-default"
     if "walls" not in v and "walls" in variant["vary"] and room:
         r = random.Random(variant["seeds"]["walls"]); h, s, val = r.random(), r.uniform(0.05, 0.6), r.uniform(0.45, 0.95)
@@ -115,7 +115,12 @@ def contact_sheet(vdir, K, py_png):
         im = np.asarray(Image.open(os.path.join(vdir, v["file"])).convert("RGB"))
         d = np.load(os.path.join(vdir, v["depth"])); dn = np.clip(d / 10.0, 0, 1); col = cv2.applyColorMap((dn * 255).astype(np.uint8), cv2.COLORMAP_TURBO)[:, :, ::-1]
         col[d <= 0] = 0
-        rows.append(np.concatenate([im, col], 0))
+        col2 = []
+        if v.get("depth_full"):
+            mk = np.asarray(Image.open(os.path.join(vdir, v["removed_mask"])).convert("L")); ov = im.copy(); ov[mk > 127] = (0.4 * ov[mk > 127] + 0.6 * np.array([255, 0, 0])).astype(np.uint8)
+            df = np.load(os.path.join(vdir, v["depth_full"])); c3 = cv2.applyColorMap((np.clip(df / 10.0, 0, 1) * 255).astype(np.uint8), cv2.COLORMAP_TURBO)[:, :, ::-1]; c3[df <= 0] = 0
+            col2 = [ov, c3]
+        rows.append(np.concatenate([im, col] + col2, 0))
     sheet = np.concatenate(rows, 1) if rows else np.zeros((8, 8, 3), np.uint8)
     h, w = sheet.shape[:2]; s = min(1.0, 1800.0 / w)
     Image.fromarray(sheet).resize((int(w * s), int(h * s))).save(py_png)
@@ -163,13 +168,17 @@ def main():
                 slug = house["room"].lower().replace("room", "-room") if house["room"].endswith("Room") and house["room"] != "Room" else house["room"].lower()
                 room = next((n["name"].rsplit(".", 1)[0] for n in sidecar["nodes"] if n["name"].startswith(slug) and n["name"].endswith(".floor")), None)
             variation = fallback_variation(variant, room, sidecar.get("variation"))
-            variation.update(variant_factors=variant["vary"], factor_seeds=variant["seeds"], gen_config=gcfg, notes=notes, room=room)
+            rem = copy.deepcopy(variant.get("remove"))
+            if rem:
+                rem.setdefault("seed", crc(house["seed"], variant["name"], "remove"))
+                if isinstance(rem.get("random"), dict): rem["random"].setdefault("seed", crc(house["seed"], variant["name"], "remove-objects"))
+            variation.update(remove_spec=rem, variant_factors=variant["vary"], factor_seeds=variant["seeds"], gen_config=gcfg, notes=notes, room=room)
             json.dump(variation, open(os.path.join(vdir, "variation.json"), "w"), indent=1)
             meta = dict(house=hname, variant=variant["name"], house_seed=house["seed"], room_type=house["room"], room=room, engine=engine, width=W, height=H, views=K, samples=samples, gen_s=t_gen, glb_mb=os.path.getsize(glb) / 1e6)
             if engine == "cycles":
                 spec = dict(out_dir=vdir, room=room, width=W, height=H, samples=samples, n_views=K, camera_seed=opt("camera_seed", house["seed"]), cameras=opt("cameras", {}),
                             pool_path=os.path.join(out, hname, "cameras_pool.json"), depth_format=opt("depth_format", "npy"), extras=opt("extras", ["normal", "instance"]),
-                            variation=variation, variant=variant["name"])
+                            variation=variation, variant=variant["name"], remove=rem)
                 sp = os.path.join(tmp, "spec.json"); json.dump(spec, open(sp, "w"))
                 rc, t_r = run([py, os.path.join(ROOT, "tools/render/render_rust.py"), glb, "unused.png", "--room", room, "--seed", str(house["seed"]), "--samples", str(samples), "--no-cloth", "--dataset", sp],
                               os.path.join(vdir, "render.log"), cwd=ref)

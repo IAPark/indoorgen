@@ -12,7 +12,9 @@
        {"name": "mess", "vary": ["mess"]},
        {"name": "lighting", "vary": ["lighting"]},
        {"name": "furniture", "vary": ["furniture"]},
-       {"name": "people", "vary": ["people"]}
+       {"name": "people", "vary": ["people"]},
+       {"name": "rm_class_all", "vary": [], "remove": {"classes": ["Bed"], "views": "all", "with_children": true}},
+       {"name": "rm_random_subset", "vary": [], "remove": {"random": {"count": 1, "classes": ["Shelf", "Table", "Desk", "Bookcase", "Cabinet", "Plant"]}, "views": "random_subset", "views_count": 2}}
      ]}
   ]
 }

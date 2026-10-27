@@ -20,7 +20,9 @@ def load(d):
         dp = os.path.join(d, v["depth"])
         depth = np.load(dp) if dp.endswith(".npy") else None
         img = np.asarray(Image.open(os.path.join(d, v["file"])).convert("L"), np.float32)
-        V.append(dict(K=np.array(v["K"]), w2c=np.array(v["w2c"]), c2w=np.array(v["c2w"]), depth=depth, img=img, name=v["file"]))
+        full = np.load(os.path.join(d, v["depth_full"])) if v.get("depth_full") else None
+        mask = np.asarray(Image.open(os.path.join(d, v["removed_mask"]))) > 127 if v.get("removed_mask") else None
+        V.append(dict(vis=depth, full=full, mask=mask, removed=v.get("removed_keys") or [], K=np.array(v["K"]), w2c=np.array(v["w2c"]), c2w=np.array(v["c2w"]), depth=depth if full is None else full, img=img, name=v["file"]))
     return V
 
 
@@ -111,10 +113,24 @@ def main():
             bad += not ok
             print("%d->%d overlap %.2f inl %s depth_err %s reproj %s/%s photo %s (shift4 %s) %s" % (i, j, r["overlap"], *("%.3f" % r[k] if k in r else "-" for k in ("depth_inlier_frac",)),
                   *("%.4f" % r[k] if k in r else "-" for k in ("depth_err_rel_med",)), *("%.2f" % r[k] if k in r else "-" for k in ("reproj_px_med", "reproj_px_p90", "photo_abs_med", "photo_abs_med_shift4px")), "ok" if ok else "BAD"))
+    rem = []
+    for i, v in enumerate(V):
+        if v["full"] is None: continue
+        m = v["mask"]; vis = v["vis"]; full = v["full"]; r = dict(view=i, removed=len(v["removed"]), mask_frac=float(m.mean()))
+        if v["removed"]:
+            r["outside_mask_equal"] = float((np.abs(vis - full)[~m] < 1e-4).mean()) if (~m).any() else 1.0
+            r["inside_mask_depth_gain_med"] = float(np.median((np.where(vis > 0, vis, 100.0) - full)[m])) if m.any() else 0.0
+            r["inside_mask_not_nearer"] = float(((vis >= full - 1e-3) | (vis == 0))[m].mean()) if m.any() else 1.0
+            # RGB must be identical-ish outside the (dilated) mask is NOT checked: shadows / bounce light change
+            ok = r["outside_mask_equal"] > 0.999 and r["inside_mask_not_nearer"] > 0.999 and (m.any() or r["mask_frac"] == 0)
+            bad += not ok; r["ok"] = bool(ok)
+        else:
+            r["mask_empty"] = bool(not m.any()); r["equal"] = bool(np.array_equal(vis, full)); bad += not (r["mask_empty"] and r["equal"])
+        rem.append(r); print("REMOVAL", json.dumps(r))
     al = [align(v) for v in V]; print("ALIGN best (dy,dx) per view, score/score(0,0):", [(b, round(r, 3)) for b, r in al])
     bad += sum(abs(b[0]) > 1 or abs(b[1]) > 1 for b, _ in al)
     ov = [r for r in out if "reproj_px_med" in r]
-    summ = dict(rgb_depth_best_shift=[list(b) for b, _ in al], pairs=len(out), pairs_with_overlap=len(ov), bad=bad,
+    summ = dict(removal=rem, rgb_depth_best_shift=[list(b) for b, _ in al], pairs=len(out), pairs_with_overlap=len(ov), bad=bad,
                 reproj_px_med=float(np.median([r["reproj_px_med"] for r in ov])) if ov else None,
                 depth_err_rel_med=float(np.median([r["depth_err_rel_med"] for r in ov])) if ov else None,
                 photo_abs_med=float(np.median([r["photo_abs_med"] for r in ov if "photo_abs_med" in r])) if any("photo_abs_med" in r for r in ov) else None,

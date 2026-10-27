@@ -27,43 +27,64 @@ def _kelvin_rgb(k):
     return f(k) / f(6500.0)
 
 
+def _colors(rec):
+    """{room: [r,g,b] linear} from a variation record: gen2's {"colors": {...}, ...} or a plain mapping"""
+    if not isinstance(rec, dict): return {}
+    c = rec.get("colors") if "colors" in rec else rec
+    return {k: v for k, v in c.items() if isinstance(v, (list, tuple)) and len(v) == 3} if isinstance(c, dict) else {}
+
+
 def apply_walls(variation):
-    """variation.walls = {room name: [r, g, b] linear}: replace the base colour of that room's wall materials (texture/bump/roughness kept)"""
-    walls = (variation or {}).get("walls") or {}
+    """variation.walls / ceiling / floor colours (linear rgb per room): replace the base colour of that room's wall / ceiling / floor materials
+    (texture, bump and roughness kept)"""
     done = {}
-    for room, rgb in walls.items():
-        n = 0
-        for o in bpy.data.objects:
-            if o.type != "MESH" or not o.name.startswith(room + ".wall"): continue
-            for slot in o.material_slots:
-                m = slot.material
-                if m is None or not m.use_nodes: continue
-                m = m.copy(); slot.material = m  # materials may be shared between rooms
-                for nd in m.node_tree.nodes:
-                    if nd.type != "BSDF_PRINCIPLED": continue
-                    s = nd.inputs["Base Color"]
-                    for l in list(s.links): m.node_tree.links.remove(l)
-                    s.default_value = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0); n += 1
-        done[room] = n
+    for part in ("walls", "ceiling", "floor"):
+        suffix = "." + part.rstrip("s")
+        for room, rgb in _colors((variation or {}).get(part)).items():
+            n = 0
+            for o in bpy.data.objects:
+                if o.type != "MESH" or not o.name.startswith(room + suffix): continue
+                for slot in o.material_slots:
+                    m = slot.material
+                    if m is None or not m.use_nodes: continue
+                    m = m.copy(); slot.material = m  # materials may be shared between rooms
+                    for nd in m.node_tree.nodes:
+                        if nd.type != "BSDF_PRINCIPLED": continue
+                        s_ = nd.inputs["Base Color"]
+                        for l in list(s_.links): m.node_tree.links.remove(l)
+                        s_.default_value = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0); n += 1
+            done[part + ":" + room] = n
     return done
 
 
+# Blender sky texture: sun_rotation r puts the sun toward (sin r, -cos r) in world xy (measured with a shadow test, tools/dataset/README.md),
+# i.e. compass bearing b (clockwise from +Y) = 180 deg - r.  gen2 records sun_dir (unit vector toward the sun, scene frame).
+def sun_angles(lg):
+    """-> (rotation rad, elevation rad) from variation.lighting (sun_dir preferred; else sun_azimuth_deg compass + sun_elevation_deg)"""
+    if lg.get("sun_dir") is not None:
+        x, y, z = lg["sun_dir"]; return math.pi - math.atan2(x, y), math.asin(max(-1.0, min(1.0, z)))
+    az = lg.get("sun_azimuth_deg"); el = lg.get("sun_elevation_deg")
+    return (None if az is None else math.pi - math.radians(az)), (None if el is None else math.radians(el))
+
+
 def apply_lighting(sc, variation):
-    """variation.lighting: sun_azimuth_deg -> sky sun_rotation, sun_elevation_deg -> sun_elevation, sun_strength -> sky sun_intensity,
+    """variation.lighting: sun_dir (or sun_azimuth_deg compass + sun_elevation_deg) -> sky sun rotation/elevation, sun_strength -> sky sun_intensity,
     sky_strength -> world Background strength, color_temp_K -> world colour tint (relative to 6500 K)"""
     lg = (variation or {}).get("lighting") or {}
     if not lg or sc.world is None or not sc.world.use_nodes: return {}
     nt = sc.world.node_tree
     sky = next((n for n in nt.nodes if n.type == "TEX_SKY"), None)
     bg = next((n for n in nt.nodes if n.type == "BACKGROUND"), None)
+    ct = lg.get("color_temp_K", lg.get("color_temp_k"))
     if sky is not None:
-        if lg.get("sun_azimuth_deg") is not None: sky.sun_rotation = math.radians(lg["sun_azimuth_deg"])
-        if lg.get("sun_elevation_deg") is not None: sky.sun_elevation = math.radians(lg["sun_elevation_deg"])
+        rot, el = sun_angles(lg)
+        if rot is not None: sky.sun_rotation = rot
+        if el is not None: sky.sun_elevation = el
         if lg.get("sun_strength") is not None: sky.sun_intensity = float(lg["sun_strength"])
     if bg is not None:
         if lg.get("sky_strength") is not None: bg.inputs["Strength"].default_value = float(lg["sky_strength"])
-        if lg.get("color_temp_K") is not None:
-            tint = _kelvin_rgb(float(lg["color_temp_K"]))
+        if ct is not None:
+            tint = _kelvin_rgb(float(ct))
             mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"; mix.blend_type = "MULTIPLY"
             mix.inputs[0].default_value = 1.0  # factor
             src = bg.inputs["Color"].links[0].from_socket if bg.inputs["Color"].is_linked else None
@@ -71,20 +92,24 @@ def apply_lighting(sc, variation):
             else: mix.inputs[6].default_value = tuple(bg.inputs["Color"].default_value)
             mix.inputs[7].default_value = (tint[0], tint[1], tint[2], 1.0)
             nt.links.new(mix.outputs[2], bg.inputs["Color"])
-    return {k: lg.get(k) for k in ("sun_azimuth_deg", "sun_elevation_deg", "sun_strength", "sky_strength", "color_temp_K")}
+    return {k: lg.get(k) for k in ("sun_dir", "sun_elevation_deg", "sun_strength", "sky_strength")} | {"color_temp_K": ct}
 
 
 def lamp_state(variation, sidecar):
-    """-> fn(light dict) -> (on, scale) from variation.lighting {lamps_on: bool | [bool per non-ceiling lamp in sidecar order],
-    lamp_strength_scale, ceiling_lights_on}"""
+    """-> fn(light dict) -> (on, scale). gen2 record: variation.lighting.lamps = {light name: {on, watt}}, lamp_strength_scale multiplies the watt;
+    capture-fallback record: lamps_on bool | [bool per non-ceiling lamp in sidecar order], ceiling_lights_on"""
     lg = (variation or {}).get("lighting") or {}
+    per = lg.get("lamps") if isinstance(lg.get("lamps"), dict) else None
     lamps = [L for L in sidecar.get("lights", []) if "CeilingLight" not in L["name"]]
     idx = {L["name"]: i for i, L in enumerate(lamps)}
     lon = lg.get("lamps_on", True); cl = lg.get("ceiling_lights_on", True); sc_ = float(lg.get("lamp_strength_scale", 1.0))
     def f(L):
+        if per is not None and L["name"] in per: return bool(per[L["name"]].get("on", True)), sc_
         if "CeilingLight" in L["name"]: return bool(cl), 1.0
-        on = lon[idx[L["name"]] % len(lon)] if isinstance(lon, (list, tuple)) and lon else bool(lon)
-        return bool(on), sc_
+        if isinstance(lon, bool) or isinstance(lon, int) and per is None: on = bool(lon)
+        elif isinstance(lon, (list, tuple)) and lon: on = bool(lon[idx[L["name"]] % len(lon)])
+        else: on = True
+        return on, sc_
     return f
 
 
@@ -118,7 +143,7 @@ class Scene:
         t = time.time()
         objs = [o for o in bpy.data.objects if o.type == "MESH" and not o.hide_render and len(o.data.polygons)]
         classes = {n["name"]: n.get("class", "") for n in sidecar.get("nodes", [])}
-        V, T, OB, self.names, self.kind, self.cls = [], [], [], [], [], []
+        V, T, OB, self.names, self.kind, self.cls, self.okeys, self.bbox = [], [], [], [], [], [], [], []
         base = 0
         for i, o in enumerate(objs):
             me = o.data; me.calc_loop_triangles()
@@ -131,6 +156,8 @@ class Scene:
             oi = len(self.names)
             OB.append(np.full(nt, oi, np.int32)); base += nv
             self.names.append(o.name)
+            self.okeys.append(re.sub(r"\.\d+$", "", o.name.split("#")[0]))
+            wv = V[-1]; self.bbox.append((wv.min(0), wv.max(0)))
             m = ROOM_RE.search(o.name)
             self.kind.append({"wall": 1, "floor": 2, "ceiling": 3}[m.group(1)] if m else 0)
             c = classes.get(o.name)
@@ -155,6 +182,34 @@ class Scene:
         a = np.linalg.norm(np.cross(self.floor_tris[:, 1] - self.floor_tris[:, 0], self.floor_tris[:, 2] - self.floor_tris[:, 0]), axis=1) / 2
         self.floor_area = float(a.sum()); self._pa = a / a.sum() if a.sum() > 0 else a
         self.t_load = time.time() - t
+
+    def obj_class(self, key):
+        """class part of an object key '<id>_<Class>' ('mess_<room>_<n>_<Class>', 'personN_...' for people)"""
+        if key.startswith("person"): return "person"
+        return key.rsplit("_", 1)[-1] if key.startswith("mess_") else key.split("_", 1)[-1]
+
+    def keys_by_class(self, cl):
+        c = cl.lower()
+        return sorted({k for k, kd in zip(self.okeys, self.kind) if kd == 0 and (self.obj_class(k).lower() == c or c in self.obj_class(k).lower())})
+
+    def children_of(self, keys, objclasses_skip=("Window", "Door")):
+        """objects resting on the given objects (inferred when the sidecar has no parent info): bottom within 6 cm of an object's top and
+        centre inside its footprint; transitive"""
+        box = {}
+        for k, kd, (lo, hi) in zip(self.okeys, self.kind, self.bbox):
+            if kd != 0: continue
+            b = box.setdefault(k, [lo.copy(), hi.copy()]); b[0] = np.minimum(b[0], lo); b[1] = np.maximum(b[1], hi)
+        out = set(keys); grew = True
+        while grew:
+            grew = False
+            for k, (lo, hi) in box.items():
+                if k in out or any(skip in k for skip in objclasses_skip): continue
+                c = (lo + hi) / 2
+                for r in list(out):
+                    rlo, rhi = box[r]
+                    if abs(lo[2] - rhi[2]) < 0.06 and rlo[0] - 0.02 <= c[0] <= rhi[0] + 0.02 and rlo[1] - 0.02 <= c[1] <= rhi[1] + 0.02 and (hi[2] - lo[2]) < (rhi[2] - rlo[2]) + 1.0:
+                        out.add(k); grew = True; break
+        return sorted(out)
 
     def edge_dist(self, p):
         s = self.bsegs
@@ -269,11 +324,11 @@ def pool_from_json(js):
 
 
 # ------------------------------------------------------------------------------------------------ depth / normals / ids
-def trace(S, c2w, f, W, H):
+def trace(S, c2w, f, W, H, bvh=None, tri_map=None):
     """z-depth (H,W) float32 (0 = no surface), world normals (H,W,3) float16 facing the camera, instance ids (H,W) uint16 (0 none, k = object k-1)"""
     ray = rays_cv(W, H, f).reshape(-1, 3)
     dw = ray @ c2w[:3, :3].T; nrm = np.linalg.norm(dw, axis=1); dwn = (dw / nrm[:, None])
-    o = tuple(c2w[:3, 3]); rc = S.bvh.ray_cast
+    o = tuple(c2w[:3, 3]); rc = (bvh or S.bvh).ray_cast
     N = len(dwn); depth = np.zeros(N, np.float32); normal = np.zeros((N, 3), np.float32); tri = np.full(N, -1, np.int32)
     dl = dwn.tolist(); far = 100.0
     for i in range(N):
@@ -281,6 +336,7 @@ def trace(S, c2w, f, W, H):
         if h[0] is None: continue
         depth[i] = h[3] / nrm[i]; normal[i] = h[1]; tri[i] = h[2]
     hit = tri >= 0
+    if tri_map is not None: tri[hit] = tri_map[tri[hit]]
     flip = (normal * dwn).sum(1) > 0; normal[flip] *= -1
     inst = np.zeros(N, np.uint16); inst[hit] = S.tri_obj[tri[hit]] + 1
     depth[depth < 0.05] = 0
@@ -292,6 +348,48 @@ def write_exr(path, arr):
     h, w = arr.shape
     hd = OpenEXR.Header(w, h); hd["channels"] = {"Z": Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT))}
     f = OpenEXR.OutputFile(path, hd); f.writePixels({"Z": arr.astype(np.float32).tobytes()}); f.close()
+
+
+# ------------------------------------------------------------------------------------------------ object removal
+def resolve_removal(S, rem, K, sidecar):
+    """rem = {keys, classes, random: {count, classes, seed}, with_children, views: "all" | "random_subset" | [indices], views_fraction, views_count, seed}
+    -> (sorted removed object keys, set of view indices that render without them)"""
+    if not rem: return [], set()
+    objs = sidecar.get("objects")  # factors worker's list {key, class, parent, room}; else inferred from names / geometry
+    allk = sorted({k for k, kd in zip(S.okeys, S.kind) if kd == 0})
+    keys = set(k for k in rem.get("keys", []) if k in allk)
+    for c in rem.get("classes", []): keys.update(S.keys_by_class(c))
+    rnd = rem.get("random")
+    if rnd:
+        r = np.random.RandomState(int(rnd.get("seed", 0)))
+        cand = sorted({k for c in (rnd.get("classes") or [None]) for k in (S.keys_by_class(c) if c else allk)})
+        cand = [k for k in cand if not any(x in k for x in ("Window", "Door", "CeilingLight", "Light")) or rnd.get("classes")]
+        # visible-sized things only (bbox diagonal > 0.25 m)
+        diag = {}
+        for k, kd, (lo, hi) in zip(S.okeys, S.kind, S.bbox):
+            if kd == 0: d = diag.get(k); diag[k] = max(d or 0.0, float(np.linalg.norm(hi - lo)))
+        cand = [k for k in cand if diag.get(k, 0) > 0.25]
+        n = min(int(rnd.get("count", 1)), len(cand))
+        keys.update(r.choice(cand, n, replace=False).tolist() if n else [])
+    keys = sorted(keys)
+    if rem.get("with_children", True) and keys:
+        if objs:
+            par = {o["key"]: o.get("parent") for o in objs}; grew = True; ks = set(keys)
+            while grew:
+                grew = False
+                for k, pk in par.items():
+                    if pk in ks and k not in ks: ks.add(k); grew = True
+            keys = sorted(ks)
+        else:
+            keys = S.children_of(keys)
+    vs = rem.get("views", "all")
+    if vs == "all": views = set(range(K))
+    elif vs == "random_subset":
+        r = np.random.RandomState(int(rem.get("seed", 0)) + 1)
+        n = int(rem["views_count"]) if "views_count" in rem else max(1, int(round(float(rem.get("views_fraction", 0.5)) * K)))
+        views = set(r.choice(K, min(n, K), replace=False).tolist())
+    else: views = set(int(i) for i in vs if 0 <= int(i) < K)
+    return keys, views
 
 
 # ------------------------------------------------------------------------------------------------ main entry
@@ -328,12 +426,31 @@ def run(sc, sidecar, spec, log=print):
     sc.render.image_settings.file_format = "PNG"; sc.render.image_settings.color_mode = "RGB"; sc.render.image_settings.color_depth = "8"
     sc.render.use_persistent_data = True
     views, tt = [], dict(trace=0.0, render=0.0)
+    rem_keys, rem_views = resolve_removal(S, spec.get("remove"), len(chosen), sidecar)
+    bvh2 = tri_map2 = None; rem_objs = []
+    if rem_keys:
+        ks = set(rem_keys); rm = np.array([S.okeys[i] in ks and S.kind[i] == 0 for i in range(len(S.names))])
+        keep = np.nonzero(~rm[S.tri_obj])[0]; tri_map2 = keep.astype(np.int32)
+        bvh2 = BVHTree.FromPolygons(S.V.tolist(), S.T[keep].tolist())
+        rem_ids = set(np.nonzero(rm)[0].tolist())
+        rem_objs = [o for o in bpy.data.objects if o.type in ("MESH", "LIGHT") and re.sub(r"\.\d+$", "", o.name.split("#")[0]) in ks]
+        os.makedirs(os.path.join(out, "depth_full"), exist_ok=True); os.makedirs(os.path.join(out, "removed_mask"), exist_ok=True)
+        log("DSCAP remove %d objects %s in views %s (%d blender objects)" % (len(rem_keys), rem_keys[:12], sorted(rem_views), len(rem_objs)))
     for k, (j, st) in enumerate(chosen):
         v = pool[j]; M = cam_pose_cv(v["pos"], v["yaw"], v["pitch"]); fpx = v["f_mm"] / 36.0 * W
         co.matrix_world = mathutils.Matrix((M @ BL2CV).tolist()); cam.lens = v["f_mm"]
         bpy.context.view_layer.update()
         t = time.time(); depth, nrm, inst = trace(S, M, fpx, W, H); tt["trace"] += time.time() - t
         nm = "%03d" % k
+        removed_here = bool(rem_keys) and k in rem_views
+        if rem_keys:
+            from PIL import Image
+            np.save(os.path.join(out, "depth_full", nm + ".npy"), depth)  # the full scene: what was there
+            mask = np.isin(inst, np.array(sorted(i + 1 for i in rem_ids))) if removed_here else np.zeros(depth.shape, bool)
+            Image.fromarray((mask * 255).astype(np.uint8)).save(os.path.join(out, "removed_mask", nm + ".png"))
+            if removed_here:  # what the camera sees without them
+                depth, nrm, inst = trace(S, M, fpx, W, H, bvh2, tri_map2)
+        for o in rem_objs: o.hide_render = removed_here
         if spec.get("depth_format", "npy") in ("npy", "both"): np.save(os.path.join(out, "depth", nm + ".npy"), depth)
         if spec.get("depth_format", "npy") in ("exr", "both"): write_exr(os.path.join(out, "depth", nm + ".exr"), depth)
         if "normal" in extras: np.save(os.path.join(out, "normal", nm + ".npy"), nrm)
@@ -347,9 +464,13 @@ def run(sc, sidecar, spec, log=print):
                           K=[[fpx, 0, W / 2], [0, fpx, H / 2], [0, 0, 1]], focal_mm=v["f_mm"], sensor_width_mm=36.0,
                           w2c=w2c.tolist(), c2w=M.tolist(), near=0.05, far=100.0, valid_frac=float((depth > 0).mean()),
                           depth_median=float(np.median(depth[depth > 0])) if (depth > 0).any() else 0.0))
+        if rem_keys:
+            views[-1].update(removed_keys=rem_keys if removed_here else [], removed_classes=sorted({S.obj_class(x) for x in rem_keys}) if removed_here else [],
+                             depth_full="depth_full/%s.npy" % nm, removed_mask="removed_mask/%s.png" % nm, removed_frac=float(mask.mean()))
         log("DSCAP view %s pool %d trace %.1fs render %.1fs valid %.2f" % (nm, j, tt["trace"], tt["render"], views[-1]["valid_frac"]))
     json.dump(dict(convention="opencv: x right, y down, z forward; w2c maps world->camera; world z up, metres; depth = z-depth along the optical axis, 0 = no surface",
                    views=views, dropped_pool_views=[dict(pool_index=j, reason=r) for j, r in dropped]), open(os.path.join(out, "cameras.json"), "w"), indent=1)
     if "instance" in extras:
         json.dump({str(i + 1): dict(name=S.names[i], cls=S.cls[i], kind=["object", "wall", "floor", "ceiling"][S.kind[i]]) for i in range(len(S.names))}, open(os.path.join(out, "instances.json"), "w"))
-    return dict(n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0)
+    for o in rem_objs: o.hide_render = False
+    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0)
