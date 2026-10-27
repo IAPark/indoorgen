@@ -14,10 +14,13 @@ fn main() {
     let wall = scene.material(Material::diffuse("wall", [0.86, 0.85, 0.82], 0.9));
     let floor = scene.material(Material::diffuse("floor", [0.55, 0.42, 0.3], 0.7));
     let glass = scene.material(Material::diffuse("window", [0.8, 0.9, 1.0], 0.1));
-    let feats = builtin_features();
+    // FIREPLACE=N: N fireplaces on plain 3.6 m spans (one per seed) instead of the built-in cases
+    let fp_n: Option<usize> = std::env::var("FIREPLACE").ok().and_then(|v| v.parse().ok());
+    let feats: Vec<Box<dyn Feature>> = if fp_n.is_some() { vec![Box::new(fireplace::FireplaceFeature)] } else { builtin_features() };
     // (feature index, length, height, openings)
     let op = |w: bool, x0: f64, x1: f64, z0: f64, z1: f64| Opening { is_window: w, x: [x0, x1], z: [z0, z1] };
-    let cases: Vec<(usize, f64, f64, Vec<Opening>)> = vec![
+    let fp_cases: Vec<(usize, f64, f64, Vec<Opening>)> = (0..fp_n.unwrap_or(0)).map(|i| (0, 3.6, if i % 4 == 3 { 3.0 } else { 2.7 }, vec![])).collect();
+    let cases: Vec<(usize, f64, f64, Vec<Opening>)> = if fp_n.is_some() { fp_cases } else { vec![
         (0, 2.0, 2.7, vec![]),
         (0, 3.2, 2.7, vec![op(false, 2.5, 3.2, 0.0, 2.05)]),
         (0, 4.5, 2.8, vec![op(true, 1.6, 2.8, 0.9, 1.9)]),
@@ -26,7 +29,7 @@ fn main() {
         (1, 2.6, 2.7, vec![op(true, 0.9, 1.9, 0.8, 1.9)]),
         (1, 3.8, 2.7, vec![op(true, 1.4, 2.6, 0.7, 1.8)]),
         (1, 2.2, 2.6, vec![op(true, 0.6, 1.6, 0.95, 2.0)]),
-    ];
+    ] };
     let t = 0.2;
     let mut n = 0;
     for (ci, (fi, len, h, ops)) in cases.iter().enumerate() {

@@ -121,7 +121,22 @@ for o in list(bpy.data.objects):
                     cache[ck] = _as_material(_o, **{k: v for k, v in spec["kwargs"].items() if k != "attr"})
                 else:
                     inst = getattr(mods[mod], cls)()
-                    cache[ck] = _as_material(inst, **spec.get("kwargs", {}))
+                    kw = dict(spec.get("kwargs", {}))
+                    if mod == "ceramic" and cls == "Tile" and "shader" in kw:  # tile glaze by name (ig_features): "ceramic" | "marble" | "stone"
+                        from infinigen.assets.materials.ceramic import ceramic as _cer, tile as _tile
+                        kw["shader_func"] = {"ceramic": _cer.shader_ceramic, "marble": _tile.shader_marble}.get(kw.pop("shader"))
+                        if kw["shader_func"] is None: kw.pop("shader_func")
+                    cache[ck] = _as_material(inst, **kw)
+                if spec.get("paint") and cache[ck] is not None:  # painted / whitewashed surface: mix the base colour toward paint.rgb by paint.amount
+                    _m = cache[ck].copy(); _nt = _m.node_tree
+                    for _bs in [n for n in _nt.nodes if n.type == 'BSDF_PRINCIPLED']:
+                        _inp = _bs.inputs['Base Color']; _mix = _nt.nodes.new('ShaderNodeMix'); _mix.data_type = 'RGBA'
+                        _mix.inputs['Factor'].default_value = float(spec["paint"]["amount"])
+                        _mix.inputs[7].default_value = tuple(spec["paint"]["rgb"]) + (1.0,)
+                        if _inp.is_linked: _nt.links.new(_inp.links[0].from_socket, _mix.inputs[6])
+                        else: _mix.inputs[6].default_value = _inp.default_value
+                        _nt.links.new(_mix.outputs[2], _inp)
+                    cache[ck] = _m
             except Exception as e:
                 print("MATERIAL FAIL", spec, repr(e)); cache[ck] = None
     if cache[ck] is not None:
