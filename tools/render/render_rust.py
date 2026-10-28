@@ -373,6 +373,29 @@ def _wood_depth(m):
     except Exception:
         m.cycles.displacement_method = "BUMP"
     return True
+def _knit_uv():
+    """fine / coarse knit fabrics draw their weave from Object coordinates projected along one axis: moire rings on curved cushions and no
+    weave at all on faces parallel to the projection. Switch them to the mesh UVs when every object using the material has a UV map."""
+    users = {}
+    for o in bpy.data.objects:
+        if o.type != "MESH": continue
+        for sl in o.material_slots:
+            if sl.material: users.setdefault(sl.material.name, []).append(o)
+    n = 0
+    for m in bpy.data.materials:
+        if not m.use_nodes: continue
+        nt = m.node_tree
+        rr = [nd for nd in nt.nodes if nd.type == "REROUTE" and nd.inputs[0].is_linked and nd.inputs[0].links[0].from_node.type == "TEX_COORD" and nd.inputs[0].links[0].from_socket.name == "Object"]
+        if not rr or not any(nd.label == "displacement_scale" for nd in nt.nodes): continue
+        us = users.get(m.name, [])
+        if not us or not all(len(o.data.uv_layers) > 0 for o in us): continue
+        for nd in rr:
+            tc = nd.inputs[0].links[0].from_node
+            nt.links.new(tc.outputs["UV"], nd.inputs[0])
+        n += 1
+    return n
+if not os.environ.get("RAW_KNIT"):
+    print("KNITUV", _knit_uv(), "knit materials on UVs")
 if not os.environ.get("RAW_WOOD"):
     _nw = sum(1 for _m in bpy.data.materials if _m.use_nodes and _wood_depth(_m))
     print("WOODDEPTH", _nw, "wood materials")
