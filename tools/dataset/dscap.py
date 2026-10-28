@@ -518,9 +518,19 @@ def run(sc, sidecar, spec, log=print):
         json.dump(dict(camera_seed=spec["camera_seed"], width=W, height=H, views=pool_to_json(pool), rejects=rej, tries=tries, room=spec["room"], made_by=spec.get("variant")), open(pp, "w"), indent=1)
         pool_new = True; log("DSCAP pool %d views from %d tries, rejects %s" % (len(pool), tries, rej))
     if spec.get("pool_only"): return dict(n_views=0, pool_new=pool_new, pool=len(pool), t_scene=S.t_load, t_run=time.time() - t0)
-    # validity per variant (furniture changed): first K valid in pool order
-    chosen, dropped = [], []
+    # clusters (a fresh view + the steps that follow it) best composition first: with few views per house the first cluster drawn
+    # (say a view of bare floor) would otherwise always be the one rendered
+    clusters, cur = [], []
     for j, v in enumerate(pool):
+        if v["kind"] == "fresh" and cur: clusters.append(cur); cur = []
+        cur.append(j)
+    if cur: clusters.append(cur)
+    sc_ = lambda c: view_score(pool[c[0]]["stats"]) if pool[c[0]].get("stats") else 0.0
+    order = [j for c in sorted(clusters, key=lambda c: -sc_(c)) for j in c]
+    # validity per variant (furniture changed): first K valid in that order
+    chosen, dropped = [], []
+    for j in order:
+        v = pool[j]
         if len(chosen) >= K: break
         M = cam_pose_cv(v["pos"], v["yaw"], v["pitch"]); st, why = view_stats(S, M, v["f_mm"] / 36.0 * W, W, H)
         (chosen if st is not None else dropped).append((j, why) if st is None else (j, st))
