@@ -704,6 +704,12 @@ impl Factory for Sofa {
 }
 
 pub fn make(c: &str, rng: &mut Rng) -> Option<Box<dyn Factory>> {
+    // 60 % of sofas / armchairs are the part-built ModernSofa (cushions, arms, legs as separate upholstered parts), the rest infinigen's;
+    // the choice is its own stream so infinigen's draws are unchanged
+    let mut pick = Rng::seeded(crate::int_hash(&["modern_sofa", &rng.clone().next_u64().to_string()]));
+    if std::env::var_os("NO_MODERN_SOFA").is_none() && pick.f64() < 0.6 {
+        return Some(Box::new(super::modern_sofa::ModernSofa::new(&mut rng.clone(), c == "ArmChairFactory")));
+    }
     Some(Box::new(Sofa::new(rng, c == "ArmChairFactory")))
 }
 
