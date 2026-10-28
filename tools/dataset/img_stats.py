@@ -1,5 +1,5 @@
-"""img_stats.py RUN_DIR...: per-image visible object instances / classes (>= 0.1% of pixels) from instance maps, Hypersim-style"""
-import os, sys, json, re
+"""img_stats.py RUN_DIR...: Hypersim-style visible objects / classes per image of make_dataset runs (instance maps). Multi-object assets are split: books = parts / 2 (cover + pages), shelf trinket sets and fruit bowls = their parts"""
+import os, sys, json, re, math
 import numpy as np
 from PIL import Image
 NOT_OBJ = ("room", "skirting", "Door", "Window", "Person")
@@ -11,14 +11,18 @@ for run in sys.argv[1:]:
         inst = json.load(open(os.path.join(b, "instances.json")))
         for f in sorted(os.listdir(os.path.join(b, "instance"))):
             a = np.array(Image.open(os.path.join(b, "instance", f)))
-            ids, cnt = np.unique(a, return_counts=True)
-            objs, cls = set(), set()
-            for i, c in zip(ids, cnt):
+            ids = np.unique(a)
+            whole, parts, cls = set(), {}, set()
+            for i in ids:
                 v = inst.get(str(int(i)))
-                if not v or c < a.size * float(os.environ.get("THR", "0.001")): continue
+                if not v: continue
                 cl = v.get("cls") or ""
                 if not cl or any(x in cl for x in NOT_OBJ): continue
-                objs.add(re.sub(r"#\d+$", "", v["name"])); cls.add(cl)
-            tot.append((len(objs), len(cls)))
+                cls.add(cl); base = re.sub(r"#\d+$", "", v["name"])
+                if "Book" in cl: parts.setdefault(("b", base), set()).add(v["name"])
+                elif any(x in cl for x in ("NatureShelfTrinkets", "FruitContainer")): parts.setdefault(("p", base), set()).add(v["name"])
+                else: whole.add(base)
+            n = len(whole) + sum(math.ceil(len(s) / 2) if k[0] == "b" else len(s) for k, s in parts.items())
+            tot.append((n, len(cls)))
 t = np.array(tot)
-print("images", len(t), "objects/image mean %.1f median %.0f" % (t[:, 0].mean(), np.median(t[:, 0])), "classes/image mean %.1f" % t[:, 1].mean(), ">=21 objects %.0f%%" % (100 * (t[:, 0] >= 21).mean()))
+print(sys.argv[1:], "images", len(t), "objects/image mean %.1f median %.0f" % (t[:, 0].mean(), np.median(t[:, 0])), "classes/image %.1f" % t[:, 1].mean(), ">=21 objects %.0f%%" % (100 * (t[:, 0] >= 21).mean()))
