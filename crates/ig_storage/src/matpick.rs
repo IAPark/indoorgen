@@ -4,6 +4,9 @@ use crate::materials::*;
 use serde_json::json;
 
 pub const METALS: Weighted = &[("metal.MetalBasic", 3.0), ("metal.BrushedMetal", 2.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 0.7), ("metal.BrushedBlackMetal", 0.3)];
+/// kitchen appliance shells: stainless (brushed), plain and black finishes; infinigen's METALS drew galvanised / grained / hammered
+/// metal (blotchy, dirty-looking ovens and dishwashers) nearly half the time
+pub const APPLIANCE_METALS: Weighted = &[("metal.BrushedMetal", 3.0), ("metal.MetalBasic", 1.2), ("metal.BrushedBlackMetal", 1.0)];
 pub const MAYBE_GLASS: Weighted = &[
     ("metal.MetalBasic", 3.0), ("metal.BrushedMetal", 2.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 0.7), ("metal.BrushedBlackMetal", 0.3),
     ("metal.BlackGlass", 4.0), ("ceramic.Glass", 10.0),
@@ -24,10 +27,10 @@ pub fn spec_of(name: &str, cls: &str, seed: u64) -> Material {
 /// SetMaterial: material index 0 in python = the first slot) maps to the Surface material.
 pub fn gn_appliance_mats(c: &str, mut r: Rng, fseed: u64) -> Vec<(String, Material)> {
     let roles: &[(&str, Weighted)] = match c {
-        "DishwasherFactory" => &[("Surface", METALS), ("Front", MAYBE_GLASS), ("WhiteMetal", METALS), ("Top", METALS), ("NameMaterial", METALS)],
-        "BeverageFridgeFactory" => &[("Surface", METALS), ("Front", MAYBE_GLASS), ("Handle", HANDLE), ("Back", METALS)],
-        "OvenFactory" => &[("Surface", METALS), ("Back", METALS), ("WhiteMetal", METALS), ("SuperBlackGlass", MAYBE_GLASS), ("Glass", GLASS)],
-        "MicrowaveFactory" => &[("Surface", METALS), ("Back", METALS), ("BlackGlass", MAYBE_GLASS), ("Glass", GLASS)],
+        "DishwasherFactory" => &[("Surface", APPLIANCE_METALS), ("Front", MAYBE_GLASS), ("WhiteMetal", APPLIANCE_METALS), ("Top", APPLIANCE_METALS), ("NameMaterial", APPLIANCE_METALS)],
+        "BeverageFridgeFactory" => &[("Surface", APPLIANCE_METALS), ("Front", MAYBE_GLASS), ("Handle", HANDLE), ("Back", APPLIANCE_METALS)],
+        "OvenFactory" => &[("Surface", APPLIANCE_METALS), ("Back", APPLIANCE_METALS), ("WhiteMetal", APPLIANCE_METALS), ("SuperBlackGlass", MAYBE_GLASS), ("Glass", GLASS)],
+        "MicrowaveFactory" => &[("Surface", APPLIANCE_METALS), ("Back", APPLIANCE_METALS), ("BlackGlass", MAYBE_GLASS), ("Glass", GLASS)],
         _ => &[],
     };
     let mut out = vec![];

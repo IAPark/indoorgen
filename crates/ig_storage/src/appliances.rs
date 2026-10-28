@@ -184,11 +184,11 @@ impl Appliance {
             a.mesh(mesh, &m, Some(b));
             return a;
         }
-        let body = spec("app_body", weighted(&mut r, METALS), self.seed);
-        let back = spec("app_back", weighted(&mut r, METALS), self.seed + 1);
+        let body = spec("app_body", weighted(&mut r, crate::matpick::APPLIANCE_METALS), self.seed);
+        let back = spec("app_back", weighted(&mut r, crate::matpick::APPLIANCE_METALS), self.seed + 1);
         let glass = spec("app_glass", weighted(&mut r, GLASS), self.seed + 2);
         let front = spec("app_front", weighted(&mut r, MAYBE_GLASS), self.seed + 3);
-        let handle = spec("app_handle", weighted(&mut r, METALS), self.seed + 4);
+        let handle = spec("app_handle", weighted(&mut r, crate::matpick::APPLIANCE_METALS), self.seed + 4);
         let t = self.door_t;
         let bodyh = h;
         // carcass: open at the front so the door reads as separate

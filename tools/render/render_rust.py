@@ -301,6 +301,68 @@ if args.dataset:
     print("DSWALLS", dscap.apply_walls(DS.get("variation")))
 if os.environ.get("DUMPMATS"):
     import roommats; json.dump(roommats.dump_room_materials(), open(os.environ["DUMPMATS"], "w")); print("DUMPMATS done"); sys.exit(0)
+def _wood_depth(m):
+    """infinigen shader_wood: grain relief scaled by log_uniform(0.0002, 0.01) (usually invisible) under a clear coat of up to 100 % (plastic
+    look). Deeper relief (>= 0.0015) with fine pores stretched along the grain, none on end-grain faces; the varnish is kept."""
+    nt = m.node_tree
+    disp = next((n for n in nt.nodes if n.type == "DISPLACEMENT"), None)
+    grain_map = next((n for n in nt.nodes if n.type == "MAPPING" and not n.inputs["Scale"].is_linked and tuple(round(x) for x in n.inputs["Scale"].default_value) == (5, 100, 100)), None)
+    bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if disp is None or grain_map is None or bsdf is None or not disp.inputs["Height"].is_linked: return False
+    mul = disp.inputs["Height"].links[0].from_node
+    if mul.type != "MATH" or not mul.inputs[0].is_linked: return False
+    grain = mul.inputs[0].links[0].from_socket  # 0..1, dark grain lines low
+    # relief from the smoother grain layer: mix_2 = high-detail musgrave (fibre noise, crusty as relief on thin edges) x mix_1 (grain bands)
+    g2 = mul.inputs[0].links[0].from_node
+    soft = g2.inputs[7].links[0].from_socket if g2.type == "MIX" and g2.inputs[7].is_linked else grain
+    relief = nt.nodes.new("ShaderNodeMath"); relief.operation = "MULTIPLY"
+    # thick varnish fills grain and pores: relief scales down with the coat (glossy table tops stay smooth, matte panels get full depth)
+    coat = bsdf.inputs["Coat Weight"].default_value if "Coat Weight" in bsdf.inputs and not bsdf.inputs["Coat Weight"].is_linked else 0.0
+    fill = max(0.0, 1.0 - 0.9 * coat)
+    nt.links.new(soft, relief.inputs[0]); relief.inputs[1].default_value = float(os.environ.get("WOOD_RELIEF", 0.0015)) * fill
+    # pores: high-frequency noise in the stretched grain space
+    pn = nt.nodes.new("ShaderNodeTexNoise"); pn.inputs["Scale"].default_value = 6.0; pn.inputs["Detail"].default_value = 3.0
+    nt.links.new(grain_map.outputs[0], pn.inputs["Vector"])
+    pr = nt.nodes.new("ShaderNodeMapRange"); pr.inputs[1].default_value = 0.55; pr.inputs[2].default_value = 0.75; pr.inputs[3].default_value = 0.0; pr.inputs[4].default_value = -float(os.environ.get("WOOD_PORES", 0.0005)) * fill
+    nt.links.new(pn.outputs["Fac"], pr.inputs[0])
+    add = nt.nodes.new("ShaderNodeMath"); add.operation = "ADD"
+    nt.links.new(relief.outputs[0], add.inputs[0]); nt.links.new(pr.outputs[0], add.inputs[1])
+    # end-grain faces (normal along the grain axis = x of the grain space) keep their swirl colour but get no relief (crusty edges otherwise)
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    nrm = tc.outputs["Normal"]
+    src = grain_map.inputs["Vector"].links[0].from_node if grain_map.inputs["Vector"].is_linked else None
+    if src is not None and src.type == "MAPPING":  # vertical grain: same rotation for the normal
+        rm = nt.nodes.new("ShaderNodeMapping"); rm.vector_type = "NORMAL"
+        rm.inputs["Rotation"].default_value = src.inputs["Rotation"].default_value
+        nt.links.new(nrm, rm.inputs["Vector"]); nrm = rm.outputs[0]
+    sep = nt.nodes.new("ShaderNodeSeparateXYZ"); nt.links.new(nrm, sep.inputs[0])
+    sq = nt.nodes.new("ShaderNodeMath"); sq.operation = "MULTIPLY"; nt.links.new(sep.outputs[0], sq.inputs[0]); nt.links.new(sep.outputs[0], sq.inputs[1])
+    side = nt.nodes.new("ShaderNodeMath"); side.operation = "SUBTRACT"; side.use_clamp = True; side.inputs[0].default_value = 1.0; nt.links.new(sq.outputs[0], side.inputs[1])
+    att = nt.nodes.new("ShaderNodeMath"); att.operation = "MULTIPLY"; nt.links.new(add.outputs[0], att.inputs[0]); nt.links.new(side.outputs[0], att.inputs[1])
+    # relief on the wood (base layer) only, as a bump into the BSDF normal: the varnish (coat) stays smooth on the true normal (bumping the
+    # whole shading normal broke a glossy coat's highlight into sparkles); the material displacement output is disconnected
+    for l in list(disp.outputs[0].links): nt.links.remove(l)
+    bump = nt.nodes.new("ShaderNodeBump"); bump.inputs["Strength"].default_value = 1.0; bump.inputs["Distance"].default_value = 1.0
+    nt.links.new(att.outputs[0], bump.inputs["Height"])
+    if not bsdf.inputs["Normal"].is_linked: nt.links.new(bump.outputs[0], bsdf.inputs["Normal"])
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    if "Coat Normal" in bsdf.inputs and not bsdf.inputs["Coat Normal"].is_linked: nt.links.new(geo.outputs["Normal"], bsdf.inputs["Coat Normal"])
+    disp.inputs["Scale"].default_value = 1.0
+    # base roughness floor 0.28: shader_wood draws roughness down to 0 (mirror-like), and relief on a mirror reads as sparkle; the varnish
+    # (coat) keeps the gloss
+    ri = bsdf.inputs["Roughness"]
+    rmax = nt.nodes.new("ShaderNodeMath"); rmax.operation = "MAXIMUM"; rmax.inputs[1].default_value = 0.28
+    if ri.is_linked: nt.links.new(ri.links[0].from_socket, rmax.inputs[0])
+    else: rmax.inputs[0].default_value = ri.default_value
+    nt.links.new(rmax.outputs[0], ri)
+    try:
+        m.displacement_method = "BUMP"  # relief as shading only: true displacement crumpled thin table tops / edges
+    except Exception:
+        m.cycles.displacement_method = "BUMP"
+    return True
+if not os.environ.get("RAW_WOOD"):
+    _nw = sum(1 for _m in bpy.data.materials if _m.use_nodes and _wood_depth(_m))
+    print("WOODDEPTH", _nw, "wood materials")
 if not os.environ.get("RAW_FLOORS"):
     # floors: infinigen's tile / hardwood shaders go down to roughness ~0.05, so floors read as mirrors; real floors are satin at most
     _done = {}
