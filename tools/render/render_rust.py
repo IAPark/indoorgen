@@ -8,8 +8,14 @@ ap.add_argument("--cam"); ap.add_argument("--samples", type=int, default=16); ap
 ap.add_argument("--seed", type=int, default=0); ap.add_argument("--clay", action="store_true"); ap.add_argument("--room"); ap.add_argument("--light-scale", type=float, default=1.0); ap.add_argument("--view"); ap.add_argument("--norender", action="store_true"); ap.add_argument("--dataset", help="tools/dataset capture spec json: multi-view RGB+depth+cameras for one variant (see tools/dataset/README.md)"); ap.add_argument("--no-cloth", action="store_true", help="keep the Rust cloth approximation instead of re-simulating in Blender")
 ap.add_argument("--exposure", type=float, default=3.0, help="Cycles film exposure (3.0 suits closed rooms lit by the scene lights; open test layouts such as featureshot grids need ~0.5-1)")
 args = ap.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:])
+_T0 = [time.time()]
+def phase(name):
+    """PHASES=1: wall time of each setup phase"""
+    if os.environ.get("PHASES"):
+        t = time.time(); print("PHASE %-14s %6.1fs" % (name, t - _T0[0]), flush=True); _T0[0] = t
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=args.glb, merge_vertices=True)
+phase("gltf import")
 import math
 # python-style object frames: the glb holds world-space meshes under a Y-up root; Infinigen shaders use Object texture
 # coordinates, so put each mesh back into its asset's local Z-up frame (sidecar "pose", identity for rooms) like python does
@@ -22,10 +28,33 @@ for _o in list(bpy.data.objects):
     _o.parent = None
     _o.data.transform(_P.inverted() @ _W)
     _o.matrix_world = _P
-for _o in bpy.data.objects:
-    if _o.type == 'MESH':
-        bpy.ops.object.select_all(action='DESELECT'); _o.select_set(True); bpy.context.view_layer.objects.active = _o
+phase("object frames")
+# smooth by angle: one operator call over every mesh (it handles each selected object on its own; per-object calls with a
+# select-all in between cost ~45 s on a house). OLD_SMOOTH=1: the per-object loop.
+if os.environ.get("OLD_SMOOTH"):
+    for _o in bpy.data.objects:
+        if _o.type == 'MESH':
+            bpy.ops.object.select_all(action='DESELECT'); _o.select_set(True); bpy.context.view_layer.objects.active = _o
+            bpy.ops.object.shade_smooth_by_angle(angle=math.radians(35))
+else:
+    _meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+    bpy.ops.object.select_all(action='DESELECT')
+    for _o in _meshes:
+        _o.select_set(True)
+    if _meshes:
+        bpy.context.view_layer.objects.active = _meshes[0]
         bpy.ops.object.shade_smooth_by_angle(angle=math.radians(35))
+    bpy.ops.object.select_all(action='DESELECT')
+if os.environ.get("SMOOTH_HASH"):
+    import hashlib
+    _h = hashlib.sha1()
+    for _o in sorted((o for o in bpy.data.objects if o.type == 'MESH'), key=lambda o: o.name):
+        for _an in ("sharp_edge", "sharp_face"):
+            _a = _o.data.attributes.get(_an)
+            _h.update(_an.encode() + (bytes(bytearray(int(v.value) for v in _a.data)) if _a else b"-"))
+        _h.update(bytes(bytearray(int(p.use_smooth) for p in _o.data.polygons)))
+    print("SMOOTH_HASH", _h.hexdigest())
+phase("smooth by angle")
 
 sidecar = json.load(open(args.glb.replace(".glb", ".json")))
 if sidecar.get("cloth") and not args.no_cloth:
@@ -61,6 +90,7 @@ specs = {n["name"]: n for n in sidecar["nodes"]}
 from infinigen.core.util.math import FixedSeed, int_hash
 import importlib
 from infinigen.assets.materials import ceramic, wood, fabric, metal, plastic, terrain, art, lamp_shaders, text
+phase("infinigen import")
 import bl5compat; bl5compat.install()  # Blender 5: geometry-nodes modifier sockets via mod.properties (no-op on 4.x)
 mods = {"ceramic": ceramic, "wood": wood, "fabric": fabric, "metal": metal, "plastic": plastic, "terrain": terrain, "art": art, "lamp_shaders": lamp_shaders, "text": text}
 for _n in ("plant", "creature", "dev"):  # extra material modules for specs ("plant.SpiderPlant", ...)
@@ -142,6 +172,7 @@ for o in list(bpy.data.objects):
                 print("MATERIAL FAIL", spec, repr(e)); cache[ck] = None
     if cache[ck] is not None:
         o.data.materials.clear(); o.data.materials.append(cache[ck])
+phase("materials")
 # room shells: python's own room_walls/room_floors/room_ceilings sampling (roommats.py) replaces the Rust-side spec draws
 if not args.clay and not os.environ.get("NO_ROOMMATS"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -157,6 +188,7 @@ if args.dataset:
     print("DSWALLS", dscap.apply_walls(DS.get("variation")))
 if os.environ.get("DUMPMATS"):
     import roommats; json.dump(roommats.dump_room_materials(), open(os.environ["DUMPMATS"], "w")); print("DUMPMATS done"); sys.exit(0)
+phase("room materials")
 sc = bpy.context.scene
 # lighting: Infinigen's sky (same seed convention as the reference)
 from infinigen.core import init
@@ -346,5 +378,6 @@ if os.environ.get('DEBUGL'):
         if n.type=='BACKGROUND': print('BG', n.inputs[1].default_value)
         if n.type=='TEX_SKY': print('SKY', n.sun_elevation, n.sun_rotation, n.air_density, n.dust_density, getattr(n,'sun_intensity',None))
     print('VIEW', sc.view_settings.view_transform, sc.view_settings.exposure, sc.cycles.film_exposure)
+phase("sky lights cam")
 if args.norender: print('NORENDER done'); sys.exit(0)
 t = time.time(); bpy.ops.render.render(write_still=True); print("render time", time.time() - t)
