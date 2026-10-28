@@ -26,6 +26,7 @@ pub mod pillow;
 pub mod seating;
 pub mod sofa;
 pub mod modern_sofa;
+pub mod modern_chair;
 pub mod stools;
 pub mod tables;
 pub mod towel;

@@ -19,6 +19,10 @@ pub fn handles(c: &str) -> bool {
 }
 
 pub fn make(_c: &str, _rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
+    // 60 % of dining chairs are the part-built ModernChair (own choice stream; NO_MODERN_CHAIR=1 off), the rest infinigen's
+    if std::env::var_os("NO_MODERN_CHAIR").is_none() && crate::int_hash(&["modern_chair", &fseed.to_string()]) % 10 < 6 {
+        return Some(Box::new(super::modern_chair::ModernChair::new(&mut Rng::seeded(crate::int_hash(&["modern_chair_p", &fseed.to_string()])))));
+    }
     Some(Box::new(Chair { spec: ChairSpec::new(fseed) }))
 }
 
