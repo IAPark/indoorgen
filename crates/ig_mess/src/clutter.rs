@@ -25,6 +25,10 @@ struct Spec {
 }
 
 const SURFACE: &[Spec] = &[
+    // decor (Hypersim / 3D-FRONT living spaces: vases, small plants, trinkets on every shelf and sideboard), [bed, living, kitchen, bath, dining, other]
+    Spec { class: "VaseFactory", w: [1.0, 2.5, 0.3, 0.3, 2.0, 1.0], max_xy: 0.3, max_z: 0.45 },
+    Spec { class: "PlantContainerFactory", w: [1.0, 2.0, 0.8, 0.6, 1.5, 1.0], max_xy: 0.35, max_z: 0.6 },
+    Spec { class: "NatureShelfTrinketsFactory", w: [1.0, 1.5, 0.2, 0.3, 1.0, 1.0], max_xy: 0.3, max_z: 0.3 },
     Spec { class: "CupFactory", w: [2.0, 3.0, 4.0, 1.0, 3.0, 2.0], max_xy: 0.13, max_z: 0.14 },
     Spec { class: "BowlFactory", w: [0.0, 1.0, 3.0, 0.0, 2.0, 0.5], max_xy: 0.24, max_z: 0.12 },
     Spec { class: "PlateFactory", w: [0.0, 0.5, 3.0, 0.0, 3.0, 0.0], max_xy: 0.28, max_z: 0.05 },

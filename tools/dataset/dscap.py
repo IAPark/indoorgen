@@ -301,7 +301,7 @@ def view_score(st):
     """composition score of a valid view: many kinds of objects and furniture coverage, little bare wall (raw object counts made views
     of book-filled shelves win every time)"""
     # + the room's anchor furniture in frame (bonus saturates at 15 % of the frame), - people (they crowded every kitchen frame)
-    return 1.5 * st.get("ncls", st["nobj"]) + 0.1 * min(st["nobj"], 40) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 25.0 * st.get("person", 0.0)
+    return 1.5 * st.get("ncls", st["nobj"]) + 0.3 * min(st["nobj"], 60) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 25.0 * st.get("person", 0.0)
 
 
 def auto_exposure(sc, base, tmp, target=0.40, lo=-2.0, hi=4.0):
