@@ -292,7 +292,7 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     if st["wall"] > 0.55: return None, "mostly-wall"
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.22: return None, "person-fills-frame"
-    if max(per.values(), default=0) / n > 0.45: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
+    if max(per.values(), default=0) / n > 0.38: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
     if pnear < 1.6: return None, "person-too-close"  # a face filling the middle of the frame reads as a portrait, not a room
     return st, "ok"
 

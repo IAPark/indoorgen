@@ -234,12 +234,16 @@ pub fn plan(cfg: &FeatureCfg, c: &RoomConstants, room_polys: &[(String, G)], cut
         let inner_ring = crate::shp::exterior(&crate::shp::buffer_mitre(poly, -c.wall_thickness / 2.0 + 0.005));
         let mut rng = Rng::seeded(crate::int_hash(&[&cfg.seed.to_string(), "features", room]));
         let mut n = 0usize;
+        // one feature per 14 m2 of floor at most: a bookshelf wall + window seat in a 16 m2 bedroom left no wall for the bed
+        // (bedrooms 18 m2: bed + wardrobe + nightstands need most of the walls)
+        let per_m2 = if rt == "Bedroom" { 18.0 } else { 14.0 };
+        let max_n = rf.max.min((crate::shp::area(poly) / per_m2) as usize);
         for (kind, feat) in &reg {
             // draws are made for every (room, kind) whether or not the feature fits, so one kind's fit does not shift another's stream
             let roll = rng.f64();
             let pick = rng.f64();
             let fseed = rng.next_u64();
-            if n >= rf.max || roll >= prob(rf, kind) { continue }
+            if n >= max_n || roll >= prob(rf, kind) { continue }
             // candidates: (span index, interval), weighted by interval length (long walls first)
             let mut cands: Vec<(usize, [f64; 2])> = vec![];
             for (si, s) in spans.iter().enumerate() {

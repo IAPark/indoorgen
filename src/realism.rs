@@ -39,6 +39,8 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Bathroom", "SimpleBookcaseFactory", "against_wall", 0, 0, false),
     ("Bathroom", "SimpleBookcaseFactory", "on_floor", 0, 0, false),
     ("Bathroom", "LargeShelfFactory", "on_floor", 0, 0, false),
+    ("Bathroom", "CellShelfFactory", "against_wall", 0, 0, false),
+    ("Bathroom", "CellShelfFactory", "on_floor", 0, 0, false),
     ("Bathroom", "BottleFactory", "on:Storage", 0, 3, false),
     // shelves in bathrooms held bowls, books and trinkets by the dozen; walls up to four paintings
     ("Bathroom", "BowlFactory", "on:Storage", 0, 0, false),
