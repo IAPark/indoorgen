@@ -36,6 +36,9 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     // bathroom: a toilet always, a bathtub where it fits, no bookcases, a few toiletries rather than dozens of bottles
     ("Bathroom", "ToiletFactory", "against_wall", 1, 1, false),
     ("Bathroom", "BathtubFactory", "against_wall", 1, 1, false),
+    // one storage piece, two towel bars / hooks at most (four hung on the walls of 6 m2 bathrooms)
+    ("Bathroom", "Storage", "against_wall", 0, 1, false),
+    ("Bathroom", "HardwareFactory", "against_wall", 1, 2, false),
     ("Bathroom", "SimpleBookcaseFactory", "against_wall", 0, 0, false),
     ("Bathroom", "SimpleBookcaseFactory", "on_floor", 0, 0, false),
     ("Bathroom", "LargeShelfFactory", "on_floor", 0, 0, false),

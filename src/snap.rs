@@ -314,6 +314,9 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
     let vol = |b: &B| (0..3).map(|d| b.hi[d] - b.lo[d]).product::<f64>();
     let related = |a: &B, b: &B| a.parent.as_deref() == Some(b.key.as_str()) || b.parent.as_deref() == Some(a.key.as_str());
     let mut gone: Vec<(String, String)> = vec![];
+    let mut shifted: Vec<(String, f64)> = vec![];
+    let ess_key = |k: &str| ["ToiletFactory", "BathtubFactory", "StandingSinkFactory", "BathroomSinkFactory", "KitchenSpaceFactory", "FridgeFactory", "WardrobeFactory", "TableDiningFactory", "TVStandFactory", "CoffeeTableFactory"].iter().any(|e| k.ends_with(e));
+    let ess_pair = |a: &B, b: &B| ess_key(&a.key) && ess_key(&b.key);
     let mut dead: std::collections::HashSet<String> = Default::default();
     for i in 0..bs.len() {
         for j in i + 1..bs.len() {
@@ -325,8 +328,31 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
                 continue;
             }
             let hit = a.parts.iter().any(|(al, ah)| b.parts.iter().any(|(bl, bh)| (0..3).all(|d| ah[d].min(bh[d]) - al[d].max(bl[d]) > min_ov)));
+            if hit && ess_pair(a, b) {
+                // two essential fixtures (toilet against a pedestal sink): slide the smaller one clear along the axis of least overlap
+                let (mv, other) = if vol(a) < vol(b) { (i, j) } else { (j, i) };
+                let (m, o) = (&bs[mv], &bs[other]);
+                let mut best = (f64::MAX, 0usize, 0.0f64);
+                for d in 0..2 {
+                    let push_pos = o.hi[d] - m.lo[d] + 0.02;
+                    let push_neg = -(m.hi[d] - o.lo[d] + 0.02);
+                    for p in [push_pos, push_neg] { if p.abs() < best.0 { best = (p.abs(), d, p) } }
+                }
+                if best.0 < 0.35 {
+                    let key = m.key.clone();
+                    if let Some(ob) = state.objs.get_mut(&key) { ob.pose.t[best.1] += best.2; }
+                    shifted.push((key, best.2));
+                    continue;
+                }
+            }
             if hit {
-                let (loser, other) = if vol(a) < vol(b) { (a, b) } else { (b, a) };
+                // the room's essential fixtures lose only to each other (a toilet "inside" a standing sink's box went, the sink stayed)
+                let ess = |x: &B| ess_key(&x.key);
+                let (loser, other) = match (ess(a), ess(b)) {
+                    (true, false) => (b, a),
+                    (false, true) => (a, b),
+                    _ => if vol(a) < vol(b) { (a, b) } else { (b, a) },
+                };
                 dead.insert(loser.key.clone());
                 gone.push((loser.key.clone(), other.key.clone()));
             }
@@ -353,6 +379,7 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
     for k in &dead {
         state.objs.shift_remove(k);
     }
+    for (k, d) in &shifted { eprintln!("OVERLAP shifted {k} by {d:.2} m (two essential fixtures)"); }
     gone
 }
 
