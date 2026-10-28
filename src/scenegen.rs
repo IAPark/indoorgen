@@ -607,6 +607,9 @@ pub fn build_scene(p: &Params) -> Built {
     if cfg.program.bath_decor && !orig_prog {
         for l in crate::bath_decor::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("BATH {l}"); }
     }
+    if cfg.program.top_dress && !orig_prog {
+        for l in crate::top_dress::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("DRESS {l}"); }
+    }
     // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
     let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {
         Some(serde_json::json!({

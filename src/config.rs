@@ -84,9 +84,11 @@ pub struct Program {
     pub gallery_wall: bool,
     /// Dense program: towels on towel bars, bath mats, toiletries on sinks (src/bath_decor.rs).
     pub bath_decor: bool,
+    /// Dense program: small objects on level spots of counters, islands, bathtub rims, toilet tanks, coffee tables, nightstands (src/top_dress.rs).
+    pub top_dress: bool,
 }
 impl Default for Program {
-    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true, gallery_wall: true, bath_decor: true } }
+    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true, gallery_wall: true, bath_decor: true, top_dress: true } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
