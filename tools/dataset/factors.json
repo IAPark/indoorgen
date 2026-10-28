@@ -4,7 +4,7 @@
                 "seeded": {"variation": {"doors": {"seed": "{seed}"}}}},
   "walls":     {"always": {"variation": {"walls": {"mode": "interior"}}},
                 "seeded": {"variation": {"walls": {"seed": "{seed}"}}}},
-  "mess":      {"always": {"mess": {"level": 0.4, "floor_scale": 0.4, "surface_scale": 4.0}},
+  "mess":      {"always": {"mess": {"level": 0.6, "floor_scale": 0.27, "surface_scale": 4.0}},
                 "seeded": {"mess": {"seed": "{seed}"}},
                 "fallback": {"mess": {"level": 0.4}}},
   "lighting":  {"always": {"variation": {"lighting": {"mode": "random", "lamps": "auto"}}},
