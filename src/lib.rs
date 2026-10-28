@@ -27,6 +27,7 @@ pub mod realism;
 pub mod ceiling_decor;
 pub mod soft_decor;
 pub mod gallery_wall;
+pub mod bath_decor;
 pub mod shelffill;
 pub mod snap;
 pub mod variation;
