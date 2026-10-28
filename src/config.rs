@@ -216,13 +216,19 @@ pub struct Cameras {
     pub count: usize,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct Output {
     /// Write the quality-control report (placement defects) to this path prefix (native).
     pub qc_path: Option<String>,
     /// Stop before the mesh budget and glb export (native; for QC runs).
     pub no_glb: bool,
+    /// Also write the scene as binary USD (X.usdc next to X.glb): tools/render/render_rust.py imports it with Blender's C++ USD
+    /// importer instead of the Python glTF importer.
+    pub usd: bool,
+}
+impl Default for Output {
+    fn default() -> Self { Output { qc_path: None, no_glb: false, usd: true } }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

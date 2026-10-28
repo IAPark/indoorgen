@@ -96,6 +96,7 @@ fn main() {
         eprintln!("WARNING: people.count {} requested but no avatars found in {:?}: run tools/people/fetch_rocketbox.sh or set INDOORGEN_ASSETS (e.g. in .indoorgen.env); no people will be placed", cfg.people.count, indoorgen::people::avatar::root_dir());
     }
     let (seed, room, cams_k) = (cfg.house.seed, cfg.house.room.clone(), cfg.cameras.count);
+    let params_usd = cfg.output.usd;
     let out = std::path::PathBuf::from(args.get(3).cloned().unwrap_or("/tmp/gen2.glb".into()));
     let prog_file = if cfg.program.dense { "home_program_dense.json" } else { "home_program.json" };
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/data/{}", env!("CARGO_MANIFEST_DIR"), prog_file)).unwrap()).unwrap();
@@ -116,6 +117,10 @@ fn main() {
     let tw = std::time::Instant::now();
     scene.write_glb(&out).unwrap();
     lap("glb written");
+    if params_usd {
+        scene.write_usdc(&out.with_extension("usdc")).unwrap();
+        lap("usdc written");
+    }
     if cams_k > 0 { add_cameras(&room, scene, room_polys, cams_k, seed, wall_t, &out); }
     {
         // sidecar `objects` (always) and `variation` record (only when some factor is not default)

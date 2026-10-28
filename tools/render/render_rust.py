@@ -13,9 +13,83 @@ def phase(name):
     """PHASES=1: wall time of each setup phase"""
     if os.environ.get("PHASES"):
         t = time.time(); print("PHASE %-14s %6.1fs" % (name, t - _T0[0]), flush=True); _T0[0] = t
+def _dumpsig(path):
+    # per-object scene data as it would render, for comparing import paths (tools/render/sigcmp.py): world positions, and per face
+    # corner (sorted by corner position + face centre) world normal and uv; materials and smoothing counts in a json beside it
+    import numpy as _np
+    arrs, meta = {}, {}
+    for o in bpy.data.objects:
+        if o.type != 'MESH': continue
+        me = o.data
+        M = _np.array(o.matrix_world); R = M[:3, :3]
+        co = _np.zeros(3 * len(me.vertices)); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3) @ R.T + M[:3, 3]
+        lv = _np.zeros(len(me.loops), dtype=_np.int64); me.loops.foreach_get("vertex_index", lv)
+        cn = _np.zeros(3 * len(me.loops)); me.corner_normals.foreach_get("vector", cn); cn = cn.reshape(-1, 3) @ R.T
+        cn /= _np.maximum(_np.linalg.norm(cn, axis=1, keepdims=True), 1e-12)
+        uv = _np.zeros(2 * len(me.loops))
+        if me.uv_layers.active: me.uv_layers.active.data.foreach_get("uv", uv)
+        uv = uv.reshape(-1, 2)
+        ls = _np.zeros(len(me.polygons), dtype=_np.int64); me.polygons.foreach_get("loop_start", ls)
+        lt = _np.zeros(len(me.polygons), dtype=_np.int64); me.polygons.foreach_get("loop_total", lt)
+        fidx = _np.repeat(_np.arange(len(me.polygons)), lt)
+        cent = _np.zeros((len(me.polygons), 3)); _np.add.at(cent, fidx, co[lv]); cent /= _np.maximum(lt, 1)[:, None]
+        key = _np.round(_np.c_[co[lv], cent[fidx]], 5)
+        order = _np.lexsort(key.T[::-1]) if len(key) else _np.zeros(0, dtype=_np.int64)
+        pv = _np.round(co, 5); pv = co[_np.lexsort(pv.T[::-1])] if len(co) else co
+        arrs[o.name + "|pos"] = pv; arrs[o.name + "|cn"] = cn[order]; arrs[o.name + "|uv"] = uv[order]
+        sm = _np.zeros(len(me.polygons), dtype=bool); me.polygons.foreach_get("use_smooth", sm)
+        se = me.attributes.get("sharp_edge")
+        meta[o.name] = dict(nv=len(me.vertices), nf=len(me.polygons), mats=[m.name if m else None for m in me.materials], smooth=int(sm.sum()),
+                            sharp=int(sum(1 for d in se.data if d.value)) if se else 0, uvname=me.uv_layers.active.name if me.uv_layers.active else None)
+    _np.savez(path + ".npz", **arrs)
+    json.dump(meta, open(path + ".json", "w"))
+    print("DUMPSIG", len(meta), "objects")
 bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.import_scene.gltf(filepath=args.glb, merge_vertices=True)
-phase("gltf import")
+def import_usdc(path, side):
+    """the scene's usdc (gen2 output.usd): Blender's C++ USD importer, then glTF-importer names, uv layer names and plain
+    materials from the sidecar, so everything downstream sees the same objects as after the glTF import"""
+    bpy.ops.wm.usd_import(filepath=path, import_materials=False, import_cameras=False, import_lights=False, import_curves=False, import_volumes=False,
+                          import_shapes=False, import_skeletons=False, import_blendshapes=False, import_points=False, import_subdivision=False,
+                          read_mesh_uvs=True, read_mesh_colors=False, read_mesh_attributes=False, create_collection=False, set_frame_range=False,
+                          create_world_material=False, merge_parent_xform=False, validate_meshes=False)
+    mats = {}
+    for m in side.get("materials", []):
+        mt = bpy.data.materials.new(m["name"])
+        mt.use_backface_culling = False
+        nt = mt.node_tree
+        p = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
+        p.inputs["Base Color"].default_value = tuple(m["color"][:3]) + (1.0,)
+        p.inputs["Alpha"].default_value = m["color"][3]
+        p.inputs["Metallic"].default_value = m["metallic"]
+        p.inputs["Roughness"].default_value = m["roughness"]
+        if any(c > 0 for c in m["emissive"]):
+            p.inputs["Emission Color"].default_value = tuple(m["emissive"]) + (1.0,)
+            p.inputs["Emission Strength"].default_value = m["emissive_strength"] if m["emissive_strength"] > 0 else 1.0
+        else:
+            p.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+            p.inputs["Emission Strength"].default_value = 0.0
+        if m["color"][3] < 1.0:
+            mt.surface_render_method = 'BLENDED'
+        mats[m["name"]] = mt
+    nodes = side["nodes"]
+    for o in list(bpy.data.objects):
+        if o.type == 'MESH' and o.name[:1] == 'n' and o.name[1:].isdigit():
+            n = nodes[int(o.name[1:])]
+            w = o.matrix_world.copy(); o.parent = None; o.matrix_world = w
+            o.name = n["name"]; o.data.name = n["name"]
+            for uv in o.data.uv_layers:
+                if uv.name == "st": uv.name = "UVMap"
+            o.data.materials.clear(); o.data.materials.append(mats.get(n["material"]))
+    for o in list(bpy.data.objects):
+        if o.type == 'EMPTY' and not o.children:
+            bpy.data.objects.remove(o, do_unlink=True)
+_usd = args.glb[:-4] + ".usdc"
+if os.path.exists(_usd) and not os.environ.get("NO_USD"):
+    import_usdc(_usd, json.load(open(args.glb.replace(".glb", ".json"))))
+    phase("usdc import")
+else:
+    bpy.ops.import_scene.gltf(filepath=args.glb, merge_vertices=True)
+    phase("gltf import")
 import math
 # python-style object frames: the glb holds world-space meshes under a Y-up root; Infinigen shaders use Object texture
 # coordinates, so put each mesh back into its asset's local Z-up frame (sidecar "pose", identity for rooms) like python does
@@ -55,6 +129,8 @@ if os.environ.get("SMOOTH_HASH"):
         _h.update(bytes(bytearray(int(p.use_smooth) for p in _o.data.polygons)))
     print("SMOOTH_HASH", _h.hexdigest())
 phase("smooth by angle")
+if os.environ.get("DUMPSIG_EARLY"):
+    _dumpsig(os.environ["DUMPSIG_EARLY"])
 
 sidecar = json.load(open(args.glb.replace(".glb", ".json")))
 if sidecar.get("cloth") and not args.no_cloth:
@@ -379,5 +455,19 @@ if os.environ.get('DEBUGL'):
         if n.type=='TEX_SKY': print('SKY', n.sun_elevation, n.sun_rotation, n.air_density, n.dust_density, getattr(n,'sun_intensity',None))
     print('VIEW', sc.view_settings.view_transform, sc.view_settings.exposure, sc.cycles.film_exposure)
 phase("sky lights cam")
+if os.environ.get("DUMPSIG"):
+    _dumpsig(os.environ["DUMPSIG"])
+if os.environ.get("DUMPOBJ"):
+    _o = bpy.data.objects[os.environ["DUMPOBJ"]]
+    for _m in _o.data.materials:
+        print("OBJMAT", _m.name, "nodes", len(_m.node_tree.nodes), sorted((n.type, n.label) for n in _m.node_tree.nodes)[:12])
+        for n in _m.node_tree.nodes:
+            if n.type in ("TEX_COORD", "ATTRIBUTE", "UVMAP", "TEX_IMAGE", "VERTEX_COLOR"):
+                print("  ", n.type, getattr(n, "attribute_name", ""), getattr(n, "uv_map", ""), getattr(n, "object", None), [o.name for o in n.outputs if o.is_linked])
+    print("OBJDATA attrs", sorted((a.name, a.domain, a.data_type) for a in _o.data.attributes), "uv", [(u.name, u.active_render) for u in _o.data.uv_layers], "modifiers", [m.type for m in _o.modifiers])
+if os.environ.get("DUMPLIGHTS"):
+    json.dump(sorted([[o.name, o.type, [round(x, 3) for x in o.matrix_world.translation], round(o.data.energy, 3) if o.type == 'LIGHT' else None,
+                       o.data.type if o.type == 'LIGHT' else None, getattr(o.data.cycles, 'is_portal', None) if o.type == 'LIGHT' else None] for o in bpy.data.objects if o.type != 'MESH']),
+              open(os.environ["DUMPLIGHTS"], "w"))
 if args.norender: print('NORENDER done'); sys.exit(0)
 t = time.time(); bpy.ops.render.render(write_still=True); print("render time", time.time() - t)

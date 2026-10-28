@@ -30,4 +30,5 @@ robust = { workspace = true }
 cc = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+openusd = "0.8"
 geos = { workspace = true }

@@ -592,103 +592,8 @@ impl Scene {
         use rayon::prelude::*;
         let t_glb = web_time::Instant::now();
         // per-node blobs are built in parallel (pure functions of the node), then concatenated in node order: deterministic
-        struct Blob { lo: V3, hi: V3, nv: usize, ntri: usize, pos: Vec<u8>, nrm: Vec<u8>, uv: Option<Vec<u8>>, idx: Vec<u8> }
         let ph: [std::sync::atomic::AtomicU64; 4] = Default::default();
-        let lapn = |i: usize, t: &mut web_time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = web_time::Instant::now(); };
-        let blobs: Vec<Blob> = self.nodes.par_iter().map(|n| {
-            let mut tt = web_time::Instant::now();
-            let (xpos, xuv, xtris) = n.mesh.export_tris();
-            lapn(0, &mut tt);
-            let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
-            let tris = &xtris;
-            let (lo, hi) = m.bounds();
-            // smooth-by-angle normals: weld by position, average face normals within 40 degrees of the vertex's own face
-            let mut normals = vec![[0f32; 3]; m.pos.len()];
-            {
-                let key = |p: V3| ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64, (p[2] * 1e4).round() as i64);
-                let fnorm: Vec<V3> = tris.iter().map(|t| cross(sub(m.pos[t[1] as usize], m.pos[t[0] as usize]), sub(m.pos[t[2] as usize], m.pos[t[0] as usize]))).collect();
-                // vertices welded by position: sort (key, tri, corner) so each group lists its triangles in ascending order
-                let mut ent: Vec<((i64, i64, i64), u32, u32)> = Vec::with_capacity(tris.len() * 3);
-                for (ti, t) in tris.iter().enumerate() {
-                    for (c, &v) in t.iter().enumerate() {
-                        ent.push((key(m.pos[v as usize]), ti as u32, c as u32));
-                    }
-                }
-                ent.sort_unstable();
-                let flen: Vec<f64> = fnorm.iter().map(|f| (f[0].powi(2) + f[1].powi(2) + f[2].powi(2)).sqrt().max(1e-18)).collect();
-                let cos_t = 40f64.to_radians().cos();
-                let mut g0 = 0;
-                while g0 < ent.len() {
-                    let mut g1 = g0 + 1;
-                    while g1 < ent.len() && ent[g1].0 == ent[g0].0 { g1 += 1; }
-                    for &(_, ti, c) in &ent[g0..g1] {
-                        let ti = ti as usize;
-                        let nl = flen[ti];
-                        let nu = [fnorm[ti][0] / nl, fnorm[ti][1] / nl, fnorm[ti][2] / nl];
-                        let mut acc = [0f64; 3];
-                        for &(_, si, _) in &ent[g0..g1] {
-                            let si = si as usize;
-                            let d = (fnorm[si][0] * nu[0] + fnorm[si][1] * nu[1] + fnorm[si][2] * nu[2]) / flen[si];
-                            if d >= cos_t {
-                                for k in 0..3 {
-                                    acc[k] += fnorm[si][k];
-                                }
-                            }
-                        }
-                        let v = tris[ti][c as usize] as usize;
-                        for k in 0..3 {
-                            normals[v][k] = acc[k] as f32;
-                        }
-                    }
-                    g0 = g1;
-                }
-            }
-            lapn(1, &mut tt);
-            let generated_uv: Vec<[f64; 2]>;
-            let uvs: &Vec<[f64; 2]> = if m.uv.len() == m.pos.len() {
-                &m.uv
-            } else {
-                // box projection per triangle (1 uv unit = 1 metre)
-                let mut uv = vec![[0.0, 0.0]; m.pos.len()];
-                for t in tris {
-                    let (a, b, c) = (m.pos[t[0] as usize], m.pos[t[1] as usize], m.pos[t[2] as usize]);
-                    let n = cross(sub(b, a), sub(c, a));
-                    let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
-                    for &i in t {
-                        let p = m.pos[i as usize];
-                        uv[i as usize] = if az >= ax && az >= ay { [p[0], p[1]] } else if ax >= ay { [p[1], p[2]] } else { [p[0], p[2]] };
-                    }
-                }
-                generated_uv = uv;
-                &generated_uv
-            };
-
-            lapn(2, &mut tt);
-            // lossless weld: soup vertices with identical f32 position / normal / uv share one index
-            let has_uv = uvs.len() == m.pos.len();
-            let mut map: FxMap<[u32; 8], u32> = FxMap::default();
-            let (mut pos, mut nrm, mut uvb, mut idx) = (vec![], vec![], vec![], Vec::with_capacity(tris.len() * 12));
-            let mut remap = vec![0u32; m.pos.len()];
-            let mut nv = 0u32;
-            for (i, p) in m.pos.iter().enumerate() {
-                let nn = normals[i];
-                let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]).sqrt().max(1e-12);
-                let nn = [nn[0] / l, nn[1] / l, nn[2] / l];
-                let pf = [p[0] as f32, p[1] as f32, p[2] as f32];
-                let uf = if has_uv { [uvs[i][0] as f32, uvs[i][1] as f32] } else { [0.0, 0.0] };
-                let key = [pf[0].to_bits(), pf[1].to_bits(), pf[2].to_bits(), nn[0].to_bits(), nn[1].to_bits(), nn[2].to_bits(), uf[0].to_bits(), uf[1].to_bits()];
-                remap[i] = *map.entry(key).or_insert_with(|| {
-                    for k in 0..3 { pos.extend_from_slice(&pf[k].to_le_bytes()); }
-                    for k in 0..3 { nrm.extend_from_slice(&nn[k].to_le_bytes()); }
-                    if has_uv { for k in 0..2 { uvb.extend_from_slice(&uf[k].to_le_bytes()); } }
-                    nv += 1;
-                    nv - 1
-                });
-            }
-            for t in tris { for &i in t { idx.extend_from_slice(&remap[i as usize].to_le_bytes()); } }
-            lapn(3, &mut tt);
-            Blob { lo, hi, nv: nv as usize, ntri: tris.len(), pos, nrm, uv: if has_uv { Some(uvb) } else { None }, idx }
-        }).collect();
+        let blobs = self.node_blobs(&ph);
         if std::env::var_os("GLBPROF").is_some() { eprintln!("GLBPROF blobs {:.1}s (cpu s: export {:.1} normals {:.1} uv {:.1} weld {:.1})", t_glb.elapsed().as_secs_f64(), ph[0].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[1].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[2].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[3].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6); }
         let mut bin: usize = 0; // total bin chunk length; the blobs are streamed to the file in the same order
         let mut buffer_views = vec![];
@@ -737,8 +642,10 @@ impl Scene {
             .collect();
         assert!(bin % 4 == 0);
         let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec, "pose": n.pose})).collect();
+        // the plain (non-spec) material values, for importers that take geometry only (usdc)
+        let materials_json: Vec<_> = self.materials.iter().map(|m| json!({"name": m.name, "color": m.color, "metallic": m.metallic, "roughness": m.roughness, "emissive": m.emissive, "emissive_strength": m.emissive_strength})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
-        let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth});
+        let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json});
         let gltf = json!({
             "asset":{"version":"2.0","generator":"infinigen-rs"},
             "extensionsUsed":["KHR_materials_emissive_strength"],
@@ -922,5 +829,189 @@ mod tests {
         m.weld(1e-6);
         assert_eq!(m.faces.len(), 1);
         assert_eq!(m.faces[0].len(), 3);
+    }
+}
+
+/// One scene node as exported: welded triangle mesh (f32 little-endian bytes: positions, smooth-by-angle normals, uvs, u32 indices).
+pub struct NodeBlob {
+    pub lo: V3,
+    pub hi: V3,
+    pub nv: usize,
+    pub ntri: usize,
+    pub pos: Vec<u8>,
+    pub nrm: Vec<u8>,
+    pub uv: Option<Vec<u8>>,
+    pub idx: Vec<u8>,
+}
+type Blob = NodeBlob;
+
+impl Scene {
+    /// the exported data of every node (glb and usdc writers), built in parallel, in node order
+    pub fn node_blobs(&self, ph: &[std::sync::atomic::AtomicU64; 4]) -> Vec<NodeBlob> {
+        use rayon::prelude::*;
+        let lapn = |i: usize, t: &mut web_time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = web_time::Instant::now(); };
+        let lapn = |i: usize, t: &mut web_time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = web_time::Instant::now(); };
+        self.nodes.par_iter().map(|n| {
+            let mut tt = web_time::Instant::now();
+            let (xpos, xuv, xtris) = n.mesh.export_tris();
+            lapn(0, &mut tt);
+            let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
+            let tris = &xtris;
+            let (lo, hi) = m.bounds();
+            // smooth-by-angle normals: weld by position, average face normals within 40 degrees of the vertex's own face
+            let mut normals = vec![[0f32; 3]; m.pos.len()];
+            {
+                let key = |p: V3| ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64, (p[2] * 1e4).round() as i64);
+                let fnorm: Vec<V3> = tris.iter().map(|t| cross(sub(m.pos[t[1] as usize], m.pos[t[0] as usize]), sub(m.pos[t[2] as usize], m.pos[t[0] as usize]))).collect();
+                // vertices welded by position: sort (key, tri, corner) so each group lists its triangles in ascending order
+                let mut ent: Vec<((i64, i64, i64), u32, u32)> = Vec::with_capacity(tris.len() * 3);
+                for (ti, t) in tris.iter().enumerate() {
+                    for (c, &v) in t.iter().enumerate() {
+                        ent.push((key(m.pos[v as usize]), ti as u32, c as u32));
+                    }
+                }
+                ent.sort_unstable();
+                let flen: Vec<f64> = fnorm.iter().map(|f| (f[0].powi(2) + f[1].powi(2) + f[2].powi(2)).sqrt().max(1e-18)).collect();
+                let cos_t = 40f64.to_radians().cos();
+                let mut g0 = 0;
+                while g0 < ent.len() {
+                    let mut g1 = g0 + 1;
+                    while g1 < ent.len() && ent[g1].0 == ent[g0].0 { g1 += 1; }
+                    for &(_, ti, c) in &ent[g0..g1] {
+                        let ti = ti as usize;
+                        let nl = flen[ti];
+                        let nu = [fnorm[ti][0] / nl, fnorm[ti][1] / nl, fnorm[ti][2] / nl];
+                        let mut acc = [0f64; 3];
+                        for &(_, si, _) in &ent[g0..g1] {
+                            let si = si as usize;
+                            let d = (fnorm[si][0] * nu[0] + fnorm[si][1] * nu[1] + fnorm[si][2] * nu[2]) / flen[si];
+                            if d >= cos_t {
+                                for k in 0..3 {
+                                    acc[k] += fnorm[si][k];
+                                }
+                            }
+                        }
+                        let v = tris[ti][c as usize] as usize;
+                        for k in 0..3 {
+                            normals[v][k] = acc[k] as f32;
+                        }
+                    }
+                    g0 = g1;
+                }
+            }
+            lapn(1, &mut tt);
+            let generated_uv: Vec<[f64; 2]>;
+            let uvs: &Vec<[f64; 2]> = if m.uv.len() == m.pos.len() {
+                &m.uv
+            } else {
+                // box projection per triangle (1 uv unit = 1 metre)
+                let mut uv = vec![[0.0, 0.0]; m.pos.len()];
+                for t in tris {
+                    let (a, b, c) = (m.pos[t[0] as usize], m.pos[t[1] as usize], m.pos[t[2] as usize]);
+                    let n = cross(sub(b, a), sub(c, a));
+                    let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
+                    for &i in t {
+                        let p = m.pos[i as usize];
+                        uv[i as usize] = if az >= ax && az >= ay { [p[0], p[1]] } else if ax >= ay { [p[1], p[2]] } else { [p[0], p[2]] };
+                    }
+                }
+                generated_uv = uv;
+                &generated_uv
+            };
+
+            lapn(2, &mut tt);
+            // lossless weld: soup vertices with identical f32 position / normal / uv share one index
+            let has_uv = uvs.len() == m.pos.len();
+            let mut map: FxMap<[u32; 8], u32> = FxMap::default();
+            let (mut pos, mut nrm, mut uvb, mut idx) = (vec![], vec![], vec![], Vec::with_capacity(tris.len() * 12));
+            let mut remap = vec![0u32; m.pos.len()];
+            let mut nv = 0u32;
+            for (i, p) in m.pos.iter().enumerate() {
+                let nn = normals[i];
+                let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]).sqrt().max(1e-12);
+                let nn = [nn[0] / l, nn[1] / l, nn[2] / l];
+                let pf = [p[0] as f32, p[1] as f32, p[2] as f32];
+                let uf = if has_uv { [uvs[i][0] as f32, uvs[i][1] as f32] } else { [0.0, 0.0] };
+                let key = [pf[0].to_bits(), pf[1].to_bits(), pf[2].to_bits(), nn[0].to_bits(), nn[1].to_bits(), nn[2].to_bits(), uf[0].to_bits(), uf[1].to_bits()];
+                remap[i] = *map.entry(key).or_insert_with(|| {
+                    for k in 0..3 { pos.extend_from_slice(&pf[k].to_le_bytes()); }
+                    for k in 0..3 { nrm.extend_from_slice(&nn[k].to_le_bytes()); }
+                    if has_uv { for k in 0..2 { uvb.extend_from_slice(&uf[k].to_le_bytes()); } }
+                    nv += 1;
+                    nv - 1
+                });
+            }
+            for t in tris { for &i in t { idx.extend_from_slice(&remap[i as usize].to_le_bytes()); } }
+            lapn(3, &mut tt);
+            Blob { lo, hi, nv: nv as usize, ntri: tris.len(), pos, nrm, uv: if has_uv { Some(uvb) } else { None }, idx }
+        }).collect()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Scene {
+    /// Binary USD (.usdc) of the same meshes as the glb: one Mesh prim per node under /World, named n<index> in node order (the sidecar's
+    /// `nodes` give the real names and materials), Z-up metres, points welded by position with face-varying normals and uvs (what a glTF
+    /// import with merge_vertices gives). No materials: the renderer assigns them from the sidecar.
+    pub fn write_usdc(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use openusd::gf::{Vec2f, Vec3f};
+        use openusd::sdf::{self, ChildrenKey, FieldKey, SpecType, Specifier, Value};
+        let ph: [std::sync::atomic::AtomicU64; 4] = Default::default();
+        let blobs = self.node_blobs(&ph);
+        fn err<E: std::fmt::Debug>(e: E) -> std::io::Error { std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}")) }
+        let f3 = |b: &[u8], i: usize| -> [f32; 3] { [0, 1, 2].map(|k| f32::from_le_bytes(b[(3 * i + k) * 4..(3 * i + k) * 4 + 4].try_into().unwrap())) };
+        let f2 = |b: &[u8], i: usize| -> [f32; 2] { [0, 1].map(|k| f32::from_le_bytes(b[(2 * i + k) * 4..(2 * i + k) * 4 + 4].try_into().unwrap())) };
+        let mut d = sdf::Data::new();
+        let names: Vec<String> = (0..self.nodes.len()).map(|i| format!("n{i}")).collect();
+        let r = d.create_spec(sdf::Path::abs_root(), SpecType::PseudoRoot);
+        r.add(ChildrenKey::PrimChildren, Value::TokenVec(vec!["World".into()]));
+        r.add(FieldKey::DefaultPrim, Value::Token("World".into()));
+        r.add("upAxis", Value::Token("Z".into()));
+        r.add("metersPerUnit", Value::Double(1.0));
+        let w = d.create_spec(sdf::Path::new("/World").map_err(err)?, SpecType::Prim);
+        w.add(FieldKey::Specifier, Value::Specifier(Specifier::Def));
+        w.add(FieldKey::TypeName, Value::Token("Xform".into()));
+        w.add(ChildrenKey::PrimChildren, Value::TokenVec(names.iter().map(|n| n.as_str().into()).collect()));
+        let attr = |d: &mut sdf::Data, path: String, ty: &str, v: Value, interp: Option<&str>| -> std::io::Result<()> {
+            let s = d.create_spec(sdf::Path::new(&path).map_err(err)?, SpecType::Attribute);
+            s.add(FieldKey::TypeName, Value::Token(ty.into()));
+            s.add(FieldKey::Default, v);
+            if let Some(i) = interp { s.add("interpolation", Value::Token(i.into())); }
+            Ok(())
+        };
+        for (bl, name) in blobs.iter().zip(&names) {
+            let base = format!("/World/{name}");
+            let m = d.create_spec(sdf::Path::new(&base).map_err(err)?, SpecType::Prim);
+            m.add(FieldKey::Specifier, Value::Specifier(Specifier::Def));
+            m.add(FieldKey::TypeName, Value::Token("Mesh".into()));
+            let mut props: Vec<openusd::tf::Token> = vec!["points".into(), "faceVertexCounts".into(), "faceVertexIndices".into(), "normals".into(), "subdivisionScheme".into(), "doubleSided".into()];
+            if bl.uv.is_some() { props.push("primvars:st".into()); }
+            m.add(ChildrenKey::PropertyChildren, Value::TokenVec(props));
+            // weld as Blender's glTF importer does with merge_vertices (io_scene_gltf2 merge_duplicate_verts): vertices with the same
+            // position and the same normal truncated to 1/50000 (float32) become one, uvs stay per corner; the normal kept per vertex
+            // is the truncated one (the importer sets the custom normals from it). -0.0 counts as 0.0, like its byte-wise unique.
+            let z = |v: f32| if v == 0.0 { 0.0f32 } else { v };
+            let trunc = |v: f32| z((v * 50000.0f32).trunc() * (1.0f64 / 50000.0) as f32);
+            let mut map: crate::dhash::FxMap<[u32; 6], i32> = Default::default();
+            let (mut pts, mut nrms): (Vec<Vec3f>, Vec<Vec3f>) = (vec![], vec![]);
+            let remap: Vec<i32> = (0..bl.nv).map(|i| {
+                let p = f3(&bl.pos, i).map(z);
+                let n = f3(&bl.nrm, i).map(trunc);
+                let key = [p[0].to_bits(), p[1].to_bits(), p[2].to_bits(), n[0].to_bits(), n[1].to_bits(), n[2].to_bits()];
+                *map.entry(key).or_insert_with(|| { pts.push(Vec3f::from(p)); nrms.push(Vec3f::from(n)); pts.len() as i32 - 1 })
+            }).collect();
+            let corners: Vec<usize> = bl.idx.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()) as usize).collect();
+            attr(&mut d, format!("{base}.points"), "point3f[]", Value::Vec3fVec(pts), None)?;
+            attr(&mut d, format!("{base}.faceVertexCounts"), "int[]", Value::IntVec(vec![3; bl.ntri]), None)?;
+            attr(&mut d, format!("{base}.faceVertexIndices"), "int[]", Value::IntVec(corners.iter().map(|&c| remap[c]).collect()), None)?;
+            attr(&mut d, format!("{base}.normals"), "normal3f[]", Value::Vec3fVec(nrms), Some("vertex"))?;
+            if let Some(uv) = &bl.uv {
+                // the glTF importer flips v (glTF's uv origin is top-left): the same values as after a glb import
+                attr(&mut d, format!("{base}.primvars:st"), "texCoord2f[]", Value::Vec2fVec(corners.iter().map(|&c| { let t = f2(uv, c); Vec2f::from([t[0], 1.0 - t[1]]) }).collect()), Some("faceVarying"))?;
+            }
+            attr(&mut d, format!("{base}.subdivisionScheme"), "token", Value::Token("none".into()), None)?;
+            attr(&mut d, format!("{base}.doubleSided"), "bool", Value::Bool(true), None)?;
+        }
+        openusd::usdc::CrateWriter::write_to_file(&d, path).map_err(err)
     }
 }
