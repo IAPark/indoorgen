@@ -75,9 +75,12 @@ pub struct Program {
     /// Dense program: the realism rules of src/realism.rs (a sofa and one TV per living room, fewer shelves, ...); user rules for
     /// the same room + class + relation win.
     pub realism: bool,
+    /// Dense program: pendant lamps over dining tables / kitchen islands and exposed ceiling beams in some living / dining rooms
+    /// (src/ceiling_decor.rs).
+    pub ceiling_decor: bool,
 }
 impl Default for Program {
-    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true } }
+    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

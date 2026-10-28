@@ -593,6 +593,10 @@ pub fn build_scene(p: &Params) -> Built {
             o["feature"] = serde_json::json!({"origin": pf.origin, "yaw": pf.yaw, "span_len": pf.span_len, "x": pf.x, "footprint": pf.footprint, "keepout": pf.keepout, "info": pf.info});
         }
     }
+    if cfg.program.ceiling_decor && !orig_prog {
+        let ceiling_z = g.c.wall_height - g.c.wall_thickness / 2.0;
+        for l in crate::ceiling_decor::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness, night) { eprintln!("CEILING {l}"); }
+    }
     // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
     let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {
         Some(serde_json::json!({
