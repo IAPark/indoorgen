@@ -938,6 +938,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ig_clothlib"
+version = "0.1.0"
+dependencies = [
+ "cmake",
+]
+
+[[package]]
 name = "ig_core"
 version = "0.1.0"
 dependencies = [
@@ -1101,6 +1108,7 @@ dependencies = [
  "anyhow",
  "earcutr",
  "ig_bm",
+ "ig_clothlib",
  "ig_core",
  "ig_exbool",
  "ig_geom",

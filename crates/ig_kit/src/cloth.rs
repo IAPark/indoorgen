@@ -208,6 +208,9 @@ impl Collider {
     pub fn tri(&self, ti: usize) -> &[V3; 3] {
         &self.tris[ti]
     }
+    pub fn len(&self) -> usize {
+        self.tris.len()
+    }
     /// first front-face hit of segment a->b: (t, triangle index)
     pub fn segment_hit(&self, a: V3, b: V3) -> Option<(f64, usize)> {
         if self.nodes.is_empty() {
@@ -491,8 +494,90 @@ pub fn simulate_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders:
     simulate(pos0, faces, p, colliders, cal)
 }
 
+/// CLOTH_DUMP=dir: every job's input (positions, faces, settings, collider triangles) is written to dir/job_NNN.bin for replay
+/// (examples/clothreplay.rs), e.g. to calibrate a solver without regenerating a house
+#[cfg(not(target_arch = "wasm32"))]
+fn dump_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) {
+    use std::io::Write;
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Some(dir) = std::env::var_os("CLOTH_DUMP") else { return };
+    let k = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut b: Vec<u8> = vec![];
+    let f = |b: &mut Vec<u8>, x: f64| b.extend_from_slice(&x.to_le_bytes());
+    let u = |b: &mut Vec<u8>, x: u64| b.extend_from_slice(&x.to_le_bytes());
+    u(&mut b, pos0.len() as u64);
+    for q in pos0 { for &c in q { f(&mut b, c) } }
+    u(&mut b, faces.len() as u64);
+    for fc in faces { u(&mut b, fc.len() as u64); for &i in fc { u(&mut b, i as u64) } }
+    for x in [p.mass, p.tension, p.compression, p.shear, p.bending, p.tension_damp, p.compression_damp, p.shear_damp, p.air_damping, p.gravity, p.distance_min, p.self_distance, p.pressure, p.volume_cap] { f(&mut b, x) }
+    u(&mut b, p.use_self_collision as u64);
+    u(&mut b, p.use_pressure as u64);
+    u(&mut b, p.end_frame as u64);
+    u(&mut b, p.quality as u64);
+    for x in [cal.press_scale, cal.press_thresh, cal.press_thresh_g, cal.press_pow] { f(&mut b, x) }
+    u(&mut b, p.pin.len() as u64);
+    for &w in &p.pin { f(&mut b, w) }
+    u(&mut b, colliders.len() as u64);
+    for c in colliders {
+        u(&mut b, c.len() as u64);
+        for i in 0..c.len() { for q in c.tri(i) { for &x in q { f(&mut b, x) } } }
+    }
+    let path = std::path::Path::new(&dir).join(format!("job_{k:03}.bin"));
+    if let Ok(mut fh) = std::fs::File::create(&path) { let _ = fh.write_all(&b); }
+}
+
+/// read a job written by CLOTH_DUMP: (positions, faces, settings, colliders)
+pub fn load_job(path: &std::path::Path) -> Option<(Vec<V3>, Vec<Vec<u32>>, ClothParams, Calib, Vec<Collider>)> {
+    let d = std::fs::read(path).ok()?;
+    let mut o = 0usize;
+    let mut u = || { let v = u64::from_le_bytes(d[o..o + 8].try_into().unwrap()); o += 8; v };
+    let mut vals: Vec<u64> = vec![];
+    let _ = &mut vals;
+    let nv = u() as usize;
+    let mut pos = Vec::with_capacity(nv);
+    for _ in 0..nv { pos.push([f64::from_bits(u()), f64::from_bits(u()), f64::from_bits(u())]) }
+    let nf = u() as usize;
+    let mut faces = Vec::with_capacity(nf);
+    for _ in 0..nf { let n = u() as usize; faces.push((0..n).map(|_| u() as u32).collect::<Vec<u32>>()) }
+    let mut p = ClothParams::default();
+    let mut g = || f64::from_bits(u());
+    p.mass = g(); p.tension = g(); p.compression = g(); p.shear = g(); p.bending = g(); p.tension_damp = g(); p.compression_damp = g(); p.shear_damp = g();
+    p.air_damping = g(); p.gravity = g(); p.distance_min = g(); p.self_distance = g(); p.pressure = g(); p.volume_cap = g();
+    p.use_self_collision = u() != 0;
+    p.use_pressure = u() != 0;
+    p.end_frame = u() as u32;
+    p.quality = u() as u32;
+    let mut cal = Calib::default();
+    cal.press_scale = f64::from_bits(u());
+    cal.press_thresh = f64::from_bits(u());
+    cal.press_thresh_g = f64::from_bits(u());
+    cal.press_pow = f64::from_bits(u());
+    let np = u() as usize;
+    p.pin = (0..np).map(|_| f64::from_bits(u())).collect();
+    let nc = u() as usize;
+    let mut cols = vec![];
+    for _ in 0..nc {
+        let nt = u() as usize;
+        let mut cp = Vec::with_capacity(3 * nt);
+        for _ in 0..3 * nt { cp.push([f64::from_bits(u()), f64::from_bits(u()), f64::from_bits(u())]) }
+        let cf: Vec<Vec<u32>> = (0..nt as u32).map(|i| vec![3 * i, 3 * i + 1, 3 * i + 2]).collect();
+        cols.push(Collider::new(&cp, &cf));
+    }
+    Some((pos, faces, p, cal, cols))
+}
+
 pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
+    #[cfg(not(target_arch = "wasm32"))]
+    dump_job(pos0, faces, p, colliders, cal);
     let t0 = web_time::Instant::now();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(b) = ig_core::envx::var("CL_SOLVER").and_then(|v| match v.as_str() { "jolt" => Some(ig_clothlib::Backend::Jolt), "bullet" => Some(ig_clothlib::Backend::Bullet), _ => None }) {
+        let r = simulate_lib(b, pos0, faces, p, colliders, cal);
+        if std::env::var_os("CLOTH_T").is_some() {
+            eprintln!("CLOTH_T {} verts {} frames {:.2}s ({b:?})", pos0.len(), p.end_frame, t0.elapsed().as_secs_f64());
+        }
+        return r;
+    }
     let r = if ig_core::envx::var("CL_VBD").map_or(false, |v| v == "1") {
         crate::vbd::simulate(pos0, faces, p, colliders, cal, &crate::vbd::VbdCfg::default())
     } else {
@@ -502,6 +587,46 @@ pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&
         eprintln!("CLOTH_T {} verts {} frames {:.2}s", pos0.len(), p.end_frame, t0.elapsed().as_secs_f64());
     }
     r
+}
+
+/// the job on a library soft body (crates/ig_clothlib: Jolt / Bullet); same material settings and pressure calibration as the implicit solver
+#[cfg(not(target_arch = "wasm32"))]
+fn simulate_lib(b: ig_clothlib::Backend, pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
+    let springs = build_springs(pos0, faces);
+    let avg_len = {
+        let s: Vec<f64> = springs.iter().filter(|s| s.kind == 0).map(|s| s.l0).collect();
+        s.iter().sum::<f64>() / s.len().max(1) as f64
+    };
+    let tris: Vec<[u32; 3]> = faces.iter().flat_map(|f| (1..f.len().saturating_sub(1)).map(move |k| [f[0], f[k], f[k + 1]])).collect();
+    let press = if p.use_pressure && p.pressure != 0.0 {
+        cal.press_scale * (p.pressure.abs() - cal.press_thresh - if p.gravity > 0.0 { cal.press_thresh_g } else { 0.0 }).max(0.0).powf(cal.press_pow) * p.pressure.signum()
+    } else {
+        0.0
+    };
+    let soups: Vec<(Vec<V3>, Vec<[u32; 3]>)> = colliders.iter().map(|c| {
+        let n = c.len();
+        let pos: Vec<V3> = (0..n).flat_map(|i| c.tri(i).iter().copied()).collect();
+        let tri: Vec<[u32; 3]> = (0..n as u32).map(|i| [3 * i, 3 * i + 1, 3 * i + 2]).collect();
+        (pos, tri)
+    }).collect();
+    let meshes: Vec<ig_clothlib::Mesh> = soups.iter().map(|(p, t)| ig_clothlib::Mesh { pos: p, tris: t }).collect();
+    let lp = ig_clothlib::Params {
+        mass: p.mass,
+        tension: p.tension,
+        compression: p.compression,
+        shear: p.shear,
+        bending: p.bending,
+        tension_damp: p.tension_damp,
+        shear_damp: p.shear_damp,
+        air_damping: p.air_damping,
+        gravity: p.gravity,
+        pressure: press,
+        distance_min: p.distance_min,
+        end_frame: p.end_frame,
+        self_collision: p.use_self_collision,
+        avg_len,
+    };
+    ig_clothlib::simulate(b, pos0, &tris, &p.pin, &lp, &meshes)
 }
 
 fn simulate_inner(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {

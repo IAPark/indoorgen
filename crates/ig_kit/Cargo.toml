@@ -24,3 +24,6 @@ ig_core = { path = "../ig_core" }
 ig_exbool = { path = "../ig_exbool" }
 ig_bm = { path = "../ig_bm" }
 ig_geom = { path = "../ig_geom" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ig_clothlib = { path = "../ig_clothlib" }
