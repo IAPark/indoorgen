@@ -100,6 +100,54 @@ def apply_lighting(sc, variation):
     return {k: lg.get(k) for k in ("sun_dir", "sun_elevation_deg", "sun_strength", "sky_strength")} | {"color_temp_K": ct}
 
 
+def apply_hdri(sc, variation, hdri_dir, seed, k=4.0):
+    """outdoor panorama (CC0 Poly Haven HDRIs in hdri_dir, meta.json from hdri_meta.py) for everything but diffuse bounces: window views and
+    reflections show streets / gardens / skylines; room lighting stays on the calibrated procedural sky. Picked by time of day (night ->
+    night set, sun below 12 deg -> sunset set, else urban 60 % / nature 30 % / overcast 10 %), rotated so its sun is where the scene's sun is,
+    strength k * sky_strength / panorama mean sky."""
+    import random
+    lg = (variation or {}).get("lighting") or {}
+    mp = os.path.join(hdri_dir, "meta.json")
+    if not lg or sc.world is None or not sc.world.use_nodes or not os.path.exists(mp): return None
+    meta = json.load(open(mp))
+    rnd = random.Random(int(seed) * 7919 + 17)
+    el = lg.get("sun_elevation_deg")
+    if lg.get("is_night") or (el is not None and el < 0):
+        groups = ["night"]
+    elif el is not None and el < 12:
+        groups = ["sunset"]
+    else:
+        u = rnd.random()
+        groups = ["day_urban", "day_urban2"] if u < 0.6 else (["day_nature", "day_nature2"] if u < 0.9 else ["overcast"])
+    cands = sorted(k_ for k_, v in meta.items() if v["group"] in groups)
+    if not cands: return None
+    name = rnd.choice(cands); m = meta[name]
+    nt = sc.world.node_tree
+    out = next((n for n in nt.nodes if n.type == "OUTPUT_WORLD"), None)
+    if out is None or not out.inputs["Surface"].is_linked: return None
+    sky_shader = out.inputs["Surface"].links[0].from_socket
+    env = nt.nodes.new("ShaderNodeTexEnvironment")
+    env.image = bpy.data.images.load(os.path.join(hdri_dir, name + "_2k.hdr"), check_existing=True)
+    tc = nt.nodes.new("ShaderNodeTexCoord"); mapn = nt.nodes.new("ShaderNodeMapping")
+    # blender equirect: u = atan2(d.y, -d.x) / 2pi + 0.5 ; rotate the lookup so the scene's sun direction lands on the panorama's sun
+    sd = lg.get("sun_dir")
+    rz = 0.0
+    if sd is not None and m.get("sun_u") is not None:
+        phi_t = math.atan2(sd[1], -sd[0]); phi_0 = (m["sun_u"] - 0.5) * 2 * math.pi
+        rz = phi_0 - phi_t
+    mapn.inputs["Rotation"].default_value = (0.0, 0.0, rz)
+    nt.links.new(tc.outputs["Generated"], mapn.inputs["Vector"]); nt.links.new(mapn.outputs[0], env.inputs["Vector"])
+    bgh = nt.nodes.new("ShaderNodeBackground")
+    strength = k * float(lg.get("sky_strength") or 1.0) / max(m["mean_sky"], 0.05)
+    bgh.inputs["Strength"].default_value = float(np.clip(strength, 0.05, 20.0))
+    nt.links.new(env.outputs["Color"], bgh.inputs["Color"])
+    lp = nt.nodes.new("ShaderNodeLightPath"); mix = nt.nodes.new("ShaderNodeMixShader")
+    nt.links.new(lp.outputs["Is Diffuse Ray"], mix.inputs[0])
+    nt.links.new(bgh.outputs[0], mix.inputs[1]); nt.links.new(sky_shader, mix.inputs[2])
+    nt.links.new(mix.outputs[0], out.inputs["Surface"])
+    return dict(hdri=name, group=m["group"], rot_z_deg=round(math.degrees(rz), 1), strength=round(bgh.inputs["Strength"].default_value, 3))
+
+
 def lamp_state(variation, sidecar):
     """-> fn(light dict) -> (on, scale). gen2 record: variation.lighting.lamps = {light name: {on, watt}}, lamp_strength_scale multiplies the watt;
     capture-fallback record: lamps_on bool | [bool per non-ceiling lamp in sidecar order], ceiling_lights_on"""

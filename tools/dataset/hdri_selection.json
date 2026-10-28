@@ -1,0 +1,45 @@
+{
+ "day_urban": [
+  "wide_street_01",
+  "studio_garden",
+  "suburban_garden",
+  "schadowplatz",
+  "abandoned_tank_farm_03"
+ ],
+ "day_urban2": [
+  "canary_wharf",
+  "buikslotermeerplein",
+  "wide_street_02",
+  "urban_street_04",
+  "urban_street_01"
+ ],
+ "day_nature": [
+  "meadow_2",
+  "je_gray_02",
+  "golden_gate_hills",
+  "spiaggia_di_mondello"
+ ],
+ "day_nature2": [
+  "noon_grass",
+  "rural_asphalt_road",
+  "sunflowers"
+ ],
+ "overcast": [
+  "cannon",
+  "snowy_park_01",
+  "tiergarten",
+  "potsdamer_platz"
+ ],
+ "sunset": [
+  "the_sky_is_on_fire",
+  "venice_sunset",
+  "sunset_jhbcentral",
+  "rooftop_night"
+ ],
+ "night": [
+  "moonless_golf",
+  "dikhololo_night",
+  "satara_night",
+  "kloppenheim_02"
+ ]
+}

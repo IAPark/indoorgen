@@ -446,6 +446,9 @@ except Exception as e:
     print("SKY FAIL", repr(e))
 if DS:
     print("DSLIGHT", dscap.apply_lighting(sc, DS.get("variation")), "lamp meshes", dscap.switch_lamp_meshes(DS.get("variation"), sidecar))
+    _hd = os.environ.get("HDRI_DIR", os.path.expanduser("~/work/hdri"))
+    if not os.environ.get("NO_HDRI") and os.path.isdir(_hd):
+        print("DSHDRI", dscap.apply_hdri(sc, DS.get("variation"), _hd, int((DS.get("variation") or {}).get("house", {}).get("seed", args.seed))))
 if args.top:
     for o in list(bpy.data.objects):
         n = o.name.lower()
