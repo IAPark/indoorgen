@@ -234,6 +234,9 @@ impl Tv {
         let mut r = rng.clone();
         let aspect = [9.0 / 16.0, 3.0 / 4.0][r.choice_idx(2)];
         let width = r.uniform(0.6, 2.1);
+        // living-room TVs: 16:9, 0.75-1.3 m wide (~38-58"); infinigen's 0.6-2.1 m / 3:4 sets did not fit on their stands (4/10
+        // living rooms had a stand but no TV). Same draws, mapped.
+        let (aspect, width) = if monitor { (aspect, width) } else { (9.0 / 16.0, 0.75 + (width - 0.6) / 1.5 * 0.55) };
         let bevel_w = r.uniform(0.0, 0.01);
         let side = r.log_uniform(0.005, 0.01);
         let bottom = r.uniform(0.005, 0.03);

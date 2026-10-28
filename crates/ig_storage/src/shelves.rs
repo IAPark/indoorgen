@@ -350,7 +350,9 @@ impl CellShelf {
     fn new(rng: &mut Rng, tv: bool, fseed: u64) -> CellShelf {
         let mut r = rng.clone();
         let mut dims = if tv {
-            [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.3, 0.5)]
+            // TV stands 1.25-2.1 m wide (infinigen 0.7-2.1): narrower stands could not hold the TV (no TV in 4/10 living rooms)
+            let d = [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.3, 0.5)];
+            [d[0], 1.25 + (d[1] - 0.7) / 1.4 * 0.85, d[2]]
         } else {
             [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.35, 2.1)]
         };

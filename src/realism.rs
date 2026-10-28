@@ -97,3 +97,60 @@ pub fn with_realism_rules(mut spec: RuleSpec) -> RuleSpec {
     }
     spec
 }
+
+/// Room type (CamelCase, as in RuleSpec.rooms) of a room object key like "living-room_0/0".
+fn room_type_of(key: &str) -> String {
+    key.split('_').next().unwrap_or("").split('-').map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default() }).collect()
+}
+
+/// Post-solve cap enforcement: the solver accepts moves at equal violation count, so a 0..1 cap can be broken while satisfying a
+/// built-in minimum (5 wall art pieces against a cap of 4, two TVs on one stand). For every factory class with a max in `spec`
+/// (summed over its rules in that room type), extra objects in a room are removed -- the ones with the fewest dependents, added last
+/// first -- together with everything resting on them. Returns the removed keys.
+pub fn enforce_caps(state: &mut crate::furn::state::State, spec: &RuleSpec) -> Vec<String> {
+    use std::collections::{BTreeMap, HashSet};
+    let mut caps: BTreeMap<(String, String), u32> = BTreeMap::new();
+    for (room, rr) in &spec.rooms {
+        for r in &rr.rules {
+            if !r.class.ends_with("Factory") { continue }
+            if let Some(m) = r.max { *caps.entry((room.clone(), r.class.clone())).or_insert(0) += m }
+        }
+    }
+    let keys: Vec<String> = state.objs.keys().cloned().collect();
+    let is_room = |k: &str| state.objs.get(k).map_or(false, |o| o.generator.is_none()) && k.contains('/');
+    let room_of = |k: &str| -> Option<String> {
+        let mut cur = k.to_string();
+        for _ in 0..8 {
+            let o = state.objs.get(&cur)?;
+            if let Some(t) = o.relations.iter().map(|r| r.target.clone()).find(|t| is_room(t)) { return Some(t) }
+            cur = o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.contains_key(t))?;
+        }
+        None
+    };
+    let dependents = |k: &str| keys.iter().filter(|c| state.objs[c.as_str()].relations.iter().any(|r| r.target == k)).count();
+    let mut by: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for k in &keys {
+        let Some(g) = &state.objs[k.as_str()].generator else { continue };
+        let Some(room) = room_of(k) else { continue };
+        by.entry((room, g.class.clone())).or_default().push(k.clone());
+    }
+    let mut remove: HashSet<String> = HashSet::new();
+    for ((room, class), objs) in &by {
+        let Some(&cap) = caps.get(&(room_type_of(room), class.clone())).or_else(|| caps.get(&("Any".to_string(), class.clone()))) else { continue };
+        if objs.len() as u32 <= cap { continue }
+        let mut order: Vec<(usize, usize, &String)> = objs.iter().enumerate().map(|(i, k)| (dependents(k), usize::MAX - i, k)).collect();
+        order.sort();
+        if std::env::var_os("CAPS_DEBUG").is_some() { eprintln!("CAPS {room} {class} {} > {cap}", objs.len()); }
+        for (_, _, k) in order.iter().take(objs.len() - cap as usize) { remove.insert((*k).clone()); }
+    }
+    // everything resting on a removed object goes too
+    loop {
+        let more: Vec<String> = keys.iter().filter(|k| !remove.contains(*k) && state.objs[k.as_str()].relations.iter().any(|r| remove.contains(&r.target))).cloned().collect();
+        if more.is_empty() { break }
+        remove.extend(more);
+    }
+    let mut out: Vec<String> = remove.into_iter().collect();
+    out.sort();
+    for k in &out { state.objs.shift_remove(k); }
+    out
+}

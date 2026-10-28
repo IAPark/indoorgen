@@ -294,6 +294,27 @@ if args.dataset:
     print("DSWALLS", dscap.apply_walls(DS.get("variation")))
 if os.environ.get("DUMPMATS"):
     import roommats; json.dump(roommats.dump_room_materials(), open(os.environ["DUMPMATS"], "w")); print("DUMPMATS done"); sys.exit(0)
+if not os.environ.get("RAW_FLOORS"):
+    # floors: infinigen's tile / hardwood shaders go down to roughness ~0.05, so floors read as mirrors; real floors are satin at most
+    _done = {}
+    for _o in bpy.data.objects:
+        if _o.type != "MESH" or ".floor" not in _o.name: continue
+        for _sl in _o.material_slots:
+            _m = _sl.material
+            if _m is None or not _m.use_nodes: continue
+            if _m.name not in _done:
+                _nt = _m.node_tree
+                for _nd in list(_nt.nodes):
+                    if _nd.type != "BSDF_PRINCIPLED": continue
+                    _ri = _nd.inputs["Roughness"]
+                    if _ri.is_linked:
+                        _src = _ri.links[0].from_socket
+                        _mx = _nt.nodes.new("ShaderNodeMath"); _mx.operation = "MAXIMUM"; _mx.inputs[1].default_value = 0.32
+                        _nt.links.new(_src, _mx.inputs[0]); _nt.links.new(_mx.outputs[0], _ri)
+                    else:
+                        _ri.default_value = max(_ri.default_value, 0.32)
+                    if "Coat Weight" in _nd.inputs and not _nd.inputs["Coat Weight"].is_linked: _nd.inputs["Coat Weight"].default_value = min(_nd.inputs["Coat Weight"].default_value, 0.1)
+                _done[_m.name] = True
 phase("room materials")
 sc = bpy.context.scene
 # lighting: Infinigen's sky (same seed convention as the reference)

@@ -338,6 +338,7 @@ def make_pool(S, cfg, W, H, n, rng):
     lo_f, hi_f = cfg.get("focal_mm", [18, 35]); hlo, hhi = cfg.get("eye_height_m", [1.0, 1.8]); margin = cfg.get("wall_margin_m", 0.45)
     # small rooms (10 m2 kitchens, 3 m wide bedrooms): photographers stand closer to walls and targets
     R = math.sqrt(max(S.floor_area, 1.0)); margin = min(margin, max(0.25, 0.12 * R))
+    if S.floor_area < 10.0: lo_f, hi_f = min(lo_f, 14.0), min(hi_f, 22.0)  # wide lens in small bathrooms / kitchens, as photographers do
     d_tgt = float(np.clip(0.5 * R, 1.2, 2.0))
     traj, cluster = cfg.get("traj_frac", 0.4), cfg.get("cluster_len", 3)
     pool, rejects, prev, run = [], {}, None, 0

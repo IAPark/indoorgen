@@ -81,6 +81,12 @@ pub fn build_scene(p: &Params) -> Built {
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
     let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone() }, &assets, prog);
+    if cfg.program.realism && !orig_prog {
+        if let Some(spec) = &rules {
+            let rm = crate::realism::enforce_caps(&mut g.state, spec);
+            if !rm.is_empty() { eprintln!("CAPS removed {} objects over the rule maxima: {:?}", rm.len(), &rm[..rm.len().min(12)]); }
+        }
+    }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {
