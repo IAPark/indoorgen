@@ -1,4 +1,5 @@
-"""img_stats.py RUN_DIR...: Hypersim-style visible objects / classes per image of make_dataset runs (instance maps). Multi-object assets are split: books = parts / 2 (cover + pages), shelf trinket sets and fruit bowls = their parts"""
+"""img_stats.py RUN_DIR...: Hypersim-style visible objects / classes per image of make_dataset runs (instance maps). Multi-object assets are split: books = parts / 2 (cover + pages), shelf trinket sets and fruit bowls = their parts, bed linen (comforter, throw, each pillow: BedFactory parts >= 4) separate from the
+bed (frame + mattress), as Hypersim's instance maps label pillows and blankets on their own"""
 import os, sys, json, re, math
 import numpy as np
 from PIL import Image
@@ -19,6 +20,8 @@ for run in sys.argv[1:]:
                 cl = v.get("cls") or ""
                 if not cl or any(x in cl for x in NOT_OBJ): continue
                 cls.add(cl); base = re.sub(r"#\d+$", "", v["name"])
+                pi = int(v["name"].rsplit("#", 1)[1]) if "#" in v["name"] else 0
+                if cl == "BedFactory" and pi >= 4: parts.setdefault(("p", base), set()).add(v["name"]); continue  # comforter, throw, each pillow
                 if "Book" in cl: parts.setdefault(("b", base), set()).add(v["name"])
                 elif any(x in cl for x in ("NatureShelfTrinkets", "FruitContainer")): parts.setdefault(("p", base), set()).add(v["name"])
                 else: whole.add(base)
