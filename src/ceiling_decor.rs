@@ -72,7 +72,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 // canopy at the ceiling
                 scene.add(&format!("{name}#1"), "PendantLampFactory", limb([c[0], c[1], ceiling_z - 0.03], [c[0], c[1], ceiling_z], 0.05, 0.05, false), shade_m);
                 // open-bottom shade: a tapered tube (r small at the top), bulb just inside
-                let shade = limb([c[0], c[1], zb + shade_h], [c[0], c[1], zb], shade_r * 0.35, shade_r, false);
+                let shade = limb([c[0], c[1], zb + shade_h], [c[0], c[1], zb], shade_r * 0.35, shade_r, true);
                 scene.add(&format!("{name}#2"), "PendantLampFactory", shade, shade_m);
                 scene.add(&format!("{name}#3"), "PendantLampFactory", limb([c[0], c[1], zb + 0.04], [c[0], c[1], zb + 0.1], 0.03, 0.03, true), bulb_m);
                 let light = Light { loc: [c[0], c[1], zb - 0.02], watt: 35.0, radius: 0.03, temperature: 2900.0, name: format!("{name}_light") };

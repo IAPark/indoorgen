@@ -78,9 +78,11 @@ pub struct Program {
     /// Dense program: pendant lamps over dining tables / kitchen islands and exposed ceiling beams in some living / dining rooms
     /// (src/ceiling_decor.rs).
     pub ceiling_decor: bool,
+    /// Dense program: throw cushions on sofas and armchairs (src/soft_decor.rs).
+    pub soft_decor: bool,
 }
 impl Default for Program {
-    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true } }
+    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
