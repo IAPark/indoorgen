@@ -167,6 +167,19 @@ from infinigen.core.util.math import FixedSeed, int_hash
 import importlib
 from infinigen.assets.materials import ceramic, wood, fabric, metal, plastic, terrain, art, lamp_shaders, text
 phase("infinigen import")
+if not os.environ.get("RAW_PLANTS"):
+    # potted plants: leafy houseplant kinds only (matches crates/ig_plants monocot kind_for_seed) in green hues (infinigen's monocot hues
+    # reach straw yellow 0.15; houseplants are green 0.22-0.33)
+    try:
+        from infinigen.assets.objects.monocot import generate as _mg, growth as _mgr
+        _mi0 = _mg.MonocotFactory.__init__
+        def _mi(self, factory_seed, coarse=False, factory_method=None, grass=None): _mi0(self, factory_seed, coarse, factory_method, False if grass is None else grass)
+        _mg.MonocotFactory.__init__ = _mi
+        import numpy as _npp
+        for _c in [_mgr.MonocotGrowthFactory] + _mgr.MonocotGrowthFactory.__subclasses__():
+            _c.build_base_hue = staticmethod(lambda: _npp.random.uniform(0.22, 0.33))
+    except Exception as _e:
+        print("plant patch skipped", repr(_e))
 if not os.environ.get("RAW_METALS"):
     # infinigen's metal_hsv gives 80% of metals a random saturated hue (teal fridges, purple microwaves); real interiors are mostly
     # natural metals: 85% natural, the rest infinigen's draw (RAW_METALS=1 keeps infinigen's mix)

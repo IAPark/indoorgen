@@ -949,9 +949,11 @@ pub struct MonocotFactory {
 }
 
 /// kind chosen by MonocotFactory.__init__: np.random.choice over [Tussock, Grasses, Wheat, Maize, Agave, Banana, Taro, Veratrum], uniform p
+/// Indoor pots hold houseplants: only the leafy kinds (Agave, Banana, Taro, Veratrum); the grass kinds (wheat / maize / tussock, 60 % straw
+/// hues) read as dried grain in a pot. The renderer's leaf material is patched to match (tools/render/render_rust.py, grass=False).
 pub fn kind_for_seed(fs: u64) -> Kind {
-    let kinds = [Kind::Tussock, Kind::Grasses, Kind::Wheat, Kind::Maize, Kind::Agave, Kind::Banana, Kind::Taro, Kind::Veratrum];
-    let i = Rng::seeded(fs).choice_p(&[0.125; 8]);
+    let kinds = [Kind::Agave, Kind::Banana, Kind::Taro, Kind::Veratrum];
+    let i = Rng::seeded(fs).choice_p(&[0.25; 4]);
     kinds[i]
 }
 
