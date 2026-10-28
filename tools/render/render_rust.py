@@ -471,8 +471,11 @@ if args.showcase:
     pts = [o.matrix_world @ mathutils.Vector(c) for o in meshes for c in o.bound_box]
     x0 = min(p.x for p in pts); x1 = max(p.x for p in pts); zh = max(p.z for p in pts)
     cam = bpy.data.cameras.new("c"); co = bpy.data.objects.new("c", cam); sc.collection.objects.link(co); sc.camera = co
-    cam.lens = 35; dist = max((x1 - x0) * 1.1, 2.0) * 1.15
-    co.location = ((x0 + x1) / 2, -dist, max(zh * 0.5, 0.6)); co.rotation_euler = (1.45, 0, 0)
+    y0 = min(p.y for p in pts)
+    cam.lens = 35; dist = max((x1 - x0) * 1.1, 2.0, zh * 1.6) * 1.15
+    # SHOWCASE_DIST / SHOWCASE_Z: close-up framing of single assets
+    dist = float(os.environ.get("SHOWCASE_DIST", dist))
+    co.location = ((x0 + x1) / 2, y0 - dist, float(os.environ.get("SHOWCASE_Z", max(zh * 0.5, 0.6)))); co.rotation_euler = (1.45, 0, 0)
     sun = bpy.data.lights.new("s", "SUN"); sun.energy = 3
     so = bpy.data.objects.new("s", sun); sc.collection.objects.link(so); so.rotation_euler = (0.9, 0.2, 0.4)
     w = bpy.data.worlds.new("w3"); w.use_nodes = True; w.node_tree.nodes["Background"].inputs[1].default_value = 1.0; sc.world = w

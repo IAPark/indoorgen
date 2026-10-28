@@ -67,8 +67,23 @@ impl Wardrobe {
         let handle = spec("wardrobe_handle", weighted(&mut r, HANDLE_M), s + 2);
         let t = 0.02; // door thickness
         let x0 = d - t;
+        // 25 % of hinged wardrobes have one bay open (door swung out): a hollow compartment with a rail of hanging clothes and folded
+        // stacks on a shelf above (own stream); the cabinet body is built around it
+        let dw0 = w / self.doors as f64;
+        let open_bay = {
+            let hsh = crate::int_hash(&["wardrobe_open", &self.seed.to_string()]);
+            if !self.sliding && std::env::var_os("NO_WARDROBE_OPEN").is_none() && hsh % 4 == 0 { Some((hsh / 4) as usize % self.doors) } else { None }
+        };
         let mut cab = Mesh::new();
-        cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, w, h]));
+        match open_bay {
+            Some(bi) => {
+                let (by0, by1) = (dw0 * bi as f64, dw0 * (bi + 1) as f64);
+                if by0 > 0.0 { cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, by0, h])); }
+                if by1 < w { cab.append(&Mesh::cuboid([0.0, by1, p], [x0, w, h])); }
+                cab.append(&Mesh::cuboid([0.0, by0, p], [x0, by1, p + 0.018])); // bay floor (bottom panel)
+            }
+            None => cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, w, h])),
+        }
         // recessed plinth
         cab.append(&Mesh::cuboid([0.0, 0.02, 0.0], [x0 - 0.04, w - 0.02, p]));
         let cb = cab.bounds();
@@ -126,8 +141,28 @@ impl Wardrobe {
         }
         let dw = w / self.doors as f64;
         let hz = zd + (h - zd) * 0.45;
+        if let Some(bi) = open_bay {
+            let (y0, y1) = (dw * bi as f64, dw * (bi + 1) as f64);
+            self.open_bay(&mut a, &mut r, y0, y1, zd, x0);
+        }
         for i in 0..self.doors {
             let (y0, y1) = (dw * i as f64, dw * (i + 1) as f64);
+            if open_bay == Some(i) {
+                // the door stands open ~100 deg on its hinge (the bay's outer edge), swung out into the room
+                let hinge_y = if i % 2 == 0 { y0 } else { y1 };
+                let sgn = if i % 2 == 0 { 1.0 } else { -1.0 }; // +1: door spans toward +y when closed
+                let ang: f64 = 1.75;
+                let wd = y1 - y0 - 2.0 * GAP;
+                // closed direction (0, sgn); rotated by ang about z toward +x (out of the cabinet)
+                let dir = [ang.sin(), sgn * ang.cos()];
+                let nrm = [dir[1] * -sgn, dir[0] * sgn];
+                let v = |u: f64, tt: f64, z: f64| [d + dir[0] * u + nrm[0] * tt, hinge_y + dir[1] * u + nrm[1] * tt, z];
+                let vs = [v(0.0, 0.0, zd + GAP), v(wd, 0.0, zd + GAP), v(wd, 0.0, h - GAP), v(0.0, 0.0, h - GAP), v(0.0, t, zd + GAP), v(wd, t, zd + GAP), v(wd, t, h - GAP), v(0.0, t, h - GAP)];
+                let mut m = Mesh::new();
+                for f in [[0, 1, 2, 3], [7, 6, 5, 4], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]] { m.add_face(&[vs[f[0]], vs[f[1]], vs[f[2]], vs[f[3]]]); }
+                a.mesh(m, &door, None);
+                continue;
+            }
             panel(&mut a, x0, d, y0, y1, zd, h);
             // handle on the opening edge: doors pair up (left door opens at its right edge)
             let y = if i % 2 == 0 { y1 - 0.04 } else { y0 + 0.04 };
@@ -138,6 +173,87 @@ impl Wardrobe {
             }
         }
         a
+    }
+}
+
+/// box-projected uvs (metres) per corner (meshes with per-face vertices, as Mesh::smoothed returns)
+fn box_uv(m: &mut Mesh) {
+    m.uv = vec![[0.0, 0.0]; m.pos.len()];
+    for f in &m.faces {
+        if f.len() < 3 { continue }
+        let (a, b, c) = (m.pos[f[0] as usize], m.pos[f[1] as usize], m.pos[f[2] as usize]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let ax = (0..3).max_by(|&i, &j| n[i].abs().partial_cmp(&n[j].abs()).unwrap()).unwrap();
+        for &i in f { let p = m.pos[i as usize]; m.uv[i as usize] = match ax { 0 => [p[1], p[2]], 1 => [p[0], p[2]], _ => [p[0], p[1]] }; }
+    }
+}
+
+impl Wardrobe {
+    /// hollow bay [y0, y1] x [0, x0] above zd: back + side boards + floor, a hanging rail with 6-14 garments (shirts / dresses / coats:
+    /// thin rounded slabs hung from the rail at slightly different depths, lengths and colours, each on a hanger) and a top shelf with
+    /// 2-3 folded stacks
+    fn open_bay(&self, a: &mut Asset, r: &mut Rng, y0: f64, y1: f64, zd: f64, x0: f64) {
+        let h = self.height;
+        let wall = 0.018;
+        let inside = Material::diffuse("wardrobe_inside", [0.82, 0.8, 0.76], 0.8);
+        // carve: the cabinet body is solid; paint its interior faces with an inner shell slightly inside the bay
+        let mut shell = Mesh::new();
+        shell.append(&Mesh::cuboid([0.0, y0 + wall, zd + wall], [0.02, y1 - wall, h - wall])); // back
+        shell.append(&Mesh::cuboid([0.0, y0, zd], [x0, y0 + wall, h])); // sides
+        shell.append(&Mesh::cuboid([0.0, y1 - wall, zd], [x0, y1, h]));
+        shell.append(&Mesh::cuboid([0.0, y0, zd], [x0, y1, zd + wall])); // floor
+        shell.append(&Mesh::cuboid([0.0, y0, h - wall], [x0, y1, h])); // top
+        a.mesh(shell, &inside, None);
+        let shelf_z = h - 0.32;
+        a.mesh(Mesh::cuboid([0.02, y0 + wall, shelf_z], [x0 - 0.01, y1 - wall, shelf_z + 0.018]), &inside, None);
+        let rail_z = shelf_z - 0.06;
+        let chrome = Material::diffuse("wardrobe_rail", [0.75, 0.75, 0.77], 0.25);
+        a.mesh(ig_kit::geomkit::limb([x0 * 0.5, y0 + wall, rail_z], [x0 * 0.5, y1 - wall, rail_z], 0.012, 0.012, true), &chrome, None);
+        // garments
+        let pal: [[f32; 3]; 10] = [[0.08, 0.1, 0.18], [0.85, 0.85, 0.82], [0.25, 0.25, 0.27], [0.55, 0.42, 0.3], [0.6, 0.15, 0.15], [0.35, 0.45, 0.6], [0.15, 0.3, 0.2], [0.75, 0.65, 0.5], [0.45, 0.3, 0.45], [0.9, 0.75, 0.55]];
+        let n = ((y1 - y0 - 2.0 * wall) / 0.045) as usize;
+        let n = n.clamp(4, 14);
+        let mut y = y0 + wall + 0.03;
+        let step = (y1 - y0 - 2.0 * wall - 0.06) / n as f64;
+        for k in 0..n {
+            let len = [0.7f64, 0.75, 0.95, 1.15, 0.6][r.randint(0, 5) as usize].min(rail_z - zd - 0.05);
+            let gw = r.uniform(0.44, 0.52).min(x0 - 0.06);
+            let th = r.uniform(0.018, 0.04);
+            let xc = x0 * 0.5 + r.uniform(-0.015, 0.015);
+            let col = pal[r.randint(0, 10) as usize];
+            let fab = spec_material(&format!("garment:{}:{k}", self.seed), json!({"cls": "fabric.FineKnitFabric", "kwargs": {}, "seed": self.seed + 100 + k as u64}), col);
+            // body: a thin slab tapering at the shoulders
+            let top = rail_z - 0.07;
+            let mut g = Mesh::cuboid([xc - gw / 2.0, y - th / 2.0, top - len], [xc + gw / 2.0, y + th / 2.0, top]).smoothed(th * 0.45, 2, 1);
+            for p in g.pos.iter_mut() {
+                if p[2] > top - 0.08 { let f = 1.0 - (p[2] - (top - 0.08)) / 0.08 * 0.35; p[0] = xc + (p[0] - xc) * f; }
+            }
+            box_uv(&mut g);
+            a.mesh(g, &fab, None);
+            // hanger: hook + bar
+            a.mesh(ig_kit::geomkit::limb([xc, y, rail_z], [xc, y, top + 0.005], 0.003, 0.003, false), &chrome, None);
+            a.mesh(ig_kit::geomkit::limb([xc - gw * 0.42, y, top - 0.01], [xc + gw * 0.42, y, top - 0.01], 0.006, 0.006, true), &Material::diffuse("hanger", [0.5, 0.38, 0.25], 0.6), None);
+            y += step;
+        }
+        // folded stacks on the shelf
+        let ns = if y1 - y0 > 0.55 { 3 } else { 2 };
+        for k in 0..ns {
+            let yc = y0 + (y1 - y0) * (k as f64 + 0.5) / ns as f64;
+            let mut z = shelf_z + 0.018;
+            let layers = r.randint(3, 7);
+            for l in 0..layers {
+                let col = pal[r.randint(0, 10) as usize];
+                let tt = r.uniform(0.025, 0.045);
+                let (sw, sd) = (r.uniform(0.25, 0.3), r.uniform(0.25, 0.3).min(x0 - 0.05));
+                let jx = r.uniform(-0.01, 0.01);
+                let mut m = Mesh::cuboid([x0 - sd - 0.02 + jx, yc - sw / 2.0, z], [x0 - 0.02 + jx, yc + sw / 2.0, z + tt]).smoothed(tt * 0.4, 2, 1);
+                box_uv(&mut m);
+                let fab = spec_material(&format!("folded:{}:{k}:{l}", self.seed), json!({"cls": "fabric.CoarseKnitFabric", "kwargs": {}, "seed": self.seed + 300 + (k * 10 + l as usize) as u64}), col);
+                a.mesh(m, &fab, None);
+                z += tt;
+            }
+        }
     }
 }
 
