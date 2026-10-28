@@ -5,7 +5,7 @@ run_jobs(jobs, world_mesh, set_mesh):
   world_mesh(name) -> (verts Nx3 world Z-up, faces)       current state of a node (earlier jobs' results included)
   set_mesh(name, verts, faces)                            store a result (verts world Z-up)
 Job kinds: "cloth" (pre mesh + colliders + python kwargs, optional z_from shift) and "follow" (re-drop an object onto the new surfaces)."""
-import numpy as np, bpy
+import numpy as np, bpy, time
 
 
 def _make(name, verts, faces):
@@ -112,7 +112,9 @@ def run_jobs(jobs, world_mesh, set_mesh, verbose=True):
                 vg.add([int(i) for i in j["pin"]], 1, "REPLACE")
             cols = [_make("col", *world_mesh(n)) for n in j["collide"]]
             butil.select_none()
+            _t0 = time.time()
             cloth_sim(obj, cols, int(j["end_frame"]), **j["kwargs"])
+            _dt = time.time() - _t0
             if j.get("subsurf"):
                 subsurf(obj, int(j["subsurf"]))
             if j.get("post"):
@@ -127,7 +129,7 @@ def run_jobs(jobs, world_mesh, set_mesh, verbose=True):
                 pose = np.array(j["pose"], dtype=float)
                 v = v @ pose[:3, :3].T + pose[:3, 3]
             if verbose:
-                print("CLOTHJOB", j["target"], len(verts), "->", len(v), "z", v[:, 2].min(), v[:, 2].max())
+                print("CLOTHJOB", j["target"], len(verts), "->", len(v), "z", v[:, 2].min(), v[:, 2].max(), "sim %.1fs" % _dt)
             set_mesh(j["target"], v, f)
             for o in [obj] + cols:
                 bpy.data.objects.remove(o, do_unlink=True)
