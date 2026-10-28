@@ -49,6 +49,58 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             }
             // bath mat on the floor in front of the bathtub / toilet (front = local +x)
             "BathtubFactory" | "ToiletFactory" if in_bath(o) => {
+                if g.class == "ToiletFactory" {
+                    let mut r2 = Rng::seeded(crate::int_hash(&[&seed.to_string(), "bath_decor_wc", k]));
+                    // wall shelf above the cistern (on the back wall, lo x) with toiletries and a folded towel, 70 %
+                    if r2.f64() < 0.7 {
+                        let sz = hi[2] + r2.uniform(0.3, 0.45);
+                        let sw = r2.uniform(0.5, 0.7);
+                        let yc = (lo[1] + hi[1]) / 2.0;
+                        let sd = 0.16;
+                        let wood = scene.material(Material::diffuse(&format!("wc_shelf:{k}"), [0.85, 0.83, 0.8], 0.5));
+                        scene.add(&format!("wcshelf_{}#0", k.replace('/', "_")), "WallShelfFactory", bx([lo[0], yc - sw / 2.0, sz], [lo[0] + sd, yc + sw / 2.0, sz + 0.02], &o.pose), wood);
+                        let n = r2.randint(2, 5) as usize;
+                        for i in 0..n {
+                            let y = yc - sw / 2.0 + sw * (i as f64 + 0.5) / n as f64;
+                            if i == n - 1 && r2.f64() < 0.6 {
+                                let m = fabric(scene, &format!("wctowel:{k}"), &mut r2);
+                                let mut tw = Mesh::cuboid([lo[0] + 0.02, y - 0.09, sz + 0.02], [lo[0] + 0.15, y + 0.09, sz + 0.1]).smoothed(0.02, 2, 1);
+                                for q in tw.pos.iter_mut() { *q = o.pose.apply(*q) }
+                                scene.add(&format!("wctowel_{}#0", k.replace('/', "_")), "TowelFactory", tw, m);
+                                continue;
+                            }
+                            let b = assets.visual("BottleFactory", r2.next_u64() % 1_000_000, 0);
+                            let (blo, bhi) = b.bounds();
+                            let sc = (0.17 / (bhi[2] - blo[2]).max(0.05)).min(1.0);
+                            for (pi, p) in b.parts.iter().enumerate() {
+                                let mut m = p.mesh.clone();
+                                for q in m.pos.iter_mut() {
+                                    *q = o.pose.apply([lo[0] + 0.08 + (q[0] - (blo[0] + bhi[0]) / 2.0) * sc, y + (q[1] - (blo[1] + bhi[1]) / 2.0) * sc, sz + 0.02 + (q[2] - blo[2]) * sc]);
+                                }
+                                let mi = scene.material(p.mat.clone());
+                                scene.add(&format!("wcbottle_{}_{i}#{pi}", k.replace('/', "_")), "BottleFactory", m, mi);
+                            }
+                        }
+                        log.push(format!("wall shelf over {k}"));
+                    }
+                    // toilet-paper stand beside the bowl (chrome post + roll), 80 %
+                    if r2.f64() < 0.8 {
+                        let side = if r2.f64() < 0.5 { lo[1] - 0.14 } else { hi[1] + 0.14 };
+                        let x = (lo[0] + hi[0]) / 2.0;
+                        let chrome = scene.material(Material::diffuse("tp_chrome", [0.78, 0.78, 0.8], 0.2));
+                        let paper = scene.material(Material::diffuse("tp_paper", [0.95, 0.95, 0.93], 0.9));
+                        let mut post = ig_kit::geomkit::limb([x, side, lo[2]], [x, side, lo[2] + 0.62], 0.012, 0.012, true);
+                        post.append(&ig_kit::geomkit::limb([x - 0.1, side, lo[2] + 0.004], [x + 0.1, side, lo[2] + 0.004], 0.03, 0.03, false));
+                        for q in post.pos.iter_mut() { *q = o.pose.apply(*q) }
+                        scene.add(&format!("tpstand_{}#0", k.replace('/', "_")), "ToiletPaperFactory", post, chrome);
+                        for (j, zz) in [lo[2] + 0.5, lo[2] + 0.3, lo[2] + 0.18].iter().enumerate() {
+                            let mut roll = ig_kit::geomkit::limb([x, side, *zz], [x, side, *zz + 0.1], 0.055, 0.055, true);
+                            for q in roll.pos.iter_mut() { *q = o.pose.apply(*q) }
+                            scene.add(&format!("tproll_{}_{j}#0", k.replace('/', "_")), "ToiletPaperFactory", roll, paper);
+                        }
+                        log.push(format!("paper stand at {k}"));
+                    }
+                }
                 if r.f64() >= if g.class == "BathtubFactory" { 0.8 } else { 0.4 } { continue }
                 let m = fabric(scene, &format!("bathmat:{k}"), &mut r);
                 let (mw, md) = (r.uniform(0.5, 0.8).min(hi[1] - lo[1]), r.uniform(0.4, 0.55));
