@@ -44,7 +44,7 @@ pub struct ModernSofa {
 }
 
 /// box-projected uv (metres) per corner; `m` must have per-face vertices (as `Mesh::smoothed` returns)
-fn box_uv(m: &mut Mesh) {
+pub fn box_uv(m: &mut Mesh) {
     m.uv = vec![[0.0, 0.0]; m.pos.len()];
     for f in &m.faces {
         if f.len() < 3 { continue }
@@ -61,7 +61,7 @@ fn box_uv(m: &mut Mesh) {
 }
 
 /// rounded upholstered block: cuboid, bevelled edges, subdivided (puffed), box uvs
-fn pad(lo: V3, hi: V3, bevel: f64, levels: usize) -> Mesh {
+pub fn pad(lo: V3, hi: V3, bevel: f64, levels: usize) -> Mesh {
     let b = bevel.min(0.45 * (hi[0] - lo[0]).min(hi[1] - lo[1]).min(hi[2] - lo[2]));
     let mut m = Mesh::cuboid(lo, hi).smoothed(b, 2, levels);
     box_uv(&mut m);

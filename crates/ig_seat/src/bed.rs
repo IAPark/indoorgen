@@ -681,7 +681,45 @@ impl Factory for Bed {
             eprintln!("leg_decor {} wrapped {} bed_back {} back_type {} all_legs {} sub {}x{} frame {} limb {}", s.leg_decor, s.leg_decor_wrapped, c.bed_back, c.back_type, s.has_all_legs, s.seat_sub_x, s.seat_sub_y, s.frame_cls, s.frame_limb_cls);
         }
         let mut r = inst_rng(c.fseed, inst);
-        let (seat, limbs, panels) = s.frame_parts_with(&mut r);
+        let (seat, mut limbs, mut panels) = s.frame_parts_with(&mut r);
+        // upholstered headboards (half the beds, own stream): each panel becomes 3-6 vertical padded channels over its footprint, in fabric
+        let ukey = format!("{}:{}", self.fseed, inst);
+        let upholstered = std::env::var_os("NO_UPHOLSTERED_BED").is_none() && crate::int_hash(&["bed_upholstered_p", &ukey]) % 2 == 0;
+        let panel = if upholstered {
+            {
+                // fabric by hash (independent of the shared stream: the first draws of nearby seeds were correlated)
+                let h = crate::int_hash(&["bed_headboard_fab", &ukey]) as usize;
+                let cls = ["fabric.SofaFabric", "fabric.SofaFabric", "fabric.Velvet", "fabric.CoarseKnitFabric", "fabric.Leather", "fabric.SofaFabric", "fabric.Velvet"][h % 7];
+                spec_material(&format!("bed_headboard:{}", h % 1_000_000), json!({"cls": cls, "kwargs": {}, "seed": (h % 1_000_000) as i64}), [0.55, 0.52, 0.5])
+            }
+        } else { panel };
+        if upholstered {
+            // replace the headboard (the tallest panel: the back slab / decor rising above the frame) by vertical padded channels over its
+            // footprint; other panels (leg decor) stay
+            let seat_top = seat.bounds().1[2];
+            let tall: Vec<usize> = (0..panels.len()).filter(|&i| panels[i].bounds().1[2] > seat_top + 0.2).collect();
+            if !tall.is_empty() {
+                let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+                for &i in &tall { let (l, h) = panels[i].bounds(); for d in 0..3 { lo[d] = lo[d].min(l[d]); hi[d] = hi[d].max(h[d]); } }
+                lo[2] = lo[2].max(seat_top - 0.05);
+                let ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+                let thin = if ext[0] < ext[1] { 0 } else { 1 };
+                let long = 1 - thin;
+                let n = ((ext[long] / 0.3).round() as usize).clamp(3, 7);
+                let t = ext[thin].max(0.08);
+                let c0 = (lo[thin] + hi[thin]) / 2.0;
+                let mut keep: Vec<Mesh> = (0..panels.len()).filter(|i| !tall.contains(i)).map(|i| panels[i].clone()).collect();
+                for k in 0..n {
+                    let (mut plo, mut phi) = (lo, hi);
+                    plo[thin] = c0 - t / 2.0; phi[thin] = c0 + t / 2.0;
+                    plo[long] = lo[long] + ext[long] * k as f64 / n as f64 + 0.004;
+                    phi[long] = lo[long] + ext[long] * (k + 1) as f64 / n as f64 - 0.004;
+                    keep.push(super::modern_sofa::pad(plo, phi, 0.04, 2));
+                }
+                panels = keep;
+            }
+        }
+        let _ = &mut limbs;
         let mut frame_all = Mesh::new();
         let mut frame_idx: Vec<usize> = vec![];
         for (g, mt) in [(vec![seat], &surf), (limbs, &limb), (panels, &panel)] {

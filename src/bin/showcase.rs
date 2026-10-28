@@ -16,6 +16,8 @@ fn main() {
     let floor = scene.material(Material::diffuse("floor", [0.6, 0.6, 0.6], 0.9));
     let mut x = 0.0;
     for i in 0..n {
+        // constructor draws (bed sheet type, ...) as the solver sets them: some ports (BedFactory) only take this path
+        indoorgen::assets::set_unseeded(indoorgen::assets::ctor_draws::ctor_draws(class, &mut indoorgen::rng::Rng::seeded(f0 + i as u64)));
         let mut asset = assets.visual(class, f0 + i as u64, 0);
         // FRONT=1: turn the asset's front (+x) toward the showcase camera (-y)
         if std::env::var("FRONT").is_ok() {
