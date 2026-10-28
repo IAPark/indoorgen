@@ -28,9 +28,12 @@ def depth_inside(v, cv, cf):
 
 def main():
     scene, ref, test = sys.argv[1:4]
+    # --self: TEST's cloth is checked against TEST's own colliders (a different solver: its cloth rests on its own comforter)
+    own = "--self" in sys.argv
     g, r, t = Glb(scene), Glb(ref), Glb(test)
     jobs = [j for j in json.load(open(scene.replace(".glb", ".json")))["cloth"] if j["kind"] == "cloth"]
     mesh_ref = lambda n: r.mesh(n) if n in r.by_name else g.mesh(n)
+    mesh_test = (lambda n: t.mesh(n) if n in t.by_name else g.mesh(n)) if own else mesh_ref
     for j in jobs:
         n = j["target"]
         if n not in r.by_name or n not in t.by_name:
@@ -48,9 +51,10 @@ def main():
             for c in j["collide"]:
                 cv, cf = mesh_ref(c)
                 pr = np.maximum(pr, depth_inside(vr, cv, cf))
+                cv, cf = mesh_test(c)
                 pt = np.maximum(pt, depth_inside(vt, cv, cf))
             f = lambda p: f"{100 * (p > 0.001).mean():5.2f}% >1mm, {100 * (p > 0.003).mean():5.2f}% >3mm, max {p.max() * 1000:5.1f} mm"
-            line += f" | inside full colliders: ref {f(pr)} | test {f(pt)}"
+            line += f" | inside {'own' if own else 'full'} colliders: ref {f(pr)} | test {f(pt)}"
         print(line)
 
 
