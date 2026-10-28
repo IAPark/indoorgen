@@ -10,7 +10,9 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("LivingRoom", "TVFactory", "ontop:TVStandFactory", 1, 1, false),
     ("LivingRoom", "Storage", "against_wall", 1, 4, false),
     ("LivingRoom", "ArmChairFactory", "on_floor", 0, 2, false),
-    ("LivingRoom", "WallArtFactory", "against_wall", 1, 4, false),
+    // walls dressed like real living spaces (Hypersim / 3D-FRONT: picture groups over the sofa, a mirror, plants)
+    ("LivingRoom", "WallArtFactory", "against_wall", 2, 6, true),
+    ("LivingRoom", "LargePlantContainerFactory", "against_wall", 1, 2, false),
     ("LivingRoom", "RugFactory", "on_floor", 1, 1, false),
     // shelves held a dozen trinkets and four potted plants; no kitchen cabinets, at most one desk lamp
     ("LivingRoom", "NatureShelfTrinketsFactory", "on:Storage", 0, 4, false),
@@ -72,6 +74,7 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     // a tall open shelf plus the wardrobe left small bedrooms no wall for the bed
     ("Bedroom", "LargeShelfFactory", "against_wall", 0, 0, false),
     ("Bedroom", "LargePlantContainerFactory", "against_wall", 0, 1, false),
+    ("Bedroom", "WallArtFactory", "against_wall", 1, 4, true),
     ("Bedroom", "PlantContainerFactory", "ontop:Storage", 0, 2, false),
     // dining room
     ("DiningRoom", "Storage", "against_wall", 1, 2, false),
@@ -85,6 +88,9 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("DiningRoom", "CupFactory", "on:Storage", 0, 3, false),
     ("DiningRoom", "NatureShelfTrinketsFactory", "on:Storage", 0, 3, false),
     ("DiningRoom", "DeskLampFactory", "ontop:Furniture", 0, 0, false),
+    ("DiningRoom", "WallArtFactory", "against_wall", 1, 4, true),
+    ("DiningRoom", "LargePlantContainerFactory", "against_wall", 1, 2, false),
+    ("Kitchen", "WallArtFactory", "against_wall", 0, 2, false),
     // ... which left dining shelves near empty: books and vases instead, preferred
     ("DiningRoom", "BookColumnFactory", "on:Storage", 0, 8, true),
     ("DiningRoom", "VaseFactory", "on:Storage", 0, 3, true),
