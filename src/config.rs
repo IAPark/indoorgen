@@ -157,10 +157,13 @@ pub struct Cloth {
     pub support_reach: f64,
     /// Final projection that removes remaining penetrations.
     pub final_project: bool,
+    /// Vertex Block Descent solver with offset-geometry contact (crates/ig_kit/src/vbd.rs) instead of the implicit spring solver:
+    /// no cloth vertex ends inside a collider. Settings: VBD_* environment variables (see VbdCfg).
+    pub vbd: bool,
 }
 impl Default for Cloth {
     fn default() -> Self {
-        Cloth { on: false, steps: 2, cg_iters: 40, cg_tol: 1e-4, substeps_mult: 1, collision_thickness: 0.035, friction: 10.0, stiffness_scale: 1.0, support_reach: 0.12, final_project: true }
+        Cloth { on: false, steps: 2, cg_iters: 40, cg_tol: 1e-4, substeps_mult: 1, collision_thickness: 0.035, friction: 10.0, stiffness_scale: 1.0, support_reach: 0.12, final_project: true, vbd: false }
     }
 }
 
@@ -310,6 +313,7 @@ impl GenConfig {
         f("CL_K", c.stiffness_scale, d.stiffness_scale);
         f("CL_SUPPORT", c.support_reach, d.support_reach);
         f("CL_FINAL", if c.final_project { 1.0 } else { 0.0 }, 1.0);
+        f("CL_VBD", if c.vbd { 1.0 } else { 0.0 }, 0.0);
         set_fast_stable(self.solver.fast_stable);
         #[cfg(not(target_arch = "wasm32"))]
         if !self.solver.cheap_placeholders { std::env::set_var("NO_CHEAP_PH", "1"); }

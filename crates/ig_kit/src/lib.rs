@@ -25,6 +25,7 @@ pub mod bpyx;
 pub mod bridge;
 pub mod cabnodes;
 pub mod cloth;
+pub mod vbd;
 pub mod clothes;
 pub mod coil;
 pub mod ctor_draws;

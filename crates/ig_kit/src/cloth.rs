@@ -52,7 +52,7 @@ pub struct Collider {
     nodes: Vec<Node>,
 }
 
-fn closest_on_tri(p: V3, t: &[V3; 3]) -> V3 {
+pub(crate) fn closest_on_tri(p: V3, t: &[V3; 3]) -> V3 {
     // Ericson, Real-Time Collision Detection
     let (a, b, c) = (t[0], t[1], t[2]);
     let ab = sub(b, a);
@@ -178,6 +178,35 @@ impl Collider {
             }
         }
         res
+    }
+    /// indices of the triangles whose bounding box lies within `r` of `p` (appended to `out`)
+    pub fn near(&self, p: V3, r: f64, out: &mut Vec<u32>) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let mut stack = vec![0usize];
+        while let Some(ni) = stack.pop() {
+            let n = &self.nodes[ni];
+            let mut d2 = 0.0;
+            for k in 0..3 {
+                let d = (n.lo[k] - p[k]).max(p[k] - n.hi[k]).max(0.0);
+                d2 += d * d;
+            }
+            if d2 > r * r {
+                continue;
+            }
+            if n.count > 0 {
+                for j in n.first..n.first + n.count {
+                    out.push(self.order[j as usize]);
+                }
+            } else {
+                stack.push(ni + 1);
+                stack.push(n.right as usize);
+            }
+        }
+    }
+    pub fn tri(&self, ti: usize) -> &[V3; 3] {
+        &self.tris[ti]
     }
     /// first front-face hit of segment a->b: (t, triangle index)
     pub fn segment_hit(&self, a: V3, b: V3) -> Option<(f64, usize)> {
@@ -376,14 +405,14 @@ impl Default for Calib {
     }
 }
 
-struct Spring {
-    i: u32,
-    j: u32,
-    l0: f64,
-    kind: u8, // 0 structural 1 shear 2 bending
+pub(crate) struct Spring {
+    pub(crate) i: u32,
+    pub(crate) j: u32,
+    pub(crate) l0: f64,
+    pub(crate) kind: u8, // 0 structural 1 shear 2 bending
 }
 
-fn build_springs(pos: &[V3], faces: &[Vec<u32>]) -> Vec<Spring> {
+pub(crate) fn build_springs(pos: &[V3], faces: &[Vec<u32>]) -> Vec<Spring> {
     use crate::dhash::{HashMap, HashSet};
     let mut seen: HashSet<(u32, u32)> = HashSet::default();
     let mut out = vec![];
@@ -434,7 +463,7 @@ fn build_springs(pos: &[V3], faces: &[Vec<u32>]) -> Vec<Spring> {
 // ---------------------------------------------------------------- simulation
 
 /// vertex-spread pressure forces: every polygon contributes (vector area * pressure) split equally between its vertices
-fn pressure_forces(x: &[V3], faces: &[Vec<u32>], p: f64, out: &mut [V3]) {
+pub(crate) fn pressure_forces(x: &[V3], faces: &[Vec<u32>], p: f64, out: &mut [V3]) {
     for o in out.iter_mut() {
         *o = [0.0; 3];
     }
@@ -464,7 +493,11 @@ pub fn simulate_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders:
 
 pub fn simulate(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
     let t0 = web_time::Instant::now();
-    let r = simulate_inner(pos0, faces, p, colliders, cal);
+    let r = if ig_core::envx::var("CL_VBD").map_or(false, |v| v == "1") {
+        crate::vbd::simulate(pos0, faces, p, colliders, cal, &crate::vbd::VbdCfg::default())
+    } else {
+        simulate_inner(pos0, faces, p, colliders, cal)
+    };
     if std::env::var_os("CLOTH_T").is_some() {
         eprintln!("CLOTH_T {} verts {} frames {:.2}s", pos0.len(), p.end_frame, t0.elapsed().as_secs_f64());
     }
