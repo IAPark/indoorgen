@@ -26,7 +26,7 @@ fn fab(scene: &mut Scene, name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> us
     scene.material(m)
 }
 
-pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::G)], keepout: &[([f64; 3], [f64; 3], f64)], seed: u64) -> Vec<String> {
+pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::G)], keepout: &[([f64; 3], [f64; 3], f64)], assets: &crate::assets::RealAssets, seed: u64) -> Vec<String> {
     let mut log = vec![];
     let inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -0.18)).collect();
     let mut taken: Vec<Box3> = state.objs.values().filter(|o| o.generator.is_some()).map(|o| world_box(o, o.geom.lo, o.geom.hi)).collect();
@@ -100,6 +100,107 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 log.push(format!("slippers at {k}"));
             }
         }
+    }
+    // ---- wall shelf above nightstands and desks (70 %): books, a vase or small plant, a framed photo. The wall is found by marching from
+    // the object's centre along its back axis (-x of its pose) to the room's inner outline.
+    let wall_inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -0.12)).collect();
+    for (k, o) in &state.objs {
+        let Some(g) = &o.generator else { continue };
+        if !matches!(g.class.as_str(), "SideTableFactory" | "SimpleDeskFactory" | "SidetableDeskFactory") { continue }
+        let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "wall_shelf", k]));
+        let roll = r.f64();
+        if std::env::var_os("WSHELF_DEBUG").is_some() { eprintln!("WSHELF cand {k} roll {roll:.2}"); }
+        if roll >= 0.7 { continue }
+        let wb = world_box(o, o.geom.lo, o.geom.hi);
+        let c = [(wb.0[0] + wb.1[0]) / 2.0, (wb.0[1] + wb.1[1]) / 2.0];
+        let Some(ri) = wall_inner.iter().position(|g| crate::shp::contains_pt(g, c)) else { if std::env::var_os("WSHELF_DEBUG").is_some() { eprintln!("WSHELF {k} centre not in room"); } continue };
+        // nearest wall along the object's 4 local horizontal axes (nightstands are not always posed with their back to the wall)
+        let o0 = o.pose.apply([0.0, 0.0, 0.0]);
+        let mut best: Option<(f64, [f64; 2], [f64; 2])> = None;
+        for ax in [[-1.0, 0.0], [1.0, 0.0], [0.0, -1.0], [0.0, 1.0]] {
+            let oa = o.pose.apply([ax[0], ax[1], 0.0]);
+            let dv = { let (dx, dy) = (oa[0] - o0[0], oa[1] - o0[1]); let n = dx.hypot(dy).max(1e-9); [dx / n, dy / n] };
+            for st in 0..80 {
+                let dd = st as f64 * 0.01;
+                let q = [c[0] + dv[0] * dd, c[1] + dv[1] * dd];
+                if !crate::shp::contains_pt(&wall_inner[ri], q) {
+                    if best.map_or(true, |b| dd < b.0) { best = Some((dd, q, dv)); }
+                    break;
+                }
+            }
+        }
+        let wall = best.map(|b| b.1);
+        let dir = best.map_or([1.0, 0.0], |b| b.2);
+        let Some(wq) = wall else { continue };
+        let along = [-dir[1], dir[0]];
+        let span = (wb.1[0] - wb.0[0]).max(wb.1[1] - wb.0[1]);
+        let sw = (span * r.uniform(0.9, 1.3)).clamp(0.5, 1.2);
+        let sd = 0.22;
+        let sz = wb.1[2] + r.uniform(0.75, 0.9); // above a desk lamp
+        // shelf board in world space: corners from the wall point
+        let pt = |u: f64, t: f64| [wq[0] + along[0] * u - dir[0] * t, wq[1] + along[1] * u - dir[1] * t];
+        let shelf_box: Box3 = { let ps = [pt(-sw / 2.0, 0.0), pt(sw / 2.0, 0.0), pt(-sw / 2.0, sd), pt(sw / 2.0, sd)]; ([ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min), ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min), sz], [ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max), ps.iter().map(|p| p[1]).fold(f64::MIN, f64::max), sz + 0.4]) };
+        // 2 cm tolerance: neighbouring furniture boxes (the bed beside a nightstand) touch the shelf's footprint
+        let probe: Box3 = ([shelf_box.0[0] + 0.02, shelf_box.0[1] + 0.02, shelf_box.0[2] + 0.02], [shelf_box.1[0] - 0.02, shelf_box.1[1] - 0.02, shelf_box.1[2] - 0.02]);
+        let blocker = taken.iter().find(|t| overlaps(&probe, t));
+        if std::env::var_os("WSHELF_DEBUG").is_some() { eprintln!("WSHELF {k} wall {wq:?} box {shelf_box:?} blocked {:?}", blocker); }
+        if blocker.is_some() { continue }
+        let wood = fab(scene, &format!("wshelf:{k}"), "wood.Wood", r.next_u64(), [0.5, 0.36, 0.22]);
+        let mut board = Mesh::new();
+        let (a0, a1, b1, b0) = (pt(-sw / 2.0, 0.0), pt(sw / 2.0, 0.0), pt(sw / 2.0, sd), pt(-sw / 2.0, sd));
+        let v = [[a0[0], a0[1], sz], [a1[0], a1[1], sz], [b1[0], b1[1], sz], [b0[0], b0[1], sz], [a0[0], a0[1], sz + 0.025], [a1[0], a1[1], sz + 0.025], [b1[0], b1[1], sz + 0.025], [b0[0], b0[1], sz + 0.025]];
+        for f in [[0, 1, 2, 3], [7, 6, 5, 4], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]] { board.add_face(&[v[f[0]], v[f[1]], v[f[2]], v[f[3]]]); }
+        let key = k.replace('/', "_");
+        scene.add(&format!("wshelf_{key}#0"), "WallShelfFactory", board, wood);
+        // items left to right along the shelf
+        let yaw = dir[1].atan2(dir[0]) + std::f64::consts::PI; // item front faces the room
+        let mut u = -sw / 2.0 + 0.03;
+        let mut n = 0;
+        while u < sw / 2.0 - 0.08 && n < 5 {
+            let pick = r.f64();
+            let cls = if pick < 0.45 { "BookColumnFactory" } else if pick < 0.65 { "VaseFactory" } else if pick < 0.8 { "PlantContainerFactory" } else { "Frame" };
+            if cls == "Frame" {
+                let (fw, fh) = (r.uniform(0.12, 0.2), r.uniform(0.15, 0.25));
+                if u + fw > sw / 2.0 - 0.02 { break }
+                let fm = fab(scene, &format!("photo_frame:{k}:{n}"), "wood.Wood", r.next_u64(), [0.3, 0.22, 0.15]);
+                let art = fab(scene, &format!("photo:{k}:{n}"), "art.Art", r.next_u64(), [0.5, 0.5, 0.5]);
+                let (p0, p1) = (pt(u, 0.05), pt(u + fw, 0.05));
+                let lean = 0.08;
+                let fr = [[p0[0], p0[1], sz + 0.025], [p1[0], p1[1], sz + 0.025], [p1[0] + dir[0] * lean, p1[1] + dir[1] * lean, sz + 0.025 + fh], [p0[0] + dir[0] * lean, p0[1] + dir[1] * lean, sz + 0.025 + fh]];
+                let mut m = Mesh::new(); m.add_face(&[fr[0], fr[1], fr[2], fr[3]]);
+                let mut back = m.clone();
+                for q in back.pos.iter_mut() { q[0] += dir[0] * 0.012; q[1] += dir[1] * 0.012; }
+                m.append(&back.flipped());
+                scene.add(&format!("photo_{key}_{n}#0"), "PhotoFrameFactory", m.clone(), fm);
+                let mut inner = Mesh::new();
+                let shrink = |p: [f64; 3], c: [f64; 3]| [c[0] + (p[0] - c[0]) * 0.8 - dir[0] * 0.002, c[1] + (p[1] - c[1]) * 0.8 - dir[1] * 0.002, c[2] + (p[2] - c[2]) * 0.8];
+                let cc = [(fr[0][0] + fr[2][0]) / 2.0, (fr[0][1] + fr[2][1]) / 2.0, (fr[0][2] + fr[2][2]) / 2.0];
+                inner.add_face(&[shrink(fr[0], cc), shrink(fr[1], cc), shrink(fr[2], cc), shrink(fr[3], cc)]);
+                scene.add(&format!("photo_{key}_{n}#1"), "PhotoFrameFactory", inner, art);
+                u += fw + 0.04; n += 1;
+                continue;
+            }
+            let item = assets.visual(cls, r.next_u64() % 1_000_000, 0);
+            let (ilo, ihi) = item.bounds();
+            let (iw, idp, ih) = (ihi[0] - ilo[0], ihi[1] - ilo[1], ihi[2] - ilo[2]);
+            let s = (0.32 / ih.max(0.05)).min((sd - 0.02) / iw.min(idp).max(0.05)).min(1.0);
+            let wlen = iw.max(idp) * s;
+            if u + wlen > sw / 2.0 - 0.02 { break }
+            let c2 = pt(u + wlen / 2.0, sd / 2.0);
+            let (cx, cy) = ((ilo[0] + ihi[0]) / 2.0, (ilo[1] + ihi[1]) / 2.0);
+            for (pi, p) in item.parts.iter().enumerate() {
+                let mut m = p.mesh.clone();
+                for q in m.pos.iter_mut() {
+                    let (dx, dy) = ((q[0] - cx) * s, (q[1] - cy) * s);
+                    *q = [c2[0] + dx * yaw.cos() - dy * yaw.sin(), c2[1] + dx * yaw.sin() + dy * yaw.cos(), sz + 0.025 + (q[2] - ilo[2]) * s];
+                }
+                let mi = scene.material(p.mat.clone());
+                scene.add(&format!("wsitem_{key}_{n}#{pi}"), cls, m, mi);
+            }
+            u += wlen + 0.03; n += 1;
+        }
+        taken.push(shelf_box);
+        log.push(format!("wall shelf ({n} items) over {k}"));
     }
     // ---- laundry basket beside a nightstand (one per bedroom), 50 %
     for (i, st) in side_tables.iter().enumerate() {
