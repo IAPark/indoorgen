@@ -89,9 +89,11 @@ pub struct Program {
     /// Open plan: probability that a door between kitchen / dining room / living room becomes a wide doorless passage (0 = off).
     #[schemars(range(min = 0.0, max = 1.0))]
     pub open_plan: f64,
+    /// Dense program: bench at the bed foot, slippers, laundry basket by a nightstand (src/bed_decor.rs).
+    pub bed_decor: bool,
 }
 impl Default for Program {
-    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true, gallery_wall: true, bath_decor: true, top_dress: true, open_plan: 0.0 } }
+    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true, gallery_wall: true, bath_decor: true, top_dress: true, open_plan: 0.0, bed_decor: true } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
