@@ -54,7 +54,13 @@ pub fn build_scene(p: &Params) -> Built {
     let feat_cfg = crate::features::FeatureCfg::resolve(&cfg.features, &var.features, seed);
     // with room features on, built-in rules fill them: decor on mantels / hearths, books and decor on bookshelf walls (user rules for the
     // same class + relation win)
-    let rules = if feat_cfg.on() && !orig_prog { Some(crate::features::with_feature_rules(cfg.rules.clone().unwrap_or_default())) } else { cfg.rules.clone() };
+    // dense program: realism rules (program.realism) and, with room features, the rules that furnish the features; user rules win
+    let rules = if orig_prog { cfg.rules.clone() } else {
+        let mut spec = cfg.rules.clone();
+        if cfg.program.realism { spec = Some(crate::realism::with_realism_rules(spec.unwrap_or_default())) }
+        if feat_cfg.on() { spec = Some(crate::features::with_feature_rules(spec.unwrap_or_default())) }
+        spec
+    };
     if let Some(spec) = &rules {
         prog_owned = p.prog.clone();
         crate::rules::apply(&mut prog_owned, spec);

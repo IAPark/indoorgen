@@ -80,7 +80,24 @@ pub enum ColorMode {
     RandomHsv,
     /// The colours given in `fixed` (rooms not listed keep their default).
     Fixed,
+    /// Realistic interior paint: mostly whites / off-whites, then warm neutrals, greys, soft pastels and a few muted accent
+    /// colours, each jittered slightly (see INTERIOR_PAINTS).
+    Interior,
 }
+
+/// (weight, sRGB) families of common interior wall paints; a pick is jittered by up to +-3 % per channel
+const INTERIOR_PAINTS: &[(f64, [f64; 3])] = &[
+    // whites and off-whites
+    (14.0, [0.95, 0.94, 0.91]), (10.0, [0.93, 0.92, 0.88]), (8.0, [0.96, 0.95, 0.94]), (6.0, [0.92, 0.90, 0.84]), (5.0, [0.90, 0.90, 0.89]),
+    // warm neutrals: cream, beige, greige, taupe, sand
+    (5.0, [0.91, 0.87, 0.78]), (5.0, [0.86, 0.82, 0.74]), (4.0, [0.80, 0.77, 0.71]), (3.0, [0.72, 0.67, 0.60]), (3.0, [0.84, 0.78, 0.68]),
+    // greys
+    (4.0, [0.82, 0.83, 0.83]), (3.0, [0.72, 0.73, 0.74]), (2.0, [0.60, 0.61, 0.62]), (2.0, [0.78, 0.77, 0.74]),
+    // soft pastels: sage, mist blue, blush, pale yellow, mint, lavender grey
+    (3.0, [0.78, 0.82, 0.74]), (3.0, [0.78, 0.84, 0.88]), (2.0, [0.90, 0.82, 0.80]), (2.0, [0.94, 0.91, 0.76]), (1.5, [0.80, 0.88, 0.82]), (1.0, [0.82, 0.80, 0.86]),
+    // muted accents: navy, forest, terracotta, mustard, charcoal, dusty teal
+    (1.0, [0.22, 0.28, 0.40]), (1.0, [0.27, 0.36, 0.30]), (1.0, [0.70, 0.45, 0.35]), (0.8, [0.78, 0.63, 0.32]), (0.8, [0.30, 0.30, 0.31]), (0.8, [0.38, 0.52, 0.53]),
+];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -248,6 +265,18 @@ impl SurfaceColor {
                 Some(hsv_to_rgb(h, s, v))
             }
             ColorMode::Fixed => self.fixed.get(room).or_else(|| self.fixed.get(room_type)).or_else(|| self.fixed.get("*")).copied(),
+            ColorMode::Interior => {
+                let mut r = stream(seed, what, key);
+                let w: Vec<f64> = INTERIOR_PAINTS.iter().map(|p| p.0).collect();
+                let tot: f64 = w.iter().sum();
+                let mut x = r.uniform(0.0, tot);
+                let mut c = INTERIOR_PAINTS[INTERIOR_PAINTS.len() - 1].1;
+                for (wi, p) in INTERIOR_PAINTS.iter() {
+                    if x < *wi { c = *p; break }
+                    x -= wi;
+                }
+                Some(c.map(|v| (v * r.uniform(0.97, 1.03)).clamp(0.0, 1.0)))
+            }
         }
     }
     /// pick for every room; returns {room: (srgb, linear)} for the rooms that change

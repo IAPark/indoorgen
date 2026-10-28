@@ -8,7 +8,8 @@ use crate::mesh::*;
 use crate::rng::Rng;
 
 pub const WOODS: Table = &[("wood.Wood", 1.0), ("wood.WhitePlywood", 0.1), ("wood.BlackPlywood", 0.1), ("wood.BlondePlywood", 0.1)];
-pub const CURTAIN: Table = &[("fabric.FineKnitFabric", 1.0), ("wood.Wood", 2.0), ("plastic.PlasticRough", 2.0), ("ceramic.GlassVolume", 0.5), ("lamp_shaders.LampShade", 2.0)];
+/// curtain cloth: fabrics and translucent sheers (infinigen's table also drew wood, plastic and glass "curtains")
+pub const CURTAIN: Table = &[("fabric.FineKnitFabric", 2.0), ("fabric.CoarseKnitFabric", 1.0), ("fabric.Velvet", 1.0), ("fabric.SofaFabric", 1.0), ("lamp_shaders.LampShade", 2.5)];
 
 #[derive(Clone, Debug)]
 pub struct WinAsset {
@@ -112,7 +113,8 @@ impl WindowSpec {
             u(r, 0.0, 1.0); // open = U(0,1) < 0.5 (then forced to False)
         }
         let shutter = u(r, 0.0, 1.0) < 0.2;
-        let curtain = u(r, 0.0, 1.0) < 0.3;
+        // curtains on most windows (infinigen: 30%), never together with shutters
+        let curtain = u(r, 0.0, 1.0) < 0.65 && !shutter;
         let mut open_type = r.randint(0, 3);
         if panel_v as i64 % 2 == 1 {
             open_type = r.randint(1, 3);

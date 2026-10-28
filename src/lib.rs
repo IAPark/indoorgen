@@ -23,6 +23,7 @@ pub mod openings;
 pub mod pipeline;
 pub mod qc;
 pub mod scenegen;
+pub mod realism;
 pub mod shelffill;
 pub mod snap;
 pub mod variation;

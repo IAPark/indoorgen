@@ -167,6 +167,13 @@ from infinigen.core.util.math import FixedSeed, int_hash
 import importlib
 from infinigen.assets.materials import ceramic, wood, fabric, metal, plastic, terrain, art, lamp_shaders, text
 phase("infinigen import")
+if not os.environ.get("RAW_METALS"):
+    # infinigen's metal_hsv gives 80% of metals a random saturated hue (teal fridges, purple microwaves); real interiors are mostly
+    # natural metals: 85% natural, the rest infinigen's draw (RAW_METALS=1 keeps infinigen's mix)
+    from infinigen.assets import colors as _colors
+    _metal_hsv0 = _colors.metal_hsv
+    import numpy as _np
+    _colors.metal_hsv = lambda: _colors.metal_natural_hsv() if _np.random.uniform() < 0.85 else _metal_hsv0()
 import bl5compat; bl5compat.install()  # Blender 5: geometry-nodes modifier sockets via mod.properties (no-op on 4.x)
 mods = {"ceramic": ceramic, "wood": wood, "fabric": fabric, "metal": metal, "plastic": plastic, "terrain": terrain, "art": art, "lamp_shaders": lamp_shaders, "text": text}
 for _n in ("plant", "creature", "dev"):  # extra material modules for specs ("plant.SpiderPlant", ...)
@@ -203,7 +210,7 @@ for o in list(bpy.data.objects):
     ck = json.dumps(spec, sort_keys=True)
     if ck not in cache:
         mod, cls = spec["cls"].split(".", 1)
-        with FixedSeed(int(spec.get("seed", 0))):
+        with FixedSeed(int(spec.get("seed", 0)) % 2**32):
             try:
                 if spec.get("skip"):  # replay the generator position of the python draw stream (cabinet drawer materials): burn `skip` 32-bit words
                     import numpy as _np; _np.random.randint(0, 2**32, size=int(spec["skip"]), dtype=_np.uint32)

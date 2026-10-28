@@ -16,7 +16,14 @@ fn main() {
     let floor = scene.material(Material::diffuse("floor", [0.6, 0.6, 0.6], 0.9));
     let mut x = 0.0;
     for i in 0..n {
-        let asset = assets.visual(class, f0 + i as u64, 0);
+        let mut asset = assets.visual(class, f0 + i as u64, 0);
+        // FRONT=1: turn the asset's front (+x) toward the showcase camera (-y)
+        if std::env::var("FRONT").is_ok() {
+            let r = Mat4::rot_z(-std::f64::consts::FRAC_PI_2);
+            for p in asset.parts.iter_mut() {
+                p.mesh.transform(&r);
+            }
+        }
         let (lo, hi) = asset.bounds();
         let w = hi[0] - lo[0];
         let shift = Mat4::translation([x - lo[0], 0.0, 0.0]);

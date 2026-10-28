@@ -8,7 +8,7 @@ import os, sys, json, time, zlib, shutil, subprocess, argparse, random, colorsys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-FACTORS = ["doors", "walls", "mess", "lighting", "furniture", "people"]
+FACTORS = ["doors", "walls", "mess", "lighting", "furniture", "people", "features"]
 RENDER_FACTORS = ("lighting", "walls")  # applied by the renderer from variation.json when the sidecar carries none
 
 
@@ -163,9 +163,11 @@ def main():
             rc, t_gen = run([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], os.path.join(vdir, "gen2.log"))
             if rc != 0 or not os.path.exists(side): print("gen2 FAILED rc=%s, see %s/gen2.log" % (rc, vdir)); continue
             sidecar = json.load(open(side))
-            room = (sidecar.get("cameras") or [{}])[0].get("room")
+            slug = house["room"].lower().replace("room", "-room") if house["room"].endswith("Room") and house["room"] != "Room" else house["room"].lower()
+            # gen2 writes cameras for every furnished room (room features furnish e.g. the living room too): take the target type's
+            cams = sidecar.get("cameras") or []
+            room = next((c.get("room") for c in cams if (c.get("room") or "").startswith(slug)), None) or (cams[0].get("room") if cams else None)
             if room is None:
-                slug = house["room"].lower().replace("room", "-room") if house["room"].endswith("Room") and house["room"] != "Room" else house["room"].lower()
                 room = next((n["name"].rsplit(".", 1)[0] for n in sidecar["nodes"] if n["name"].startswith(slug) and n["name"].endswith(".floor")), None)
             variation = fallback_variation(variant, room, sidecar.get("variation"))
             rem = copy.deepcopy(variant.get("remove"))

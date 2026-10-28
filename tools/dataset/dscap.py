@@ -246,8 +246,9 @@ def rays_cv(W, H, f, step=1):
     return np.stack(np.broadcast_arrays(u[None, :], v[:, None], np.ones((1, 1))), -1)
 
 
-def view_stats(S, c2w, f, W, H, grid=(9, 7)):
-    """frustum probe: None if invalid else dict(med, p10, miss, wall)"""
+def view_stats(S, c2w, f, W, H, grid=(16, 12)):
+    """frustum probe: None if invalid else dict(med, p10, miss, wall, nobj, objfrac, person); composition: a view must show at least 4
+    objects, at most 55 % bare wall / ceiling and no person filling more than 22 % of the frame (people up close read as occluders)"""
     o = c2w[:3, 3]
     dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1), (.7, .7, 0), (-.7, .7, 0), (.7, -.7, 0), (-.7, -.7, 0),
             (.7, 0, .7), (-.7, 0, .7), (0, .7, .7), (0, -.7, .7), (.7, 0, -.7), (-.7, 0, -.7), (0, .7, -.7), (0, -.7, -.7)]
@@ -256,20 +257,63 @@ def view_stats(S, c2w, f, W, H, grid=(9, 7)):
         if h is not None and (h[3] < 0.22 or (S.tri_kind[h[2]] == 0 and np.dot(h[1], d) > 0)): return None, "eye-in-object" if S.tri_kind[h[2]] == 0 else "eye-near-wall"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0
     for y in ys:
         for x in xs:
             d = c2w[:3, :3] @ ray[y, x]; n = np.linalg.norm(d); h = S.cast(o, d / n)
             if h is None: miss += 1; continue
-            ds.append(h[3]); wall += S.tri_kind[h[2]] in (1, 3)
+            ds.append(h[3]); kd = S.tri_kind[h[2]]; wall += kd in (1, 3)
+            if kd == 0:
+                k = S.okeys[S.tri_obj[h[2]]]
+                if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
+                    objs.add(k); nobjpix += 1
+                    person += k.startswith("person")
     n = gw * gh
     if not ds: return None, "all-miss"
-    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n)
+    # distinct classes ("131945_BookColumnFactory" -> BookColumnFactory): a bookcase of 60 book columns is one kind of thing, not 60
+    ncls = len({re.sub(r"^\d+_", "", k).split(".")[0] for k in objs})
+    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n)
     if st["p10"] < 0.35: return None, "too-close"
     if st["med"] < 1.3: return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
-    if st["wall"] > 0.7: return None, "mostly-wall"
+    if st["wall"] > 0.55: return None, "mostly-wall"
+    if st["nobj"] < 4: return None, "few-objects"
+    if st["person"] > 0.22: return None, "person-fills-frame"
     return st, "ok"
+
+
+def view_score(st):
+    """composition score of a valid view: many kinds of objects and furniture coverage, little bare wall (raw object counts made views
+    of book-filled shelves win every time)"""
+    return 1.5 * st.get("ncls", st["nobj"]) + 0.1 * min(st["nobj"], 40) + 12.0 * st["objfrac"] - 6.0 * st["wall"]
+
+
+def auto_exposure(sc, base, tmp, target=0.40, lo=-2.0, hi=4.0):
+    """camera auto exposure: a tiny, few-sample pre-render (1/8 size) measures the mean display luminance, the film exposure is shifted
+    by log2(target / mean) stops (clamped) and re-measured once; returns the exposure set for the real render"""
+    pct, smp, den = sc.render.resolution_percentage, sc.cycles.samples, sc.cycles.use_denoising
+    fp = sc.render.filepath
+    sc.render.resolution_percentage = 12; sc.cycles.samples = 4; sc.cycles.use_denoising = False; sc.render.filepath = tmp
+    ev = base
+    try:
+        from PIL import Image
+        for _ in range(2):
+            sc.cycles.film_exposure = ev
+            bpy.ops.render.render(write_still=True)
+            a = np.asarray(Image.open(tmp).convert("RGB"), dtype=np.float32) / 255.0
+            y = 0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2]
+            lum = float(np.mean(y))
+            step = math.log2(target / max(lum, 1e-3)) * 0.8
+            # sunlit patches: keep blown-out (near white) pixels under ~3% of the frame even if the mean stays a little dark
+            clip = float(np.mean(y > 0.97))
+            if clip > 0.03:
+                step = min(step, -0.35 - 2.0 * (clip - 0.03))
+            ev = float(np.clip(ev + step, base + lo, base + hi))
+            if abs(step) < 0.15: break
+    finally:
+        sc.render.resolution_percentage, sc.cycles.samples, sc.cycles.use_denoising, sc.render.filepath = pct, smp, den, fp
+    sc.cycles.film_exposure = ev
+    return ev
 
 
 def make_pool(S, cfg, W, H, n, rng):
@@ -279,11 +323,25 @@ def make_pool(S, cfg, W, H, n, rng):
     traj, cluster = cfg.get("traj_frac", 0.4), cfg.get("cluster_len", 3)
     pool, rejects, prev, run = [], {}, None, 0
     tries = 0
+    # furniture targets for fresh views: object bounding-box centres in the room (weighted by footprint, so a sofa is aimed at more often
+    # than a cup)
+    rlo, rhi = S.floor_tris.reshape(-1, 3).min(0), S.floor_tris.reshape(-1, 3).max(0)
+    targets, tw = [], []
+    for k, kd, (lo, hi) in zip(S.okeys, S.kind, S.bbox):
+        if kd != 0 or k.startswith("person") or "Window" in k or "Door" in k: continue
+        c = (lo + hi) / 2
+        if not (rlo[0] - 0.1 <= c[0] <= rhi[0] + 0.1 and rlo[1] - 0.1 <= c[1] <= rhi[1] + 0.1): continue
+        fp = (hi[0] - lo[0]) * (hi[1] - lo[1])
+        # furniture-sized things only: the dozens of book columns inside one shelf summed to more weight than the bed
+        if fp < 0.12: continue
+        targets.append(c); tw.append(fp)
+    tw = np.array(tw) / np.sum(tw) if tw else None
+    best_of = cfg.get("fresh_candidates", 8)
+    fresh_best = []
     while len(pool) < n and tries < n * 400:
         tries += 1
-        fresh = prev is None or run >= cluster
-        if fresh:
-            run = 0
+        # still collecting best-of fresh candidates counts as fresh
+        fresh = prev is None or run >= cluster or bool(fresh_best)
         kind = "fresh" if fresh else ("traj" if rng.rand() < traj else "overlap")
         if kind == "traj":
             ang = rng.uniform(0, 2 * math.pi); step = rng.uniform(0.3, 0.7)
@@ -295,7 +353,15 @@ def make_pool(S, cfg, W, H, n, rng):
             if kind == "overlap":
                 tgt = prev["hit"] + rng.normal(0, 0.3, 3)
             else:
-                q = S.sample_floor(rng); tgt = np.array([q[0], q[1], rng.uniform(0.4, 1.4) + S.floor_z])
+                if targets and rng.rand() < 0.85:
+                    tgt = np.array(targets[rng.choice(len(targets), p=tw)], dtype=float); tgt[2] = float(np.clip(tgt[2], S.floor_z + 0.3, S.floor_z + 1.5))
+                    # stand back near the room's edge (0.45-1.3 m from the walls), looking across the room at the target
+                    for _ in range(20):
+                        p2 = S.sample_floor(rng)
+                        if S.edge_dist(p2[:2]) < 1.3 and np.linalg.norm(tgt[:2] - p2[:2]) > 2.0: break
+                    pos = np.array([p2[0], p2[1], 0.0])
+                else:
+                    q = S.sample_floor(rng); tgt = np.array([q[0], q[1], rng.uniform(0.4, 1.4) + S.floor_z])
                 if np.linalg.norm(tgt[:2] - pos[:2]) < 1.5: continue
             f = float(math.exp(rng.uniform(math.log(lo_f), math.log(hi_f))))
         if kind == "traj":
@@ -304,7 +370,7 @@ def make_pool(S, cfg, W, H, n, rng):
             pos[2] = S.floor_z + rng.uniform(hlo, hhi)
             dv = tgt - pos; yaw = math.atan2(dv[1], dv[0]) + math.radians(rng.normal(0, 10))
             pitch = math.atan2(dv[2], np.linalg.norm(dv[:2]) + 1e-9)
-        pitch = float(np.clip(pitch, math.radians(-25), math.radians(12)))
+        pitch = float(np.clip(pitch, math.radians(-22), math.radians(10)))
         if S.edge_dist(pos[:2]) < margin:
             rejects["wall-margin"] = rejects.get("wall-margin", 0) + 1; continue
         M = cam_pose_cv(pos, yaw, pitch); fpx = f / 36.0 * W
@@ -313,7 +379,23 @@ def make_pool(S, cfg, W, H, n, rng):
             rejects[why] = rejects.get(why, 0) + 1; continue
         d = M[:3, 2]; h = S.cast(pos, d); hit = np.array(h[0]) if h else pos + d * st["med"]
         v = dict(pos=pos, yaw=yaw, pitch=pitch, f_mm=f, kind=kind, hit=hit, stats=st)
-        pool.append(v); prev = v; run += 1
+        if kind == "fresh":
+            # best of `best_of` valid fresh candidates by composition
+            fresh_best.append(v)
+            if len(fresh_best) < best_of and tries < n * 400 - 1: continue
+            # and away from what earlier fresh views looked at (otherwise one big shelf collects most views)
+            # ... and from where they stood / which way they faced (in a narrow room every hit lands on the same end wall)
+            seen = [u for u in pool if u["kind"] == "fresh"]
+            def nov(c):
+                pen = 0.0
+                for u in seen:
+                    pen += 4.0 * math.exp(-float(np.sum((c["hit"][:2] - u["hit"][:2]) ** 2)) / 1.5)
+                    dyaw = abs((c["yaw"] - u["yaw"] + math.pi) % (2 * math.pi) - math.pi)
+                    pen += 4.0 * math.exp(-float(np.sum((c["pos"][:2] - u["pos"][:2]) ** 2)) / 1.0) * math.exp(-(dyaw / 0.6) ** 2)
+                return -pen
+            v = max(fresh_best, key=lambda c: view_score(c["stats"]) + nov(c)); fresh_best = []
+        # the run restarts when a fresh view is taken (resetting it when one was drawn let rejected candidates restart the run)
+        pool.append(v); prev = v; run = 1 if v["kind"] == "fresh" else run + 1
     return pool, rejects, tries
 
 
@@ -428,6 +510,7 @@ def run(sc, sidecar, spec, log=print):
     sc.render.image_settings.file_format = "PNG"; sc.render.image_settings.color_mode = "RGB"; sc.render.image_settings.color_depth = "8"
     sc.render.use_persistent_data = True
     views, tt = [], dict(trace=0.0, render=0.0)
+    base_exposure = sc.cycles.film_exposure; ae_log = []
     rem_keys, rem_views = resolve_removal(S, spec.get("remove"), len(chosen), sidecar)
     bvh2 = tri_map2 = None; rem_objs = []
     if rem_keys:
@@ -460,7 +543,11 @@ def run(sc, sidecar, spec, log=print):
             from PIL import Image
             Image.fromarray(inst).save(os.path.join(out, "instance", nm + ".png"))
         sc.render.filepath = os.path.join(out, "images", nm + ".png")
-        t = time.time(); bpy.ops.render.render(write_still=True); tt["render"] += time.time() - t
+        t = time.time()
+        if spec.get("auto_exposure", True):
+            ev = auto_exposure(sc, base_exposure, os.path.join(out, "_ae.png"))
+            ae_log.append(round(ev - base_exposure, 2))
+        bpy.ops.render.render(write_still=True); tt["render"] += time.time() - t
         w2c = np.linalg.inv(M)
         views.append(dict(index=k, pool_index=j, kind=v["kind"], file="images/%s.png" % nm, depth="depth/%s.npy" % nm, width=W, height=H,
                           K=[[fpx, 0, W / 2], [0, fpx, H / 2], [0, 0, 1]], focal_mm=v["f_mm"], sensor_width_mm=36.0,
@@ -475,4 +562,6 @@ def run(sc, sidecar, spec, log=print):
     if "instance" in extras:
         json.dump({str(i + 1): dict(name=S.names[i], cls=S.cls[i], kind=["object", "wall", "floor", "ceiling"][S.kind[i]]) for i in range(len(S.names))}, open(os.path.join(out, "instances.json"), "w"))
     for o in rem_objs: o.hide_render = False
-    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0)
+    if os.path.exists(os.path.join(out, "_ae.png")): os.remove(os.path.join(out, "_ae.png"))
+    sc.cycles.film_exposure = base_exposure
+    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0, exposure_stops=ae_log)

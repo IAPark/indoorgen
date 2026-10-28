@@ -43,6 +43,8 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if books::handles(c) => books::make(c, &mut rng, factory_seed),
         c if cookware::handles(c) => cookware::make(c, &mut rng, factory_seed),
         c if appliances::handles(c) => appliances::make(c, &mut rng, factory_seed),
+        c if fridge::handles(c) => fridge::make(c, &mut rng, factory_seed),
+        c if wardrobe::handles(c) => wardrobe::make(c, &mut rng, factory_seed),
         c if vase::handles(c) => vase::make(c, &mut rng, factory_seed),
         "MolluskFactory" => Some(trinkets::make_mollusk(factory_seed)),
         c if trinkets::handles(c) => trinkets::make(c, &mut rng, factory_seed),
