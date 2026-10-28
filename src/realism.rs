@@ -37,7 +37,13 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Bathroom", "FridgeFactory", "against_wall", 0, 0, false),
     // bathroom: a toilet always, a bathtub where it fits, no bookcases, a few toiletries rather than dozens of bottles
     ("Bathroom", "ToiletFactory", "against_wall", 1, 1, false),
-    ("Bathroom", "BathtubFactory", "against_wall", 1, 1, false),
+    // a bathtub and / or a walk-in shower (ShowerFactory, ours), whichever fits
+    ("Bathroom", "BathtubFactory", "against_wall", 0, 1, true),
+    ("Bathroom", "ShowerFactory", "against_wall", 0, 1, true),
+    ("LivingRoom", "ShowerFactory", "against_wall", 0, 0, false),
+    ("Bedroom", "ShowerFactory", "against_wall", 0, 0, false),
+    ("Kitchen", "ShowerFactory", "against_wall", 0, 0, false),
+    ("DiningRoom", "ShowerFactory", "against_wall", 0, 0, false),
     // one storage piece, two towel bars / hooks at most (four hung on the walls of 6 m2 bathrooms)
     ("Bathroom", "Storage", "against_wall", 0, 1, false),
     ("Bathroom", "HardwareFactory", "against_wall", 1, 2, false),
@@ -102,7 +108,9 @@ pub fn with_realism_rules(mut spec: RuleSpec) -> RuleSpec {
         if rr.rules.iter().any(|x| x.class == class && x.relation == rel) {
             continue;
         }
-        rr.rules.push(Rule { class: class.into(), relation: rel.into(), min: Some(min), max: Some(max), prefer: more.then_some(Prefer::More), weight: None });
+        // bath fixtures: a strong preference (the solver adds a bathtub and / or shower wherever one fits)
+        let weight = if more && matches!(class, "BathtubFactory" | "ShowerFactory") { Some(4.0) } else { None };
+        rr.rules.push(Rule { class: class.into(), relation: rel.into(), min: Some(min), max: Some(max), prefer: more.then_some(Prefer::More), weight });
     }
     spec
 }

@@ -315,7 +315,7 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
     let related = |a: &B, b: &B| a.parent.as_deref() == Some(b.key.as_str()) || b.parent.as_deref() == Some(a.key.as_str());
     let mut gone: Vec<(String, String)> = vec![];
     let mut shifted: Vec<(String, f64)> = vec![];
-    let ess_key = |k: &str| ["ToiletFactory", "BathtubFactory", "StandingSinkFactory", "BathroomSinkFactory", "KitchenSpaceFactory", "FridgeFactory", "WardrobeFactory", "TableDiningFactory", "TVStandFactory", "CoffeeTableFactory"].iter().any(|e| k.ends_with(e));
+    let ess_key = |k: &str| ["ToiletFactory", "BathtubFactory", "ShowerFactory", "StandingSinkFactory", "BathroomSinkFactory", "KitchenSpaceFactory", "FridgeFactory", "WardrobeFactory", "TableDiningFactory", "TVStandFactory", "CoffeeTableFactory"].iter().any(|e| k.ends_with(e));
     let ess_pair = |a: &B, b: &B| ess_key(&a.key) && ess_key(&b.key);
     let mut dead: std::collections::HashSet<String> = Default::default();
     for i in 0..bs.len() {

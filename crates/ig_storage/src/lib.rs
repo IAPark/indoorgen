@@ -34,6 +34,7 @@ pub mod ksink;
 pub mod pangeom;
 pub mod potbars;
 pub mod shelves;
+pub mod shower;
 pub mod taps;
 pub mod toiletx;
 pub mod uvlab;
