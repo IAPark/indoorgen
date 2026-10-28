@@ -36,7 +36,9 @@ impl Vase {
                 (g.uniform(0.17, 0.5), g.uniform(0.3, 0.6))
             }
         };
-        let x = z * xf;
+        // vase.py uses this "diameter" as the profile radius: width 0.6-1.2 x height gave 0.56 m wide tabletop bowls-of-vases;
+        // 0.6 x keeps real proportions (width 0.36-0.72 x height)
+        let x = z * xf * 0.6;
         let mut r = Rng::seeded(fs);
         let neck_scale = r.uniform(0.2, 0.8);
         let u = r.uniform(0.8, 1.0);

@@ -21,7 +21,9 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Kitchen", "SimpleBookcaseFactory", "against_wall", 0, 0, false),
     ("Kitchen", "CellShelfFactory", "against_wall", 0, 0, false),
     ("Kitchen", "DeskLampFactory", "ontop:Furniture", 0, 0, false),
-    ("Kitchen", "Storage", "against_wall", 0, 3, false),
+    ("Kitchen", "Storage", "against_wall", 0, 2, false),
+    // tall open shelves took the only free wall of small kitchens before the counters (no KitchenSpace at all)
+    ("Kitchen", "LargeShelfFactory", "against_wall", 0, 0, false),
     // book columns stood on kitchen counters
     ("Kitchen", "BookColumnFactory", "on:Storage", 0, 0, false),
     ("Kitchen", "BookStackFactory", "on:Storage", 0, 0, false),
@@ -35,6 +37,8 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Bathroom", "ToiletFactory", "against_wall", 1, 1, false),
     ("Bathroom", "BathtubFactory", "against_wall", 1, 1, false),
     ("Bathroom", "SimpleBookcaseFactory", "against_wall", 0, 0, false),
+    ("Bathroom", "SimpleBookcaseFactory", "on_floor", 0, 0, false),
+    ("Bathroom", "LargeShelfFactory", "on_floor", 0, 0, false),
     ("Bathroom", "BottleFactory", "on:Storage", 0, 3, false),
     // shelves in bathrooms held bowls, books and trinkets by the dozen; walls up to four paintings
     ("Bathroom", "BowlFactory", "on:Storage", 0, 0, false),
@@ -60,10 +64,15 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Bathroom", "WardrobeFactory", "against_wall", 0, 0, false),
     ("Bedroom", "SimpleBookcaseFactory", "against_wall", 0, 1, false),
     ("Bedroom", "CellShelfFactory", "against_wall", 0, 1, false),
+    // a tall open shelf plus the wardrobe left small bedrooms no wall for the bed
+    ("Bedroom", "LargeShelfFactory", "against_wall", 0, 0, false),
     ("Bedroom", "LargePlantContainerFactory", "against_wall", 0, 1, false),
     ("Bedroom", "PlantContainerFactory", "ontop:Storage", 0, 2, false),
     // dining room
-    ("DiningRoom", "Storage", "against_wall", 1, 3, false),
+    ("DiningRoom", "Storage", "against_wall", 1, 2, false),
+    // narrow dining rooms got three shelves and one chair
+    ("DiningRoom", "LargeShelfFactory", "against_wall", 0, 1, false),
+    ("DiningRoom", "CellShelfFactory", "against_wall", 0, 1, false),
     ("DiningRoom", "SimpleBookcaseFactory", "against_wall", 0, 1, false),
     // dining rooms had 10+ wine glasses and desk lamps
     ("DiningRoom", "WineglassFactory", "on:Storage", 0, 3, false),

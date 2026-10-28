@@ -287,7 +287,7 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     ncls = len({re.sub(r"^\d+_", "", k).split(".")[0] for k in objs})
     st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n)
     if st["p10"] < 0.35: return None, "too-close"
-    if st["med"] < 1.3: return None, "near-median"
+    if st["med"] < float(np.clip(0.38 * math.sqrt(max(S.floor_area, 1.0)), 1.0, 1.3)): return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
     if st["wall"] > 0.55: return None, "mostly-wall"
     if st["nobj"] < 4: return None, "few-objects"
@@ -336,6 +336,9 @@ def make_pool(S, cfg, W, H, n, rng):
     """n candidate views: first of each trajectory/cluster is a fresh look-at-the-room pose, the rest either small trajectory steps
     (0.3-0.7 m, yaw +-20 deg) or new positions aimed at the previous view's centre hit point (overlap)"""
     lo_f, hi_f = cfg.get("focal_mm", [18, 35]); hlo, hhi = cfg.get("eye_height_m", [1.0, 1.8]); margin = cfg.get("wall_margin_m", 0.45)
+    # small rooms (10 m2 kitchens, 3 m wide bedrooms): photographers stand closer to walls and targets
+    R = math.sqrt(max(S.floor_area, 1.0)); margin = min(margin, max(0.25, 0.12 * R))
+    d_tgt = float(np.clip(0.5 * R, 1.2, 2.0))
     traj, cluster = cfg.get("traj_frac", 0.4), cfg.get("cluster_len", 3)
     pool, rejects, prev, run = [], {}, None, 0
     tries = 0
@@ -375,11 +378,11 @@ def make_pool(S, cfg, W, H, n, rng):
                     # stand back near the room's edge (0.45-1.3 m from the walls), looking across the room at the target
                     for _ in range(20):
                         p2 = S.sample_floor(rng)
-                        if S.edge_dist(p2[:2]) < 1.3 and np.linalg.norm(tgt[:2] - p2[:2]) > 2.0: break
+                        if S.edge_dist(p2[:2]) < 1.3 and np.linalg.norm(tgt[:2] - p2[:2]) > d_tgt: break
                     pos = np.array([p2[0], p2[1], 0.0])
                 else:
                     q = S.sample_floor(rng); tgt = np.array([q[0], q[1], rng.uniform(0.4, 1.4) + S.floor_z])
-                if np.linalg.norm(tgt[:2] - pos[:2]) < 1.5: continue
+                if np.linalg.norm(tgt[:2] - pos[:2]) < min(1.5, d_tgt): continue
             f = float(math.exp(rng.uniform(math.log(lo_f), math.log(hi_f))))
         if kind == "traj":
             pos[2] = float(np.clip(pos[2], S.floor_z + hlo, S.floor_z + hhi))
