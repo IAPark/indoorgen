@@ -174,6 +174,29 @@ if not os.environ.get("RAW_METALS"):
     _metal_hsv0 = _colors.metal_hsv
     import numpy as _np
     _colors.metal_hsv = lambda: _colors.metal_natural_hsv() if _np.random.uniform() < 0.85 else _metal_hsv0()
+    # fabric_hsv (sofas, knits, plaid) draws any hue at saturation 0.3-0.8, value 0.6-0.9: pastel pink / lime / purple upholstery
+    # everywhere. Real homes: mostly neutrals (greys, beiges, oatmeal, charcoal), some muted colours (navy, olive, rust, teal), rarely
+    # bright: 60 % neutral, 25 % muted, 15 % infinigen's draw. textile_hsv (velvet, darker) likewise.
+    _fabric_hsv0, _textile_hsv0 = _colors.fabric_hsv, _colors.textile_hsv
+    def _home_fabric(v_lo, v_hi, orig):
+        u = _np.random.uniform()
+        if u < 0.6: return (_np.random.uniform(0.05, 0.13) if _np.random.uniform() < 0.7 else _np.random.uniform(0, 1), _np.random.uniform(0.02, 0.22), _np.random.uniform(v_lo, v_hi))
+        if u < 0.85: return (_np.random.choice([0.0, 0.06, 0.1, 0.25, 0.45, 0.58, 0.62, 0.95]) + _np.random.uniform(-0.02, 0.02), _np.random.uniform(0.25, 0.5), _np.random.uniform(v_lo * 0.8, v_hi * 0.85))
+        return orig()
+    _colors.fabric_hsv = lambda: _home_fabric(0.3, 0.85, _fabric_hsv0)
+    _colors.textile_hsv = lambda: _home_fabric(0.1, 0.45, _textile_hsv0)
+    # the knits draw "_color" as three uniform RGB channels (random saturated bedding): same palette, as RGB
+    import importlib as _il
+    for _mn in ("fine_knit_fabric", "coarse_knit_fabric"):
+        try:
+            _m = _il.import_module("infinigen.assets.materials.fabric." + _mn)
+            def _wrap(f0):
+                def f():
+                    d = f0(); d["_color"] = list(_colors.hsv2rgba(_home_fabric(0.25, 0.85, _fabric_hsv0))[:3]); return d
+                return f
+            _m.get_texture_params = _wrap(_m.get_texture_params)
+        except Exception as _e:
+            print("fabric palette patch skipped for", _mn, repr(_e))
 import bl5compat; bl5compat.install()  # Blender 5: geometry-nodes modifier sockets via mod.properties (no-op on 4.x)
 mods = {"ceramic": ceramic, "wood": wood, "fabric": fabric, "metal": metal, "plastic": plastic, "terrain": terrain, "art": art, "lamp_shaders": lamp_shaders, "text": text}
 for _n in ("plant", "creature", "dev"):  # extra material modules for specs ("plant.SpiderPlant", ...)
