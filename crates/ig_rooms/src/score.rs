@@ -91,6 +91,11 @@ fn hinge_sq(a: f64, norm: f64) -> f64 {
 }
 
 /// The "room" score term, in terms of weights/definitions from home.py (single story).
+/// (room name, area m2, convex hull area / area, bbox aspect) of every valid room (PLAN_STATS=1 in gen2)
+pub fn room_stats(state: &RoomState) -> Vec<(String, f64, f64, f64)> {
+    state.valid_rooms().map(|(k, _)| (k.clone(), area(state.poly(k)), convexity(state, k), aspect_ratio(state, k))).collect()
+}
+
 pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
     let rooms: Vec<&String> = state.valid_rooms().map(|(k, _)| k).collect();
     let of = |t: &str| rooms.iter().copied().filter(move |k| room_type(k) == t).collect::<Vec<_>>();
@@ -105,16 +110,19 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
     total += s * 5.0;
 
     // area
+    // room size targets (no penalty between norm and 1.49 x norm). Infinigen's home.py norms (kitchen 20, bedroom 40, living 40,
+    // dining 20, closet 5, bathroom 8, utility 5, garage 25, balcony 8) gave 46 m2 bedrooms and 65 m2 living rooms; these follow
+    // real homes / 3D-FRONT (bedroom ~12-20 m2, living room ~25-35 m2). The typical areas (graph.rs) and so the house size follow.
     let area_terms: [(&str, f64); 10] = [
-        ("kitchen", 20.0),
-        ("bedroom", 40.0),
-        ("living-room", 40.0),
-        ("dining-room", 20.0),
-        ("closet", 5.0),
-        ("bathroom", 8.0),
-        ("utility", 5.0),
-        ("garage", 25.0),
-        ("balcony", 8.0),
+        ("kitchen", 11.0),
+        ("bedroom", 14.0),
+        ("living-room", 26.0),
+        ("dining-room", 13.0),
+        ("closet", 3.0),
+        ("bathroom", 5.0),
+        ("utility", 4.0),
+        ("garage", 20.0),
+        ("balcony", 6.0),
         ("staircase-room", 25.0),
     ];
     let mut s = 0.0;
@@ -144,6 +152,8 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
     // convexity, vertex count (non-hallway)
     let nonhall: Vec<&&String> = rooms.iter().filter(|k| room_type(k) != "hallway").collect();
     total += nonhall.iter().map(|k| convexity(state, k).ln()).sum::<f64>() * 5.0;
+    // main rooms: L-shaped living rooms with a corridor arm (the hallway area term pushes circulation into them) read as hallways
+    total += rooms.iter().filter(|k| matches!(room_type(k), "living-room" | "dining-room" | "bedroom" | "kitchen")).map(|k| convexity(state, k).ln()).sum::<f64>() * 60.0;
     total += nonhall.iter().map(|k| (n_verts(state, k) - 6.0).max(0.0).powf(1.5)).sum::<f64>() * 1.0;
 
     // exterior sharing

@@ -261,9 +261,13 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     for d in dirs:
         h = S.cast(o, d, 0.3)
         if h is not None and (h[3] < 0.22 or (S.tri_kind[h[2]] == 0 and np.dot(h[1], d) > 0)): return None, "eye-in-object" if S.tri_kind[h[2]] == 0 else "eye-near-wall"
+    # the photographer's feet: straight down from the eye must reach the floor (or a rug), not a table top or bed
+    hd = S.cast(o, (0.0, 0.0, -1.0))
+    if hd is not None and S.tri_kind[hd[2]] == 0 and hd[3] < (o[2] - S.floor_z) - 0.12 and "Rug" not in S.okeys[S.tri_obj[hd[2]]]:
+        return None, "over-furniture"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}
     anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
@@ -273,7 +277,7 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
             if kd == 0:
                 k = S.okeys[S.tri_obj[h[2]]]
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
-                    objs.add(k); nobjpix += 1
+                    objs.add(k); nobjpix += 1; per[k] = per.get(k, 0) + 1
                     if k.startswith("person"):
                         person += 1; pnear = min(pnear, h[3])
                     anchor += any(a in k for a in anc)
@@ -288,6 +292,7 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     if st["wall"] > 0.55: return None, "mostly-wall"
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.22: return None, "person-fills-frame"
+    if max(per.values(), default=0) / n > 0.45: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
     if pnear < 1.6: return None, "person-too-close"  # a face filling the middle of the frame reads as a portrait, not a room
     return st, "ok"
 
@@ -522,7 +527,7 @@ def run(sc, sidecar, spec, log=print):
     sc.render.image_settings.file_format = "PNG"; sc.render.image_settings.color_mode = "RGB"; sc.render.image_settings.color_depth = "8"
     sc.render.use_persistent_data = True
     views, tt = [], dict(trace=0.0, render=0.0)
-    base_exposure = sc.cycles.film_exposure; ae_log = []
+    base_exposure = sc.cycles.film_exposure; ae_log = []; lights_on_log = []
     rem_keys, rem_views = resolve_removal(S, spec.get("remove"), len(chosen), sidecar)
     bvh2 = tri_map2 = None; rem_objs = []
     if rem_keys:
@@ -558,8 +563,15 @@ def run(sc, sidecar, spec, log=print):
         t = time.time()
         if spec.get("auto_exposure", True):
             ev = auto_exposure(sc, base_exposure, os.path.join(out, "_ae.png"))
-            ae_log.append(round(ev - base_exposure, 2))
+            off = [o for o in bpy.data.objects if o.type == "LIGHT" and o.get("ig_off")]
+            switched = False
+            if ev >= base_exposure + 4.0 - 1e-3 and off:
+                # too dark even at the exposure cap (lamps drawn off, small window): the photographer switches the lights on
+                for o in off: o.hide_render = False
+                ev = auto_exposure(sc, base_exposure, os.path.join(out, "_ae.png")); switched = True
+            ae_log.append(round(ev - base_exposure, 2)); lights_on_log.append(switched)
         bpy.ops.render.render(write_still=True); tt["render"] += time.time() - t
+        for o in [o for o in bpy.data.objects if o.type == "LIGHT" and o.get("ig_off")]: o.hide_render = True
         w2c = np.linalg.inv(M)
         views.append(dict(index=k, pool_index=j, kind=v["kind"], file="images/%s.png" % nm, depth="depth/%s.npy" % nm, width=W, height=H,
                           K=[[fpx, 0, W / 2], [0, fpx, H / 2], [0, 0, 1]], focal_mm=v["f_mm"], sensor_width_mm=36.0,
@@ -576,4 +588,4 @@ def run(sc, sidecar, spec, log=print):
     for o in rem_objs: o.hide_render = False
     if os.path.exists(os.path.join(out, "_ae.png")): os.remove(os.path.join(out, "_ae.png"))
     sc.cycles.film_exposure = base_exposure
-    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0, exposure_stops=ae_log)
+    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0, exposure_stops=ae_log, lights_switched_on=lights_on_log)

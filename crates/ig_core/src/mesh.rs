@@ -554,6 +554,8 @@ pub struct Scene {
     pub materials: Vec<Material>,
     pub nodes: Vec<Node>,
     pub lights: Vec<Light>,
+    /// lamps drawn off (sidecar `lights_off`, only written when non-empty): a dataset capture may still switch them on
+    pub lights_off: Vec<Light>,
     /// cloth jobs for a Blender re-simulation (sidecar `cloth`)
     pub cloth: Vec<serde_json::Value>,
 }
@@ -645,7 +647,10 @@ impl Scene {
         // the plain (non-spec) material values, for importers that take geometry only (usdc)
         let materials_json: Vec<_> = self.materials.iter().map(|m| json!({"name": m.name, "color": m.color, "metallic": m.metallic, "roughness": m.roughness, "emissive": m.emissive, "emissive_strength": m.emissive_strength})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
-        let sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json});
+        let mut sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json});
+        if !self.lights_off.is_empty() {
+            sidecar["lights_off"] = self.lights_off.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
+        }
         let gltf = json!({
             "asset":{"version":"2.0","generator":"infinigen-rs"},
             "extensionsUsed":["KHR_materials_emissive_strength"],

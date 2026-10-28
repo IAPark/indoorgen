@@ -97,6 +97,12 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     let solver = FloorPlanSolver::new(seed, &c, cfg);
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
     let st = solver.solve(&mut a);
+    if std::env::var_os("PLAN_STATS").is_some() {
+        for (k, ar, cv, asp) in crate::rooms::score::room_stats(&st) {
+            println!("PLAN {seed} {k} area {ar:.1} convexity {cv:.2} aspect {asp:.2}");
+        }
+        std::process::exit(0);
+    }
     let sol = Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false };
     let res = sol.solidify(&mut Rng::seeded(seed), &st);
     let shells = shell::build_shells(&c, &st, &res.cutters);

@@ -451,7 +451,8 @@ pub fn build_scene(p: &Params) -> Built {
                 let temp = if gen.class.contains("Lamp") && !gen.class.contains("Ceiling") { (temp * 0.6).max(2500.0) } else { temp };
                 let watt = watt * var.lighting.lamp_strength_scale;
                 lamp_rec.push((k.clone(), on, watt));
-                if on { scene.lights.push(indoorgen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() }); }
+                let light = indoorgen::mesh::Light { loc: o.pose.apply(l), watt, radius, temperature: temp, name: k.clone() };
+                if on { scene.lights.push(light) } else if var.record || var.lighting != Default::default() { scene.lights_off.push(light) }
             }
         }
         let asset = &visuals[k];

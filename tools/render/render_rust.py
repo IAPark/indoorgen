@@ -329,9 +329,11 @@ if args.showcase:
     bpy.ops.render.render(write_still=True); sys.exit(0)
 # point lights (PointLampFactory)
 _lamp = dscap.lamp_state(DS.get("variation"), sidecar) if DS else (lambda L: (True, 1.0))
-for L in sidecar.get("lights", []):
+for L in sidecar.get("lights", []) + ([dict(L, _off=True) for L in sidecar.get("lights_off", [])] if DS else []):
     _on, _ls = _lamp(L)
-    if not _on: continue
+    if L.get("_off"): _on = False
+    if not _on and not DS: continue
+    if not _on: _ls = 1.0  # dataset capture: switched-off lamps exist hidden (dscap switches them on when a view is too dark)
     ld = bpy.data.lights.new(L["name"], "POINT"); ld.energy = L["watt"] * args.light_scale * _ls; ld.shadow_soft_size = L["radius"]
     ld.use_nodes = True
     nt = ld.node_tree; nt.nodes.clear()
@@ -339,6 +341,7 @@ for L in sidecar.get("lights", []):
     em = nt.nodes.new("ShaderNodeEmission"); out = nt.nodes.new("ShaderNodeOutputLight")
     nt.links.new(bb.outputs[0], em.inputs["Color"]); nt.links.new(em.outputs[0], out.inputs[0])
     lo = bpy.data.objects.new(L["name"], ld); sc.collection.objects.link(lo)
+    if not _on: lo.hide_render = True; lo["ig_off"] = 1
     lo.location = mathutils.Vector(L["loc"])  # z-up coords match after glTF import (importer converts the glb; lights are added in blender space)
 
 def view_camera(sc, room, view):
