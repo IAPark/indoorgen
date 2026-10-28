@@ -36,15 +36,19 @@ struct Kind { items: &'static [&'static str], per_m: f64, min: usize, max: usize
 fn kind(class: &str) -> Option<Kind> {
     const KITCHEN: &[&str] = &["JarFactory", "JarFactory", "BottleFactory", "BowlFactory", "CupFactory", "CupFactory", "PotFactory", "PanFactory", "FruitContainerFactory", "FoodBoxFactory", "FoodBoxFactory", "PlateFactory", "CanFactory"];
     const BATH: &[&str] = &["BottleFactory", "BottleFactory", "JarFactory", "CupFactory"];
+    const DECOR: &[&str] = &["VaseFactory", "JarFactory", "BowlFactory", "BottleFactory", "PlantContainerFactory", "CupFactory"];
     const TABLE: &[&str] = &["BowlFactory", "CupFactory", "CupFactory", "PlateFactory", "JarFactory", "BottleFactory", "FruitContainerFactory"];
     // z band: (from, to) metres above the object's bottom (None-like negative from = relative to its top)
     Some(match class {
         "KitchenSpaceFactory" => Kind { items: KITCHEN, per_m: 3.0, min: 3, max: 14, z: (0.75, 1.05), clear: 0.35, p: 1.0 },
         "KitchenIslandFactory" => Kind { items: KITCHEN, per_m: 2.0, min: 2, max: 8, z: (0.75, 1.05), clear: 0.35, p: 0.9 },
-        "BathtubFactory" => Kind { items: BATH, per_m: 1.5, min: 1, max: 4, z: (-0.12, 0.01), clear: 0.3, p: 0.8 },
-        "ToiletFactory" => Kind { items: BATH, per_m: 3.0, min: 1, max: 3, z: (-0.08, 0.01), clear: 0.3, p: 0.6 },
+        "BathtubFactory" => Kind { items: BATH, per_m: 3.0, min: 2, max: 6, z: (-0.12, 0.01), clear: 0.3, p: 0.9 },
+        "ToiletFactory" => Kind { items: BATH, per_m: 4.0, min: 1, max: 3, z: (-0.08, 0.01), clear: 0.3, p: 0.85 },
         "CoffeeTableFactory" => Kind { items: TABLE, per_m: 3.0, min: 1, max: 4, z: (-0.06, 0.01), clear: 0.3, p: 0.8 },
-        "SideTableFactory" => Kind { items: TABLE, per_m: 3.0, min: 1, max: 2, z: (-0.06, 0.01), clear: 0.25, p: 0.6 },
+        "SideTableFactory" => Kind { items: TABLE, per_m: 5.0, min: 2, max: 3, z: (-0.06, 0.01), clear: 0.25, p: 0.9 },
+        // bedroom / study furniture: desks, dressers and cabinets
+        "SimpleDeskFactory" | "SidetableDeskFactory" => Kind { items: TABLE, per_m: 3.0, min: 2, max: 5, z: (-0.06, 0.01), clear: 0.3, p: 0.9 },
+        "SingleCabinetFactory" | "KitchenCabinetFactory" => Kind { items: DECOR, per_m: 3.0, min: 2, max: 5, z: (-0.06, 0.01), clear: 0.3, p: 0.85 },
         _ => return None,
     })
 }
