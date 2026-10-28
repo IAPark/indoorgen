@@ -80,7 +80,7 @@ pub fn build_scene(p: &Params) -> Built {
     let assets = indoorgen::assets::RealAssets { fallback: p.fallback.clone() };
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
-    let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone() }, &assets, prog);
+    let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan } }, &assets, prog);
     if cfg.program.realism && !orig_prog {
         if let Some(spec) = &rules {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
@@ -181,17 +181,20 @@ pub fn build_scene(p: &Params) -> Built {
     // the ring is then split at door-jamb (wall thickness) and opening (door width) segments, so no board runs across doors
     let mut floor_polys = polys.clone();
     for ct in &g.cutters {
-        if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance) {
+        if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance | indoorgen::rooms::solidify::CutKind::Passage) {
             continue;
         }
-        let (hw, hd) = (g.c.door_width / 2.0, wt / 2.0 + 1e-4);
+        let hw = if ct.kind == indoorgen::rooms::solidify::CutKind::Passage { ct.dims[0] / 2.0 } else { g.c.door_width / 2.0 };
+        let hd = wt / 2.0 + 1e-4;
         let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
         let pt = |x: f64, y: f64| [ct.loc[0] + c * x - s_ * y, ct.loc[1] + s_ * x + c * y];
         floor_polys.push(indoorgen::shp::polygon(&[pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd), pt(-hw, -hd)], &[]).unwrap());
     }
+    let mut passage_widths = vec![wt, g.c.door_width];
+    passage_widths.extend(g.cutters.iter().filter(|ct| ct.kind == indoorgen::rooms::solidify::CutKind::Passage).map(|ct| ct.dims[0]));
     for (nm, ceil, z) in [("skirting_floor", false, wt / 2.0), ("skirting_ceiling", true, g.c.wall_height - wt / 2.0)] {
         let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), nm]));
-        let sk = if ceil { indoorgen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { indoorgen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &[wt, g.c.door_width]) };
+        let sk = if ceil { indoorgen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { indoorgen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &passage_widths) };
         if let (Some(sk), true) = (&sk, ig_core::envx::var_r("SKIRTDBG").is_ok()) {
             for ct in &g.cutters {
                 if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance) { continue }

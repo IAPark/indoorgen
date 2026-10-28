@@ -13,6 +13,8 @@ pub enum CutKind {
     Door,
     Window,
     Entrance,
+    /// wide doorless opening between open-plan rooms (kitchen / dining / living), no door leaf or frame
+    Passage,
 }
 
 /// An oriented box cutter, centred at `loc`, rotated by `rot_z` about +z. `dims` are full local extents.
@@ -133,6 +135,8 @@ pub struct Solidifier<'a> {
     pub graph: &'a RoomGraph,
     pub level: usize,
     pub enable_open: bool,
+    /// probability that a door between two of kitchen / dining room / living room becomes a wide passage (0: off, output unchanged)
+    pub passage_prob: f64,
 }
 
 fn rotz_dir(d: P2) -> P2 {
@@ -206,6 +210,20 @@ impl<'a> Solidifier<'a> {
                 // enable_open=false path: door iff graph-adjacent
                 let fn_ = if adjacent { "door" } else { "none" };
                 assert!(!self.enable_open, "open cutters not ported");
+                // open plan: kitchen / dining / living doors on a long enough shared wall become wide passages; own stream, drawn only
+                // when passages are on so the door draws (and everything after them) are unchanged otherwise
+                let open_pair = |t: &str| matches!(t, "kitchen" | "dining-room" | "living-room");
+                if std::env::var_os("PASSAGE_DEBUG").is_some() && self.passage_prob > 0.0 { eprintln!("PASSAGEDBG {k} {l} fn {fn_} len {:.2}", length(se)); }
+                if fn_ == "door" && self.passage_prob > 0.0 && open_pair(room_type(k)) && open_pair(room_type(l)) && length(se) >= 2.2 {
+                    let mut pr = Rng::seeded(crate::int_hash(&["passage", &format!("{:?}", rng.peek()), k, l]));
+                    if pr.f64() < self.passage_prob {
+                        let mut cut = self.make_passage_cutter(&mut pr, se);
+                        cut.rooms = vec![k.clone(), l.clone()];
+                        door_map.entry(k.clone()).or_default().insert(l.clone(), cut.clone());
+                        door_map.entry(l.clone()).or_default().insert(k.clone(), cut);
+                        continue;
+                    }
+                }
                 if fn_ == "door" {
                     let mut cut = self.make_door_cutter(rng, se, direction);
                     cut.rooms = vec![k.clone(), l.clone()];
@@ -294,6 +312,23 @@ impl<'a> Solidifier<'a> {
             loc: [x, y, self.c.door_size / 2.0 + wt / 2.0],
             rot_z: z_rot,
             dims: [self.c.door_width, 2.0 * (self.c.door_width + wt / 2.0), self.c.door_size],
+            rooms: vec![],
+        }
+    }
+
+    /// a wide opening centred on the longest piece of the shared wall: 1.6-2.6 m wide (0.35 m of wall kept at each end), up to
+    /// 0.25 m below the ceiling
+    fn make_passage_cutter(&self, rng: &mut Rng, mls: &G) -> Cutter {
+        let (x, y, x_, y_) = max_mls(mls);
+        let wt = self.c.wall_thickness;
+        let len = ((x_ - x).powi(2) + (y_ - y).powi(2)).sqrt();
+        let w = (len - 2.0 * (wt / 2.0 + 0.35)).min(rng.uniform(1.6, 2.6)).max(self.c.door_width);
+        let h = (self.c.wall_height - wt - rng.uniform(0.25, 0.45)).max(self.c.door_size);
+        Cutter {
+            kind: CutKind::Passage,
+            loc: [(x + x_) / 2.0, (y + y_) / 2.0, h / 2.0 + wt / 2.0],
+            rot_z: (y_ - y).atan2(x_ - x),
+            dims: [w, 2.0 * wt + 0.2, h],
             rooms: vec![],
         }
     }

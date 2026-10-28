@@ -139,7 +139,7 @@ fn frame_mesh(c: &RoomConstants, swing: f64, t: f64) -> Mesh {
 /// it opens to. `desired` angles keep python's rot_z draw; `settle_doors` limits them against furniture and walls.
 fn doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::shp::G)], seed: u64, out: &mut Vec<Piece>, leaves: &mut Vec<DoorLeaf>) {
     let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "room_doors"]));
-    let dc: Vec<(usize, &Cutter)> = cutters.iter().enumerate().filter(|(_, c)| c.kind != CutKind::Window).collect();
+    let dc: Vec<(usize, &Cutter)> = cutters.iter().enumerate().filter(|(_, c)| matches!(c.kind, CutKind::Door | CutKind::Entrance)).collect();
     let kinds = [DoorKind::Panel, DoorKind::GlassPanel, DoorKind::Louver, DoorKind::Lite];
     let mut facs = vec![];
     for _ in 0..3 {

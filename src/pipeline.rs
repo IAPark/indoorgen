@@ -48,6 +48,8 @@ pub struct Options {
     pub steps_small: usize,
     /// room features (fireplaces, ...) decided per room before the solve; empty table = none
     pub features: crate::features::FeatureCfg,
+    /// open plan: probability that a kitchen / dining / living door becomes a wide passage (0 = off)
+    pub passage_prob: f64,
 }
 
 /// constraint program for a scene seed (params drawn from the global numpy stream like the python)
@@ -103,7 +105,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         }
         std::process::exit(0);
     }
-    let sol = Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false };
+    let sol = Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false, passage_prob: opt.passage_prob };
     let res = sol.solidify(&mut Rng::seeded(seed), &st);
     let shells = shell::build_shells(&c, &st, &res.cutters);
     timings.push(("rooms".into(), t.elapsed().as_secs_f64()));
@@ -189,7 +191,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     for k in &names {
         let mut rels = vec![];
         for r in &st.objs[k].relations {
-            let door = res.cutters.iter().any(|ct| ct.kind == CutKind::Door && ct.rooms.len() == 2 && ct.rooms.contains(k) && ct.rooms.contains(&r.target));
+            let door = res.cutters.iter().any(|ct| matches!(ct.kind, CutKind::Door | CutKind::Passage) && ct.rooms.len() == 2 && ct.rooms.contains(k) && ct.rooms.contains(&r.target));
             rels.push(RelState { relation: Relation::RoomNeighbour(vec![(if door { "door" } else { "wall" }).to_string()]), target: r.target.clone(), child_plane: 0, parent_plane: 0 });
         }
         state.objs.get_mut(k).unwrap().relations = rels;
@@ -200,6 +202,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             CutKind::Door => "door",
             CutKind::Window => "window",
             CutKind::Entrance => "entrance",
+            CutKind::Passage => "passage",
         };
         let n = counts.entry(base).or_insert(0);
         let name = if *n == 0 { base.to_string() } else { format!("{base}.{:03}", n) };
@@ -292,7 +295,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default() }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0 }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives

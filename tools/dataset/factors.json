@@ -9,7 +9,7 @@
                 "fallback": {"mess": {"level": 0.4}}},
   "lighting":  {"always": {"variation": {"lighting": {"mode": "random", "lamps": "auto"}}},
                 "seeded": {"variation": {"lighting": {"seed": "{seed}"}}}},
-  "furniture": {"always": {},
+  "furniture": {"always": {"program": {"open_plan": 0.6}},
                 "seeded": {"variation": {"furniture": {"seed": "{seed}"}}}},
   "people":    {"always": {"people": {"count": 2, "count_choices": [0, 1, 2, 2]}},
                 "seeded": {"people": {"seed": "{seed}"}},

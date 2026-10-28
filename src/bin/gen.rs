@@ -16,7 +16,7 @@ fn main() {
     let solver = FloorPlanSolver::new(seed, &c, cfg);
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
     let st = solver.solve(&mut a);
-    let sol = solidify::Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false };
+    let sol = solidify::Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false, passage_prob: 0.0 };
     let res = sol.solidify(&mut Rng::seeded(seed), &st);
     let shells = shell::build_shells(&c, &st, &res.cutters);
     let mut scene = Scene::default();
