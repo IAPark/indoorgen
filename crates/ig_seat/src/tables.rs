@@ -9,8 +9,10 @@ pub fn handles(c: &str) -> bool {
     matches!(c, "TableDiningFactory" | "CoffeeTableFactory" | "SideTableFactory" | "TableCocktailFactory")
 }
 
-const TOP: Weighted = &[("ceramic.Marble", 1.0), ("wood.TiledWood", 1.0), ("wood.Wood", 1.0), ("plastic.PlasticRough", 0.5), ("ceramic.GlassVolume", 1.0)];
-const LEG: Weighted = &[("ceramic.Ceramic", 1.0), ("ceramic.Glass", 1.0), ("plastic.Plastic", 1.0), ("metal.MetalBasic", 1.0), ("wood.Wood", 1.0)];
+// coffee-table finishes as in real living rooms: mostly wood, some marble and glass, rarely plastic; legs wood / metal (infinigen's
+// table drew plastic tops in random hues and ceramic or plastic legs equally often)
+const TOP: Weighted = &[("ceramic.Marble", 1.0), ("wood.TiledWood", 1.0), ("wood.Wood", 2.5), ("plastic.PlasticRough", 0.15), ("ceramic.GlassVolume", 0.8)];
+const LEG: Weighted = &[("ceramic.Ceramic", 0.2), ("ceramic.Glass", 0.3), ("plastic.Plastic", 0.2), ("metal.MetalBasic", 1.5), ("metal.BrushedBlackMetal", 1.0), ("wood.Wood", 2.0)];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Style {

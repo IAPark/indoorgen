@@ -29,6 +29,10 @@ pub struct Wardrobe {
 const GAP: f64 = 0.003;
 
 fn spec(name: &str, cls: &str, seed: u64) -> Material {
+    // wood.Wood stretches its grain along object x (here: depth), so tall door panels showed end-grain swirls: vertical grain instead
+    if cls == "wood.Wood" {
+        return spec_material(&format!("{name}:{seed}"), json!({"cls": "shader.wood.wood.shader_wood", "kwargs": {"vertical": true}, "seed": seed}), [0.45, 0.3, 0.18]);
+    }
     spec_material(&format!("{name}:{seed}"), json!({"cls": cls, "kwargs": {}, "seed": seed}), [0.6, 0.6, 0.62])
 }
 

@@ -110,7 +110,8 @@ fn drawer_material(p: &cabdoor::DrawerPick, seed: u64) -> Material {
 /// slot materials of a kitchen cabinet row: [frame + doors (K_z), division boards (K), drawers...]
 fn kitchen_slot_mats(kind: &str, picks: &[cabdoor::DrawerPick], seed: u64) -> Vec<Material> {
     let mut v = vec![plywood(kind, true, 0), plywood(kind, false, 0)];
-    v.extend(picks.iter().map(|p| drawer_material(p, seed)));
+    // one front material for the whole cabinet (see KitchenSpace::exact_slots)
+    if let Some(p0) = picks.first() { let m0 = drawer_material(p0, seed); v.extend(picks.iter().map(|_| m0.clone())); }
     v
 }
 
@@ -930,7 +931,8 @@ impl Factory for KitchenSpace {
         let g = hwexact::join_fwd(&parts);
         let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
         let mut mats = vec![plywood(kind, true, 0), plywood(kind, false, 0), cls_spec("counter_marble", "ceramic.Marble", self.factory_seed + 7, [0.85, 0.85, 0.85])];
-        mats.extend(dr.iter().map(|(p, seed)| drawer_material(p, *seed)));
+        // one door / drawer front material for the whole run (each front drew its own of 5 shaders: patchwork kitchens)
+        if let Some((p0, s0)) = dr.first() { let m0 = drawer_material(p0, *s0); mats.extend(dr.iter().map(|_| m0.clone())); }
         Some((g.tag.iter().map(|&t| ((t >> 1) as u16).min(mats.len() as u16 - 1)).collect(), mats))
     }
     fn asset(&self, i: u64) -> Asset {

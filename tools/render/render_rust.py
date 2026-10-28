@@ -230,6 +230,13 @@ for o in list(bpy.data.objects):
     if nm is None: continue
     spec = specs[nm].get("spec")
     if not spec: continue
+    if spec.get("cls") == "wood.Wood" and not os.environ.get("RAW_WOOD"):
+        # wood.Wood stretches its grain along object x; on parts thin in x (headboards, cabinet doors, panels facing x) the visible
+        # faces showed end grain (marble-like swirls): those get the shader's vertical grain instead
+        _bb = [mathutils.Vector(c) for c in o.bound_box]
+        _ext = [max(v[i] for v in _bb) - min(v[i] for v in _bb) for i in range(3)]
+        if _ext[0] < 0.5 * max(_ext[1], _ext[2]):
+            spec = {"cls": "shader.wood.wood.shader_wood", "kwargs": {"vertical": True}, "seed": spec.get("seed", 0)}
     ck = json.dumps(spec, sort_keys=True)
     if ck not in cache:
         mod, cls = spec["cls"].split(".", 1)
