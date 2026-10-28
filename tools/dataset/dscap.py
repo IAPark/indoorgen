@@ -37,16 +37,20 @@ def _colors(rec):
 def apply_walls(variation):
     """variation.walls / ceiling / floor colours (linear rgb per room): replace the base colour of that room's wall / ceiling / floor materials
     (texture, bump and roughness kept)"""
-    done = {}
+    done = {}; kept = []
     for part in ("walls", "ceiling", "floor"):
         suffix = "." + part.rstrip("s")
         for room, rgb in _colors((variation or {}).get(part)).items():
             n = 0
             for o in bpy.data.objects:
                 if o.type != "MESH" or not o.name.startswith(room + suffix): continue
+                # keep infinigen's wall alternatives (".alt": wainscoting, art wallpaper) and patterned finishes (tile, brick, wood):
+                # painting them one flat colour removed the grout / brick / panel pattern; only plain plaster is repainted
+                if part == "walls" and ".alt" in o.name: kept.append(o.name); continue
                 for slot in o.material_slots:
                     m = slot.material
                     if m is None or not m.use_nodes: continue
+                    if part == "walls" and "plaster" not in m.name.lower(): kept.append(m.name); continue
                     m = m.copy(); slot.material = m  # materials may be shared between rooms
                     for nd in m.node_tree.nodes:
                         if nd.type != "BSDF_PRINCIPLED": continue
@@ -54,6 +58,7 @@ def apply_walls(variation):
                         for l in list(s_.links): m.node_tree.links.remove(l)
                         s_.default_value = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0); n += 1
             done[part + ":" + room] = n
+    done["kept"] = sorted(set(kept))[:20]
     return done
 
 
