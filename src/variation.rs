@@ -147,7 +147,7 @@ pub enum LampMode {
     Off,
     /// Each lamp is on with probability lamp_on_prob.
     Random,
-    /// On when the sun is below the horizon (night), off otherwise.
+    /// Daylight-aware draw: ceiling lights on with p 0.55 by day / 0.9 at night, other lamps 0.25 / 0.7.
     Auto,
 }
 
@@ -384,7 +384,12 @@ impl Lighting {
             LampMode::On => true,
             LampMode::Off => false,
             LampMode::Random => stream(seed, "lamps", key).f64() < self.lamp_on_prob,
-            LampMode::Auto => night,
+            LampMode::Auto => {
+                // people switch lights on in dim rooms by day too (small-windowed bathrooms rendered black at +4 stops), and leave some
+                // off at night: ceiling lights 55 % by day / 90 % at night, other lamps 25 % / 70 %
+                let p = match (ceiling, night) { (true, false) => 0.55, (true, true) => 0.9, (false, false) => 0.25, (false, true) => 0.7 };
+                stream(seed, "lamps_auto", key).f64() < p
+            }
         }
     }
 

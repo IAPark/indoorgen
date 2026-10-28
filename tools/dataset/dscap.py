@@ -143,6 +143,7 @@ class Scene:
     """all render-visible meshes merged into one BVH (world space); tri -> object / kind lookup"""
     def __init__(self, room, sidecar):
         t = time.time()
+        self.room = room
         objs = [o for o in bpy.data.objects if o.type == "MESH" and not o.hide_render and len(o.data.polygons)]
         classes = {n["name"]: n.get("class", "") for n in sidecar.get("nodes", [])}
         V, T, OB, self.names, self.kind, self.cls, self.okeys, self.bbox = [], [], [], [], [], [], [], []
@@ -246,9 +247,14 @@ def rays_cv(W, H, f, step=1):
     return np.stack(np.broadcast_arrays(u[None, :], v[:, None], np.ones((1, 1))), -1)
 
 
+# the furniture a photo of each room type is "of" (3D-FRONT / Hypersim bedroom shots show the bed, living rooms the sofa, ...)
+ANCHORS = {"bedroom": ("BedFactory",), "living-room": ("SofaFactory", "TVStandFactory"), "dining-room": ("TableDiningFactory",),
+           "kitchen": ("KitchenSpaceFactory", "FridgeFactory", "KitchenIslandFactory"), "bathroom": ("BathtubFactory", "ToiletFactory", "BathroomSinkFactory", "StandingSinkFactory")}
+
+
 def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     """frustum probe: None if invalid else dict(med, p10, miss, wall, nobj, objfrac, person); composition: a view must show at least 4
-    objects, at most 55 % bare wall / ceiling and no person filling more than 22 % of the frame (people up close read as occluders)"""
+    objects, at most 55 % bare wall / ceiling and no person filling more than 22 % of the frame or nearer than 1.6 m (people up close read as occluders)"""
     o = c2w[:3, 3]
     dirs = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1), (.7, .7, 0), (-.7, .7, 0), (.7, -.7, 0), (-.7, -.7, 0),
             (.7, 0, .7), (-.7, 0, .7), (0, .7, .7), (0, -.7, .7), (.7, 0, -.7), (-.7, 0, -.7), (0, .7, -.7), (0, -.7, -.7)]
@@ -257,7 +263,8 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
         if h is not None and (h[3] < 0.22 or (S.tri_kind[h[2]] == 0 and np.dot(h[1], d) > 0)): return None, "eye-in-object" if S.tri_kind[h[2]] == 0 else "eye-near-wall"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9
+    anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
             d = c2w[:3, :3] @ ray[y, x]; n = np.linalg.norm(d); h = S.cast(o, d / n)
@@ -267,25 +274,29 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
                 k = S.okeys[S.tri_obj[h[2]]]
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
                     objs.add(k); nobjpix += 1
-                    person += k.startswith("person")
+                    if k.startswith("person"):
+                        person += 1; pnear = min(pnear, h[3])
+                    anchor += any(a in k for a in anc)
     n = gw * gh
     if not ds: return None, "all-miss"
     # distinct classes ("131945_BookColumnFactory" -> BookColumnFactory): a bookcase of 60 book columns is one kind of thing, not 60
     ncls = len({re.sub(r"^\d+_", "", k).split(".")[0] for k in objs})
-    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n)
+    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n)
     if st["p10"] < 0.35: return None, "too-close"
     if st["med"] < 1.3: return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
     if st["wall"] > 0.55: return None, "mostly-wall"
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.22: return None, "person-fills-frame"
+    if pnear < 1.6: return None, "person-too-close"  # a face filling the middle of the frame reads as a portrait, not a room
     return st, "ok"
 
 
 def view_score(st):
     """composition score of a valid view: many kinds of objects and furniture coverage, little bare wall (raw object counts made views
     of book-filled shelves win every time)"""
-    return 1.5 * st.get("ncls", st["nobj"]) + 0.1 * min(st["nobj"], 40) + 12.0 * st["objfrac"] - 6.0 * st["wall"]
+    # + the room's anchor furniture in frame (bonus saturates at 15 % of the frame), - people (they crowded every kitchen frame)
+    return 1.5 * st.get("ncls", st["nobj"]) + 0.1 * min(st["nobj"], 40) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 25.0 * st.get("person", 0.0)
 
 
 def auto_exposure(sc, base, tmp, target=0.40, lo=-2.0, hi=4.0):
@@ -334,7 +345,8 @@ def make_pool(S, cfg, W, H, n, rng):
         fp = (hi[0] - lo[0]) * (hi[1] - lo[1])
         # furniture-sized things only: the dozens of book columns inside one shelf summed to more weight than the bed
         if fp < 0.12: continue
-        targets.append(c); tw.append(fp)
+        anc = next((v for kk, v in ANCHORS.items() if S.room.startswith(kk)), ())
+        targets.append(c); tw.append(fp * (4.0 if any(a in k for a in anc) else 1.0))
     tw = np.array(tw) / np.sum(tw) if tw else None
     best_of = cfg.get("fresh_candidates", 8)
     fresh_best = []

@@ -71,6 +71,9 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("DiningRoom", "CupFactory", "on:Storage", 0, 3, false),
     ("DiningRoom", "NatureShelfTrinketsFactory", "on:Storage", 0, 3, false),
     ("DiningRoom", "DeskLampFactory", "ontop:Furniture", 0, 0, false),
+    // ... which left dining shelves near empty: books and vases instead, preferred
+    ("DiningRoom", "BookColumnFactory", "on:Storage", 0, 8, true),
+    ("DiningRoom", "VaseFactory", "on:Storage", 0, 3, true),
 ];
 
 pub fn with_realism_rules(mut spec: RuleSpec) -> RuleSpec {
