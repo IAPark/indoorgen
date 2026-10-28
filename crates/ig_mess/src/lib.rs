@@ -20,6 +20,9 @@ pub struct MessCfg {
     /// 0 = off (exact current output), 1 = very messy
     pub level: f64,
     pub seed: u64,
+    /// multipliers of the floor / surface clutter counts (1 = as tuned)
+    pub floor_scale: f64,
+    pub surface_scale: f64,
 }
 
 impl MessCfg {

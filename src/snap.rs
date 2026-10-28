@@ -267,7 +267,7 @@ pub fn recenter_visuals(state: &State, visuals: &mut HashMap<String, crate::asse
 /// Furniture standing inside other furniture (parts of two unrelated objects whose boxes overlap by more than `min_ov` in every axis):
 /// the solver's placeholders allow it when the visible shape is bigger than the box it used. The smaller object (and everything
 /// resting on it) is removed. Returns the removed keys.
-pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, skip: &[String], min_ov: f64) -> Vec<(String, String)> {
+pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, skip: &[String], min_ov: f64, rooms: &[(String, crate::shp::G)]) -> Vec<(String, String)> {
     let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
     let exempt = |c: &str| ["Chair", "Stool", "Bed", "Sofa", "Rug", "Curtain", "Lamp", "Light", "Mirror", "WallArt", "Plant", "Door", "Window", "Cloth", "Pillow", "Towel"].iter().any(|e| c.contains(e));
     struct B {
@@ -329,19 +329,40 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
             }
             let hit = a.parts.iter().any(|(al, ah)| b.parts.iter().any(|(bl, bh)| (0..3).all(|d| ah[d].min(bh[d]) - al[d].max(bl[d]) > min_ov)));
             if hit && ess_pair(a, b) {
-                // two essential fixtures (toilet against a pedestal sink): slide the smaller one clear along the axis of least overlap
-                let (mv, other) = if vol(a) < vol(b) { (i, j) } else { (j, i) };
-                let (m, o) = (&bs[mv], &bs[other]);
-                let mut best = (f64::MAX, 0usize, 0.0f64);
-                for d in 0..2 {
-                    let push_pos = o.hi[d] - m.lo[d] + 0.02;
-                    let push_neg = -(m.hi[d] - o.lo[d] + 0.02);
-                    for p in [push_pos, push_neg] { if p.abs() < best.0 { best = (p.abs(), d, p) } }
+                // two essential fixtures (toilet against a pedestal sink): slide one of them clear along the axis of least overlap; a shift
+                // must keep its footprint inside the room (0.18 m in from the wall centre line: half a wall + 3 cm) and off every other object
+                let mut best = (f64::MAX, 0usize, 0usize, 0.0f64);
+                for (mv, other) in [(i, j), (j, i)] {
+                    let (m, o) = (&bs[mv], &bs[other]);
+                    let room = rooms.iter().find(|(_, g)| crate::shp::contains_pt(g, [(m.lo[0] + m.hi[0]) / 2.0, (m.lo[1] + m.hi[1]) / 2.0])).map(|(_, g)| crate::shp::buffer_mitre(g, -0.18));
+                    for d in 0..2 {
+                        for p in [o.hi[d] - m.lo[d] + 0.02, -(m.hi[d] - o.lo[d] + 0.02)] {
+                            if p.abs() >= best.0 { continue }
+                            let (mut lo, mut hi) = (m.lo, m.hi);
+                            lo[d] += p; hi[d] += p;
+                            let inside = room.as_ref().map_or(true, |g| [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]].iter().all(|q| crate::shp::contains_pt(g, *q)));
+                            // only along a wall the fixture is backed against (its other axis within 0.25 m of the room edge), so it stays on it
+                            let e = 1 - d;
+                            let c = [(m.lo[0] + m.hi[0]) / 2.0, (m.lo[1] + m.hi[1]) / 2.0];
+                            let along_wall = room.as_ref().map_or(false, |g| [m.lo[e] - 0.25, m.hi[e] + 0.25].iter().any(|&v| { let mut q = c; q[e] = v; !crate::shp::contains_pt(g, q) }));
+                            let inside = inside && along_wall;
+                            let free = bs.iter().all(|x| x.key == m.key || dead.contains(&x.key) || (0..3).any(|e| x.lo[e] > hi[e] - min_ov || lo[e] > x.hi[e] - min_ov));
+                            if std::env::var_os("SHIFT_DEBUG").is_some() { eprintln!("SHIFT {} d{d} {p:.2} inside {inside} free {free} blockers {:?}", m.key, bs.iter().filter(|x| !(x.key == m.key || dead.contains(&x.key) || (0..3).any(|e| x.lo[e] > hi[e] - min_ov || lo[e] > x.hi[e] - min_ov))).map(|x| x.key.clone()).collect::<Vec<_>>()); }
+                            if inside && free { best = (p.abs(), mv, d, p) }
+                        }
+                    }
                 }
-                if best.0 < 0.35 {
-                    let key = m.key.clone();
-                    if let Some(ob) = state.objs.get_mut(&key) { ob.pose.t[best.1] += best.2; }
-                    shifted.push((key, best.2));
+                if best.0 < 1.5 {
+                    let key = bs[best.1].key.clone();
+                    // the fixture and everything resting on it (bottles on a sink)
+                    let mut group = vec![key.clone()];
+                    loop {
+                        let more: Vec<String> = state.objs.iter().filter(|(k, o)| !group.contains(*k) && o.relations.iter().any(|r| group.contains(&r.target))).map(|(k, _)| k.clone()).collect();
+                        if more.is_empty() { break }
+                        group.extend(more);
+                    }
+                    for gk in &group { if let Some(ob) = state.objs.get_mut(gk) { ob.pose.t[best.2] += best.3; } }
+                    shifted.push((key, best.3));
                     continue;
                 }
             }

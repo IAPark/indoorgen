@@ -617,8 +617,8 @@ fn clutter_room(scene: &mut Scene, state: &State, rname: &str, rt: &str, poly: &
     let world = RoomWorld::new(&statics);
     let area_total = ig_core::shp::signed_area(poly).abs();
     let surf_area: f64 = surf_tris.iter().map(|t| t.1).sum();
-    let n_floor_target = ((cfg.level * FLOOR_DENSITY[slot] * area_total).round() as usize).min(45);
-    let n_surf_target = ((cfg.level * SURFACE_DENSITY[slot] * surf_area).round() as usize).min(40);
+    let n_floor_target = ((cfg.level * cfg.floor_scale * FLOOR_DENSITY[slot] * area_total).round() as usize).min(45);
+    let n_surf_target = ((cfg.level * cfg.surface_scale * SURFACE_DENSITY[slot] * surf_area).round() as usize).min((40.0 * cfg.surface_scale.max(1.0)) as usize);
     if dbg {
         eprintln!("MESSDBG {rname} area {area_total:.1} surf_area {surf_area:.2} tris {} statics {} targets floor {n_floor_target} surf {n_surf_target} floor_z {floor_z:.3} doors {}", surf_tris.len(), world.n_static(), doors.len());
     }

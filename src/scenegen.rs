@@ -42,7 +42,7 @@ pub fn build_scene(p: &Params) -> Built {
     let seed = cfg.house.seed;
     let only_target = cfg.house.only_target;
     let var = &cfg.variation;
-    let mess = indoorgen::mess::MessCfg { level: cfg.mess.level, seed: cfg.mess.seed.unwrap_or(seed) };
+    let mess = indoorgen::mess::MessCfg { level: cfg.mess.level, seed: cfg.mess.seed.unwrap_or(seed), floor_scale: cfg.mess.floor_scale, surface_scale: cfg.mess.surface_scale };
     let furn_seed = var.furniture.seed.unwrap_or(seed);
     let people_seed = cfg.people.seed.unwrap_or(seed);
     let room = cfg.house.room.clone();
@@ -312,7 +312,7 @@ pub fn build_scene(p: &Params) -> Built {
         eprintln!("RECENTER {} KitchenCabinet visuals aligned with their solver box", mv.len());
         let mut cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
         cut_keys.extend(feature_keys.iter().cloned());
-        let gone = indoorgen::snap::remove_overlapping(&mut g.state, &visuals, &cut_keys, 0.08);
+        let gone = indoorgen::snap::remove_overlapping(&mut g.state, &visuals, &cut_keys, 0.08, &g.room_polys);
         for (k, o) in &gone { eprintln!("OVERLAP removed {k} (inside {o})"); }
         for k in indoorgen::snap::remove_overlapping_rugs(&mut g.state, &visuals, 0.10) { eprintln!("OVERLAP removed rug {k} (overlaps a larger rug)"); }
     }

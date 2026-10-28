@@ -154,6 +154,9 @@ def main():
             gcfg = deep_merge(deep_merge(d.get("gen", {}), house.get("gen", {})), variant.get("gen", {}))
             gcfg = deep_merge(gcfg, fcfg)
             gcfg = deep_merge(gcfg, {"house": {"seed": house["seed"], "room": house["room"], "only_target": house.get("only_target", True)}, "cameras": {"count": 1}})
+            # people.count_choices: the house's people count drawn from the list (per house, the same for all its variants)
+            pc = gcfg.get("people", {}).pop("count_choices", None)
+            if pc: gcfg["people"]["count"] = int(pc[crc(house["seed"], "people_count") % len(pc)])
             print("== %s/%s vary=%s config=%s" % (hname, variant["name"], variant["vary"], json.dumps(gcfg)))
             if a.dry_run: continue
             os.makedirs(vdir, exist_ok=True)

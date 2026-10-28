@@ -124,9 +124,15 @@ pub struct Mess {
     pub level: f64,
     /// Seed of the mess stream (null: house.seed). Furniture, floor plan and the other factors do not depend on it.
     pub seed: Option<u64>,
+    /// Multiplier of the floor clutter count (dropped clothes, pillows, books on the floor). 1 = as tuned.
+    #[schemars(range(min = 0.0, max = 4.0))]
+    pub floor_scale: f64,
+    /// Multiplier of the clutter count on shelves, tables and counters. 1 = as tuned.
+    #[schemars(range(min = 0.0, max = 4.0))]
+    pub surface_scale: f64,
 }
 impl Default for Mess {
-    fn default() -> Self { Mess { level: 0.0, seed: None } }
+    fn default() -> Self { Mess { level: 0.0, seed: None, floor_scale: 1.0, surface_scale: 1.0 } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
