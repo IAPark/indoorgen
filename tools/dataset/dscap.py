@@ -479,7 +479,9 @@ def make_pool(S, cfg, W, H, n, rng, strict=True):
         if kind == "fresh":
             # best of `best_of` valid fresh candidates by composition
             fresh_best.append(v)
-            if len(fresh_best) < best_of and tries < n * 400 - 1: continue
+            # tight rooms pass few candidates: settle for fewer later on (waiting for 8 discarded every valid view of a 3.5 m bedroom)
+            need = best_of if tries < n * 100 else (2 if tries < n * 250 else 1)
+            if len(fresh_best) < need and tries < n * 400 - 1: continue
             # and away from what earlier fresh views looked at (otherwise one big shelf collects most views)
             # ... and from where they stood / which way they faced (in a narrow room every hit lands on the same end wall)
             seen = [u for u in pool if u["kind"] == "fresh"]
