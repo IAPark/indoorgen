@@ -63,3 +63,101 @@ pub fn arrange(state: &mut State) -> Vec<String> {
     if !remove.is_empty() { log.push(format!("removed {}", remove.len())); }
     log
 }
+
+/// Dining chairs the solver left against the walls (their "near the table" relation is soft; cramped plans park them in pairs along
+/// a wall): a chair whose seat is more than 0.8 m from its table's edge moves to a free slot around the table, facing it (slots every
+/// ~0.6 m along each side, 0.15 m tucked under); a slot must lie in the chair's room and clear every other object. No free slot: removed.
+pub fn gather_chairs(state: &mut State) -> Vec<String> {
+    type B = ([f64; 3], [f64; 3]);
+    let wbox = |o: &crate::furn::state::ObjState| -> B {
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    let ov = |a: &B, b: &B| (0..2).all(|d| a.0[d] < b.1[d] - 0.01 && b.0[d] < a.1[d] - 0.01) && a.0[2] < b.1[2] && b.0[2] < a.1[2];
+    let mut log = vec![];
+    let tables: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "TableDiningFactory")).map(|(k, _)| k.clone()).collect();
+    let mut remove = vec![];
+    for tk in tables {
+        let t = state.objs[&tk].clone();
+        let (r, tt) = (t.pose.r, t.pose.t);
+        let to_local = |p: [f64; 3]| { let d = [p[0] - tt[0], p[1] - tt[1]]; [r[0][0] * d[0] + r[1][0] * d[1], r[0][1] * d[0] + r[1][1] * d[1]] };
+        let to_world = |l: [f64; 2]| [tt[0] + r[0][0] * l[0] + r[0][1] * l[1], tt[1] + r[1][0] * l[0] + r[1][1] * l[1]];
+        let (lo, hi) = (t.geom.lo, t.geom.hi);
+        let chairs: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "ChairFactory") && o.relations.iter().any(|x| x.target == tk)).map(|(k, _)| k.clone()).collect();
+        // seat centre of a chair (local frame: back at x = lo, front toward +x)
+        let seat = |o: &crate::furn::state::ObjState| o.pose.apply([(o.geom.lo[0] + o.geom.hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0, 0.0]);
+        let _far: Vec<String> = chairs.iter().filter(|k| {
+            let l = to_local(seat(&state.objs[k.as_str()]));
+            let dx = (lo[0] - l[0]).max(l[0] - hi[0]).max(0.0); let dy = (lo[1] - l[1]).max(l[1] - hi[1]).max(0.0);
+            if std::env::var_os("CHAIR_DEBUG").is_some() { eprintln!("CHAIRDBG {k} local {:.2?} table lo {:.2?} hi {:.2?} dist {:.2}", l, [lo[0], lo[1]], [hi[0], hi[1]], dx.hypot(dy)); }
+            dx.hypot(dy) > 0.8
+        }).cloned().collect();
+        // every chair takes its own slot: five chairs at a 1 m square table shared sides and overlapped
+        let far = chairs.clone();
+        if far.is_empty() { continue }
+        let room = state.objs[&far[0]].relations.iter().map(|x| x.target.clone()).find(|x| state.objs.get(x).map_or(false, |o| o.polygon.is_some()));
+        let poly = room.and_then(|k| state.objs[&k].polygon.clone());
+        // candidate slots: (local position on the edge, outward normal)
+        let mut slots: Vec<([f64; 2], [f64; 2])> = vec![];
+        for (axis, sign) in [(0usize, 1.0f64), (0, -1.0), (1, 1.0), (1, -1.0)] {
+            let o = 1 - axis; let len = hi[o] - lo[o];
+            let n = ((len / 0.6).floor() as usize).max(1);
+            for i in 0..n {
+                let mut p = [0.0; 2];
+                p[axis] = if sign > 0.0 { hi[axis] } else { lo[axis] };
+                p[o] = lo[o] + len * (i as f64 + 0.5) / n as f64;
+                let mut nl = [0.0; 2]; nl[axis] = sign;
+                slots.push((p, nl));
+            }
+        }
+        let mut moved = 0;
+        let mut taken: Vec<usize> = vec![];
+        for ck in &far {
+            let c = state.objs[ck].clone();
+            let (cl, ch) = (c.geom.lo, c.geom.hi);
+            let depth = ch[0] - cl[0];
+            let others: Vec<B> = state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && !o.generator.as_ref().unwrap().class.contains("Rug") && !o.relations.iter().any(|x| x.target == tk && o.generator.as_ref().unwrap().class != "ChairFactory")).map(|(_, o)| wbox(o)).collect();
+            let mut done = false;
+            let here = to_local(seat(&c));
+            let mut order: Vec<usize> = (0..slots.len()).filter(|i| !taken.contains(i)).collect();
+            order.sort_by(|&a, &b| { let d = |i: usize| (slots[i].0[0] - here[0]).hypot(slots[i].0[1] - here[1]); d(a).partial_cmp(&d(b)).unwrap() });
+            for si in order {
+                let (p, nl) = (&slots[si].0, &slots[si].1);
+                // seat centre 0.5 depth out from the edge minus the tuck; chair faces -n (its +x toward the table)
+                let off = 0.5 * depth - 0.15;
+                let sc = to_world([p[0] + nl[0] * off, p[1] + nl[1] * off]);
+                let nw = [r[0][0] * nl[0] + r[0][1] * nl[1], r[1][0] * nl[0] + r[1][1] * nl[1]];
+                let yaw = (-nw[1]).atan2(-nw[0]);
+                let mut np = c.pose;
+                let e = np.o.eul; np.set_euler([e[0] as f64, e[1] as f64, yaw]);
+                let cc = np.rot([(cl[0] + ch[0]) / 2.0, (cl[1] + ch[1]) / 2.0, 0.0]);
+                np.set_loc([sc[0] - cc[0], sc[1] - cc[1], c.pose.t[2]]);
+                let mut cand = c.clone(); cand.pose = np;
+                let b = wbox(&cand);
+                if others.iter().any(|o| ov(&b, o)) { continue }
+                if let Some(pg) = &poly {
+                    if ![[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.0[0], b.1[1]], [b.1[0], b.1[1]]].iter().all(|q| crate::shp::contains_pt(pg, *q)) { continue }
+                }
+                state.objs.get_mut(ck).unwrap().pose = np;
+                taken.push(si);
+                done = true; moved += 1; break;
+            }
+            if !done { remove.push(ck.clone()); }
+        }
+        log.push(format!("{} of {} chairs seated at {tk} ({} slots, {} removed)", moved, far.len(), slots.len(), far.len() - moved));
+    }
+    // and anything resting on a removed chair
+    let mut all = remove.clone();
+    loop {
+        let more: Vec<String> = state.objs.iter().filter(|(k, o)| !all.contains(k) && o.relations.iter().any(|x| all.contains(&x.target))).map(|(k, _)| k.clone()).collect();
+        if more.is_empty() { break }
+        all.extend(more);
+    }
+    for k in &all { state.objs.shift_remove(k); }
+    log
+}
