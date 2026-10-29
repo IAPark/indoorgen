@@ -234,6 +234,33 @@ if args.clay:
     clay = bpy.data.materials.new("clay"); clay.use_nodes = True
     clay.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.6, 0.6, 0.6, 1)
     clay.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.9
+
+# photographic prints for wall art (infinigen's art.Art noise patterns read as synthetic next to Hypersim's framed photos): horizon
+# crops of the HDRI skies (tools: ~/work/assets/art_photos, ART_PHOTOS overrides), a different print per picture, the crop aspect
+# nearest the canvas; 15 % keep the procedural art
+_ART_DIR = os.environ.get("ART_PHOTOS", os.path.expanduser("~/work/assets/art_photos"))
+_ART_FILES = sorted(f for f in os.listdir(_ART_DIR) if f.endswith(".jpg")) if os.path.isdir(_ART_DIR) else []
+_ART_IMG = {}
+def _photo_art(o):
+    import zlib
+    if not _ART_FILES: return None
+    h = zlib.crc32(("%s:%s" % (args.seed, o.name.split("#")[0])).encode())
+    if h % 100 < 15: return None
+    bb = [mathutils.Vector(c) for c in o.bound_box]; ext = [max(v[i] for v in bb) - min(v[i] for v in bb) for i in range(3)]
+    hor = 0 if ext[0] >= ext[1] else 1
+    asp = ext[hor] / max(ext[2], 1e-3)
+    best = min((0.75, 1.0, 1.33, 1.5), key=lambda a: abs(math.log(a / max(asp, 1e-3))))
+    cands = [f for f in _ART_FILES if "_%s_" % best in f]
+    f = cands[(h // 100) % len(cands)]
+    if f not in _ART_IMG: _ART_IMG[f] = bpy.data.images.load(os.path.join(_ART_DIR, f))
+    m = bpy.data.materials.new("photo_art_%s" % o.name.split("#")[0]); m.use_nodes = True; nt = m.node_tree
+    bs = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"); bs.inputs["Roughness"].default_value = 0.45
+    tc = nt.nodes.new("ShaderNodeTexCoord"); sep = nt.nodes.new("ShaderNodeSeparateXYZ"); com = nt.nodes.new("ShaderNodeCombineXYZ")
+    tx = nt.nodes.new("ShaderNodeTexImage"); tx.image = _ART_IMG[f]; tx.extension = "EXTEND"
+    nt.links.new(tc.outputs["Generated"], sep.inputs[0]); nt.links.new(sep.outputs[hor], com.inputs[0]); nt.links.new(sep.outputs[2], com.inputs[1])
+    nt.links.new(com.outputs[0], tx.inputs[0]); nt.links.new(tx.outputs["Color"], bs.inputs["Base Color"])
+    return m
+
 for o in list(bpy.data.objects):
     if o.type != "MESH": continue
     if clay is not None:
@@ -256,6 +283,10 @@ for o in list(bpy.data.objects):
         _ext = [max(v[i] for v in _bb) - min(v[i] for v in _bb) for i in range(3)]
         if _ext[0] < 0.5 * max(_ext[1], _ext[2]):
             spec = {"cls": "shader.wood.wood.shader_wood", "kwargs": {"vertical": True}, "seed": spec.get("seed", 0)}
+    if spec.get("cls") in ("art.Art", "art.DarkArt") and not os.environ.get("RAW_ART"):
+        _pm = _photo_art(o)
+        if _pm is not None:
+            o.data.materials.clear(); o.data.materials.append(_pm); continue
     ck = json.dumps(spec, sort_keys=True)
     if ck not in cache:
         mod, cls = spec["cls"].split(".", 1)
