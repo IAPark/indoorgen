@@ -276,7 +276,19 @@ for o in list(bpy.data.objects):
     if not os.environ.get("RAW_BEDFRAME") and spec.get("cls") in ("metal.HammeredMetal", "metal.GalvanizedMetal") and str(specs[nm].get("material", "")).split(":")[0] == "bed_frame":
         # hammered / galvanized bumps on a 1.5 m footboard read as crumpled paper; bed frames are powder-coated or brushed
         spec = dict(spec, cls="metal.BrushedBlackMetal")
+    if spec.get("cls") == "ceramic.Marble" and not os.environ.get("RAW_MARBLE"):
+        # ceramic.Marble is a grey camouflage blotch (reviewers: "camo / agate counters"); MarbleRegular is veined stone
+        spec = dict(spec, cls="ceramic.MarbleRegular")
     if spec.get("cls") == "wood.Wood" and not os.environ.get("RAW_WOOD"):
+        # large flat tops (table / desk / counter boards): shader_wood's noise-warped grain reads as burl / contour lines there;
+        # straight-grain veneer (plywood) instead, 70 % blonde, 30 % dark
+        _bb0 = [mathutils.Vector(c) for c in o.bound_box]
+        _e0 = sorted([max(v[i] for v in _bb0) - min(v[i] for v in _bb0) for i in range(3)])
+        _ez = max(v[2] for v in _bb0) - min(v[2] for v in _bb0)
+        if _e0[1] > 0.35 and _ez <= _e0[0] + 1e-6 and _ez < 0.12 * _e0[1]:
+            import zlib as _z
+            spec = dict(spec, cls="wood.BlondePlywood" if _z.crc32(o.name.split("#")[0].encode()) % 10 < 7 else "wood.BlackPlywood")
+
         # wood.Wood stretches its grain along object x; on parts thin in x (headboards, cabinet doors, panels facing x) the visible
         # faces showed end grain (marble-like swirls): those get the shader's vertical grain instead
         _bb = [mathutils.Vector(c) for c in o.bound_box]
@@ -534,10 +546,15 @@ if not os.environ.get("RAW_FLOORS"):
                     _ri = _nd.inputs["Roughness"]
                     if _ri.is_linked:
                         _src = _ri.links[0].from_socket
-                        _mx = _nt.nodes.new("ShaderNodeMath"); _mx.operation = "MAXIMUM"; _mx.inputs[1].default_value = 0.32
+                        _mx = _nt.nodes.new("ShaderNodeMath"); _mx.operation = "MAXIMUM"; _mx.inputs[1].default_value = 0.42
                         _nt.links.new(_src, _mx.inputs[0]); _nt.links.new(_mx.outputs[0], _ri)
                     else:
-                        _ri.default_value = max(_ri.default_value, 0.32)
+                        _ri.default_value = max(_ri.default_value, 0.42)
+                    # saturated orange planks / parquet: pull saturation down (reviewers: "orange, repetitive floors")
+                    _bc = _nd.inputs["Base Color"]
+                    if _bc.is_linked:
+                        _hs = _nt.nodes.new("ShaderNodeHueSaturation"); _hs.inputs["Saturation"].default_value = 0.72; _hs.inputs["Value"].default_value = 0.97
+                        _nt.links.new(_bc.links[0].from_socket, _hs.inputs["Color"]); _nt.links.new(_hs.outputs["Color"], _bc)
                     if "Coat Weight" in _nd.inputs and not _nd.inputs["Coat Weight"].is_linked: _nd.inputs["Coat Weight"].default_value = min(_nd.inputs["Coat Weight"].default_value, 0.1)
                 _done[_m.name] = True
 phase("room materials")

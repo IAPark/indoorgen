@@ -436,10 +436,12 @@ def make_pool(S, cfg, W, H, n, rng, strict=True):
     lo_f, hi_f = cfg.get("focal_mm", [18, 35]); hlo, hhi = cfg.get("eye_height_m", [1.0, 1.8]); margin = cfg.get("wall_margin_m", 0.45)
     # small rooms (10 m2 kitchens, 3 m wide bedrooms): photographers stand closer to walls and targets
     R = math.sqrt(max(S.floor_area, 1.0)); margin = min(margin, max(0.25, 0.12 * R))
-    if S.floor_area < 10.0: lo_f, hi_f = min(lo_f, 14.0), min(hi_f, 22.0)  # wide lens in small bathrooms / kitchens, as photographers do
+    # lens: Hypersim's cameras are near-normal (~ 24-35 mm full-frame equivalent); 14-18 mm bowed ceilings and stretched walls in a third
+    # of our frames. Tiny rooms (< 10 m2) may go to 20 mm; LENS_MIN overrides
+    lo_f = max(lo_f, float(os.environ.get("LENS_MIN", 24.0))); hi_f = max(hi_f, lo_f + 6.0)
+    if S.floor_area < 10.0: lo_f, hi_f = min(lo_f, 20.0), min(hi_f, 28.0)
     elif S.room.startswith("bedroom"):
-        lo_f, hi_f = min(lo_f, 16.0), min(hi_f, 26.0)  # bedrooms: the bed fills a normal lens; real-estate shots go wide
-        hlo = max(hlo, 1.35)  # and from standing height (low cameras looked at floor clutter over the bed edge)
+        hlo = max(hlo, 1.35)  # standing height (low cameras looked at floor clutter over the bed edge)
     d_tgt = float(np.clip(0.5 * R, 1.2, 2.0))
     traj, cluster = cfg.get("traj_frac", 0.4), cfg.get("cluster_len", 3)
     pool, rejects, prev, run = [], {}, None, 0

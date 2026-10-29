@@ -81,6 +81,7 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
         let want = ((len * kd.per_m) as usize).clamp(kd.min, kd.max);
         let me = world_box(o);
         let others: Vec<&Box3> = objs.iter().filter(|(kk, b)| kk != k && overlaps(&(b.0, b.1), &([me.0[0] - 0.05, me.0[1] - 0.05, me.0[2]], [me.1[0] + 0.05, me.1[1] + 0.05, me.1[2] + 1.0]))).map(|(_, b)| b).collect();
+        let rim_only = matches!(g.class.as_str(), "BathtubFactory" | "ToiletFactory");
         let mut placed = 0;
         for t in 0..want * 12 {
             if placed >= want { break }
@@ -102,6 +103,9 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 let hs = heights(&tris, pr[0], pr[1]);
                 let Some(top) = hs.iter().cloned().filter(|z| *z >= zb0 && *z <= zb1).fold(None, |m: Option<f64>, z| Some(m.map_or(z, |m| m.max(z)))) else { blocked = true; break };
                 if hs.iter().any(|z| *z > top + 0.01 && *z < top + kd.clear.max(ih + 0.03)) { blocked = true; break }
+                // tub rims / cisterns are solid: a surface between the floor and the band means the probe is over the basin (bottles
+                // floated over the tub's interior)
+                if rim_only && hs.iter().any(|z| *z > lo[2] + 0.04 && *z < zb0 - 0.02) { blocked = true; break }
                 tops.push(top);
             }
             if blocked { continue }
