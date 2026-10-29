@@ -381,7 +381,22 @@ def view_score(st):
     return 1.5 * st.get("ncls", st["nobj"]) + 0.3 * min(st["nobj"], 60) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 45.0 * st.get("person", 0.0)
 
 
-def auto_exposure(sc, base, tmp, target=0.40, lo=-2.0, hi=4.0):
+def white_balance(path, strength=0.75):
+    """camera white balance on the written PNG: partial gray-world in linear light (warm 2200-3000 K lamps, sunset skies and peach
+    walls left frames orange: mean R/B 1.79 against Hypersim's 1.18); gains are normalised to keep the luminance; returns the gains"""
+    from PIL import Image
+    im = np.asarray(Image.open(path).convert("RGB"), np.float32) / 255.0
+    lin = np.where(im <= 0.04045, im / 12.92, ((im + 0.055) / 1.055) ** 2.4)
+    m = lin.reshape(-1, 3).mean(0) + 1e-6
+    g = (m.mean() / m) ** strength
+    g = g / (g @ np.array([0.2126, 0.7152, 0.0722]))  # keep luminance
+    lin = np.clip(lin * g, 0, 1)
+    out = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+    Image.fromarray((out * 255 + 0.5).astype(np.uint8)).save(path)
+    return [round(float(x), 3) for x in g]
+
+
+def auto_exposure(sc, base, tmp, target=0.52, lo=-2.0, hi=4.0):  # Hypersim frames average L* 53 (ours were 45-48)
     """camera auto exposure: a tiny, few-sample pre-render (1/8 size) measures the mean display luminance, the film exposure is shifted
     by log2(target / mean) stops (clamped) and re-measured once; returns the exposure set for the real render"""
     pct, smp, den = sc.render.resolution_percentage, sc.cycles.samples, sc.cycles.use_denoising
@@ -639,7 +654,7 @@ def run(sc, sidecar, spec, log=print):
     sc.render.image_settings.file_format = "PNG"; sc.render.image_settings.color_mode = "RGB"; sc.render.image_settings.color_depth = "8"
     sc.render.use_persistent_data = True
     views, tt = [], dict(trace=0.0, render=0.0)
-    base_exposure = sc.cycles.film_exposure; ae_log = []; lights_on_log = []
+    base_exposure = sc.cycles.film_exposure; ae_log = []; lights_on_log = []; wb_log = []
     # photographic tone: AgX with medium-high contrast (the base look was flat / washed out); spec "look" overrides
     try:
         sc.view_settings.view_transform = "AgX"; sc.view_settings.look = spec.get("look", "AgX - Medium High Contrast")
@@ -688,6 +703,7 @@ def run(sc, sidecar, spec, log=print):
                 ev = auto_exposure(sc, base_exposure, os.path.join(out, "_ae.png")); switched = True
             ae_log.append(round(ev - base_exposure, 2)); lights_on_log.append(switched)
         bpy.ops.render.render(write_still=True); tt["render"] += time.time() - t
+        if spec.get("white_balance", 0.75) > 0: wb_log.append(white_balance(sc.render.filepath, float(spec.get("white_balance", 0.75))))
         for o in [o for o in bpy.data.objects if o.type == "LIGHT" and o.get("ig_off")]: o.hide_render = True
         w2c = np.linalg.inv(M)
         views.append(dict(index=k, pool_index=j, kind=v["kind"], file="images/%s.png" % nm, depth="depth/%s.npy" % nm, width=W, height=H,
@@ -705,4 +721,4 @@ def run(sc, sidecar, spec, log=print):
     for o in rem_objs: o.hide_render = False
     if os.path.exists(os.path.join(out, "_ae.png")): os.remove(os.path.join(out, "_ae.png"))
     sc.cycles.film_exposure = base_exposure
-    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0, exposure_stops=ae_log, lights_switched_on=lights_on_log)
+    return dict(removed_keys=rem_keys, removed_views=sorted(rem_views), n_views=len(views), pool_new=pool_new, dropped=len(dropped), t_scene=S.t_load, t_trace=tt["trace"], t_render=tt["render"], t_run=time.time() - t0, exposure_stops=ae_log, lights_switched_on=lights_on_log, white_balance_gains=wb_log)
