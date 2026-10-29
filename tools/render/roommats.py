@@ -18,6 +18,24 @@ from infinigen.core.constraints.example_solver.room.base import room_type
 # BACKLOG).  ROOMMATS_ORDER=insertion (default, deterministic) | reverse | memory (python's own set order)
 ORDER = {"mode": __import__("os").environ.get("ROOMMATS_ORDER", "insertion"), "perm": {}}
 
+if not __import__("os").environ.get("RAW_ROOMS"):
+    # plausible finishes per room type (infinigen: a third of living / dining / bedroom walls in glossy tile, every non-bath floor tile 40 %):
+    # living / dining / bedroom walls plaster (tile 5 %), kitchens plaster 80 %; living / dining / bedroom floors hardwood / wood tile
+    # (plain hardwood weighted up, hexagon / crossed parquet down), tile 8 %, carpet (rug) 10 %; bathrooms and kitchens keep tile floors
+    from infinigen.assets.materials import ceramic as _cer, wood as _wd, fabric as _fab
+    from infinigen.core import tags as _t
+    _home_wall = [(_cer.Plaster, 19.0), (_cer.Tile, 1.0)]
+    _kitchen_wall = [(_cer.Plaster, 8.0), (_cer.Tile, 2.0)]
+    _home_floor = [(_wd.HardwoodFloor, 5.0), (_wd.StaggeredWoodTile, 2.0), (_wd.SquareWoodTile, 1.0), (_wd.CompositeWoodTile, 1.0),
+                   (_wd.HexagonWoodTile, 0.3), (_wd.CrossedWoodTile, 0.3), (_cer.Tile, 0.9), (_fab.Rug, 1.1)]
+    _kitchen_floor = [(_cer.Tile, 5.0), (_wd.HardwoodFloor, 3.0), (_wd.StaggeredWoodTile, 1.0)]
+    _S = _t.Semantics
+    for _k in (_S.LivingRoom, _S.DiningRoom, _S.Bedroom):
+        room_dec.room_wall_fns[_k] = _home_wall
+        room_dec.room_floor_fns[_k] = _home_floor
+    room_dec.room_wall_fns[_S.Kitchen] = _kitchen_wall
+    room_dec.room_floor_fns[_S.Kitchen] = _kitchen_floor
+
 
 def _iter_set(items, stage):
     uniq = list(dict.fromkeys(items))  # all instances are distinct objects
