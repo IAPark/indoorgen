@@ -16,6 +16,19 @@ fn spec(name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> Material {
 }
 
 /// world xy footprint (lo, hi) and top z of a solver object
+/// world footprint + top of the BUILT object (its scene meshes "key#i"; the solver box can be offset from the visual -- pendants hung
+/// off-centre over tables), the solver box when the object has no meshes in the scene
+fn footprint_built(scene: &Scene, state: &State, k: &str) -> Option<([f64; 2], [f64; 2], f64)> {
+    let pre = format!("{k}#");
+    let (mut lo, mut hi, mut top, mut any) = ([f64::MAX; 2], [f64::MIN; 2], f64::MIN, false);
+    for n in scene.nodes.iter().filter(|n| n.name.starts_with(&pre)) {
+        let (l, h) = n.mesh.bounds();
+        if l[0] > h[0] { continue }
+        lo[0] = lo[0].min(l[0]); lo[1] = lo[1].min(l[1]); hi[0] = hi[0].max(h[0]); hi[1] = hi[1].max(h[1]); top = top.max(h[2]); any = true;
+    }
+    if any { Some((lo, hi, top)) } else { footprint(state, k) }
+}
+
 fn footprint(state: &State, k: &str) -> Option<([f64; 2], [f64; 2], f64)> {
     let o = state.objs.get(k)?;
     let (l, h) = (o.geom.lo, o.geom.hi);
@@ -43,7 +56,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     let mut n = 0;
     for (cls, p) in [("TableDiningFactory", 0.65), ("KitchenIslandFactory", 0.5)] {
         for k in classes(cls) {
-            let Some((lo, hi, top)) = footprint(state, &k) else { continue };
+            let Some((lo, hi, top)) = footprint_built(scene, state, &k) else { continue };
             let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "ceiling_decor", &k]));
             if r.f64() >= p { continue }
             let (lx, ly) = (hi[0] - lo[0], hi[1] - lo[1]);

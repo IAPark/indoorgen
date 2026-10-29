@@ -161,3 +161,78 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
     for k in &all { state.objs.shift_remove(k); }
     log
 }
+
+/// Coffee tables beside the sofa (the solver's "near" relation lets them sit at the sofa's end): each coffee table within 3 m of a sofa
+/// in its room moves in front of that sofa -- centred on it, 0.45 m from the seat front, long side parallel to the sofa -- when that spot
+/// is in the room and clear of other furniture (rugs excepted); objects resting on it move along.
+pub fn coffee_tables(state: &mut State) -> Vec<String> {
+    type B = ([f64; 3], [f64; 3]);
+    let wbox = |o: &crate::furn::state::ObjState| -> B {
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    let cls = |o: &crate::furn::state::ObjState| o.generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
+    let room_of = |o: &crate::furn::state::ObjState| o.relations.iter().map(|x| x.target.clone()).find(|t| t.contains('/'));
+    let mut log = vec![];
+    let tables: Vec<String> = state.objs.iter().filter(|(_, o)| cls(o) == "CoffeeTableFactory").map(|(k, _)| k.clone()).collect();
+    let mut used_sofas: Vec<String> = vec![];
+    for tk in tables {
+        let t = state.objs[&tk].clone();
+        let Some(room) = room_of(&t) else { continue };
+        let tc = t.pose.apply([(t.geom.lo[0] + t.geom.hi[0]) / 2.0, (t.geom.lo[1] + t.geom.hi[1]) / 2.0, 0.0]);
+        // nearest sofa in the same room
+        let sofa = state.objs.iter().filter(|(k, o)| cls(o) == "SofaFactory" && room_of(o).as_deref() == Some(room.as_str()) && !used_sofas.contains(k)).map(|(k, o)| {
+            let c = o.pose.apply([(o.geom.lo[0] + o.geom.hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0, 0.0]);
+            (k.clone(), (c[0] - tc[0]).hypot(c[1] - tc[1]))
+        }).filter(|x| x.1 < 3.0).min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let Some((sk, _)) = sofa else { continue };
+        let s = state.objs[&sk].clone();
+        // sofa frame: x = depth (back at lo, seat front at hi), y = width
+        let front = s.pose.rot([1.0, 0.0, 0.0]);
+        let ylen = (s.geom.hi[1] - s.geom.lo[1]).max(0.1);
+        let (tl, th) = (t.geom.lo, t.geom.hi);
+        let (tx, ty) = (th[0] - tl[0], th[1] - tl[1]);
+        // table's long axis along the sofa's width; its half-depth toward the sofa
+        let long_x = tx >= ty;
+        let half_d = 0.5 * if long_x { ty } else { tx };
+        let dist = 0.45 + half_d;
+        let seat_front = s.pose.apply([s.geom.hi[0], (s.geom.lo[1] + s.geom.hi[1]) / 2.0, 0.0]);
+        let c = [seat_front[0] + front[0] * dist, seat_front[1] + front[1] * dist];
+        let sofa_y = s.pose.rot([0.0, 1.0, 0.0]);
+        let yaw = if long_x { sofa_y[1].atan2(sofa_y[0]) } else { front[1].atan2(front[0]) };
+        let _ = ylen;
+        let mut np = t.pose;
+        let e = np.o.eul; np.set_euler([e[0] as f64, e[1] as f64, yaw]);
+        let cc = np.rot([(tl[0] + th[0]) / 2.0, (tl[1] + th[1]) / 2.0, 0.0]);
+        np.set_loc([c[0] - cc[0], c[1] - cc[1], t.pose.t[2]]);
+        let mut cand = t.clone(); cand.pose = np;
+        let b = wbox(&cand);
+        let kids: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|x| x.target == tk)).map(|(k, _)| k.clone()).collect();
+        let blocked = state.objs.iter().any(|(k, o)| *k != tk && !kids.contains(k) && o.generator.is_some() && !cls(o).contains("Rug") && {
+            let ob = wbox(o); (0..2).all(|d| b.0[d] < ob.1[d] - 0.01 && ob.0[d] < b.1[d] - 0.01) && b.0[2] < ob.1[2] && ob.0[2] < b.1[2]
+        });
+        let inside = state.objs.get(&room).and_then(|r| r.polygon.clone()).map_or(true, |pg| [[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.0[0], b.1[1]], [b.1[0], b.1[1]]].iter().all(|q| crate::shp::contains_pt(&pg, *q)));
+        if blocked || !inside { log.push(format!("{tk}: front of {sk} blocked")); continue }
+        // move the table and its children rigidly (rotation about the old table centre by the yaw change, then translation)
+        let dyaw = yaw - t.pose.o.eul[2] as f64;
+        let old_c = tc;
+        let new_c = [c[0], c[1]];
+        for kk in &kids {
+            let o = state.objs.get_mut(kk).unwrap();
+            let (dx, dy) = (o.pose.t[0] - old_c[0], o.pose.t[1] - old_c[1]);
+            let (cs, sn) = (dyaw.cos(), dyaw.sin());
+            let e = o.pose.o.eul;
+            o.pose.set_euler([e[0] as f64, e[1] as f64, e[2] as f64 + dyaw]);
+            o.pose.set_loc([new_c[0] + cs * dx - sn * dy, new_c[1] + sn * dx + cs * dy, o.pose.t[2]]);
+        }
+        state.objs.get_mut(&tk).unwrap().pose = np;
+        used_sofas.push(sk.clone());
+        log.push(format!("{tk} set in front of {sk} ({} items along)", kids.len()));
+    }
+    log
+}

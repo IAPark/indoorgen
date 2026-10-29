@@ -87,6 +87,7 @@ pub fn build_scene(p: &Params) -> Built {
             if !rm.is_empty() { eprintln!("CAPS removed {} objects over the rule maxima: {:?}", rm.len(), &rm[..rm.len().min(12)]); }
         }
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
+        for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
     }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));

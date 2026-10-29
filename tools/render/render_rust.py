@@ -357,7 +357,17 @@ for o in list(bpy.data.objects):
             except Exception as e:
                 print("MATERIAL FAIL", spec, repr(e)); cache[ck] = None
     if cache[ck] is not None:
-        o.data.materials.clear(); o.data.materials.append(cache[ck])
+        _mm = cache[ck]
+        if not os.environ.get("RAW_GLASS") and str(specs[nm].get("material", "")).split(":")[0] == "shower_glass":
+            # perfectly clear 8 mm panels vanished (reviewers: "shower is frame rods only, no glass"): real shower glass shows a
+            # faint green-grey tint, edge darkening and soft reflections
+            _mm = _mm.copy()
+            for _b in [n for n in _mm.node_tree.nodes if n.type in ("BSDF_PRINCIPLED", "BSDF_GLASS")]:
+                _ci = _b.inputs["Base Color"] if "Base Color" in _b.inputs else _b.inputs["Color"]
+                if not _ci.is_linked: _ci.default_value = (0.80, 0.90, 0.88, 1.0)
+                if not _b.inputs["Roughness"].is_linked: _b.inputs["Roughness"].default_value = max(_b.inputs["Roughness"].default_value, 0.04)
+            cache[ck + ":shower"] = _mm
+        o.data.materials.clear(); o.data.materials.append(_mm)
 phase("materials")
 # room shells: python's own room_walls/room_floors/room_ceilings sampling (roommats.py) replaces the Rust-side spec draws
 if not args.clay and not os.environ.get("NO_ROOMMATS"):
