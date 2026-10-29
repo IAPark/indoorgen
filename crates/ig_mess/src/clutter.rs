@@ -58,7 +58,7 @@ const FLOOR: &[Spec] = &[
 ];
 
 /// floor clutter per m^2 of room floor at level 1, per room type [bedroom, living, kitchen, bath, dining, other]
-const FLOOR_DENSITY: W = [0.9, 0.6, 0.2, 0.7, 0.12, 0.4];
+const FLOOR_DENSITY: W = [0.45, 0.5, 0.2, 0.5, 0.12, 0.4]; // bedrooms halved: clothes piles dominated bedroom views
 /// surface items per m^2 of surface at level 1
 const SURFACE_DENSITY: W = [7.0, 6.0, 6.0, 7.0, 5.0, 6.0];
 
