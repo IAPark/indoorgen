@@ -320,7 +320,7 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
         return None, "over-furniture"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}
     anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
@@ -329,6 +329,9 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
             ds.append(h[3]); kd = S.tri_kind[h[2]]; wall += kd in (1, 3)
             if y >= ys[len(ys) * 2 // 3]:
                 n_low += 1; near_low += (kd == 0 and h[3] < 0.6)
+            if h[3] < 0.8:
+                ko = S.okeys[S.tri_obj[h[2]]] if kd == 0 else "_wall"
+                near_obj[ko] = near_obj.get(ko, 0) + 1
             if kd == 0:
                 k = S.okeys[S.tri_obj[h[2]]]
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
@@ -344,11 +347,12 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     if st["p10"] < 0.35: return None, "too-close"
     # a big object 30-60 cm in front of the lens over the lower third reads as an obstruction (sofa cushions filling the frame)
     if st.get("near_low", 1.0) > 0.35: return None, "foreground-blocked"
+    if max(near_obj.values(), default=0) / n > 0.25: return None, "near-object-fills-frame"  # a door leaf / cabinet side 0.5 m from the lens
     if st["med"] < float(np.clip(0.38 * math.sqrt(max(S.floor_area, 1.0)), 1.0, 1.3)): return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
     if st["wall"] > 0.55: return None, "mostly-wall"
     if st["nobj"] < 4: return None, "few-objects"
-    if st["person"] > 0.22: return None, "person-fills-frame"
+    if st["person"] > 0.15: return None, "person-fills-frame"
     if max(per.values(), default=0) / n > 0.38: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
     if pnear < 1.6: return None, "person-too-close"  # a face filling the middle of the frame reads as a portrait, not a room
     return st, "ok"
@@ -358,7 +362,7 @@ def view_score(st):
     """composition score of a valid view: many kinds of objects and furniture coverage, little bare wall (raw object counts made views
     of book-filled shelves win every time)"""
     # + the room's anchor furniture in frame (bonus saturates at 15 % of the frame), - people (they crowded every kitchen frame)
-    return 1.5 * st.get("ncls", st["nobj"]) + 0.3 * min(st["nobj"], 60) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 25.0 * st.get("person", 0.0)
+    return 1.5 * st.get("ncls", st["nobj"]) + 0.3 * min(st["nobj"], 60) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 45.0 * st.get("person", 0.0)
 
 
 def auto_exposure(sc, base, tmp, target=0.40, lo=-2.0, hi=4.0):
@@ -396,7 +400,9 @@ def make_pool(S, cfg, W, H, n, rng):
     # small rooms (10 m2 kitchens, 3 m wide bedrooms): photographers stand closer to walls and targets
     R = math.sqrt(max(S.floor_area, 1.0)); margin = min(margin, max(0.25, 0.12 * R))
     if S.floor_area < 10.0: lo_f, hi_f = min(lo_f, 14.0), min(hi_f, 22.0)  # wide lens in small bathrooms / kitchens, as photographers do
-    elif S.room.startswith("bedroom"): lo_f, hi_f = min(lo_f, 16.0), min(hi_f, 26.0)  # bedrooms: the bed fills a normal lens; real-estate shots go wide
+    elif S.room.startswith("bedroom"):
+        lo_f, hi_f = min(lo_f, 16.0), min(hi_f, 26.0)  # bedrooms: the bed fills a normal lens; real-estate shots go wide
+        hlo = max(hlo, 1.35)  # and from standing height (low cameras looked at floor clutter over the bed edge)
     d_tgt = float(np.clip(0.5 * R, 1.2, 2.0))
     traj, cluster = cfg.get("traj_frac", 0.4), cfg.get("cluster_len", 3)
     pool, rejects, prev, run = [], {}, None, 0
