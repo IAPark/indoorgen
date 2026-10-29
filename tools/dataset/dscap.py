@@ -365,7 +365,7 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
     if strict and any(edge_n[i] and edge_near[i] / edge_n[i] > 0.6 for i in (0, 1)): return None, "edge-occluded"
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.15: return None, "person-fills-frame"
-    if max(per.values(), default=0) / n > 0.38: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
+    if max(per.values(), default=0) / n > 0.3: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
     if pnear < 1.6: return None, "person-too-close"  # a face filling the middle of the frame reads as a portrait, not a room
     return st, "ok"
 
