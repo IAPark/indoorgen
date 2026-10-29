@@ -392,8 +392,13 @@ def white_balance(path, strength=0.75):
     g = g / (g @ np.array([0.2126, 0.7152, 0.0722]))  # keep luminance
     lin = np.clip(lin * g, 0, 1)
     out = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+    # mid-tone lift (a photographer's curves): the exposure is held down by sunlit windows (blow-out guard), leaving rooms darker
+    # than Hypersim's (L* 42 vs 53); a gamma toward mean display luminance 0.5 keeps the highlights unclipped
+    y = float((out @ np.array([0.2126, 0.7152, 0.0722])).mean())
+    gam = float(np.clip(math.log(0.5) / math.log(max(min(y, 0.99), 1e-3)), 0.75, 1.0))
+    out = np.clip(out, 0, 1) ** gam
     Image.fromarray((out * 255 + 0.5).astype(np.uint8)).save(path)
-    return [round(float(x), 3) for x in g]
+    return [round(float(x), 3) for x in g] + [round(gam, 3)]
 
 
 def auto_exposure(sc, base, tmp, target=0.52, lo=-2.0, hi=4.0):  # Hypersim frames average L* 53 (ours were 45-48)
