@@ -35,6 +35,11 @@ if not __import__("os").environ.get("RAW_ROOMS"):
         room_dec.room_floor_fns[_k] = _home_floor
     room_dec.room_wall_fns[_S.Kitchen] = _kitchen_wall
     room_dec.room_floor_fns[_S.Kitchen] = _kitchen_floor
+    # wall alternatives: infinigen gave a third of living-room / bedroom walls art wallpaper (art.Art / DarkArt: dark patterned and
+    # saturated walls); real rooms: plain paint mostly, wainscoting ("half") sometimes, a printed accent wall rarely
+    from infinigen.assets.materials import art as _art
+    for _k in (_S.LivingRoom, _S.Bedroom, _S.DiningRoom, _S.Office):
+        room_dec.room_wall_alternative_fns[_k] = ("weighted_choice", (6, "none"), (1.5, "half"), (0.25, _art.Art))
 
 
 def _iter_set(items, stage):
