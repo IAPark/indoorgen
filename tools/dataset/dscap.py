@@ -320,7 +320,7 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
         return None, "over-furniture"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}; pend = 0; edge_n = [0, 0]; edge_near = [0, 0]; door = 0
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}; pend = 0; edge_n = [0, 0]; edge_near = [0, 0]; door = 0; win = 0
     anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
@@ -340,6 +340,7 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
             if kd == 0:
                 k = S.okeys[S.tri_obj[h[2]]]
                 if ("Door" in k or k.startswith("door")) and h[3] < 2.0: door += 1
+                if "Window" in k or k.startswith("window"): win += 1
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
                     objs.add(k); nobjpix += 1; per[k] = per.get(k, 0) + 1
                     if k.startswith("person"):
@@ -349,7 +350,7 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
     if not ds: return None, "all-miss"
     # distinct classes ("131945_BookColumnFactory" -> BookColumnFactory): a bookcase of 60 book columns is one kind of thing, not 60
     ncls = len({re.sub(r"^\d+_", "", k).split(".")[0] for k in objs})
-    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n, near_low=near_low / max(n_low, 1))
+    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n, near_low=near_low / max(n_low, 1), win=win / n)
     if st["p10"] < 0.35: return None, "too-close"
     # a big object 30-60 cm in front of the lens over the lower third reads as an obstruction (sofa cushions filling the frame)
     if strict and st.get("near_low", 1.0) > 0.3: return None, "foreground-blocked"
@@ -378,7 +379,7 @@ def view_score(st):
     """composition score of a valid view: many kinds of objects and furniture coverage, little bare wall (raw object counts made views
     of book-filled shelves win every time)"""
     # + the room's anchor furniture in frame (bonus saturates at 15 % of the frame), - people (they crowded every kitchen frame)
-    return 1.5 * st.get("ncls", st["nobj"]) + 0.3 * min(st["nobj"], 60) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 45.0 * st.get("person", 0.0)
+    return 1.5 * st.get("ncls", st["nobj"]) + 0.3 * min(st["nobj"], 60) + 12.0 * st["objfrac"] - 6.0 * st["wall"] + 40.0 * min(st.get("anchor", 0.0), 0.15) - 45.0 * st.get("person", 0.0) + 15.0 * min(st.get("win", 0.0), 0.2)  # daylight through a window (Hypersim frames face them)
 
 
 def white_balance(path, strength=0.75):
