@@ -302,7 +302,7 @@ def rays_cv(W, H, f, step=1):
 
 # the furniture a photo of each room type is "of" (3D-FRONT / Hypersim bedroom shots show the bed, living rooms the sofa, ...)
 ANCHORS = {"bedroom": ("BedFactory",), "living-room": ("SofaFactory", "TVStandFactory"), "dining-room": ("TableDiningFactory",),
-           "kitchen": ("KitchenSpaceFactory", "FridgeFactory", "KitchenIslandFactory"), "bathroom": ("BathtubFactory", "ToiletFactory", "BathroomSinkFactory", "StandingSinkFactory")}
+           "kitchen": ("KitchenSpaceFactory", "FridgeFactory", "KitchenIslandFactory", "OvenFactory", "SinkFactory"), "bathroom": ("BathtubFactory", "ToiletFactory", "BathroomSinkFactory", "StandingSinkFactory")}
 
 
 def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
