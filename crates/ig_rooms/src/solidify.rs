@@ -267,7 +267,11 @@ impl<'a> Solidifier<'a> {
                     c.reverse();
                     ls = linestring(&c).unwrap();
                 }
-                let mut cs = self.make_window_cutter(rng, &ls, 0.0);
+                // floor-to-ceiling glass on some living / dining room walls (Hypersim's living spaces; python passes 0): own stream
+                let pano_p = if k.starts_with("living-room") || k.starts_with("dining-room") { std::env::var("PANO_P").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3) } else { 0.0 };
+                let pano = pano_p > 0.0 && Rng::seeded(ig_core::int_hash(&["pano", k, &format!("{:.3}", length(&ls))])).f64() < pano_p;
+                if pano && std::env::var_os("PANO_DEBUG").is_some() { eprintln!("PANO {k} wall {:.2} m", length(&ls)); }
+                let mut cs = self.make_window_cutter(rng, &ls, if pano { -1.0 } else { 0.0 });
                 for c in cs.iter_mut() {
                     c.rooms = vec![k.clone()];
                 }
@@ -283,7 +287,9 @@ impl<'a> Solidifier<'a> {
                 entrance_cutters.entry(k.clone()).or_default().push(cutter);
                 let rest = difference(mls, &ls);
                 if length(&rest) > 0.0 {
-                    let mut cs = self.make_window_cutter(rng, &rest, 0.0);
+                    let pano_p = if k.starts_with("living-room") || k.starts_with("dining-room") { std::env::var("PANO_P").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3) } else { 0.0 };
+                    let pano = pano_p > 0.0 && Rng::seeded(ig_core::int_hash(&["pano", k, &format!("{:.3}", length(&rest))])).f64() < pano_p;
+                    let mut cs = self.make_window_cutter(rng, &rest, if pano { -1.0 } else { 0.0 });
                     for c in cs.iter_mut() {
                         c.rooms = vec![k.clone()];
                     }
@@ -354,7 +360,8 @@ impl<'a> Solidifier<'a> {
         let (wt, wm) = (self.c.wall_thickness, self.c.window_margin);
         for (x, y, x_, y_) in split_mls(mls, self.c.door_width) {
             let length = ((y_ - y).powi(2) + (x_ - x).powi(2)).sqrt();
-            let pano = panoramic > 0.0 && rng.bool(panoramic);
+            // panoramic < 0: decided by the caller's own stream (|panoramic| = 1 means panoramic), the plan's rng untouched
+            let pano = if panoramic < 0.0 { true } else { panoramic > 0.0 && rng.bool(panoramic) };
             let (x_scale, lam, z_scale, z_loc);
             if pano && self.c.wall_height < 4.0 {
                 x_scale = length / 2.0 - wm;
