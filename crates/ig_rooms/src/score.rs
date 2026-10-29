@@ -114,12 +114,12 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
     // dining 20, closet 5, bathroom 8, utility 5, garage 25, balcony 8) gave 46 m2 bedrooms and 65 m2 living rooms; these follow
     // real homes / 3D-FRONT (bedroom ~12-20 m2, living room ~25-35 m2). The typical areas (graph.rs) and so the house size follow.
     let area_terms: [(&str, f64); 10] = [
-        ("kitchen", 14.0),
+        ("kitchen", 15.0),
         ("bedroom", 17.0),
         ("living-room", 26.0),
         ("dining-room", 13.0),
         ("closet", 3.0),
-        ("bathroom", 6.0),
+        ("bathroom", 7.5),
         ("utility", 4.0),
         ("garage", 20.0),
         ("balcony", 6.0),
