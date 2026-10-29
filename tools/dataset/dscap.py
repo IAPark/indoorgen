@@ -396,8 +396,11 @@ def white_balance(path, strength=0.75):
     # mid-tone lift (a photographer's curves): the exposure is held down by sunlit windows (blow-out guard), leaving rooms darker
     # than Hypersim's (L* 42 vs 53); a gamma toward mean display luminance 0.5 keeps the highlights unclipped
     y = float((out @ np.array([0.2126, 0.7152, 0.0722])).mean())
-    gam = float(np.clip(math.log(0.5) / math.log(max(min(y, 0.99), 1e-3)), 0.75, 1.0))
+    gam = float(np.clip(math.log(0.5) / math.log(max(min(y, 0.99), 1e-3)), 0.70, 1.0))
     out = np.clip(out, 0, 1) ** gam
+    # chroma x0.85 around luminance (procedural paints / woods / fabrics are more saturated than Hypersim's: 0.29 vs 0.20)
+    lum = (out @ np.array([0.2126, 0.7152, 0.0722]))[..., None]
+    out = np.clip(lum + (out - lum) * 0.85, 0, 1)
     Image.fromarray((out * 255 + 0.5).astype(np.uint8)).save(path)
     return [round(float(x), 3) for x in g] + [round(gam, 3)]
 
