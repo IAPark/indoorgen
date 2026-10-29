@@ -18,6 +18,18 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     let mut log = vec![];
     let inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -wall_t / 2.0)).collect();
     let mut used_walls: Vec<([f64; 2], [f64; 2])> = vec![];
+    // occupied wall space: every solver object's world box (wall art, mirrors, shelves, windows, doors, lamps ...); frames that would
+    // overlap one are skipped (paintings hung over the solver's own wall art)
+    let world_box = |o: &crate::furn::state::ObjState| -> ([f64; 3], [f64; 3]) {
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    let mut occupied: Vec<([f64; 3], [f64; 3])> = state.objs.values().filter(|o| o.generator.is_some() || o.tags.0.iter().any(|t| format!("{t:?}").contains("Window") || format!("{t:?}").contains("Door"))).map(|o| world_box(o)).collect();
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
         let p = match g.class.as_str() {
@@ -67,6 +79,15 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             let zc = z0 + cell_h * (ri_ as f64 + 0.5) + r.uniform(-0.04, 0.04);
             // frame box: 2.5 cm deep, its back on the wall face
             let centre = [wq[0] - dir[0] * 0.0125 + along[0] * u, wq[1] - dir[1] * 0.0125 + along[1] * u];
+            let fbox = {
+                let c0 = [centre[0] - along[0] * fw / 2.0, centre[1] - along[1] * fw / 2.0];
+                let c1 = [centre[0] + along[0] * fw / 2.0, centre[1] + along[1] * fw / 2.0];
+                let pad = 0.03; // keep a small gap to neighbours
+                ([c0[0].min(c1[0]) - 0.05 - pad, c0[1].min(c1[1]) - 0.05 - pad, zc - fh / 2.0 - pad], [c0[0].max(c1[0]) + 0.05 + pad, c0[1].max(c1[1]) + 0.05 + pad, zc + fh / 2.0 + pad])
+            };
+            let me = world_box(o);
+            if occupied.iter().any(|b| !(b.0 == me.0 && b.1 == me.1) && (0..3).all(|d| fbox.0[d] < b.1[d] && b.0[d] < fbox.1[d])) { continue }
+            occupied.push(fbox);
             let corners = |hw: f64, hd: f64, h: f64, dz: f64| -> Mesh {
                 let mut m = Mesh::new();
                 let p = |s: f64, t: f64, z: f64| [centre[0] + along[0] * s - dir[0] * t, centre[1] + along[1] * s - dir[1] * t, z];
