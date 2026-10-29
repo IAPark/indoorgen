@@ -305,7 +305,7 @@ ANCHORS = {"bedroom": ("BedFactory",), "living-room": ("SofaFactory", "TVStandFa
            "kitchen": ("KitchenSpaceFactory", "FridgeFactory", "KitchenIslandFactory"), "bathroom": ("BathtubFactory", "ToiletFactory", "BathroomSinkFactory", "StandingSinkFactory")}
 
 
-def view_stats(S, c2w, f, W, H, grid=(24, 18)):
+def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
     """frustum probe: None if invalid else dict(med, p10, miss, wall, nobj, objfrac, person); composition: a view must show at least 4
     objects, at most 55 % bare wall / ceiling and no person filling more than 22 % of the frame or nearer than 1.6 m (people up close read as occluders)"""
     o = c2w[:3, 3]
@@ -351,14 +351,18 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18)):
     st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n, near_low=near_low / max(n_low, 1))
     if st["p10"] < 0.35: return None, "too-close"
     # a big object 30-60 cm in front of the lens over the lower third reads as an obstruction (sofa cushions filling the frame)
-    if st.get("near_low", 1.0) > 0.3: return None, "foreground-blocked"
-    if max(near_obj.values(), default=0) / n > 0.16: return None, "near-object-fills-frame"  # a door leaf / cabinet side 0.5 m from the lens
+    if strict and st.get("near_low", 1.0) > 0.3: return None, "foreground-blocked"
+    if strict and max(near_obj.values(), default=0) / n > 0.16: return None, "near-object-fills-frame"  # a door leaf / cabinet side 0.5 m from the lens
     if st["med"] < float(np.clip(0.38 * math.sqrt(max(S.floor_area, 1.0)), 1.0, 1.3)): return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
     if st["wall"] > 0.45: return None, "mostly-wall"
     if st["ncls"] < 5: return None, "few-classes"
     if pend: return None, "pendant-at-eye"
-    if any(edge_n[i] and edge_near[i] / edge_n[i] > 0.6 for i in (0, 1)): return None, "edge-occluded"  # a lamp shade hanging in front of the lens  # a bare wall with one shelf / two chairs is not a view of the room
+    # rooms with an anchor piece (bed, sofa, dining table, counters, bath fixtures): every view shows some of it (>= 3 % of the frame)
+    if anc and getattr(S, "has_anchor", None) is None:
+        S.has_anchor = any(any(a_ in k for a_ in anc) for k in S.okeys)
+    if anc and S.has_anchor and anchor / n < 0.03: return None, "no-anchor"
+    if strict and any(edge_n[i] and edge_near[i] / edge_n[i] > 0.6 for i in (0, 1)): return None, "edge-occluded"
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.15: return None, "person-fills-frame"
     if max(per.values(), default=0) / n > 0.38: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
@@ -401,7 +405,7 @@ def auto_exposure(sc, base, tmp, target=0.40, lo=-2.0, hi=4.0):
     return ev
 
 
-def make_pool(S, cfg, W, H, n, rng):
+def make_pool(S, cfg, W, H, n, rng, strict=True):
     """n candidate views: first of each trajectory/cluster is a fresh look-at-the-room pose, the rest either small trajectory steps
     (0.3-0.7 m, yaw +-20 deg) or new positions aimed at the previous view's centre hit point (overlap)"""
     lo_f, hi_f = cfg.get("focal_mm", [18, 35]); hlo, hhi = cfg.get("eye_height_m", [1.0, 1.8]); margin = cfg.get("wall_margin_m", 0.45)
@@ -467,7 +471,7 @@ def make_pool(S, cfg, W, H, n, rng):
         if S.edge_dist(pos[:2]) < margin:
             rejects["wall-margin"] = rejects.get("wall-margin", 0) + 1; continue
         M = cam_pose_cv(pos, yaw, pitch); fpx = f / 36.0 * W
-        st, why = view_stats(S, M, fpx, W, H)
+        st, why = view_stats(S, M, fpx, W, H, strict=strict)
         if st is None:
             rejects[why] = rejects.get(why, 0) + 1; continue
         d = M[:3, 2]; h = S.cast(pos, d); hit = np.array(h[0]) if h else pos + d * st["med"]
@@ -493,11 +497,11 @@ def make_pool(S, cfg, W, H, n, rng):
 
 
 def pool_to_json(pool):
-    return [dict(pos=list(map(float, v["pos"])), yaw=v["yaw"], pitch=v["pitch"], f_mm=v["f_mm"], kind=v["kind"], hit=list(map(float, v["hit"])), stats=v["stats"]) for v in pool]
+    return [dict(pos=list(map(float, v["pos"])), yaw=v["yaw"], pitch=v["pitch"], f_mm=v["f_mm"], kind=v["kind"], hit=list(map(float, v["hit"])), stats=v["stats"], relaxed=bool(v.get("relaxed"))) for v in pool]
 
 
 def pool_from_json(js):
-    return [dict(pos=np.array(v["pos"]), yaw=v["yaw"], pitch=v["pitch"], f_mm=v["f_mm"], kind=v["kind"], hit=np.array(v["hit"]), stats=v.get("stats")) for v in js]
+    return [dict(pos=np.array(v["pos"]), yaw=v["yaw"], pitch=v["pitch"], f_mm=v["f_mm"], kind=v["kind"], hit=np.array(v["hit"]), stats=v.get("stats"), relaxed=bool(v.get("relaxed"))) for v in js]
 
 
 # ------------------------------------------------------------------------------------------------ depth / normals / ids
@@ -586,6 +590,13 @@ def run(sc, sidecar, spec, log=print):
     else:
         rng = np.random.RandomState(int(spec["camera_seed"]))
         pool, rej, tries = make_pool(S, ccfg, W, H, int(ccfg.get("pool_factor", 3)) * K, rng)
+        if len(pool) < K:
+            # cramped room: too few views pass; retry with the distance rules relaxed (foreground / near object / edge), still requiring
+            # the room's anchor piece and 5 object classes -- a house with no acceptable view gets fewer (or no) views, not bad ones
+            more, rej2, tries2 = make_pool(S, ccfg, W, H, int(ccfg.get("pool_factor", 3)) * K - len(pool), np.random.RandomState(int(spec["camera_seed"]) + 7919), strict=False)
+            log("DSCAP strict pool %d views; relaxed fallback added %d" % (len(pool), len(more)))
+            for v in more: v["relaxed"] = True
+            pool = pool + more; tries += tries2; rej = dict(rej, relaxed=rej2)
         os.makedirs(os.path.dirname(pp), exist_ok=True)
         json.dump(dict(camera_seed=spec["camera_seed"], width=W, height=H, views=pool_to_json(pool), rejects=rej, tries=tries, room=spec["room"], made_by=spec.get("variant")), open(pp, "w"), indent=1)
         pool_new = True; log("DSCAP pool %d views from %d tries, rejects %s" % (len(pool), tries, rej))
@@ -604,7 +615,7 @@ def run(sc, sidecar, spec, log=print):
     for j in order:
         v = pool[j]
         if len(chosen) >= K: break
-        M = cam_pose_cv(v["pos"], v["yaw"], v["pitch"]); st, why = view_stats(S, M, v["f_mm"] / 36.0 * W, W, H)
+        M = cam_pose_cv(v["pos"], v["yaw"], v["pitch"]); st, why = view_stats(S, M, v["f_mm"] / 36.0 * W, W, H, strict=not v.get("relaxed"))
         (chosen if st is not None else dropped).append((j, why) if st is None else (j, st))
     log("DSCAP views chosen %s dropped %s" % ([j for j, _ in chosen], dropped))
     cam = bpy.data.cameras.new("dscam"); cam.sensor_fit = "HORIZONTAL"; cam.sensor_width = 36.0; cam.clip_start = 0.05; cam.clip_end = 100.0
