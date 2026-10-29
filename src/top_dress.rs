@@ -40,10 +40,10 @@ fn kind(class: &str) -> Option<Kind> {
     const TABLE: &[&str] = &["BowlFactory", "CupFactory", "CupFactory", "PlateFactory", "JarFactory", "BottleFactory", "FruitContainerFactory"];
     // z band: (from, to) metres above the object's bottom (None-like negative from = relative to its top)
     Some(match class {
-        "KitchenSpaceFactory" => Kind { items: KITCHEN, per_m: 1.5, min: 2, max: 7, z: (0.75, 1.05), clear: 0.35, p: 1.0 },
+        // (dressed by crate::dress) "KitchenSpaceFactory" => Kind { items: K...
         "KitchenIslandFactory" => Kind { items: KITCHEN, per_m: 1.2, min: 1, max: 4, z: (0.75, 1.05), clear: 0.35, p: 0.9 },
-        "BathtubFactory" => Kind { items: BATH, per_m: 3.0, min: 2, max: 6, z: (-0.12, 0.01), clear: 0.3, p: 0.9 },
-        "ToiletFactory" => Kind { items: BATH, per_m: 4.0, min: 1, max: 3, z: (-0.08, 0.01), clear: 0.3, p: 0.85 },
+        // (dressed by crate::dress) "BathtubFactory" => Kind { items: BATH, ...
+        // (dressed by crate::dress) "ToiletFactory" => Kind { items: BATH, p...
         "CoffeeTableFactory" => Kind { items: TABLE, per_m: 3.0, min: 1, max: 4, z: (-0.06, 0.01), clear: 0.3, p: 0.8 },
         "SideTableFactory" => Kind { items: TABLE, per_m: 5.0, min: 2, max: 3, z: (-0.06, 0.01), clear: 0.25, p: 0.9 },
         // bedroom / study furniture: desks, dressers and cabinets
@@ -68,6 +68,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
     let mut taken: Vec<Box3> = scene.nodes.iter().filter(|n| ["mess_", "toiletry_", "cushion_", "towel_", "bathmat_"].iter().any(|p| n.name.starts_with(p))).map(|n| n.mesh.bounds()).collect();
     let objs: Vec<(String, Box3)> = state.objs.iter().filter(|(_, o)| o.generator.is_some()).map(|(k, o)| (k.clone(), world_box(o))).collect();
     let mut n_items = 0usize;
+    const POOL: usize = 5;
+    let mut pool: HashMap<&str, Vec<Option<crate::assets::Asset>>> = HashMap::new();
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
         let Some(kd) = kind(&g.class) else { continue };
@@ -76,7 +78,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
         let Some(a) = visuals.get(k) else { continue };
         let (lo, hi) = (o.geom.lo, o.geom.hi);
         let (zb0, zb1) = if kd.z.0 < 0.0 { (hi[2] + kd.z.0, hi[2] + kd.z.1) } else { (lo[2] + kd.z.0, lo[2] + kd.z.1) };
-        let tris: Vec<[[f64; 3]; 3]> = a.parts.iter().flat_map(|p| p.mesh.faces.iter().flat_map(move |f| (1..f.len().saturating_sub(1)).map(move |i| [p.mesh.pos[f[0] as usize], p.mesh.pos[f[i] as usize], p.mesh.pos[f[i + 1] as usize]]))).collect();
+        let tris_all: Vec<[[f64; 3]; 3]> = a.parts.iter().flat_map(|p| p.mesh.faces.iter().flat_map(move |f| (1..f.len().saturating_sub(1)).map(move |i| [p.mesh.pos[f[0] as usize], p.mesh.pos[f[i] as usize], p.mesh.pos[f[i + 1] as usize]]))).collect();
+        let tris = crate::dress::TriGrid::new(tris_all);
         let len = (hi[0] - lo[0]).max(hi[1] - lo[1]);
         let want = ((len * kd.per_m) as usize).clamp(kd.min, kd.max);
         let me = world_box(o);
@@ -86,7 +89,11 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
         for t in 0..want * 12 {
             if placed >= want { break }
             let cls = kd.items[r.randint(0, kd.items.len() as i64) as usize];
-            let item = assets.visual(cls, r.next_u64() % 1_000_000, 0);
+            // a small pool per class and house (building a fresh procedural asset for every try was ~18 s per house)
+            let vi = r.randint(0, POOL as i64) as usize;
+            let _ = r.next_u64();
+            let item = pool.entry(cls).or_insert_with(|| { (0..POOL).map(|_| None).collect::<Vec<Option<crate::assets::Asset>>>() }).get_mut(vi).unwrap()
+                .get_or_insert_with(|| assets.visual(cls, crate::int_hash(&[&seed.to_string(), "top_dress_pool", cls, &vi.to_string()]) % 1_000_000, 0)).clone();
             let (ilo, ihi) = item.bounds();
             // toiletries on tub rims / cisterns are 10-20 cm (BottleFactory makes 30 cm wine bottles)
             let sc = if matches!(g.class.as_str(), "BathtubFactory" | "ToiletFactory") { (r.uniform(0.12, 0.2) / (ihi[2] - ilo[2]).max(0.05)).min(1.0) } else { 1.0 };
@@ -100,7 +107,7 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             let mut tops = vec![];
             let mut blocked = false;
             for pr in probes {
-                let hs = heights(&tris, pr[0], pr[1]);
+                let hs = tris.heights(pr[0], pr[1]);
                 let Some(top) = hs.iter().cloned().filter(|z| *z >= zb0 && *z <= zb1).fold(None, |m: Option<f64>, z| Some(m.map_or(z, |m| m.max(z)))) else { blocked = true; break };
                 if hs.iter().any(|z| *z > top + 0.01 && *z < top + kd.clear.max(ih + 0.03)) { blocked = true; break }
                 // tub rims / cisterns are solid: a surface between the floor and the band means the probe is over the basin (bottles

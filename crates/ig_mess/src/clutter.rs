@@ -113,7 +113,11 @@ fn rz(yaw: f64) -> [[f64; 2]; 2] {
 }
 
 /// class substrings of furniture that carries tabletop-like surfaces for surface clutter
+/// classes whose surfaces belong to a dresser (set by the scene builder): no surface clutter on them
+pub static NO_SURFACE: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
 fn carries_surface(class: &str) -> bool {
+    if NO_SURFACE.read().map_or(false, |v| v.iter().any(|c| c == class)) { return false }
     const YES: [&str; 12] = ["Fireplace", "Desk", "Table", "Stand", "Shelf", "Bookcase", "Cabinet", "Dresser", "Counter", "Sink", "Wardrobe", "Nightstand"];
     const NO: [&str; 6] = ["Lamp", "Plant", "Monitor", "Trinket", "Book", "Light"];
     YES.iter().any(|y| class.contains(y)) && !NO.iter().any(|n| class.contains(n))

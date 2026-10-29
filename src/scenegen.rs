@@ -62,9 +62,29 @@ pub fn build_scene(p: &Params) -> Built {
         spec
     };
     if let Some(spec) = &rules {
-        prog_owned = p.prog.clone();
-        crate::rules::apply(&mut prog_owned, spec);
-        if feat_cfg.on() && !orig_prog { crate::rules::add_feature_scores(&mut prog_owned); }
+        // the rules pass over the 6.6 MB program is ~10 s single-threaded and identical for every house of a config: cached on disk,
+        // keyed by the program, the spec, the feature flag and this binary's build (a rebuild invalidates it). RULES_NOCACHE=1 skips it.
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_string(&p.prog).unwrap_or_default().hash(&mut h);
+            serde_json::to_string(spec).unwrap_or_default().hash(&mut h);
+            (feat_cfg.on() && !orig_prog).hash(&mut h);
+            std::env::current_exe().ok().and_then(|e| std::fs::metadata(e).ok()).and_then(|m| m.modified().ok()).map(|t| format!("{t:?}")).hash(&mut h);
+            h.finish()
+        };
+        let path = std::env::temp_dir().join("indoorgen_rules_cache").join(format!("{key:016x}.json"));
+        let cached = if std::env::var_os("RULES_NOCACHE").is_some() { None } else { std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) };
+        if let Some(v) = cached { prog_owned = v; } else {
+            prog_owned = p.prog.clone();
+            crate::rules::apply(&mut prog_owned, spec);
+            if feat_cfg.on() && !orig_prog { crate::rules::add_feature_scores(&mut prog_owned); }
+            if std::env::var_os("RULES_NOCACHE").is_none() {
+                let _ = std::fs::create_dir_all(path.parent().unwrap());
+                let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+                if std::fs::write(&tmp, serde_json::to_vec(&prog_owned).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, &path); }
+            }
+        }
         prog = &prog_owned;
     }
     indoorgen::furn::solver::set_placeholder_reuse(!orig_prog && cfg.solver.placeholder_reuse);
@@ -85,6 +105,10 @@ pub fn build_scene(p: &Params) -> Built {
         if let Some(spec) = &rules {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
             if !rm.is_empty() { eprintln!("CAPS removed {} objects over the rule maxima: {:?}", rm.len(), &rm[..rm.len().min(12)]); }
+        }
+        if cfg.program.top_dress {
+            let gone = crate::dress::purge(&mut g.state);
+            if !gone.is_empty() { eprintln!("DRESS purged {} solver items from dressed surfaces", gone.len()); }
         }
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
@@ -354,7 +378,7 @@ pub fn build_scene(p: &Params) -> Built {
     }
     // bookcases / bookshelf walls fill some of their bays with rows of books (dense program; sized to each bay on the final meshes)
     if !orig_prog {
-        let rows = crate::shelffill::fill(&mut g.state, &mut visuals, furn_seed, cfg.post.shelf_books);
+        let rows = crate::shelffill::fill(&mut g.state, &mut visuals, furn_seed, cfg.post.shelf_books, if cfg.program.top_dress { Some(&assets) } else { None });
         if !rows.is_empty() { eprintln!("SHELFFILL {} rows of books", rows.len()); }
     }
     lap("snap done");
@@ -539,6 +563,9 @@ pub fn build_scene(p: &Params) -> Built {
         keepout.push(m);
     }
     // mess pass, part 2: clutter (no-op at --mess 0)
+    let dress_on = cfg.program.top_dress && !orig_prog;
+    crate::dress::ACTIVE.store(dress_on, std::sync::atomic::Ordering::Relaxed);
+    *indoorgen::mess::clutter::NO_SURFACE.write().unwrap() = if dress_on { crate::dress::no_clutter_classes() } else { vec![] };
     indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
     let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
     fn qcin<'a>(scene: &'a Scene, g: &'a indoorgen::pipeline::Generated, door_infos: &'a [indoorgen::qc::DoorInfo], cut_keys: &'a [String]) -> indoorgen::qc::QcIn<'a> { indoorgen::qc::QcIn { scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: door_infos, wall_t: g.c.wall_thickness, cut_keys } }
@@ -606,23 +633,24 @@ pub fn build_scene(p: &Params) -> Built {
     }
     if cfg.program.ceiling_decor && !orig_prog {
         let ceiling_z = g.c.wall_height - g.c.wall_thickness / 2.0;
-        for l in crate::ceiling_decor::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness, night) { eprintln!("CEILING {l}"); }
+        for l in crate::ceiling_decor::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness, night) { eprintln!("CEILING {l}"); } lap("ceiling decor");
     }
     if cfg.program.soft_decor && !orig_prog {
-        for l in crate::soft_decor::add(&mut scene, &g.state, &visuals, seed) { eprintln!("SOFT {l}"); }
+        for l in crate::soft_decor::add(&mut scene, &g.state, &visuals, seed) { eprintln!("SOFT {l}"); } lap("soft decor");
     }
     if cfg.program.gallery_wall && !orig_prog {
         let ceiling_z = g.c.wall_height - g.c.wall_thickness / 2.0;
-        for l in crate::gallery_wall::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness) { eprintln!("GALLERY {l}"); }
+        for l in crate::gallery_wall::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness) { eprintln!("GALLERY {l}"); } lap("gallery wall");
     }
     if cfg.program.bath_decor && !orig_prog {
-        for l in crate::bath_decor::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("BATH {l}"); }
+        for l in crate::bath_decor::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("BATH {l}"); } lap("bath decor");
     }
     if cfg.program.top_dress && !orig_prog {
-        for l in crate::top_dress::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("DRESS {l}"); }
+        for l in crate::dress::run(&mut scene, &g.state, &visuals, &g.features, &assets, seed) { eprintln!("DRESS {l}"); } lap("dressers");
+        for l in crate::top_dress::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("DRESS {l}"); } lap("top dress");
     }
     if cfg.program.bed_decor && !orig_prog {
-        for l in crate::bed_decor::add(&mut scene, &g.state, &g.room_polys, &door_zones, &assets, seed) { eprintln!("BEDDECOR {l}"); }
+        for l in crate::bed_decor::add(&mut scene, &g.state, &g.room_polys, &door_zones, &assets, seed) { eprintln!("BEDDECOR {l}"); } lap("bed decor");
     }
     // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
     let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {

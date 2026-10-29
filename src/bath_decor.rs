@@ -127,7 +127,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 log.push(format!("mat at {k}"));
             }
             // toiletries on the back rim of the sink (highest visual surface in the back 20 % of its depth)
-            "StandingSinkFactory" | "BathroomSinkFactory" => {
+            // sinks: dressed by crate::dress::bath (soap dispenser + toothbrush cup)
+            "StandingSinkFactory" | "BathroomSinkFactory" if !crate::dress::ACTIVE.load(std::sync::atomic::Ordering::Relaxed) => {
                 let Some(a) = visuals.get(k) else { continue };
                 let d = hi[0] - lo[0];
                 let rim: Vec<[f64; 3]> = a.parts.iter().flat_map(|p| p.mesh.pos.iter().copied()).filter(|q| q[0] < lo[0] + 0.2 * d && q[2] > lo[2] + 0.5 * (hi[2] - lo[2])).collect();

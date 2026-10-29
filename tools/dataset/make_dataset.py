@@ -141,9 +141,39 @@ def main():
     has_var = '"variation"' in schema
     print("gen2 %s  variation section: %s" % (gen2, has_var))
     idx_path = os.path.join(out, "index.jsonl")
-    for house in cfg["houses"]:
+    # prefetch (PREFETCH=0 turns it off): the next variant's gen2 runs in the background while this one renders, so a house costs
+    # max(gen2, render) instead of their sum. Jobs are listed first so the next job's config and paths are known.
+    jobs = [(house, variant) for house in cfg["houses"] for variant in expand_variants(house)]
+    prefetch = os.environ.get("PREFETCH", "1") != "0" and not a.dry_run
+    pending = {}  # job index -> (Popen, log file, start time)
+
+    def job_paths(house, variant):
         hname = house.get("name") or "%s_%d" % (house["room"].lower(), house["seed"])
-        for variant in expand_variants(house):
+        vdir = os.path.join(out, hname, variant["name"])
+        def opt(k, dflt=None): return house.get(k, d.get(k, dflt))
+        fcfg, notes = factor_config(registry, has_var, variant)
+        gcfg = deep_merge(deep_merge(d.get("gen", {}), house.get("gen", {})), variant.get("gen", {}))
+        gcfg = deep_merge(gcfg, fcfg)
+        gcfg = deep_merge(gcfg, {"house": {"seed": house["seed"], "room": house["room"], "only_target": house.get("only_target", d.get("only_target", False))}, "cameras": {"count": 1}})
+        pc = gcfg.get("people", {}).pop("count_choices", None)
+        if pc: gcfg["people"]["count"] = int(pc[crc(house["seed"], "people_count") % len(pc)])
+        cfgp = os.path.join(tmp, "gen_cfg_%s_%s.json" % (hname, variant["name"]))
+        glb = os.path.join(tmp, "%s_%s.glb" % (hname, variant["name"]))
+        return hname, vdir, opt, fcfg, notes, gcfg, cfgp, glb
+
+    def start_gen(i):
+        if i >= len(jobs) or i in pending: return
+        house, variant = jobs[i]
+        hname, vdir, opt, fcfg, notes, gcfg, cfgp, glb = job_paths(house, variant)
+        if a.only and a.only not in (hname, "%s/%s" % (hname, variant["name"])): return
+        if a.resume and os.path.exists(os.path.join(vdir, "meta.json")): return
+        os.makedirs(vdir, exist_ok=True); json.dump(gcfg, open(cfgp, "w"))
+        lf = open(os.path.join(vdir, "gen2.log"), "w")
+        pending[i] = (subprocess.Popen([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], stdout=lf, stderr=subprocess.STDOUT), lf, time.time())
+
+    for ji, (house, variant) in enumerate(jobs):
+        hname = house.get("name") or "%s_%d" % (house["room"].lower(), house["seed"])
+        if True:
             if a.only and a.only not in (hname, "%s/%s" % (hname, variant["name"])): continue
             vdir = os.path.join(out, hname, variant["name"])
             if a.resume and os.path.exists(os.path.join(vdir, "meta.json")): print("skip", vdir); continue
@@ -160,10 +190,14 @@ def main():
             print("== %s/%s vary=%s config=%s" % (hname, variant["name"], variant["vary"], json.dumps(gcfg)))
             if a.dry_run: continue
             os.makedirs(vdir, exist_ok=True)
-            cfgp = os.path.join(tmp, "gen_cfg.json"); json.dump(gcfg, open(cfgp, "w"))
-            glb = os.path.join(tmp, "%s_%s.glb" % (hname, variant["name"])); side = glb[:-4] + ".json"
+            _, _, _, _, _, _, cfgp, glb = job_paths(house, variant); side = glb[:-4] + ".json"
             t_all = time.time()
-            rc, t_gen = run([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], os.path.join(vdir, "gen2.log"))
+            if ji in pending:
+                pr, lf, t0 = pending.pop(ji); rc = pr.wait(); lf.close(); t_gen = time.time() - t0
+            else:
+                json.dump(gcfg, open(cfgp, "w"))
+                rc, t_gen = run([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], os.path.join(vdir, "gen2.log"))
+            if prefetch: start_gen(ji + 1)
             if rc != 0 or not os.path.exists(side): print("gen2 FAILED rc=%s, see %s/gen2.log" % (rc, vdir)); continue
             sidecar = json.load(open(side))
             slug = house["room"].lower().replace("room", "-room") if house["room"].endswith("Room") and house["room"] != "Room" else house["room"].lower()

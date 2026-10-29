@@ -31,6 +31,7 @@ pub mod bath_decor;
 pub mod top_dress;
 pub mod kitchen_window;
 pub mod table_setting;
+pub mod dress;
 pub mod bed_decor;
 pub mod shelffill;
 pub mod snap;
