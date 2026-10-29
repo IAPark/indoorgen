@@ -30,8 +30,10 @@ if not __import__("os").environ.get("RAW_ROOMS"):
                    (_wd.HexagonWoodTile, 0.3), (_wd.CrossedWoodTile, 0.3), (_cer.Tile, 0.9), (_fab.Rug, 1.1)]
     _kitchen_floor = [(_cer.Tile, 5.0), (_wd.HardwoodFloor, 3.0), (_wd.StaggeredWoodTile, 1.0)]
     _S = _t.Semantics
+    # exposed brick (lofts, Hypersim's living spaces) in some living / dining rooms; BRICK_W overrides the weight
+    _brick_wall = _home_wall + [(_cer.Brick, float(__import__("os").environ.get("BRICK_W", 1.2)))]
     for _k in (_S.LivingRoom, _S.DiningRoom, _S.Bedroom):
-        room_dec.room_wall_fns[_k] = _home_wall
+        room_dec.room_wall_fns[_k] = _brick_wall if _k != _S.Bedroom else _home_wall
         room_dec.room_floor_fns[_k] = _home_floor
     room_dec.room_wall_fns[_S.Kitchen] = _kitchen_wall
     room_dec.room_floor_fns[_S.Kitchen] = _kitchen_floor

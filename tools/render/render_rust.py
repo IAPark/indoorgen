@@ -246,6 +246,9 @@ for o in list(bpy.data.objects):
     if not os.environ.get("RAW_CERAMIC") and spec.get("cls") == "ceramic.Ceramic" and str(specs[nm].get("material", "")).split(":")[0] in ("toilet_ceramic", "tub_ceramic", "sink_ceramic"):
         # sanitary ware is white: infinigen's shader_ceramic draws a random hue at value 0.3-0.6 80 % of the time (mauve / mint toilets)
         spec = {"cls": "shader.ceramic.ceramic.shader_ceramic", "kwargs": {"clear": True, "roughness_max": 0.3}, "seed": spec.get("seed", 0), "whiten": True}
+    if not os.environ.get("RAW_BEDFRAME") and spec.get("cls") in ("metal.HammeredMetal", "metal.GalvanizedMetal") and str(specs[nm].get("material", "")).split(":")[0] == "bed_frame":
+        # hammered / galvanized bumps on a 1.5 m footboard read as crumpled paper; bed frames are powder-coated or brushed
+        spec = dict(spec, cls="metal.BrushedBlackMetal")
     if spec.get("cls") == "wood.Wood" and not os.environ.get("RAW_WOOD"):
         # wood.Wood stretches its grain along object x; on parts thin in x (headboards, cabinet doors, panels facing x) the visible
         # faces showed end grain (marble-like swirls): those get the shader's vertical grain instead
