@@ -40,8 +40,8 @@ fn kind(class: &str) -> Option<Kind> {
     const TABLE: &[&str] = &["BowlFactory", "CupFactory", "CupFactory", "PlateFactory", "JarFactory", "BottleFactory", "FruitContainerFactory"];
     // z band: (from, to) metres above the object's bottom (None-like negative from = relative to its top)
     Some(match class {
-        "KitchenSpaceFactory" => Kind { items: KITCHEN, per_m: 3.0, min: 3, max: 14, z: (0.75, 1.05), clear: 0.35, p: 1.0 },
-        "KitchenIslandFactory" => Kind { items: KITCHEN, per_m: 2.0, min: 2, max: 8, z: (0.75, 1.05), clear: 0.35, p: 0.9 },
+        "KitchenSpaceFactory" => Kind { items: KITCHEN, per_m: 1.5, min: 2, max: 7, z: (0.75, 1.05), clear: 0.35, p: 1.0 },
+        "KitchenIslandFactory" => Kind { items: KITCHEN, per_m: 1.2, min: 1, max: 4, z: (0.75, 1.05), clear: 0.35, p: 0.9 },
         "BathtubFactory" => Kind { items: BATH, per_m: 3.0, min: 2, max: 6, z: (-0.12, 0.01), clear: 0.3, p: 0.9 },
         "ToiletFactory" => Kind { items: BATH, per_m: 4.0, min: 1, max: 3, z: (-0.08, 0.01), clear: 0.3, p: 0.85 },
         "CoffeeTableFactory" => Kind { items: TABLE, per_m: 3.0, min: 1, max: 4, z: (-0.06, 0.01), clear: 0.3, p: 0.8 },

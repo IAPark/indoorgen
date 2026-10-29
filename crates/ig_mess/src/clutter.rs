@@ -34,7 +34,7 @@ const SURFACE: &[Spec] = &[
     Spec { class: "PlateFactory", w: [0.0, 0.5, 3.0, 0.0, 3.0, 0.0], max_xy: 0.28, max_z: 0.05 },
     Spec { class: "BottleFactory", w: [1.0, 2.0, 2.0, 2.0, 2.0, 1.0], max_xy: 0.15, max_z: 0.4 },
     Spec { class: "CanFactory", w: [0.5, 1.0, 2.0, 0.0, 1.0, 1.0], max_xy: 0.15, max_z: 0.25 },
-    Spec { class: "WineglassFactory", w: [0.0, 1.0, 0.5, 0.0, 2.0, 0.0], max_xy: 0.15, max_z: 0.3 },
+    Spec { class: "WineglassFactory", w: [0.0, 1.0, 0.15, 0.0, 1.0, 0.0], max_xy: 0.15, max_z: 0.3 },
     Spec { class: "BookFactory", w: [3.0, 3.0, 0.5, 0.3, 0.5, 3.0], max_xy: 0.45, max_z: 0.1 },
     Spec { class: "BookStackFactory", w: [2.0, 2.0, 0.0, 0.0, 0.0, 2.0], max_xy: 0.45, max_z: 0.4 },
     Spec { class: "FoodBoxFactory", w: [0.0, 0.3, 2.0, 0.0, 0.3, 0.0], max_xy: 0.4, max_z: 0.4 },
@@ -60,7 +60,7 @@ const FLOOR: &[Spec] = &[
 /// floor clutter per m^2 of room floor at level 1, per room type [bedroom, living, kitchen, bath, dining, other]
 const FLOOR_DENSITY: W = [0.45, 0.5, 0.2, 0.5, 0.12, 0.4]; // bedrooms halved: clothes piles dominated bedroom views
 /// surface items per m^2 of surface at level 1
-const SURFACE_DENSITY: W = [7.0, 6.0, 6.0, 7.0, 5.0, 6.0];
+const SURFACE_DENSITY: W = [7.0, 6.0, 3.0, 7.0, 3.0, 6.0]; // kitchen / dining halved: counters carried 30+ cups, glasses and bowls
 
 fn room_slot(rt: &str) -> usize {
     match rt {

@@ -97,6 +97,16 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("DiningRoom", "WallArtFactory", "against_wall", 1, 4, true),
     ("DiningRoom", "LargePlantContainerFactory", "against_wall", 1, 2, false),
     ("Kitchen", "WallArtFactory", "against_wall", 0, 2, false),
+    // counters carried 10+ identical wine glasses (KitchenCounterItem, one generator for all of them); caps sum per room: 3
+    ("Kitchen", "WineglassFactory", "ontop:KitchenSpaceFactory", 0, 2, false),
+    ("Kitchen", "WineglassFactory", "ontop:KitchenIslandFactory", 0, 0, false),
+    ("Kitchen", "WineglassFactory", "on:Storage", 0, 1, false),
+    // ... and 5 pots, 6 jars, 4 cups along one run: a lived-in counter has a few of each
+    ("Kitchen", "PotFactory", "ontop:KitchenSpaceFactory", 0, 2, false),
+    ("Kitchen", "JarFactory", "ontop:KitchenSpaceFactory", 0, 3, false),
+    ("Kitchen", "CupFactory", "ontop:KitchenSpaceFactory", 0, 3, false),
+    ("Kitchen", "PlateFactory", "ontop:KitchenSpaceFactory", 0, 2, false),
+    ("Kitchen", "BowlFactory", "ontop:KitchenSpaceFactory", 0, 2, false),
     // ... which left dining shelves near empty: books and vases instead, preferred
     ("DiningRoom", "BookColumnFactory", "on:Storage", 0, 8, true),
     ("DiningRoom", "VaseFactory", "on:Storage", 0, 3, true),

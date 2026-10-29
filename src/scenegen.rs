@@ -321,6 +321,10 @@ pub fn build_scene(p: &Params) -> Built {
     }
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
     indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);
+    // after the door / drawer states (they address parts by index)
+    if cfg.program.dense && cfg.program.counter_over_windows {
+        for l in crate::kitchen_window::clear_uppers(&g.state, &mut visuals) { eprintln!("KITCHEN {l}"); }
+    }
     // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)
     {
         let mut cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
