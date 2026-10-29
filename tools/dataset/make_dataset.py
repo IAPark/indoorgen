@@ -148,8 +148,8 @@ def main():
             vdir = os.path.join(out, hname, variant["name"])
             if a.resume and os.path.exists(os.path.join(vdir, "meta.json")): print("skip", vdir); continue
             def opt(k, dflt=None): return house.get(k, d.get(k, dflt))
-            K, W, H = int(opt("views", 4)), int(opt("width", 640)), int(opt("height", 480))
-            engine = opt("engine", "cycles"); samples = int(opt("samples", 16))
+            K, W, H = int(opt("views", 4)), int(opt("width", 960)), int(opt("height", 720))
+            engine = opt("engine", "cycles"); samples = int(opt("samples", 48))
             fcfg, notes = factor_config(registry, has_var, variant)
             gcfg = deep_merge(deep_merge(d.get("gen", {}), house.get("gen", {})), variant.get("gen", {}))
             gcfg = deep_merge(gcfg, fcfg)

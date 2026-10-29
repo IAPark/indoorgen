@@ -13,7 +13,7 @@ gen2 is taken from `GEN2`, the dataset config `gen2`, `target/{fast,release}/gen
 
 ## Dataset config
 ```jsonc
-{ "defaults": { "width": 640, "height": 480, "views": 4, "samples": 16, "engine": "cycles",   // or "preview"
+{ "defaults": { "width": 960, "height": 720, "views": 4, "samples": 48, "engine": "cycles",   // or "preview"
                 "depth_format": "npy",                    // npy | exr | both
                 "extras": ["normal", "instance"],         // optional per-view normals / instance ids
                 "gen": { "cloth": {"on": false} },        // partial GenConfig merged into every variant (src/config.rs)
