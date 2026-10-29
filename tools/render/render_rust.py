@@ -283,6 +283,10 @@ for o in list(bpy.data.objects):
         _ext = [max(v[i] for v in _bb) - min(v[i] for v in _bb) for i in range(3)]
         if _ext[0] < 0.5 * max(_ext[1], _ext[2]):
             spec = {"cls": "shader.wood.wood.shader_wood", "kwargs": {"vertical": True}, "seed": spec.get("seed", 0)}
+    if spec.get("cls") == "art.ArtRug" and not os.environ.get("RAW_ART"):
+        # printed-noise rugs (saturated blobs) read as synthetic: most become woven rugs (fabric.Rug: tufted pile, muted hue)
+        import zlib
+        if zlib.crc32(("%s:rug:%s" % (args.seed, o.name.split("#")[0])).encode()) % 100 < 90: spec = dict(spec, cls="fabric.Rug")
     if spec.get("cls") in ("art.Art", "art.DarkArt") and not os.environ.get("RAW_ART"):
         _pm = _photo_art(o)
         if _pm is not None:

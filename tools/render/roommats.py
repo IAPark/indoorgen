@@ -41,7 +41,7 @@ if not __import__("os").environ.get("RAW_ROOMS"):
     # saturated walls); real rooms: plain paint mostly, wainscoting ("half") sometimes, a printed accent wall rarely
     from infinigen.assets.materials import art as _art
     for _k in (_S.LivingRoom, _S.Bedroom, _S.DiningRoom, _S.Office):
-        room_dec.room_wall_alternative_fns[_k] = ("weighted_choice", (6, "none"), (1.5, "half"), (0.25, _art.Art))
+        room_dec.room_wall_alternative_fns[_k] = ("weighted_choice", (6, "none"), (1.5, "half"), (float(__import__("os").environ.get("ART_WALL_W", 0.0)), _art.Art))  # printed art walls read as synthetic (brick gives accent walls now)
 
 
 def _iter_set(items, stage):
