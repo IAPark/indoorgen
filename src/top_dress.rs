@@ -87,7 +87,9 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             let cls = kd.items[r.randint(0, kd.items.len() as i64) as usize];
             let item = assets.visual(cls, r.next_u64() % 1_000_000, 0);
             let (ilo, ihi) = item.bounds();
-            let (iw, id, ih) = (ihi[0] - ilo[0], ihi[1] - ilo[1], ihi[2] - ilo[2]);
+            // toiletries on tub rims / cisterns are 10-20 cm (BottleFactory makes 30 cm wine bottles)
+            let sc = if matches!(g.class.as_str(), "BathtubFactory" | "ToiletFactory") { (r.uniform(0.12, 0.2) / (ihi[2] - ilo[2]).max(0.05)).min(1.0) } else { 1.0 };
+            let (iw, id, ih) = ((ihi[0] - ilo[0]) * sc, (ihi[1] - ilo[1]) * sc, (ihi[2] - ilo[2]) * sc);
             if iw > 0.45 || id > 0.45 || ih > 0.4 || iw <= 0.0 { continue }
             let rad = 0.5 * iw.max(id) + 0.01;
             let x = r.uniform(lo[0] + rad, (hi[0] - rad).max(lo[0] + rad));
@@ -114,8 +116,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             for (pi, p) in item.parts.iter().enumerate() {
                 let mut m: Mesh = p.mesh.clone();
                 for q in m.pos.iter_mut() {
-                    let (dx, dy) = (q[0] - cx, q[1] - cy);
-                    *q = [c[0] + dx * yaw.cos() - dy * yaw.sin(), c[1] + dx * yaw.sin() + dy * yaw.cos(), c[2] + 0.002 + (q[2] - ilo[2])];
+                    let (dx, dy) = ((q[0] - cx) * sc, (q[1] - cy) * sc);
+                    *q = [c[0] + dx * yaw.cos() - dy * yaw.sin(), c[1] + dx * yaw.sin() + dy * yaw.cos(), c[2] + 0.002 + (q[2] - ilo[2]) * sc];
                 }
                 let mi = scene.material(p.mat.clone());
                 scene.add(&format!("dress_{}_{t}#{pi}", k.replace('/', "_")), cls, m, mi);
