@@ -86,6 +86,7 @@ pub fn build_scene(p: &Params) -> Built {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
             if !rm.is_empty() { eprintln!("CAPS removed {} objects over the rule maxima: {:?}", rm.len(), &rm[..rm.len().min(12)]); }
         }
+        for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
     }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
