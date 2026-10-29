@@ -17,6 +17,16 @@ fn fabric(scene: &mut Scene, name: &str, r: &mut Rng) -> usize {
     scene.material(m)
 }
 
+/// world axis-aligned box of a local box under `pose`
+fn wbox(pose: &crate::furn::geom::Pose, l: [f64; 3], h: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for i in 0..8 {
+        let w = pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+        for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+    }
+    (lo, hi)
+}
+
 fn bx(lo: [f64; 3], hi: [f64; 3], pose: &crate::furn::geom::Pose) -> Mesh {
     let mut m = Mesh::cuboid(lo, hi);
     for q in m.pos.iter_mut() { *q = pose.apply(*q) }
@@ -84,9 +94,16 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         log.push(format!("wall shelf over {k}"));
                     }
                     // toilet-paper stand beside the bowl (chrome post + roll), 80 %
-                    if r2.f64() < 0.8 {
-                        let side = if r2.f64() < 0.5 { lo[1] - 0.14 } else { hi[1] + 0.14 };
-                        let x = (lo[0] + hi[0]) / 2.0;
+                    // on a side that is clear of other furniture (it stood inside a bathtub next to the toilet)
+                    let x = (lo[0] + hi[0]) / 2.0;
+                    let free = |side: f64| {
+                        let wb = wbox(&o.pose, [x - 0.1, side - 0.06, lo[2]], [x + 0.1, side + 0.06, lo[2] + 0.62]);
+                        !state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.is_some() && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
+                    };
+                    let mut sides = [lo[1] - 0.14, hi[1] + 0.14];
+                    if r2.f64() < 0.5 { sides.swap(0, 1) }
+                    let side = sides.iter().cloned().find(|s| free(*s));
+                    if let (true, Some(side)) = (r2.f64() < 0.8, side) {
                         let chrome = scene.material(Material::diffuse("tp_chrome", [0.78, 0.78, 0.8], 0.2));
                         let paper = scene.material(Material::diffuse("tp_paper", [0.95, 0.95, 0.93], 0.9));
                         let mut post = ig_kit::geomkit::limb([x, side, lo[2]], [x, side, lo[2] + 0.62], 0.012, 0.012, true);
