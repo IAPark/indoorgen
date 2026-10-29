@@ -799,6 +799,12 @@ impl Factory for Bed {
         p.use_pressure = true;
         p.pressure = pressure;
         p.use_self_collision = s.sheet_folded;
+        // python sets tension 2 but keeps Blender's compression 15 / bending 0.5: the overhang hung as stiff vertical panels; a quilted
+        // comforter is soft in compression and bending (SOFT_DRAPE=0 keeps the old values)
+        if std::env::var("SOFT_DRAPE").map_or(true, |v| v != "0") {
+            p.compression = 2.0;
+            p.bending = std::env::var("DRAPE_BEND").ok().and_then(|v| v.parse().ok()).unwrap_or(0.12);
+        }
         let mut cal = Calib::default();
         cal.press_scale *= std::env::var("SHEETP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.85);
         let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf, &floor_c], &cal);
