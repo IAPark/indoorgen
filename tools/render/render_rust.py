@@ -536,6 +536,74 @@ def _brick_depth(m):
     except Exception:
         m.cycles.displacement_method = "BUMP"
     return True
+# micro-surface: most procedural materials have perfectly smooth normals and one roughness value, so every highlight is clean and
+# even -- the "plastic" look. Materials without surface relief get a fine procedural bump and a +-roughness variation, scaled by family
+# (name of the shader function): fabric weave, plaster orange-peel, wood pores, fine relief on paint / plastic / ceramic. RAW_MICRO opts out.
+_MICRO = [  # (name substrings, bump noise scale (1/m), bump strength, bump distance (m), roughness variation, albedo variation)
+    # room-scale views are 0.5-1 cm per pixel: weave-scale relief (mm) averages away; what reads as "not plastic" is cm-scale unevenness,
+    # broken-up highlights and slight colour mottling
+    (("fabric", "knit", "velvet", "rug", "towel", "cloth", "bedding", "linen", "comforter", "pillow", "curtain", "sofa_fabric", "chair_fabric", "sheet", "mattress", "duvet", "throw", "blanket", "cushion", "bed_panel", "upholster", "headboard"), 70.0, 0.22, 0.003, 0.15, 0.10),
+    (("leather",), 35.0, 0.18, 0.002, 0.20, 0.08),
+    (("plaster", "wall", "paint", "concrete", "stucco"), 22.0, 0.12, 0.002, 0.12, 0.05),
+    (("wood", "plywood", "parquet", "hardwood"), 120.0, 0.10, 0.001, 0.22, 0.06),
+    (("tile", "ceramic", "marble", "stone", "granite", "brick"), 40.0, 0.05, 0.001, 0.15, 0.04),
+    (("plastic", "rubber"), 60.0, 0.05, 0.0008, 0.15, 0.04),
+    (("metal", "steel", "aluminium", "brass", "chrome", "iron", "_leg", "_frame"), 90.0, 0.03, 0.0005, 0.25, 0.03),
+]
+_NOMICRO = ("glass", "mirror", "lamp", "bulb", "emiss", "people", "skin", "hair", "eye", "sky", "water", "window", "photo_art", "screen", "dscam")
+def _micro_surface(m):
+    nm = m.name.lower()
+    if any(x in nm for x in _NOMICRO): return False
+    fam = next((f for f in _MICRO if any(x in nm for x in f[0])), (("",), 50.0, 0.08, 0.001, 0.12, 0.05))
+    if os.environ.get("MICRODBG"): print("MICRODBG", m.name, fam[0][0], [b.inputs["Normal"].is_linked for b in m.node_tree.nodes if b.type == "BSDF_PRINCIPLED"])
+    _, scale, strength, dist, rvar, avar = fam
+    nt = m.node_tree; done = False
+    for b in [n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"]:
+        # matte families: cloth is very rough with a soft sheen and no clear coat (glossy pillows / satin sheets read as plastic);
+        # paint and plaster are matte too
+        if fam[0][0] in ("fabric", "plaster"):
+            _rmin = 0.85 if fam[0][0] == "fabric" else 0.75
+            _ri = b.inputs["Roughness"]
+            if _ri.is_linked:
+                _mx = nt.nodes.new("ShaderNodeMath"); _mx.operation = "MAXIMUM"; _mx.inputs[1].default_value = _rmin
+                nt.links.new(_ri.links[0].from_socket, _mx.inputs[0]); nt.links.new(_mx.outputs[0], _ri)
+            else: _ri.default_value = max(_ri.default_value, _rmin)
+            for _nm, _v in (("Specular IOR Level", 0.25 if fam[0][0] == "fabric" else 0.35), ("Coat Weight", 0.0)):
+                if _nm in b.inputs and not b.inputs[_nm].is_linked: b.inputs[_nm].default_value = min(b.inputs[_nm].default_value, _v)
+            if fam[0][0] == "fabric" and "Sheen Weight" in b.inputs and not b.inputs["Sheen Weight"].is_linked:
+                b.inputs["Sheen Weight"].default_value = max(b.inputs["Sheen Weight"].default_value, 0.5)
+                if "Sheen Roughness" in b.inputs: b.inputs["Sheen Roughness"].default_value = 0.5
+        if b.inputs["Normal"].is_linked: continue
+        if not b.inputs["Transmission Weight"].is_linked and b.inputs["Transmission Weight"].default_value > 0.5: continue
+        tc = nt.nodes.new("ShaderNodeTexCoord")
+        nz = nt.nodes.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = scale; nz.inputs["Detail"].default_value = 6.0; nz.inputs["Roughness"].default_value = 0.6
+        nt.links.new(tc.outputs["Object"], nz.inputs["Vector"])
+        bp = nt.nodes.new("ShaderNodeBump"); bp.inputs["Strength"].default_value = strength; bp.inputs["Distance"].default_value = dist
+        nt.links.new(nz.outputs["Fac"], bp.inputs["Height"]); nt.links.new(bp.outputs["Normal"], b.inputs["Normal"])
+        # roughness: a slower noise varies it +-rvar (relative) so highlights break up instead of reading as one smooth sheen
+        ri = b.inputs["Roughness"]
+        nz2 = nt.nodes.new("ShaderNodeTexNoise"); nz2.inputs["Scale"].default_value = scale * 0.08; nz2.inputs["Detail"].default_value = 3.0
+        nt.links.new(tc.outputs["Object"], nz2.inputs["Vector"])
+        mr = nt.nodes.new("ShaderNodeMapRange"); mr.inputs["To Min"].default_value = 1.0 - rvar; mr.inputs["To Max"].default_value = 1.0 + rvar
+        nt.links.new(nz2.outputs["Fac"], mr.inputs["Value"])
+        mul = nt.nodes.new("ShaderNodeMath"); mul.operation = "MULTIPLY"; mul.use_clamp = True
+        if ri.is_linked: nt.links.new(ri.links[0].from_socket, mul.inputs[0])
+        else: mul.inputs[0].default_value = ri.default_value
+        nt.links.new(mr.outputs["Result"], mul.inputs[1]); nt.links.new(mul.outputs[0], ri)
+        # albedo: slow +-avar mottling (one flat colour over a whole sofa or wall reads as CG)
+        bc = b.inputs["Base Color"]
+        nz3 = nt.nodes.new("ShaderNodeTexNoise"); nz3.inputs["Scale"].default_value = 6.0; nz3.inputs["Detail"].default_value = 4.0
+        nt.links.new(tc.outputs["Object"], nz3.inputs["Vector"])
+        mr3 = nt.nodes.new("ShaderNodeMapRange"); mr3.inputs["To Min"].default_value = 1.0 - avar; mr3.inputs["To Max"].default_value = 1.0 + 0.5 * avar
+        nt.links.new(nz3.outputs["Fac"], mr3.inputs["Value"])
+        mix = nt.nodes.new("ShaderNodeVectorMath"); mix.operation = "SCALE"
+        if bc.is_linked: nt.links.new(bc.links[0].from_socket, mix.inputs[0])
+        else: mix.inputs[0].default_value = tuple(bc.default_value)[:3]
+        nt.links.new(mr3.outputs["Result"], mix.inputs["Scale"]); nt.links.new(mix.outputs["Vector"], bc)
+        done = True
+    return done
+if not os.environ.get("RAW_MICRO"):
+    print("MICROSURFACE", sum(1 for _m in list(bpy.data.materials) if _m.use_nodes and _micro_surface(_m)), "materials")
 if not os.environ.get("RAW_BRICK"):
     print("BRICKDEPTH", sum(1 for _m in bpy.data.materials if _m.use_nodes and _brick_depth(_m)), "brick materials")
 if not os.environ.get("RAW_WOOD"):
@@ -754,6 +822,10 @@ else:
     co.matrix_world = mathutils.Matrix(c["matrix"]); cam.lens = c.get("lens", 15); cam.sensor_width = c.get("sensor_width", 36)
 sc.cycles.film_exposure = args.exposure
 sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
+try:  # keep fine texture through the denoiser (default settings smeared walls / fabric into a waxy look)
+    sc.cycles.denoiser = "OPENIMAGEDENOISE"; sc.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"; sc.cycles.denoising_prefilter = "ACCURATE"
+    sc.cycles.denoising_quality = "HIGH"
+except Exception as _e: print("DENOISE settings", repr(_e))
 sc.render.resolution_x, sc.render.resolution_y = 960, 540
 import os as _os
 sc.render.resolution_percentage = int(_os.environ.get("RES_PCT", "100"))
