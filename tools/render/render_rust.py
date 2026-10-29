@@ -243,6 +243,9 @@ for o in list(bpy.data.objects):
     if nm is None: continue
     spec = specs[nm].get("spec")
     if not spec: continue
+    if not os.environ.get("RAW_CERAMIC") and spec.get("cls") == "ceramic.Ceramic" and str(specs[nm].get("material", "")).split(":")[0] in ("toilet_ceramic", "tub_ceramic", "sink_ceramic"):
+        # sanitary ware is white: infinigen's shader_ceramic draws a random hue at value 0.3-0.6 80 % of the time (mauve / mint toilets)
+        spec = {"cls": "shader.ceramic.ceramic.shader_ceramic", "kwargs": {"clear": True, "roughness_max": 0.3}, "seed": spec.get("seed", 0), "whiten": True}
     if spec.get("cls") == "wood.Wood" and not os.environ.get("RAW_WOOD"):
         # wood.Wood stretches its grain along object x; on parts thin in x (headboards, cabinet doors, panels facing x) the visible
         # faces showed end grain (marble-like swirls): those get the shader's vertical grain instead
@@ -284,6 +287,13 @@ for o in list(bpy.data.objects):
                         kw["shader_func"] = {"ceramic": _cer.shader_ceramic, "marble": _tile.shader_marble}.get(kw.pop("shader"))
                         if kw["shader_func"] is None: kw.pop("shader_func")
                     cache[ck] = _as_material(inst, **kw)
+                if spec.get("whiten") and cache[ck] is not None:  # clear=True gives grey value 0.3-0.6: lift to porcelain white
+                    _m = cache[ck].copy(); _nt = _m.node_tree
+                    for _bs in [n for n in _nt.nodes if n.type == 'BSDF_PRINCIPLED']:
+                        _inp = _bs.inputs['Base Color']
+                        for _l in list(_inp.links): _nt.links.remove(_l)
+                        _inp.default_value = (0.9, 0.9, 0.88, 1.0)
+                    cache[ck] = _m
                 if spec.get("paint") and cache[ck] is not None:  # painted / whitewashed surface: mix the base colour toward paint.rgb by paint.amount
                     _m = cache[ck].copy(); _nt = _m.node_tree
                     for _bs in [n for n in _nt.nodes if n.type == 'BSDF_PRINCIPLED']:
@@ -307,6 +317,24 @@ if not args.clay and not os.environ.get("NO_ROOMMATS"):
         print("ROOMMATS", roommats.apply_room_materials(args.seed, [n['name'] for n in sidecar['nodes']]))
     except Exception as _e:
         import traceback; traceback.print_exc(); print("ROOMMATS FAILED, keeping the Rust spec materials:", repr(_e))
+def _white_ceilings(amount=0.85):
+    """ceilings: infinigen's plaster draws any hue (pink / green ceilings); mix the base colour toward an off-white (texture kept)"""
+    done = set(); n = 0
+    for o in bpy.data.objects:
+        if o.type != "MESH" or not o.name.endswith(".ceiling"): continue
+        for sl in o.material_slots:
+            m = sl.material
+            if m is None or not m.use_nodes or m.name in done: continue
+            done.add(m.name); nt = m.node_tree
+            for b_ in [x for x in nt.nodes if x.type == "BSDF_PRINCIPLED"]:
+                inp = b_.inputs["Base Color"]; mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"
+                mix.inputs["Factor"].default_value = amount; mix.inputs[7].default_value = (0.88, 0.87, 0.84, 1.0)
+                if inp.is_linked: nt.links.new(inp.links[0].from_socket, mix.inputs[6])
+                else: mix.inputs[6].default_value = inp.default_value
+                nt.links.new(mix.outputs[2], inp); n += 1
+    return n
+if not args.clay and not os.environ.get("RAW_CEILING"):
+    print("CEILINGS", _white_ceilings(), "ceiling shaders whitened")
 DS = None
 if args.dataset:
     DS = json.load(open(args.dataset))
@@ -394,6 +422,31 @@ def _knit_uv():
             nt.links.new(tc.outputs["UV"], nd.inputs[0])
         n += 1
     return n
+def _cloth_wrinkles():
+    """bedding (sheet / cover / blanket / throw / pillow / towel materials): the simulated cloth is smooth at render scale; add soft creases
+    (stretched noise ridges, ~4-8 cm) and a fine crumple as a bump on the BSDF normal. Material name match only (no other materials)."""
+    n = 0
+    for m in bpy.data.materials:
+        nm = m.name.lower()
+        if not m.use_nodes or not any(k in nm for k in ("sheet", "cover", "blanket", "throw", "pillow", "towel", "comforter", "duvet")): continue
+        nt = m.node_tree
+        b = next((x for x in nt.nodes if x.type == "BSDF_PRINCIPLED"), None)
+        if b is None or b.inputs["Normal"].is_linked: continue
+        tc = nt.nodes.new("ShaderNodeTexCoord")
+        mp = nt.nodes.new("ShaderNodeMapping"); mp.inputs["Scale"].default_value = (6.0, 18.0, 6.0)
+        nt.links.new(tc.outputs["Object"], mp.inputs["Vector"])
+        ridge = nt.nodes.new("ShaderNodeTexNoise"); ridge.inputs["Scale"].default_value = 1.0; ridge.inputs["Detail"].default_value = 2.0; ridge.inputs["Distortion"].default_value = 0.6
+        nt.links.new(mp.outputs[0], ridge.inputs["Vector"])
+        fine = nt.nodes.new("ShaderNodeTexNoise"); fine.inputs["Scale"].default_value = 60.0; fine.inputs["Detail"].default_value = 4.0
+        nt.links.new(tc.outputs["Object"], fine.inputs["Vector"])
+        mix = nt.nodes.new("ShaderNodeMath"); mix.operation = "MULTIPLY_ADD"; mix.inputs[1].default_value = 0.25
+        nt.links.new(fine.outputs["Fac"], mix.inputs[0]); nt.links.new(ridge.outputs["Fac"], mix.inputs[2])
+        bump = nt.nodes.new("ShaderNodeBump"); bump.inputs["Strength"].default_value = 0.35; bump.inputs["Distance"].default_value = 0.01
+        nt.links.new(mix.outputs[0], bump.inputs["Height"]); nt.links.new(bump.outputs[0], b.inputs["Normal"])
+        n += 1
+    return n
+if not os.environ.get("RAW_CLOTH_SHADE"):
+    print("CLOTHWRINKLE", _cloth_wrinkles(), "bedding materials")
 if not os.environ.get("RAW_KNIT"):
     print("KNITUV", _knit_uv(), "knit materials on UVs")
 if not os.environ.get("RAW_WOOD"):
