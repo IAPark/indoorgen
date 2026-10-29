@@ -866,9 +866,30 @@ impl Factory for Bed {
         let pill_mat = m("pillow", "fabric.FineKnitFabric", 10, [0.9, 0.9, 0.92]);
         let xs: Vec<f64> = (0..10).map(|_| r.uniform(0.1, 0.4) * c.size).collect();
         let ys: Vec<f64> = (0..10).map(|_| r.uniform(-0.3, 0.3) * c.width).collect();
-        for loc in scatter(&bases, &xs, &ys, np, &mut r) {
+        // pillows in a row against the headboard (x small), long side across the bed, slightly overlapping and tilted; the scatter's
+        // draws are kept so the rest of the bed stream is unchanged (NO_PILLOW_ROW=1: infinigen's random scatter)
+        let row = std::env::var_os("NO_PILLOW_ROW").is_none();
+        let scattered = scatter(&bases, &xs, &ys, np, &mut r);
+        let (plo, phi) = pillow.bounds();
+        let (pl, pw) = ((phi[0] - plo[0]).max(phi[1] - plo[1]), (phi[0] - plo[0]).min(phi[1] - plo[1]));
+        let long_x = phi[0] - plo[0] >= phi[1] - plo[1];
+        let usable = c.width * 0.92;
+        let per = (usable / pl).floor().max(1.0) as usize;
+        let n_row = np.min(per.max(1)).min(3);
+        let locs: Vec<[f64; 3]> = if row {
+            (0..n_row).map(|i| {
+                let y = -usable / 2.0 + usable * (i as f64 + 0.5) / n_row as f64;
+                let x = c.size * 0.02 + pw * 0.5 + 0.03;
+                let z = bases.iter().filter_map(|t| face_top_z(t, x, y)).fold(f64::NEG_INFINITY, f64::max);
+                [x, y, if z.is_finite() { z } else { scattered.first().map_or(0.5, |l| l[2]) }]
+            }).collect()
+        } else { scattered.clone() };
+        for (pi, loc) in locs.iter().cloned().enumerate() {
             let mut pm = pillow.clone();
-            let rz = r.uniform(0.0, std::f64::consts::PI);
+            let rz_s = r.uniform(0.0, std::f64::consts::PI);
+            // long side along y: rotate 90 deg if the pillow's long side is x; small per-pillow jitter
+            let rz = if row { (if long_x { std::f64::consts::FRAC_PI_2 } else { 0.0 }) + (rz_s - std::f64::consts::FRAC_PI_2) * 0.04 } else { rz_s };
+            let _ = pi;
             let lowz = pm.bounds().0[2];
             pm.transform(&Mat4::rot_z(rz));
             pm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
