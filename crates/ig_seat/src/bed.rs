@@ -775,7 +775,8 @@ impl Factory for Bed {
         let (wm, sm) = if s.sheet_type == 0 { (r.uniform(1.4, 1.6), r.uniform(0.9, 1.1)) } else { (r.uniform(1.4, 1.8), r.uniform(0.9, 1.2)) };
         let pressure = match s.sheet_type {
             0 => 0.0,
-            1 => r.uniform(1.0, 1.5),
+            // a filled comforter lofts (1.0-1.5 left it as flat as a sheet); PUFF_SCALE overrides
+            1 => r.uniform(1.0, 1.5) * std::env::var("PUFF_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.6),
             _ => r.log_uniform(8.0, 15.0),
         };
         let mut b = Blanket::from_unseeded(kind, &[mw * wm, msz * sm, bc[2], bc[3]]);
