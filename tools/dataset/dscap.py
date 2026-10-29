@@ -305,7 +305,7 @@ ANCHORS = {"bedroom": ("BedFactory",), "living-room": ("SofaFactory", "TVStandFa
            "kitchen": ("KitchenSpaceFactory", "FridgeFactory", "KitchenIslandFactory"), "bathroom": ("BathtubFactory", "ToiletFactory", "BathroomSinkFactory", "StandingSinkFactory")}
 
 
-def view_stats(S, c2w, f, W, H, grid=(16, 12)):
+def view_stats(S, c2w, f, W, H, grid=(24, 18)):
     """frustum probe: None if invalid else dict(med, p10, miss, wall, nobj, objfrac, person); composition: a view must show at least 4
     objects, at most 55 % bare wall / ceiling and no person filling more than 22 % of the frame or nearer than 1.6 m (people up close read as occluders)"""
     o = c2w[:3, 3]
@@ -320,7 +320,7 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
         return None, "over-furniture"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}; pend = 0
     anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
@@ -328,10 +328,11 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
             if h is None: miss += 1; continue
             ds.append(h[3]); kd = S.tri_kind[h[2]]; wall += kd in (1, 3)
             if y >= ys[len(ys) * 2 // 3]:
-                n_low += 1; near_low += (kd == 0 and h[3] < 0.6)
-            if h[3] < 0.8:
+                n_low += 1; near_low += (kd == 0 and h[3] < 1.1)
+            if h[3] < 1.1:
                 ko = S.okeys[S.tri_obj[h[2]]] if kd == 0 else "_wall"
                 near_obj[ko] = near_obj.get(ko, 0) + 1
+            if kd == 0 and h[3] < 1.2 and S.okeys[S.tri_obj[h[2]]].startswith("pendant"): pend += 1
             if kd == 0:
                 k = S.okeys[S.tri_obj[h[2]]]
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
@@ -346,11 +347,13 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n, near_low=near_low / max(n_low, 1))
     if st["p10"] < 0.35: return None, "too-close"
     # a big object 30-60 cm in front of the lens over the lower third reads as an obstruction (sofa cushions filling the frame)
-    if st.get("near_low", 1.0) > 0.35: return None, "foreground-blocked"
-    if max(near_obj.values(), default=0) / n > 0.25: return None, "near-object-fills-frame"  # a door leaf / cabinet side 0.5 m from the lens
+    if st.get("near_low", 1.0) > 0.3: return None, "foreground-blocked"
+    if max(near_obj.values(), default=0) / n > 0.16: return None, "near-object-fills-frame"  # a door leaf / cabinet side 0.5 m from the lens
     if st["med"] < float(np.clip(0.38 * math.sqrt(max(S.floor_area, 1.0)), 1.0, 1.3)): return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
-    if st["wall"] > 0.55: return None, "mostly-wall"
+    if st["wall"] > 0.45: return None, "mostly-wall"
+    if st["ncls"] < 5: return None, "few-classes"
+    if pend: return None, "pendant-at-eye"  # a lamp shade hanging in front of the lens  # a bare wall with one shelf / two chairs is not a view of the room
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.15: return None, "person-fills-frame"
     if max(per.values(), default=0) / n > 0.38: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen

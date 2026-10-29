@@ -46,7 +46,7 @@ def run_variant(a, vdir, glb, house, variant, variation, room, W, H, K, opt, out
         why = None
         if hit.size < 0.8 * d.size: why = "sees-void"
         elif np.percentile(hit, 10) < 0.35: why = "too-close"
-        elif np.median(hit) < 1.3: why = "near-median"
+        elif np.median(hit) < 1.0: why = "near-median"  # dscap scales its 1.3 m limit down to 1.0 m in small rooms (pool views were made with it)
         if why: dropped.append(dict(pool_index=j, reason=why)); continue
         k = len(views); nm = "%03d" % k
         os.replace(os.path.join(vdir, "_pv", "%s_p%03d.png" % (stem, j)), os.path.join(vdir, "images", nm + ".png"))
