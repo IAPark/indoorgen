@@ -487,6 +487,35 @@ if not os.environ.get("RAW_CLOTH_SHADE"):
     print("CLOTHWRINKLE", _cloth_wrinkles(), "bedding materials")
 if not os.environ.get("RAW_KNIT"):
     print("KNITUV", _knit_uv(), "knit materials on UVs")
+def _brick_depth(m):
+    """infinigen shader_brick: height = colour x 0.01-0.04 (+ faint noise) x scale 0.05, i.e. 0.5-2 mm and inverted wherever the mortar is
+    drawn lighter than the bricks. Relief from the brick pattern instead: mortar joints recessed 6-10 mm, a little roughness on each face
+    (bump shading: walls are flat, unsubdivided meshes)"""
+    if "brick" not in m.name.lower(): return False  # hardwood floors use the brick texture for their planks
+    nt = m.node_tree
+    bt = next((n for n in nt.nodes if n.type == "TEX_BRICK"), None)
+    disp = next((n for n in nt.nodes if n.type == "DISPLACEMENT"), None)
+    if bt is None or disp is None: return False
+    import random as _r
+    rr = _r.Random(m.name)
+    face = nt.nodes.new("ShaderNodeMath"); face.operation = "SUBTRACT"; face.inputs[0].default_value = 1.0
+    nt.links.new(bt.outputs["Fac"], face.inputs[1])  # Fac = 1 in the mortar
+    depth = nt.nodes.new("ShaderNodeMath"); depth.operation = "MULTIPLY"; depth.inputs[1].default_value = rr.uniform(0.006, 0.010)
+    nt.links.new(face.outputs[0], depth.inputs[0])
+    nz = nt.nodes.new("ShaderNodeTexNoise"); nz.inputs["Scale"].default_value = rr.uniform(25, 40); nz.inputs["Detail"].default_value = 6
+    if bt.inputs["Vector"].is_linked: nt.links.new(bt.inputs["Vector"].links[0].from_socket, nz.inputs["Vector"])
+    rough = nt.nodes.new("ShaderNodeMath"); rough.operation = "MULTIPLY_ADD"; rough.inputs[1].default_value = 0.0015
+    nt.links.new(nz.outputs["Fac"], rough.inputs[0]); nt.links.new(depth.outputs[0], rough.inputs[2])
+    for l in list(disp.inputs["Height"].links): nt.links.remove(l)
+    nt.links.new(rough.outputs[0], disp.inputs["Height"])
+    disp.inputs["Midlevel"].default_value = 0.0; disp.inputs["Scale"].default_value = 1.0
+    try:
+        m.displacement_method = "BUMP"
+    except Exception:
+        m.cycles.displacement_method = "BUMP"
+    return True
+if not os.environ.get("RAW_BRICK"):
+    print("BRICKDEPTH", sum(1 for _m in bpy.data.materials if _m.use_nodes and _brick_depth(_m)), "brick materials")
 if not os.environ.get("RAW_WOOD"):
     _nw = sum(1 for _m in bpy.data.materials if _m.use_nodes and _wood_depth(_m))
     print("WOODDEPTH", _nw, "wood materials")

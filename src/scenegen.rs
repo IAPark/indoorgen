@@ -319,6 +319,7 @@ pub fn build_scene(p: &Params) -> Built {
         let gone = indoorgen::snap::remove_overlapping(&mut g.state, &visuals, &cut_keys, 0.08, &g.room_polys);
         for (k, o) in &gone { eprintln!("OVERLAP removed {k} (inside {o})"); }
         for k in indoorgen::snap::remove_overlapping_rugs(&mut g.state, &visuals, 0.10) { eprintln!("OVERLAP removed rug {k} (overlaps a larger rug)"); }
+        for (k, what) in indoorgen::snap::rugs_clear_of(&mut g.state, &visuals, &feature_keys, 0.8) { eprintln!("RUG {what} {k} (under a room feature)"); }
     }
     // mess pass, part 1b: states that edit the built assets (bed cloth, cabinet doors / drawers; no-op at --mess 0)
     indoorgen::mess::states::post_visuals(&mut visuals, &g.state, &mess);

@@ -431,6 +431,54 @@ pub fn remove_overlapping_rugs(state: &mut State, visuals: &HashMap<String, crat
     dead
 }
 
+/// Rugs under room features (fireplace hearths, built-in shelves, window seats): the solver never saw the features, so a rug could lie
+/// under the hearth with the fireplace drawn on top of it. Each such rug slides out along the axis of least overlap (at most `max_shift`)
+/// or is removed. Footprints are the world xy boxes of the features' parts within 0.3 m of the floor. Returns (key, "moved" | "removed").
+pub fn rugs_clear_of(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, keys: &[String], max_shift: f64) -> Vec<(String, &'static str)> {
+    let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
+    let mut feet: Vec<([f64; 2], [f64; 2])> = vec![];
+    for k in keys {
+        let (Some(o), Some(a)) = (state.objs.get(k), visuals.get(k)) else { continue };
+        let m = mat_of(&o.pose);
+        let zmin = a.parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| m.apply(*q)[2])).fold(f64::MAX, f64::min);
+        for p in &a.parts {
+            let w: Vec<[f64; 3]> = p.mesh.pos.iter().map(|q| m.apply(*q)).collect();
+            if w.is_empty() || w.iter().map(|q| q[2]).fold(f64::MAX, f64::min) > zmin + 0.3 { continue }
+            let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+            for q in &w { for d in 0..2 { lo[d] = lo[d].min(q[d]); hi[d] = hi[d].max(q[d]); } }
+            feet.push((lo, hi));
+        }
+    }
+    let mut out = vec![];
+    if feet.is_empty() { return out }
+    let rugs: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class.contains("Rug"))).map(|(k, _)| k.clone()).collect();
+    for k in rugs {
+        let Some(a) = visuals.get(&k) else { continue };
+        let m = mat_of(&state.objs[&k].pose);
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in &a.parts { for q in &p.mesh.pos { let w = m.apply(*q); for d in 0..2 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); } } }
+        let mut shift = [0.0f64; 2];
+        let mut dead = false;
+        for _ in 0..4 {
+            let (l, h) = ([lo[0] + shift[0], lo[1] + shift[1]], [hi[0] + shift[0], hi[1] + shift[1]]);
+            let Some((fl, fh)) = feet.iter().find(|(fl, fh)| (0..2).all(|d| l[d].max(fl[d]) < h[d].min(fh[d]) - 0.02)) else { break };
+            // smallest move that clears this footprint
+            let cands = [(0, fh[0] - l[0] + 0.03), (0, fl[0] - h[0] - 0.03), (1, fh[1] - l[1] + 0.03), (1, fl[1] - h[1] - 0.03)];
+            let (d, v) = cands.iter().cloned().min_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap()).unwrap();
+            shift[d] += v;
+            if shift[0].hypot(shift[1]) > max_shift { dead = true; break }
+        }
+        if dead { state.objs.shift_remove(&k); out.push((k, "removed")); continue }
+        if shift != [0.0, 0.0] {
+            let o = state.objs.get_mut(&k).unwrap();
+            let t = o.pose.t;
+            o.pose.set_loc([t[0] + shift[0], t[1] + shift[1], t[2]]);
+            out.push((k, "moved"));
+        }
+    }
+    out
+}
+
 /// Furniture whose VISIBLE mesh pokes through a wall (the solver placed the python placeholder flush with the wall, the real asset is
 /// deeper, e.g. a bed headboard): move it back into its room along the wall normals, at most `max_push`, unless the move makes it
 /// overlap other furniture. Objects resting on it move along. `rooms` = inner room polygons (wall faces). Returns (key, dx, dy).
