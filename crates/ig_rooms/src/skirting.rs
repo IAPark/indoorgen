@@ -98,7 +98,9 @@ pub fn make_split(polys: &[G], z_base: f64, ceiling: bool, rng: &mut Rng, skip_l
             for j in 0..=k {
                 let z = height * (1.0 - j as f64 / k as f64);
                 let t = 1.0 - z / height;
-                prof.push((thickness * profile(&cp, 1.0 - t), z));
+                // python maps the curve's x = 0 to the board's free edge (top of a baseboard, bottom of a crown board) and x = 1 to the
+                // floor / ceiling: thin moulded edge, full thickness at the base. profile(1 - t) had every board upside down
+                prof.push((thickness * profile(&cp, t), z));
             }
             prof.push((0.0, 0.0));
             let z_of = |z: f64| if ceiling { z_base - z } else { z_base + z };

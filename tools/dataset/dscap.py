@@ -46,17 +46,28 @@ def apply_walls(variation):
                 if o.type != "MESH" or not o.name.startswith(room + suffix): continue
                 # keep infinigen's wall alternatives (".alt": wainscoting, art wallpaper) and patterned finishes (tile, brick, wood):
                 # painting them one flat colour removed the grout / brick / panel pattern; only plain plaster is repainted
-                if part == "walls" and ".alt" in o.name: kept.append(o.name); continue
+                # "half" walls (wainscoting): infinigen puts its alternative plaster on the UPPER part and leaves the lower part in the
+                # base finish; painting only the lower part put the room colour below an off-white band -- upside down. Real wainscoting:
+                # off-white satin panelling below, the room colour above. So: .alt (upper) gets the colour, the plaster base under it the
+                # panel finish
+                has_alt = part == "walls" and any(x.name.startswith(room + ".wall.alt") for x in bpy.data.objects)
+                wain = has_alt and ".alt" not in o.name
+                if part == "walls" and ".alt" in o.name and not os.environ.get("RAW_WAINSCOT"):
+                    pass
+                elif part == "walls" and ".alt" in o.name: kept.append(o.name); continue
                 for slot in o.material_slots:
                     m = slot.material
                     if m is None or not m.use_nodes: continue
                     if part == "walls" and "plaster" not in m.name.lower(): kept.append(m.name); continue
                     m = m.copy(); slot.material = m  # materials may be shared between rooms
+                    col = rgb
+                    if wain and not os.environ.get("RAW_WAINSCOT"): col = (0.86, 0.85, 0.81)  # painted panelling (linear)
                     for nd in m.node_tree.nodes:
                         if nd.type != "BSDF_PRINCIPLED": continue
                         s_ = nd.inputs["Base Color"]
                         for l in list(s_.links): m.node_tree.links.remove(l)
-                        s_.default_value = (float(rgb[0]), float(rgb[1]), float(rgb[2]), 1.0); n += 1
+                        s_.default_value = (float(col[0]), float(col[1]), float(col[2]), 1.0); n += 1
+                        if wain and not os.environ.get("RAW_WAINSCOT") and not nd.inputs["Roughness"].is_linked: nd.inputs["Roughness"].default_value = 0.45
             done[part + ":" + room] = n
     done["kept"] = sorted(set(kept))[:20]
     return done
