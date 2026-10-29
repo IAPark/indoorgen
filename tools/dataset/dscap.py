@@ -320,7 +320,7 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
         return None, "over-furniture"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}; pend = 0; edge_n = [0, 0]; edge_near = [0, 0]
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0; near_obj = {}; pend = 0; edge_n = [0, 0]; edge_near = [0, 0]; door = 0
     anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
@@ -339,6 +339,7 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
                 edge_n[side] += 1; edge_near[side] += h[3] < 0.8
             if kd == 0:
                 k = S.okeys[S.tri_obj[h[2]]]
+                if ("Door" in k or k.startswith("door")) and h[3] < 2.0: door += 1
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
                     objs.add(k); nobjpix += 1; per[k] = per.get(k, 0) + 1
                     if k.startswith("person"):
@@ -366,6 +367,9 @@ def view_stats(S, c2w, f, W, H, grid=(24, 18), strict=True):
     if st["nobj"] < 4: return None, "few-objects"
     if st["person"] > 0.15: return None, "person-fills-frame"
     if max(per.values(), default=0) / n > 0.3: return None, "one-object-fills-frame"  # a fridge door is not a view of the kitchen
+    # an open door leaf beside the lens (doorway views of kitchens were half door, half fridge side)
+    if door / n > 0.12: return None, "door-fills-frame"
+    if door / n + max(per.values(), default=0) / n > 0.4: return None, "door-and-object-fill-frame"
     if pnear < 1.6: return None, "person-too-close"  # a face filling the middle of the frame reads as a portrait, not a room
     return st, "ok"
 
