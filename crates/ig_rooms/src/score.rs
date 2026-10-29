@@ -153,7 +153,7 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
     let nonhall: Vec<&&String> = rooms.iter().filter(|k| room_type(k) != "hallway").collect();
     total += nonhall.iter().map(|k| convexity(state, k).ln()).sum::<f64>() * 5.0;
     // main rooms: L-shaped living rooms with a corridor arm (the hallway area term pushes circulation into them) read as hallways
-    total += rooms.iter().filter(|k| matches!(room_type(k), "living-room" | "dining-room" | "bedroom" | "kitchen")).map(|k| convexity(state, k).ln()).sum::<f64>() * 60.0;
+    total += rooms.iter().filter(|k| matches!(room_type(k), "living-room" | "dining-room" | "bedroom" | "kitchen")).map(|k| convexity(state, k).ln()).sum::<f64>() * 120.0;
     total += nonhall.iter().map(|k| (n_verts(state, k) - 6.0).max(0.0).powf(1.5)).sum::<f64>() * 1.0;
 
     // exterior sharing
