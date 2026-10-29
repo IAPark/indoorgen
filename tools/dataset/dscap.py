@@ -320,13 +320,15 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
         return None, "over-furniture"
     gw, gh = grid; ray = rays_cv(W, H, f)
     ys = np.linspace(0, ray.shape[0] - 1, gh).astype(int); xs = np.linspace(0, ray.shape[1] - 1, gw).astype(int)
-    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}
+    ds = []; miss = 0; wall = 0; objs = set(); nobjpix = 0; person = 0; anchor = 0; pnear = 1e9; per = {}; near_low = 0; n_low = 0
     anc = next((v for k, v in ANCHORS.items() if getattr(S, "room", "").startswith(k)), ())
     for y in ys:
         for x in xs:
             d = c2w[:3, :3] @ ray[y, x]; n = np.linalg.norm(d); h = S.cast(o, d / n)
             if h is None: miss += 1; continue
             ds.append(h[3]); kd = S.tri_kind[h[2]]; wall += kd in (1, 3)
+            if y >= ys[len(ys) * 2 // 3]:
+                n_low += 1; near_low += (kd == 0 and h[3] < 0.6)
             if kd == 0:
                 k = S.okeys[S.tri_obj[h[2]]]
                 if not ("Window" in k or "Door" in k or k.startswith("window") or k.startswith("door")):
@@ -338,8 +340,10 @@ def view_stats(S, c2w, f, W, H, grid=(16, 12)):
     if not ds: return None, "all-miss"
     # distinct classes ("131945_BookColumnFactory" -> BookColumnFactory): a bookcase of 60 book columns is one kind of thing, not 60
     ncls = len({re.sub(r"^\d+_", "", k).split(".")[0] for k in objs})
-    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n)
+    st = dict(med=float(np.median(ds)), p10=float(np.percentile(ds, 10)), miss=miss / n, wall=wall / n, nobj=len(objs), ncls=ncls, objfrac=nobjpix / n, person=person / n, anchor=anchor / n, near_low=near_low / max(n_low, 1))
     if st["p10"] < 0.35: return None, "too-close"
+    # a big object 30-60 cm in front of the lens over the lower third reads as an obstruction (sofa cushions filling the frame)
+    if st.get("near_low", 1.0) > 0.35: return None, "foreground-blocked"
     if st["med"] < float(np.clip(0.38 * math.sqrt(max(S.floor_area, 1.0)), 1.0, 1.3)): return None, "near-median"
     if st["miss"] > 0.2: return None, "sees-void"
     if st["wall"] > 0.55: return None, "mostly-wall"
@@ -596,6 +600,11 @@ def run(sc, sidecar, spec, log=print):
     sc.render.use_persistent_data = True
     views, tt = [], dict(trace=0.0, render=0.0)
     base_exposure = sc.cycles.film_exposure; ae_log = []; lights_on_log = []
+    # photographic tone: AgX with medium-high contrast (the base look was flat / washed out); spec "look" overrides
+    try:
+        sc.view_settings.view_transform = "AgX"; sc.view_settings.look = spec.get("look", "AgX - Medium High Contrast")
+    except Exception as e:
+        log("DSCAP look not set: %r" % (e,))
     rem_keys, rem_views = resolve_removal(S, spec.get("remove"), len(chosen), sidecar)
     bvh2 = tri_map2 = None; rem_objs = []
     if rem_keys:
