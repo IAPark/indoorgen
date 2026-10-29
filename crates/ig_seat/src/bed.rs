@@ -232,6 +232,11 @@ pub fn make(fseed: u64) -> Option<Box<dyn Factory>> {
     }
     let mut s = BedSpec::frame(fseed);
     s.sheet_type = v[0] as usize;
+    // the flat "blanket" cover (type 0) settles as a stiff panel in the cloth sim; 70 % of those beds get a comforter instead (own hash,
+    // the ctor stream is unchanged; NO_COMFORTER_BIAS=1 off)
+    if s.sheet_type == 0 && std::env::var_os("NO_COMFORTER_BIAS").is_none() && crate::int_hash(&["bed_comforter", &fseed.to_string()]) % 10 < 7 {
+        s.sheet_type = 1;
+    }
     s.sheet_folded = v[1] > 0.5;
     s.has_cover = v[2] > 0.5;
     Some(Box::new(Bed { s, fseed, frame_only: false }))
@@ -810,8 +815,9 @@ impl Factory for Bed {
 
         // ---- cover (always made: python never reads has_cover); 80 frames, no pressure
         let cc = blanket_ctor(&mut r, false);
-        let cw = mw * r.uniform(1.6, 1.8);
-        let cs = msz * r.uniform(0.3, 0.4);
+        let (cw0, cs0) = (r.uniform(1.6, 1.8), r.uniform(0.3, 0.4));
+        // a bed runner / throw overhangs the sides by ~10-20 cm (infinigen's 1.6-1.8 x width hung stiffly to the floor on both sides)
+        let (cw, cs) = if std::env::var_os("NO_THROW_FIT").is_none() { (mw * (1.0 + (cw0 - 1.6) * 1.2 + 0.12), msz * (cs0 * 0.8)) } else { (mw * cw0, msz * cs0) };
         let cb = Blanket::from_unseeded(BlanketKind::Blanket, &[cw, cs, cc[2], 0.0]);
         let mut cover = cb.create_asset();
         let z_cover = sheet.bounds().1[2];
