@@ -587,13 +587,22 @@ def run(sc, sidecar, spec, log=print):
     for d in ("images", "depth"): os.makedirs(os.path.join(out, d), exist_ok=True)
     extras = spec.get("extras", ["normal", "instance"])
     for d in extras: os.makedirs(os.path.join(out, d), exist_ok=True)
+    # outputs of an earlier run in the same directory would otherwise survive next to this run's cameras / instances.json
+    for d in ["images", "depth", "depth_full", "removed_mask"] + list(extras):
+        dd = os.path.join(out, d)
+        if os.path.isdir(dd):
+            for f in os.listdir(dd): os.remove(os.path.join(dd, f))
     t0 = time.time(); bpy.context.view_layer.update()
     S = Scene(spec["room"], sidecar)
     log("DSCAP scene tris=%d objs=%d floor_area=%.1f m2 bvh+load %.1fs" % (len(S.T), len(S.names), S.floor_area, S.t_load))
     pp = spec["pool_path"]; pool_new = False
+    pool = None
     if os.path.exists(pp):
         pool = pool_from_json(json.load(open(pp))["views"])
-    else:
+        # a pool from an older scene / older rules where no view is valid any more: build a new one
+        if spec.get("variant") in (None, "base") and not any(view_stats(S, cam_pose_cv(v["pos"], v["yaw"], v["pitch"]), v["f_mm"] / 36.0 * W, W, H, strict=not v.get("relaxed"))[0] for v in pool):
+            log("DSCAP stored pool has no valid view for this scene: rebuilding"); pool = None
+    if pool is None:
         rng = np.random.RandomState(int(spec["camera_seed"]))
         pool, rej, tries = make_pool(S, ccfg, W, H, int(ccfg.get("pool_factor", 3)) * K, rng)
         if len(pool) < K:
