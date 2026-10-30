@@ -276,10 +276,11 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             state.touch(&name);
         }
     }
-    // door clearance: a keep-out as wide as the opening, 0.8 m deep (0.5 m at open-plan passages) on each room side of every door and
+    // door clearance: a keep-out as wide as the opening and as deep (0.5 m at open-plan passages) on each room side of every door and
     // entrance; furniture must not stand in it, and its centre is the room's door point for the walkway rule (furn::layout2d)
     for (i, ct) in res.cutters.iter().enumerate() {
-        let depth = match ct.kind { CutKind::Door | CutKind::Entrance => 0.8, CutKind::Passage => 0.5, _ => continue };
+        // (as deep as the leaf swings, the opening's width: 0.8 m left wardrobes and chairs inside the drawn swing)
+        let depth = match ct.kind { CutKind::Door | CutKind::Entrance => (ct.dims[0] + 0.05).max(0.8), CutKind::Passage => 0.5, _ => continue };
         // cutter boxes: dims[0] = opening width along the wall (rot_z), dims[1] = depth through the wall
         let (along, w) = (ct.rot_z, ct.dims[0]);
         let n = [-along.sin(), along.cos()];

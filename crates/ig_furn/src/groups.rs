@@ -864,7 +864,8 @@ fn place_bed(state: &mut State, bed: &str) -> Option<String> {
             let centred = 1.0 - ((t - len / 2.0).abs() / (len / 2.0)).min(1.0);
             // a bed square to the room: walls at an angle only when no straight wall works
             let straight = (n[0].abs() < 1e-3 || n[1].abs() < 1e-3) as i32 as f64;
-            let score = door_d.min(3.0) + side_room * 1.5 + centred * 0.6 + straight * 2.0;
+            // (both slots free weighs most: a bed with one nightstand read as unfinished)
+            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } + centred * 0.6 + straight * 2.0;
             if best.as_ref().map_or(true, |(s, _)| score > *s) {
                 best = Some((score, state.objs[bed].pose));
             }
