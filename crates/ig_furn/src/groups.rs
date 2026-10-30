@@ -958,8 +958,17 @@ fn place_bed(state: &mut State, bed: &str) -> Option<String> {
             // (a headboard against a window read as a bed blocking the window)
             let win = Tag::sem("Window");
             let on_window = state.objs.iter().any(|(k, o)| o.tags.contains(win.clone()) && layout2d::dist(state, k, bed) < 0.25);
+            // (a window the wall layer will lay out on this wall: the headboard prefers another wall)
+            let intent = Tag::sem("WindowIntent");
+            let on_intent = state.objs.iter().any(|(_, o)| o.tags.contains(intent.clone()) && {
+                let q = [o.pose.t[0], o.pose.t[1]];
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l2 = (dx * dx + dy * dy).max(1e-9);
+                let tt = (((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2).clamp(0.0, 1.0);
+                ((a[0] + dx * tt - q[0]).powi(2) + (a[1] + dy * tt - q[1]).powi(2)).sqrt() < 0.4
+            });
             // (no slot at all: a bed wedged into a corner with no nightstand read as unfinished, worse than one by a window)
-            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } - if side_room == 0.0 { 3.0 } else { 0.0 } + centred * 0.6 + straight * 2.0 - if on_window { 2.5 } else { 0.0 };
+            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } - if side_room == 0.0 { 3.0 } else { 0.0 } + centred * 0.6 + straight * 2.0 - if on_window { 2.5 } else { 0.0 } - if on_intent { 2.0 } else { 0.0 };
             if best.as_ref().map_or(true, |(s, _)| score > *s) {
                 best = Some((score, state.objs[bed].pose));
             }
@@ -2162,7 +2171,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
         (lo, hi)
     };
     // floor level: the bottom of the door openings (doors stand on the floor); the ceiling: the room's wall height above it
-    let openings: Vec<String> = state.objs.keys().filter(|k| k.starts_with("door") || k.starts_with("entrance") || k.starts_with("window")).cloned().collect();
+    // (window intents of the wall layer are not openings yet)
+    let openings: Vec<String> = state.objs.iter().filter(|(k, o)| (k.starts_with("door") || k.starts_with("entrance") || k.starts_with("window")) && !o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| k.clone()).collect();
     let floor_z = openings.iter().filter(|k| !k.starts_with("window")).map(|k| wbox(state, k).0[2]).fold(f64::INFINITY, f64::min);
     let floor_z = if floor_z.is_finite() { floor_z.max(0.0) } else { 0.14 };
     let rooms: Vec<String> = state.objs.iter().filter(|(_, o)| layout2d::is_room(o)).map(|(k, _)| k.clone()).collect();

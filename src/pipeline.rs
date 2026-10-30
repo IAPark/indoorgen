@@ -134,7 +134,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         for l in crate::rooms::nudge::merge_useless_hallways(&mut st, &mut graph0) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("PLAN {l}"); } }
     }
     let sol = Solidifier { c: &c, graph: &graph0, level: 0, enable_open: false, passage_prob: opt.passage_prob };
-    let res = sol.solidify(&mut Rng::seeded(seed), &st);
+    let mut res = sol.solidify(&mut Rng::seeded(seed), &st);
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(path) = std::env::var("PLAN_DUMP") {
         // floor plan only (room polygons + door / window / entrance cutters), then exit: no furniture
@@ -144,7 +144,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         std::fs::write(&path, serde_json::json!({"seed": seed, "wall_thickness": c.wall_thickness, "wall_height": c.wall_height, "rooms": rooms, "cutters": cut}).to_string()).unwrap();
         std::process::exit(0);
     }
-    let shells = shell::build_shells(&c, &st, &res.cutters);
+    let mut shells = shell::build_shells(&c, &st, &res.cutters);
     timings.push(("rooms".into(), t.elapsed().as_secs_f64()));
 
     // --- solver state ---
@@ -302,6 +302,28 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             state.touch(&name);
         }
     }
+    // the wall layer (on; WALL_LAYER=0 turns it off; living rooms and bedrooms): their windows are held back here and laid out after the furniture,
+    // with the pictures and the pieces backed against the walls (wall_layer_windows); patio doors and rooms with a window seat keep
+    // theirs. The plan keeps which walls are exterior and the doors.
+    let wall_layer = std::env::var("WALL_LAYER").map_or(true, |v| v != "0");
+    let mut deferred: Vec<Cutter> = vec![];
+    if wall_layer {
+        let seat_rooms: std::collections::HashSet<String> = features.iter().filter(|f| f.class == "WindowSeatFeature").map(|f| f.room.clone()).collect();
+        let pilot = |r: &str| matches!(crate::rooms::state::room_type(r), "living-room" | "bedroom");
+        let mut keep = vec![];
+        for ct in std::mem::take(&mut res.cutters) {
+            if ct.kind == CutKind::Window && ct.rooms.len() == 1 && pilot(&ct.rooms[0]) && !seat_rooms.contains(&ct.rooms[0]) { deferred.push(ct) } else { keep.push(ct) }
+        }
+        res.cutters = keep;
+        // their solver objects stay as window intents: nothing collides with them (NoCollision), but the furniture passes can see a
+        // window will come on that wall (a headboard there is avoided); the wall layer removes them when it lays the windows out
+        let intents: Vec<String> = state.objs.iter().filter(|(_, o)| o.tags.contains(Tag::sem("Window")) && deferred.iter().any(|ct| (0..3).all(|d| (o.pose.t[d] - ct.loc[d]).abs() < 1e-6))).map(|(k, _)| k.clone()).collect();
+        for k in intents {
+            let o = state.objs.get_mut(&k).unwrap();
+            o.tags = TagSet::from([Tag::sem("WindowIntent"), Tag::sem("NoCollision"), Tag::obj(&k)]);
+            state.touch(&k);
+        }
+    }
     // door clearance: a keep-out as wide as the opening and as deep (0.5 m at open-plan passages) on each room side of every door and
     // entrance; furniture must not stand in it, and its centre is the room's door point for the walkway rule (furn::layout2d)
     for (i, ct) in res.cutters.iter().enumerate() {
@@ -357,6 +379,24 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         timings.push(("solve_large".into(), tl));
         timings.push(("solve_medium".into(), tm));
         timings.push(("solve_small".into(), ts));
+    }
+    if wall_layer && !deferred.is_empty() {
+        let intents: Vec<String> = state.objs.iter().filter(|(_, o)| o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| k.clone()).collect();
+        for k in intents { state.objs.shift_remove(&k); }
+        for (i, ct) in wall_layer_windows(&c, &mut state, &room_polys, &res.cutters, &deferred).into_iter().enumerate() {
+            let name = format!("window.{:03}", 500 + i);
+            let h = [ct.dims[0] / 2., ct.dims[1] / 2., ct.dims[2] / 2.];
+            let mut g = crate::furn::geom::cuboid_py([-h[0], -h[1], -h[2]], [h[0], h[1], h[2]], 0, 0);
+            for t in g.tris.iter_mut() { t.tags = 0; }
+            let tags = TagSet::from([Tag::sem("Window"), Tag::sem("Cutter"), Tag::obj(&name)]);
+            let mut o = ObjState::new(Arc::new(g), Pose::from_euler(ct.loc, [0., 0., ct.rot_z]), tags);
+            o.relations = ct.rooms.iter().map(|r| RelState { relation: Relation::CutFrom, target: r.clone(), child_plane: 0, parent_plane: 0 }).collect();
+            state.objs.insert(name.clone(), o);
+            state.touch(&name);
+            res.cutters.push(ct);
+        }
+        // the shells again, with the windows where they now are
+        shells = shell::build_shells(&c, &st, &res.cutters);
     }
     Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features, complaints }
 }
@@ -561,4 +601,130 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
     let keys: Vec<String> = state.objs.keys().cloned().collect();
     for k in keys { state.touch(&k); }
     (tot, complaints)
+}
+
+
+/// The wall layer's windows: each held-back window slides along its own exterior wall (same width, height and sill) to
+/// the spot that keeps it clear of what stands against that wall -- tall pieces (wardrobes, bookcases, the TV, built-ins, kitchen
+/// units) weigh most, a headboard a little, low pieces (a sofa's back, a bench) not at all -- never over another window, door or the
+/// entrance, and near where the plan put it when that spot is free. Pictures and mirrors a window now covers come off the wall.
+fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(String, crate::shp::G)], fixed: &[Cutter], deferred: &[Cutter]) -> Vec<Cutter> {
+    let mut out: Vec<Cutter> = vec![];
+    let wb = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
+        let o = &st.objs[k];
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    for ct in deferred {
+        let room = &ct.rooms[0];
+        let Some((_, poly)) = room_polys.iter().find(|(n, _)| n == room) else { out.push(ct.clone()); continue };
+        // the room's exterior walls: outline edges whose outside (0.3 m out) lies in no room; the plan's own wall first
+        let ring = crate::shp::exterior(poly);
+        let p = [ct.loc[0], ct.loc[1]];
+        let inside_any = |q: [f64; 2]| room_polys.iter().any(|(_, g)| crate::shp::contains_pt(g, q));
+        let mut walls: Vec<(f64, [f64; 2], [f64; 2])> = vec![];
+        for w in ring.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l = (dx * dx + dy * dy).sqrt();
+            if l < 1.0 { continue }
+            let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            let nrm = [-dy / l, dx / l];
+            let outside = [m[0] + nrm[0] * 0.3, m[1] + nrm[1] * 0.3];
+            let outside2 = [m[0] - nrm[0] * 0.3, m[1] - nrm[1] * 0.3];
+            if inside_any(outside) && inside_any(outside2) { continue }
+            let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (l * l)).clamp(0.0, 1.0);
+            let d = ((a[0] + dx * t - p[0]).powi(2) + (a[1] + dy * t - p[1]).powi(2)).sqrt();
+            walls.push((d, a, b));
+        }
+        walls.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        let w0 = ct.dims[0];
+        let sill = ct.loc[2] - ct.dims[2] / 2.0;
+        let margin = c.wall_thickness / 2.0 + 0.35;
+        // best over walls x widths x positions: penalty for what stands against the wall, a little for narrowing the window and for
+        // leaving its own wall / spot
+        let mut best: Option<(f64, Cutter)> = None;
+        let flip = walls.first().map_or(false, |(_, a, b)| ((b[1] - a[1]).atan2(b[0] - a[0]) - ct.rot_z).cos() < 0.0);
+        for (wi, (_, a, b)) in walls.iter().enumerate() {
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+            let along = |q: [f64; 2]| (q[0] - a[0]) * u[0] + (q[1] - a[1]) * u[1];
+            let off = |q: [f64; 2]| ((q[0] - a[0]) * -u[1] + (q[1] - a[1]) * u[0]).abs();
+            let mut spans: Vec<(f64, f64, f64)> = vec![];
+            for (k, o) in &state.objs {
+                let Some(g) = &o.generator else { continue };
+                if crate::furn::layout2d::room_of(state, k).as_deref() != Some(room.as_str()) { continue }
+                let (lo, hi) = wb(state, k);
+                let corners = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]];
+                if corners.iter().map(|q| off(*q)).fold(f64::INFINITY, f64::min) > 0.6 { continue }
+                let s0 = corners.iter().map(|q| along(*q)).fold(f64::INFINITY, f64::min);
+                let s1 = corners.iter().map(|q| along(*q)).fold(f64::NEG_INFINITY, f64::max);
+                let tall = hi[2] > sill + 0.02;
+                let weight = match g.class.as_str() {
+                    "WallArtFactory" | "MirrorFactory" | "RugFactory" | "CeilingLightFactory" => 0.0,
+                    "BedFactory" => 2.0,
+                    "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "WardrobeFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" | "FridgeFactory" => 10.0,
+                    _ if tall => 5.0,
+                    _ => 0.0,
+                };
+                if weight > 0.0 { spans.push((s0, s1, weight)); }
+            }
+            let mut taken: Vec<(f64, f64)> = vec![];
+            for o in fixed.iter().chain(out.iter()) {
+                if off([o.loc[0], o.loc[1]]) > 0.3 { continue }
+                let s = along([o.loc[0], o.loc[1]]);
+                if s < -0.3 || s > len + 0.3 { continue }
+                taken.push((s - o.dims[0] / 2.0 - 0.2, s + o.dims[0] / 2.0 + 0.2));
+            }
+            let t0 = along(p);
+            let mut w = w0;
+            while w >= (0.9f64).max(w0 * 0.5) - 1e-9 {
+                if len >= w + 2.0 * margin {
+                    let steps = ((len - 2.0 * margin - w) / 0.1).floor() as usize;
+                    for i in 0..=steps {
+                        let t = margin + w / 2.0 + i as f64 * 0.1;
+                        let (x0, x1) = (t - w / 2.0, t + w / 2.0);
+                        if taken.iter().any(|(a0, a1)| x0 < *a1 && *a0 < x1) { continue }
+                        let pen: f64 = spans.iter().map(|(s0, s1, wt)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
+                        let score = -pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 };
+                        if best.as_ref().map_or(true, |bb| score > bb.0) {
+                            let mut nc = ct.clone();
+                            let q = [a[0] + u[0] * t, a[1] + u[1] * t];
+                            nc.loc = [q[0], q[1], ct.loc[2]];
+                            nc.dims[0] = w;
+                            // its rotation follows the wall's direction, turned like the plan's window is against its own wall (the
+                            // outline runs one way round, so the same turn faces every exterior wall's window outward)
+                            nc.rot_z = if wi == 0 { ct.rot_z } else { u[1].atan2(u[0]) + if flip { std::f64::consts::PI } else { 0.0 } };
+                            best = Some((score, nc));
+                        }
+                    }
+                }
+                w -= 0.1;
+            }
+        }
+        let Some((score, nc)) = best else { continue };
+        if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window {w0:.2} m -> {:.2} m at ({:.2}, {:.2}) (score {score:.2})", nc.dims[0], nc.loc[0], nc.loc[1]); }
+        out.push(nc);
+    }
+    // pictures and mirrors a window now covers come off the wall
+    let wins: Vec<([f64; 2], [f64; 2], f64, f64)> = out.iter().map(|ct| {
+        let (cz, sz) = (ct.rot_z.cos(), ct.rot_z.sin());
+        let hw = ct.dims[0] / 2.0 + 0.05;
+        let ext = [cz * hw, sz * hw];
+        ([ct.loc[0] - ext[0].abs() - 0.15, ct.loc[1] - ext[1].abs() - 0.15], [ct.loc[0] + ext[0].abs() + 0.15, ct.loc[1] + ext[1].abs() + 0.15], ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0)
+    }).collect();
+    let hung: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "WallArtFactory" | "MirrorFactory"))).map(|(k, _)| k.clone()).collect();
+    for k in hung {
+        let (lo, hi) = wb(state, &k);
+        if wins.iter().any(|(wl, wh, z0, z1)| lo[0] < wh[0] && wl[0] < hi[0] && lo[1] < wh[1] && wl[1] < hi[1] && lo[2] < *z1 && *z0 < hi[2]) {
+            crate::furn::layout2d::remove_tree(state, &k);
+            if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER removed {k} (a window there now)"); }
+        }
+    }
+    out
 }
