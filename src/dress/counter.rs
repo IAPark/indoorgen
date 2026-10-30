@@ -65,7 +65,13 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             }
         }
         let sink = along("SinkFactory");
-        let stove = along("OvenFactory");
+        // a range stands in line with the runs (at an end, or between two): the one beside this run's end within 0.9 m counts, at
+        // that end (the crock and the bottles go on the counter next to it)
+        let stove = along("OvenFactory").or_else(|| {
+            state.objs.values().filter(|x| x.generator.as_ref().map_or(false, |g| g.class == "OvenFactory")).map(|x| to_local(world_c(x)))
+                .filter(|l| l[va] > v0 - 0.3 && l[va] < v1 + 0.3 && (l[ua] < u0 && l[ua] > u0 - 0.9 || l[ua] > u1 && l[ua] < u1 + 0.9))
+                .map(|l| l[ua].clamp(u0 - 0.3, u1 + 0.3)).next()
+        });
         let mut occ = Occ::from_scene(scene, &[format!("{k}#")]);
         // planned slots: (u, v from the back, asset, scale, class)
         let mut plan: Vec<(f64, f64, crate::assets::Asset, f64, &'static str)> = vec![];
@@ -103,6 +109,14 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             plan.push((clampu(end + inward * (0.22 + j as f64 * 0.13)), 0.08, jar.clone(), (hh / jh).min(1.2), "JarFactory"));
         }
         if r.f64() < 0.4 { plan.push((clampu((u0 + u1) / 2.0 + r.uniform(-0.3, 0.3)), depth * 0.55, assets.visual("FruitContainerFactory", r.next_u64() % 1_000_000, 0), 1.0, "FruitContainerFactory")); }
+        // a long run (2.4 m and up) holds more: a microwave at the back half the time, and a bowl or a box of food
+        if u1 - u0 >= 2.4 {
+            let mid = |r: &mut Rng| clampu((u0 + u1) / 2.0 + r.uniform(-0.5, 0.5));
+            if r.f64() < 0.5 { let u = mid(&mut r); plan.push((u, 0.05, assets.visual("MicrowaveFactory", r.next_u64() % 1_000_000, 0), 1.0, "MicrowaveFactory")); }
+            let cls = ["BowlFactory", "FoodBoxFactory"][r.choice_idx(2)];
+            let u = mid(&mut r);
+            plan.push((u, depth * 0.5, assets.visual(cls, r.next_u64() % 1_000_000, 0), 1.0, cls));
+        }
         let mut n = 0;
         for (i, (u, vb_off, item, sc, cls)) in plan.iter().enumerate() {
             let (dx, dy, dz) = dims(item);
