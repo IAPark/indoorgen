@@ -136,6 +136,49 @@ def analyse(d):
         out[rk] = {"type": rt, "flags": fl, "walk": walk, "n": len(items)}
     return out, floor
 
+def symbol(ax, o, f, fx, fy):
+    """architectural plan symbols inside a footprint, in its own frame (u from the back toward the front, v across): pillows on a
+    bed's head end, a sofa's backrest and arms, a toilet's tank and bowl, a tub's basin, burners on a range"""
+    from matplotlib.patches import Ellipse, Circle
+    sx, sy = -fy, fx
+    pts = list(f.convex_hull.exterior.coords)
+    us = [x * fx + y * fy for x, y in pts]; vs = [x * sx + y * sy for x, y in pts]
+    u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+    D, W = u1 - u0, v1 - v0
+    P = lambda u, v: (fx * (u0 + u) + sx * (v0 + v), fy * (u0 + u) + sy * (v0 + v))
+    box_ = lambda a, b, c, e, **k: ax.add_patch(MPoly([P(a, c), P(b, c), P(b, e), P(a, e)], closed=True, zorder=4.5, **k))
+    ang = math.degrees(math.atan2(fy, fx))
+    cl = o["class"]
+    if cl == "BedFactory":
+        n = 2 if W > 1.2 else 1
+        pw = (W - 0.15 * (n + 1)) / n
+        for i in range(n):
+            a = 0.15 + i * (pw + 0.15)
+            box_(0.08, 0.08 + min(0.4, D * 0.2), a, a + pw, fc="#e9eef7", ec="#333", lw=0.4)
+        ax.plot(*zip(P(D * 0.36, 0.0), P(D * 0.36, W)), color="#333", lw=0.5, zorder=4.5)  # duvet fold
+    elif cl in ("SofaFactory", "ArmChairFactory"):
+        bk, arm = min(0.22, D * 0.25), min(0.18, W * 0.15)
+        box_(0, bk, 0, W, fc="#a8683a", ec="#333", lw=0.4)
+        box_(bk, D, 0, arm, fc="#a8683a", ec="#333", lw=0.4)
+        box_(bk, D, W - arm, W, fc="#a8683a", ec="#333", lw=0.4)
+        seats = max(1, round((W - 2 * arm) / 0.7)) if cl == "SofaFactory" else 1
+        for i in range(1, seats):
+            v = arm + (W - 2 * arm) * i / seats
+            ax.plot(*zip(P(bk, v), P(D, v)), color="#333", lw=0.4, zorder=4.5)
+    elif cl == "ToiletFactory":
+        tk = min(0.2, D * 0.3)
+        box_(0, tk, W * 0.05, W * 0.95, fc="#e8f4f4", ec="#333", lw=0.4)
+        ax.add_patch(Ellipse(P(tk + (D - tk) * 0.5, W / 2), (D - tk) * 0.95, W * 0.8, angle=ang, fc="#e8f4f4", ec="#333", lw=0.4, zorder=4.5))
+    elif cl == "BathtubFactory":
+        ax.add_patch(Ellipse(P(D / 2, W / 2), D * 0.8, W * 0.86, angle=ang, fc="#d6eff2", ec="#333", lw=0.4, zorder=4.5))
+    elif cl == "StandingSinkFactory":
+        ax.add_patch(Ellipse(P(D * 0.55, W / 2), D * 0.6, W * 0.7, angle=ang, fc="#e8f4f4", ec="#333", lw=0.4, zorder=4.5))
+    elif cl == "OvenFactory":
+        for a in (0.3, 0.7):
+            for b in (0.3, 0.7):
+                ax.add_patch(Circle(P(D * a, W * b), min(D, W) * 0.13, fill=False, ec="#222", lw=0.5, zorder=4.5))
+
+
 def draw(d, ax, small=False):
     draw_plan(d, ax, small=small)
     res, floor = analyse(d)
@@ -161,6 +204,7 @@ def draw(d, ax, small=False):
                     sc = -(mx * fx + my * fy) + L * 0.01   # the back edge (opposite the front)
                     if best is None or sc > best[0]: best = (sc, (x1, x2), (y1, y2))
                 if best: ax.plot(best[1], best[2], color="#111", lw=2.2, solid_capstyle="butt", zorder=5)
+                symbol(ax, o, f, fx, fy)
                 # pieces that face something (seats, beds, TV stands, desks): a pointer outside the front edge, the way they face
                 if re.search("Sofa|Chair|^Bed|TVStand|Desk|Toilet", o["class"]):
                     hx = [(x, y) for x, y in hull]

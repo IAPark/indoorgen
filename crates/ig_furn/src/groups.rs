@@ -145,9 +145,29 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
         let rp = state.objs[&run].pose;
         let mut ends_used: Vec<f64> = vec![];
         // the range (oven) before the dishwasher: a kitchen needs a stove more than a dishwasher
+        // the appliances leave the room while they are placed in turn: the solver's oven at a run end otherwise keeps the fridge off it
+        let apps: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "FridgeFactory" | "OvenFactory" | "DishwasherFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        let mut parked: Vec<(String, Vec<(String, ObjState)>)> = vec![];
+        for a in &apps {
+            let mut tree = vec![(a.clone(), state.objs[a].clone())];
+            for (c, co) in state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| &r.target == a)) { tree.push((c.clone(), co.clone())); }
+            for (k, _) in &tree { state.objs.shift_remove(k); }
+            parked.push((a.clone(), tree));
+        }
+        // with the appliances out, the run first fills its wall; the fridge and range then take their width from its ends
+        if !apps.is_empty() {
+            let _ = super::solver::fit_builtins(ctx, state, Some(room.as_str()));
+        }
+        let (clo, chi) = lohi(state, &run);
+        let rp = state.objs[&run].pose;
         for cls in ["FridgeFactory", "OvenFactory", "DishwasherFactory"] {
-            let pieces: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == cls && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            let pieces: Vec<String> = parked.iter().filter(|(_, t)| class_of(&t[0].1) == cls).map(|(k, _)| k.clone()).collect();
             for p in pieces {
+                // back in, where the solver had it, then moved to the run
+                if let Some(i) = parked.iter().position(|(k, _)| *k == p) {
+                    let (_, tree) = parked.remove(i);
+                    for (k, o) in tree { state.objs.insert(k.clone(), o); state.touch(&k); }
+                }
                 let (lo, hi) = lohi(state, &p);
                 let mut done = false;
                 for s in [1.0f64, -1.0] {
@@ -176,7 +196,7 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
                         let base = state.objs[&run].clone();
                         let Some(cs) = base.generator.as_ref().and_then(super::solver::cur_size) else { break };
                         // the run may shrink to 0.8 m to take the fridge / range in: one continuous run beats a counter with appliances apart
-                        if cs[0] - pw < 0.8 { continue }
+                        if cs[0] - pw < 1.5 { continue }
                         let saved_piece = state.objs[&p].clone();
                         if !super::solver::set_width(ctx, state, &run, &base, cs[0] - pw, s) {
                             *state.objs.get_mut(&run).unwrap() = base;
@@ -203,8 +223,11 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
                 if !done && (cls == "OvenFactory" || cls == "FridgeFactory") {
                     let run2 = run.clone();
                     if place_on_wall(state, &p, &room, &move |st: &State, c: [f64; 2], _t, _len, _n| {
-                        let rc = st.objs[&run2].pose.t;
-                        -((c[0] - rc[0]).powi(2) + (c[1] - rc[1]).powi(2)).sqrt()
+                        // nearest the run's ends: round the corner from it, not across the room
+                        let (l, h) = lohi(st, &run2);
+                        let rp = st.objs[&run2].pose;
+                        [rp.apply([(l[0] + h[0]) / 2.0, l[1], 0.0]), rp.apply([(l[0] + h[0]) / 2.0, h[1], 0.0])].iter()
+                            .map(|e| ((c[0] - e[0]).powi(2) + (c[1] - e[1]).powi(2)).sqrt()).fold(f64::INFINITY, f64::min) * -1.0
                     }) {
                         log.push(format!("{cls} {p}: on the wall nearest {run}"));
                         done = true;
@@ -214,6 +237,10 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
                     // a free-standing oven that cannot join the run reads as a stove dropped in the middle of the kitchen
                     layout2d::remove_tree(state, &p);
                     log.push(format!("{cls} {p}: no free end at {run}, removed"));
+                } else if !done && !free_ok(state, &p) {
+                    // back where the solver had it but something placed meanwhile stands there
+                    layout2d::remove_tree(state, &p);
+                    log.push(format!("{cls} {p}: no free end at {run} and its spot taken, removed"));
                 } else if !done {
                     log.push(format!("{cls} {p}: no free end at {run}"));
                 }
@@ -573,7 +600,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 }
                 let Some((dist, hp, m)) = hit else { continue };
                 let view = dist - sdep - (thi[0] - tlo[0]);
-                if !(1.8..=4.2).contains(&view) { continue }
+                // narrow living rooms (2.6 m) seat the sofa across from the TV at 1.3 m
+                if !(1.3..=4.2).contains(&view) { continue }
                 if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
                 if !try_place(state, &tv, m[1].atan2(m[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [hp[0] + m[0] * 0.003, hp[1] + m[1] * 0.003, 0.0]) {
                     state.set_pose(&tv, tv_start); state.touch(&tv);
@@ -581,7 +609,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 }
                 // the group in the room, not along its edge: midpoint of sofa and TV near the floor's centre
                 let mid = [(base[0] + hp[0]) / 2.0, (base[1] + hp[1]) / 2.0];
-                let score = -(view - 2.6).abs() - (tt - len / 2.0).abs() / len - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.6;
+                let score = -(view - 2.6).abs() - if view < 1.8 { 1.5 } else { 0.0 } - (tt - len / 2.0).abs() / len - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.6;
                 if pair.as_ref().map_or(true, |p| score > p.0) { pair = Some((score, state.objs[&sofa].pose, state.objs[&tv].pose, view)); }
                 state.set_pose(&tv, tv_start); state.touch(&tv);
             }
@@ -655,6 +683,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let sf = [sy.cos(), sy.sin()];
         let sfront = sp.apply([shi[0], (slo[1] + shi[1]) / 2.0, 0.0]);
         let mut coffee_c: Option<[f64; 2]> = None;
+        let mut coffee_hw = 0.5f64;
         for (k, o) in lifted.iter().filter(|(_, o)| class_of(o) == "CoffeeTableFactory").chain(lifted.iter().filter(|(_, o)| class_of(o) == "ArmChairFactory")) {
             state.objs.insert(k.clone(), o.clone());
             state.touch(k);
@@ -667,6 +696,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     if try_place(state, k, sy, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], at) {
                         log.push(format!("{room}: coffee table {gap:.2} m before the sofa"));
                         coffee_c = Some([at[0], at[1]]);
+                        coffee_hw = (chi[1] - clo[1]) / 2.0;
                         ok = true;
                         break;
                     }
@@ -674,15 +704,23 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 // no spot before the sofa: back where the solver had it, if that is still free
                 if !ok { ok = free_ok(state, k); }
             } else {
-                ok = free_ok(state, k);
-                if !ok {
-                    let c = coffee_c.unwrap_or([sfront[0] + sf[0] * 0.8, sfront[1] + sf[1] * 0.8]);
-                    // beside the coffee table, across from each other: left, then right of the sofa's axis, facing the table
+                let saved = state.objs[k].pose;
+                let c = coffee_c.unwrap_or([sfront[0] + sf[0] * 0.8, sfront[1] + sf[1] * 0.8]);
+                // beside the coffee table, turned to face it across a 0.45 m gap: the side away from the room's walls first, then
+                // the other; else where the solver had it
+                let half = (chi[0] - clo[0]) / 2.0;
+                'a: for gap in [0.45f64, 0.6, 0.35] {
                     for side in [1.0f64, -1.0] {
-                        let at = [c[0] - sf[1] * side * 1.1, c[1] + sf[0] * side * 1.1, 0.0];
+                        let dd = coffee_hw + gap + half;
+                        let at = [c[0] - sf[1] * side * dd, c[1] + sf[0] * side * dd, 0.0];
                         let face = (c[1] - at[1]).atan2(c[0] - at[0]);
-                        if try_place(state, k, face, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], at) { ok = true; break; }
+                        if try_place(state, k, face, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], at) { ok = true; break 'a; }
                     }
+                }
+                if !ok {
+                    state.set_pose(k, saved);
+                    state.touch(k);
+                    ok = free_ok(state, k);
                 }
             }
             if ok {
@@ -932,16 +970,21 @@ pub fn rugs(state: &mut State) -> Vec<String> {
         let old = state.objs[&rug].pose;
         // the rug's long side across the sofa's / bed's facing direction reads best in both rooms
         let long_y = hi[1] - lo[1] >= hi[0] - lo[0];
-        let yy = if long_y { y } else { y + std::f64::consts::FRAC_PI_2 };
-        let (s_, c_) = yy.sin_cos();
-        let ra = [c_ * anchor[0] - s_ * anchor[1], s_ * anchor[0] + c_ * anchor[1]];
-        state.set_pose(&rug, super::geom::Pose::from_euler([c[0] - ra[0], c[1] - ra[1], old.t[2]], [0.0, 0.0, yy]));
-        state.touch(&rug);
-        if layout2d::outside_room_depth(state, &rug, &room) > 0.02 {
-            state.set_pose(&rug, old);
+        let y0 = if long_y { y } else { y + std::f64::consts::FRAC_PI_2 };
+        let mut placed = false;
+        // turned the other way when the room is too narrow for it across; a rug that fits under neither way reads as stray: removed
+        for yy in [y0, y0 + std::f64::consts::FRAC_PI_2] {
+            let (s_, c_) = yy.sin_cos();
+            let ra = [c_ * anchor[0] - s_ * anchor[1], s_ * anchor[0] + c_ * anchor[1]];
+            state.set_pose(&rug, super::geom::Pose::from_euler([c[0] - ra[0], c[1] - ra[1], old.t[2]], [0.0, 0.0, yy]));
             state.touch(&rug);
-        } else {
+            if layout2d::outside_room_depth(state, &rug, &room) <= 0.02 { placed = true; break; }
+        }
+        if placed {
             log.push(format!("{room}: rug under the group"));
+        } else {
+            layout2d::remove_tree(state, &rug);
+            log.push(format!("{room}: rug {rug} fits under no group, removed"));
         }
     }
     log
@@ -962,7 +1005,8 @@ pub fn eat_in(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option
         let no_dining = !state.objs.iter().any(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "dining-room");
         let kitchen_big = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").any(|(k, _)| area_of(state, k) >= 18.0);
         // a living room takes the table only when it is large enough for a separate dining corner
-        let host = (rt == "kitchen" && kitchen_big) || (rt == "living-room" && !kitchen_big && area_of(state, &room) >= 30.0);
+        // (a living room no longer takes one: a table among the sofa group reads as misplaced)
+        let host = rt == "kitchen" && kitchen_big;
         if no_dining && host && !has(state, "TableDiningFactory") {
             let tname = format!("{room}_eatin").replace('/', "_");
             if new_piece(ctx, state, rng, "TableDiningFactory", &room, &tname) {
