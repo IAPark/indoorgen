@@ -379,7 +379,7 @@ pub fn build_scene(p: &Params) -> Built {
                 ig_kit::api::set_round_hint(*round);
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
                 // the size the solver chose (furn::sizes): 'exact' classes build to it, the others are fitted to the box
-                let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact);
+                let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact) || (gen.class == "RugFactory" && gen.size.is_some());
                 if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
                 ig_kit::api::set_round_hint(false);

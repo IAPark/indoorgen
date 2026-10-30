@@ -1817,6 +1817,37 @@ pub fn rugs(state: &mut State) -> Vec<String> {
             _ => None,
         };
         let Some((c, y)) = target else { continue };
+        // the rug sized to what it lies under (width across the sofa / bed / along the table, depth the other way): the sofa and the
+        // coffee table on it with 0.2 m to spare, the dining chairs pulled out (0.6 m round the table), a bed's lower two thirds and 0.5 m
+        // each side; a round table gets a round rug
+        let size = match room_type_of(&room) {
+            "living-room" => in_room(state, "SofaFactory").map(|s| {
+                let (l, h) = lohi(state, &s);
+                let cd = in_room(state, "CoffeeTableFactory").map_or(0.6, |ct| { let (l2, h2) = lohi(state, &ct); (h2[0] - l2[0]).min(h2[1] - l2[1]) });
+                [((h[1] - l[1]) + 0.4).clamp(1.6, 3.0), (cd + 1.4).clamp(1.4, 2.4), 0.0]
+            }),
+            "dining-room" => in_room(state, "TableDiningFactory").map(|t| {
+                let (l, h) = lohi(state, &t);
+                let round = state.objs[&t].tags.contains(Tag::sem("RoundTable"));
+                let (tw, td) = (h[1] - l[1], h[0] - l[0]);
+                if round { let d = (tw.max(td) + 1.2).clamp(1.6, 2.6); [d, d, 1.0] } else { [(tw + 1.2).clamp(1.6, 3.4), (td + 1.2).clamp(1.6, 2.6), 0.0] }
+            }),
+            "bedroom" => in_room(state, "BedFactory").map(|b| {
+                let (l, h) = lohi(state, &b);
+                [((h[1] - l[1]) + 1.0).clamp(1.6, 3.0), ((h[0] - l[0]) * 0.7).clamp(1.2, 2.0), 0.0]
+            }),
+            _ => None,
+        };
+        let (lo, hi, anchor) = if let Some([w, d, round]) = size {
+            let t = (hi[2] - lo[2]).clamp(0.01, 0.03);
+            let o = state.objs.get_mut(&rug).unwrap();
+            o.geom = std::sync::Arc::new(super::geom::ObjGeom::cuboid([-d / 2.0, -w / 2.0, lo[2]], [d / 2.0, w / 2.0, lo[2] + t], 0));
+            if let Some(g) = o.generator.as_mut() { g.size = Some([w, d, t]); g.fit_box = None; }
+            if round > 0.5 { o.tags.insert(Tag::sem("RoundTable")); }
+            state.touch(&rug);
+            let (l2, h2) = lohi(state, &rug);
+            (l2, h2, [0.0, 0.0, lo[2]])
+        } else { (lo, hi, anchor) };
         let old = state.objs[&rug].pose;
         // the rug's long side across the sofa's / bed's facing direction reads best in both rooms
         let long_y = hi[1] - lo[1] >= hi[0] - lo[0];

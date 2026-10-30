@@ -181,6 +181,13 @@ impl Appliance {
                 a.depth = if a.shape == 1 { w } else { len };
                 a.rounded = w * r.uniform(0.1, 0.5);
                 a.thickness = r.uniform(0.01, 0.02);
+                // sized by the layout (groups::rugs: to the sofa group / table / bed it lies under): [width (y), depth (x)], a rectangle,
+                // or a circle under a round table (round hint); after every draw
+                if let Some(h) = crate::api::size_hint() {
+                    a.width = h[0];
+                    a.depth = h[1];
+                    a.shape = if crate::api::round_hint() { 1 } else { 0 };
+                }
             }
         }
         a.seed = r.randint(0, 1_000_000) as u64;
