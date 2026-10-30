@@ -1566,6 +1566,17 @@ pub fn toilets(state: &mut State, only_room: Option<&str>) -> Vec<String> {
 /// clear of the doors; kept where it is when no spot does better
 pub fn wardrobes(state: &mut State) -> Vec<String> {
     let mut log = vec![];
+    // a bedroom with its own closet (a door between them) keeps its clothes there: a wardrobe in the bedroom too read as a
+    // duplicate (each room is solved on its own copy, so the closet's wardrobe is not in this state; the door clearances are)
+    let closets: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "closet").map(|(k, _)| k.clone()).collect();
+    let bedrooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "bedroom").map(|(k, _)| k.clone()).collect();
+    for room in bedrooms {
+        let bd = door_points(state, &room);
+        let own = closets.iter().any(|c| door_points(state, c).iter().any(|p| bd.iter().any(|q| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() < 1.5)));
+        if !own { continue }
+        let ws: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "WardrobeFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        for w in ws { layout2d::remove_tree(state, &w); log.push(format!("{room}: wardrobe {w} removed (the bedroom has its own closet)")); }
+    }
     let ws: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| class_of(o) == "WardrobeFactory")
         .filter_map(|(k, _)| layout2d::room_of(state, k).filter(|r| room_type_of(r) == "bedroom").map(|r| (k.clone(), r))).collect();
     for (w, room) in ws {
