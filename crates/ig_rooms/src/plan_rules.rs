@@ -48,7 +48,7 @@ impl Default for PlanRules {
     fn default() -> Self {
         PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 1,
             living_windows: 2, dining_windows: 1, kitchen_windows: 1, hallway_windows: 0, other_windows: 1, extra_door_p: 0.7, angled_corner_p: 0.08, shape_w: 120.0,
-            patio_door_p: 0.5, double_door_p: 0.4, sliding_closet_p: 0.5, sliding_interior_p: 0.3, open_plan_p: 0.3, half_wall_p: 0.6, merge_hallways: true }
+            patio_door_p: 0.5, double_door_p: 0.4, sliding_closet_p: 0.5, sliding_interior_p: 0.3, open_plan_p: 0.3, half_wall_p: 0.85, merge_hallways: true }
     }
 }
 

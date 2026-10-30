@@ -17,6 +17,9 @@ pub enum CutKind {
     Passage,
 }
 
+thread_local! { static HOUSE_KEY: std::cell::RefCell<String> = std::cell::RefCell::new(String::new()); }
+fn house_key() -> String { HOUSE_KEY.with(|h| h.borrow().clone()) }
+
 /// How a door opening closes (kind Door): a hinged leaf, a pair of leaves, an interior slider, a sliding glass patio door
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DoorStyle {
@@ -180,6 +183,10 @@ impl<'a> Solidifier<'a> {
     }
 
     pub fn solidify(&self, rng: &mut Rng, state: &RoomState) -> Solidified {
+        // the per-house key of the own-stream draws below (door styles, second doors, patio doors, half walls): room names repeat
+        // from house to house, so names alone gave every house the same draws; the solidify stream's first value is per house
+        // (and unchanged by wall nudges)
+        HOUSE_KEY.with(|h| *h.borrow_mut() = rng.peek().to_string());
         let ext_name = state.objs.keys().find(|k| room_type(k) == EXTERIOR).unwrap().clone();
         let shared_edges: IndexMap<String, IndexMap<String, G>> = state
             .valid_rooms()
@@ -232,7 +239,7 @@ impl<'a> Solidifier<'a> {
                 let mut extra_rng = None;
                 if !adjacent && public(room_type(k)) && public(room_type(l)) && !(room_type(k) == "hallway" && room_type(l) == "hallway") && length(se) >= 1.5 {
                     let p = std::env::var("EXTRA_DOOR_P").ok().and_then(|v| v.parse().ok()).unwrap_or(crate::plan_rules::get().extra_door_p);
-                    let mut er = Rng::seeded(crate::int_hash(&["extra_door", k, l]));
+                    let mut er = Rng::seeded(crate::int_hash(&["extra_door", &house_key(), k, l]));
                     if er.f64() < p { fn_ = "door"; extra_rng = Some(er); }
                 }
                 if let Some(mut er) = extra_rng {
@@ -271,15 +278,50 @@ impl<'a> Solidifier<'a> {
         // half walls between kitchens and dining rooms (plan_rules.half_wall_p, own stream per pair): the opening on their shared
         // wall stops at counter height, so it is no longer a way through; only when both rooms keep another door
         let pr = crate::plan_rules::get();
+        let mut extra: Vec<Cutter> = vec![];
         let pairs: Vec<(String, String)> = door_map.iter().flat_map(|(k, cs)| cs.keys().filter(move |l| k < *l).map(move |l| (k.clone(), l.clone()))).collect();
         for (k, l) in pairs {
             let is_pair = matches!((room_type(&k), room_type(&l)), ("kitchen", "dining-room") | ("dining-room", "kitchen"));
             if !is_pair { continue }
-            if door_map[&k].len() < 2 || door_map[&l].len() < 2 { continue }
-            if Rng::seeded(crate::int_hash(&["half_wall", &k, &l])).f64() >= pr.half_wall_p { continue }
+            if Rng::seeded(crate::int_hash(&["half_wall", &house_key(), &k, &l])).f64() >= pr.half_wall_p { continue }
             let Some(se) = shared_edges.get(&k).and_then(|m| m.get(&l)).or_else(|| shared_edges.get(&l).and_then(|m| m.get(&k))) else { continue };
             if length(se) < 2.2 { continue }
-            let mut pr2 = Rng::seeded(crate::int_hash(&["half_wall_cut", &k, &l]));
+            // the only way between them (or out of one of them): the door stays and the half wall opens the longer stretch of the
+            // shared wall beside it
+            if door_map[&k].len() < 2 || door_map[&l].len() < 2 {
+                let mut door = door_map[&k][&l].clone();
+                let (x, y, x_, y_) = max_mls(se);
+                let len = ((x_ - x).powi(2) + (y_ - y).powi(2)).sqrt();
+                let u = [(x_ - x) / len, (y_ - y) / len];
+                // an open-plan opening as the only link narrows to a 1 m walk-through at one end of the wall
+                if door.kind == CutKind::Passage {
+                    let t0 = self.c.wall_thickness / 2.0 + 0.2 + 0.5;
+                    door.dims[0] = 1.0;
+                    door.loc[0] = x + u[0] * t0;
+                    door.loc[1] = y + u[1] * t0;
+                    door_map.get_mut(&k).unwrap().insert(l.clone(), door.clone());
+                    door_map.get_mut(&l).unwrap().insert(k.clone(), door.clone());
+                } else if door.kind != CutKind::Door { continue }
+                let td = (door.loc[0] - x) * u[0] + (door.loc[1] - y) * u[1];
+                let hw = door.dims[0] / 2.0 + 0.2;
+                let wt = self.c.wall_thickness;
+                let (a0, a1) = if td - hw > len - (td + hw) { (wt / 2.0 + 0.2, td - hw) } else { (td + hw, len - wt / 2.0 - 0.2) };
+                let w = (a1 - a0).min(2.4);
+                if w < 1.2 { continue }
+                let tm = (a0 + a1) / 2.0;
+                let z0 = 1.05;
+                let z1 = self.c.wall_height - wt - 0.3;
+                extra.push(Cutter {
+                    kind: CutKind::Passage,
+                    style: DoorStyle::HalfWall,
+                    loc: [x + u[0] * tm, y + u[1] * tm, (z0 + z1) / 2.0],
+                    rot_z: u[1].atan2(u[0]),
+                    dims: [w, 2.0 * wt + 0.2, z1 - z0],
+                    rooms: vec![k.clone(), l.clone()],
+                });
+                continue;
+            }
+            let mut pr2 = Rng::seeded(crate::int_hash(&["half_wall_cut", &house_key(), &k, &l]));
             let mut cut = self.make_passage_cutter(&mut pr2, se);
             let wt = self.c.wall_thickness;
             let (z0, z1) = (1.05, cut.loc[2] + cut.dims[2] / 2.0);
@@ -299,6 +341,7 @@ impl<'a> Solidifier<'a> {
                 }
             }
         }
+        out.extend(extra);
         (out, vec![])
     }
 
@@ -375,7 +418,7 @@ impl<'a> Solidifier<'a> {
         let (wt, dh) = (self.c.wall_thickness, self.c.door_size);
         for (k, cs) in window_cutters.iter_mut() {
             if !(k.starts_with("living-room") || k.starts_with("dining-room")) { continue }
-            if Rng::seeded(crate::int_hash(&["patio", k])).f64() >= pr.patio_door_p { continue }
+            if Rng::seeded(crate::int_hash(&["patio", &house_key(), k])).f64() >= pr.patio_door_p { continue }
             if let Some(c) = cs.iter_mut().filter(|c| c.dims[0] >= 1.4).max_by(|a, b| a.dims[0].partial_cmp(&b.dims[0]).unwrap()) {
                 c.kind = CutKind::Door;
                 c.style = DoorStyle::SlidingGlass;
@@ -392,7 +435,7 @@ impl<'a> Solidifier<'a> {
     /// longest piece of the shared wall.
     fn restyle(&self, cut: &mut Cutter, k: &str, l: &str, se: &G) {
         let pr = crate::plan_rules::get();
-        let mut r = Rng::seeded(crate::int_hash(&["door_style", k, l]));
+        let mut r = Rng::seeded(crate::int_hash(&["door_style", &house_key(), k, l]));
         let (tk, tl) = (room_type(k), room_type(l));
         let public = |t: &str| matches!(t, "living-room" | "dining-room" | "hallway");
         let (x, y, x_, y_) = max_mls(se);
