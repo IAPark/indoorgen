@@ -1293,8 +1293,10 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                         let snapped = (to / std::f64::consts::FRAC_PI_2).round() * std::f64::consts::FRAC_PI_2;
                         if (yaw(&p0) - snapped).sin().abs() > 0.02 || (yaw(&p0) - snapped).cos() < 0.0 {
                             if !try_place(state, k, snapped, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], [here[0], here[1], 0.0]) {
+                                // (no square turn fits there: left out rather than left at a slant)
                                 state.set_pose(k, p0);
                                 state.touch(k);
+                                ok = false;
                             }
                         }
                     }
