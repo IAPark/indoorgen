@@ -208,7 +208,23 @@ impl<'a> Solidifier<'a> {
                 let direction = rotz_dir([(centroids[k][0] - centroids[l][0]) * sign, (centroids[k][1] - centroids[l][1]) * sign]);
                 let adjacent = self.graph.valid_neighbours(l).contains(k.as_str());
                 // enable_open=false path: door iff graph-adjacent
-                let fn_ = if adjacent { "door" } else { "none" };
+                let mut fn_ = if adjacent { "door" } else { "none" };
+                // more rooms with two doors: public rooms that share a wall but are not graph neighbours (kitchen / dining / living /
+                // hallway) get a second way through, on their own stream (EXTRA_DOOR_P, default 0.7)
+                let public = |t: &str| matches!(t, "kitchen" | "dining-room" | "living-room" | "hallway");
+                let mut extra_rng = None;
+                if !adjacent && public(room_type(k)) && public(room_type(l)) && !(room_type(k) == "hallway" && room_type(l) == "hallway") && length(se) >= 1.5 {
+                    let p = std::env::var("EXTRA_DOOR_P").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
+                    let mut er = Rng::seeded(crate::int_hash(&["extra_door", k, l]));
+                    if er.f64() < p { fn_ = "door"; extra_rng = Some(er); }
+                }
+                if let Some(mut er) = extra_rng {
+                    let mut cut = self.make_door_cutter(&mut er, se, direction);
+                    cut.rooms = vec![k.clone(), l.clone()];
+                    door_map.entry(k.clone()).or_default().insert(l.clone(), cut.clone());
+                    door_map.entry(l.clone()).or_default().insert(k.clone(), cut);
+                    continue;
+                }
                 assert!(!self.enable_open, "open cutters not ported");
                 // open plan: kitchen / dining / living doors on a long enough shared wall become wide passages; own stream, drawn only
                 // when passages are on so the door draws (and everything after them) are unchanged otherwise
@@ -295,6 +311,15 @@ impl<'a> Solidifier<'a> {
                     }
                     window_cutters.entry(k.clone()).or_default().extend(cs);
                 }
+            }
+        }
+        // fewer windows where privacy or wall space matters: closets none, bathrooms their widest one, bedrooms their widest two
+        // (filtered after generation, so the random stream and every other room's windows stay as they were)
+        for (k, cs) in window_cutters.iter_mut() {
+            let keep = if k.starts_with("closet") { 0 } else if k.starts_with("bathroom") { 1 } else if k.starts_with("bedroom") { 2 } else { usize::MAX };
+            if cs.len() > keep {
+                cs.sort_by(|a, b| b.dims[0].partial_cmp(&a.dims[0]).unwrap());
+                cs.truncate(keep);
             }
         }
         (window_cutters.into_values().flatten().collect(), entrance_cutters.into_values().flatten().collect())

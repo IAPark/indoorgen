@@ -104,7 +104,11 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
         let poly = room.and_then(|k| state.objs[&k].polygon.clone());
         // candidate slots: (local position on the edge, outward normal)
         let mut slots: Vec<([f64; 2], [f64; 2])> = vec![];
-        for (axis, sign) in [(0usize, 1.0f64), (0, -1.0), (1, 1.0), (1, -1.0)] {
+        // fill order: the middle slots of the long sides first, alternating sides, then outward, then the short sides -- a set that
+        // reads balanced (chairs took the slot nearest where the solver left them: two on one side, none opposite)
+        let mut prio: Vec<(usize, usize)> = vec![];
+        let long_axis = if hi[1] - lo[1] >= hi[0] - lo[0] { 0usize } else { 1 };
+        for (si, (axis, sign)) in [(0usize, 1.0f64), (0, -1.0), (1, 1.0), (1, -1.0)].into_iter().enumerate() {
             let o = 1 - axis; let len = hi[o] - lo[o];
             let n = ((len / 0.6).floor() as usize).max(1);
             for i in 0..n {
@@ -113,6 +117,8 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 p[o] = lo[o] + len * (i as f64 + 0.5) / n as f64;
                 let mut nl = [0.0; 2]; nl[axis] = sign;
                 slots.push((p, nl));
+                let from_mid = ((i as f64 + 0.5) - n as f64 / 2.0).abs().floor() as usize;
+                prio.push((if axis == long_axis { from_mid } else { 100 + from_mid }, si % 2));
             }
         }
         let mut moved = 0;
@@ -125,7 +131,7 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
             let mut done = false;
             let here = to_local(seat(&c));
             let mut order: Vec<usize> = (0..slots.len()).filter(|i| !taken.contains(i)).collect();
-            order.sort_by(|&a, &b| { let d = |i: usize| (slots[i].0[0] - here[0]).hypot(slots[i].0[1] - here[1]); d(a).partial_cmp(&d(b)).unwrap() });
+            order.sort_by(|&a, &b| { let d = |i: usize| (slots[i].0[0] - here[0]).hypot(slots[i].0[1] - here[1]); prio[a].0.cmp(&prio[b].0).then(d(a).partial_cmp(&d(b)).unwrap()) });
             for si in order {
                 let (p, nl) = (&slots[si].0, &slots[si].1);
                 // seat centre 0.5 depth out from the edge minus the tuck; chair faces -n (its +x toward the table)

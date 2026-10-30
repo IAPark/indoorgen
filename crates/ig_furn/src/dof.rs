@@ -361,7 +361,8 @@ fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     let nc = no_collision_tag();
     let class = state.objs[name].generator.as_ref().map(|g| g.class.as_str()).unwrap_or("");
     let skip_win = COUNTER_OVER_WINDOWS.load(std::sync::atomic::Ordering::Relaxed) && (
-        (class == "KitchenSpaceFactory" && !state.objs.iter().any(|(k, o)| k.as_str() != name && o.generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")))
+        // (any counter run: kitchens get one on every free wall; upper units in front of glass are dropped later)
+        class == "KitchenSpaceFactory"
         // beds under a window are common; small bedrooms with windows on the free walls got no bed at all (headboard vs the cutter box)
         || class == "BedFactory"
         // anything lower than a sill (sofas, stands, tables) stands under a window too

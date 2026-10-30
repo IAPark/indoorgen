@@ -59,7 +59,9 @@ fn try_place(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) -> bo
     let old = state.objs[name].pose;
     let (s, c) = yaw_.sin_cos();
     let ra = [c * anchor[0] - s * anchor[1], s * anchor[0] + c * anchor[1], anchor[2]];
-    let p = super::geom::Pose::from_euler([at[0] - ra[0], at[1] - ra[1], at[2] - ra[2]], [0.0, 0.0, yaw_]);
+    // callers pass z = 0 for "on the floor": the piece keeps its height (floors stand above z = 0, by the slab)
+    let tz = if at[2] == 0.0 { old.t[2] } else { at[2] - ra[2] };
+    let p = super::geom::Pose::from_euler([at[0] - ra[0], at[1] - ra[1], tz], [0.0, 0.0, yaw_]);
     state.set_pose(name, p);
     state.touch(name);
     if free_ok(state, name) {
@@ -247,6 +249,60 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
             }
         }
     }
+    // counters on every wall with room: more runs along the kitchen's free walls (an L or U with the first), each grown to its span;
+    // a run facing another keeps a 1 m aisle (touching at a corner is fine)
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let mut rng = Rng::seeded(ig_core::int_hash(&["kitchen_runs", &room]));
+        for i in 0..3 {
+            let others: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            if others.is_empty() { break }
+            let name = format!("{room}_run{i}").replace('/', "_");
+            if !new_piece(ctx, state, &mut rng, "KitchenSpaceFactory", &room, &name) { break }
+            // the first run's floor relation (same class: the same face order); its wall relation names that run's wall
+            let floor_rel: Vec<_> = state.objs[&others[0]].relations.iter().filter(|r| r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom")))).cloned().collect();
+            if !floor_rel.is_empty() { state.objs.get_mut(&name).unwrap().relations = floor_rel; state.touch(&name); }
+            // the shortest run to find a wall; the built-in fill grows it to the span
+            let base = state.objs[&name].clone();
+            let _ = super::solver::set_width(ctx, state, &name, &base, 1.2, 1.0);
+            let n2 = name.clone();
+            let os = others.clone();
+            let aisle_ok = move |st: &State| os.iter().all(|r| { let d = layout2d::dist(st, r, &n2); d < 0.05 || d >= 1.0 });
+            let ok2 = aisle_ok.clone();
+            let placed = place_on_wall(state, &name, &room, &move |st, _c, _t, len, _n| len - if ok2(st) { 0.0 } else { 100.0 });
+            if !placed || !aisle_ok(state) {
+                state.objs.shift_remove(&name);
+                break;
+            }
+            let _ = super::solver::fit_builtins(ctx, state, Some(room.as_str()));
+            let w = state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(0.0, |c| c[0]);
+            if w < 1.0 {
+                state.objs.shift_remove(&name);
+                break;
+            }
+            log.push(format!("{room}: another counter run {name} ({w:.2} m)"));
+        }
+        // a fridge or range left off every run (no free end on the first) goes to a free end of any run now
+        let fridges: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "FridgeFactory" | "OvenFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        for f in fridges {
+            if runs.iter().any(|r| layout2d::dist(state, r, &f) < 0.1) { continue }
+            let (lo, hi) = lohi(state, &f);
+            'r: for run in &runs {
+                let (clo, chi) = lohi(state, run);
+                let rp = state.objs[run].pose;
+                let ry = yaw(&rp);
+                for s in [1.0f64, -1.0] {
+                    let at = rp.apply([clo[0], if s > 0.0 { chi[1] + 0.01 } else { clo[1] - 0.01 }, 0.0]);
+                    let anchor = [lo[0], if s > 0.0 { lo[1] } else { hi[1] }, lo[2]];
+                    if try_place(state, &f, ry, anchor, [at[0], at[1], 0.0]) {
+                        log.push(format!("{room}: {f} moved to the end of {run}"));
+                        break 'r;
+                    }
+                }
+            }
+        }
+    }
     log
 }
 
@@ -258,12 +314,22 @@ fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: &str, room:
     tags.update(&ctx.usage.usages_of(class));
     let mut o = ObjState::new(Arc::new(geom), super::geom::Pose::identity(), tags);
     o.generator = Some(gen);
-    if let Some(r) = state.objs.values().flat_map(|x| x.relations.iter()).find(|r| r.target == room && r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom")))) {
+    if let Some((ro, r)) = state.objs.values().flat_map(|x| x.relations.iter().map(move |r| (x, r))).find(|(_, r)| r.target == room && r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom")))) {
         o.relations.push(r.clone());
+        // standing at that piece's floor height (its bottom)
+        let z = ro.pose.t[2] + ro.geom.lo[2] - o.geom.lo[2];
+        let t = o.pose.t; o.pose.set_loc([t[0], t[1], z]);
     }
     o.active = true;
     state.objs.insert(name.to_string(), o);
     state.touch(name);
+    // the copied relation's child face index belongs to the other piece's geometry: re-matched to this one's downward face
+    if let Some(g) = state.objs[name].relations.first().and_then(|r| r.relation.geo().cloned()) {
+        let pl = state.planes(name, &g.child);
+        let best = (0..pl.len()).min_by(|&i, &j| state.plane_nd(name, pl[i]).0[2].partial_cmp(&state.plane_nd(name, pl[j]).0[2]).unwrap());
+        if let Some(bi) = best { state.objs.get_mut(name).unwrap().relations[0].child_plane = bi; }
+        state.touch(name);
+    }
     true
 }
 
@@ -589,7 +655,17 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let tv_start = state.objs[&tv].pose;
         let mut pair: Option<(f64, super::geom::Pose, super::geom::Pose, f64)> = None;
         let segs = wall_segments(state, &room);
-        let fc = { let r = &rings[0]; let n = r.len() as f64; [r.iter().map(|p| p[0]).sum::<f64>() / n, r.iter().map(|p| p[1]).sum::<f64>() / n] };
+        // the floor's area centroid (a vertex mean leans toward the short leg of an L-shaped room)
+        let fc = {
+            let r = &rings[0];
+            let (mut a, mut cx, mut cy) = (0.0f64, 0.0f64, 0.0f64);
+            for i in 0..r.len() {
+                let (p, q) = (r[i], r[(i + 1) % r.len()]);
+                let cr = p[0] * q[1] - q[0] * p[1];
+                a += cr; cx += (p[0] + q[0]) * cr; cy += (p[1] + q[1]) * cr;
+            }
+            if a.abs() < 1e-9 { let n = r.len() as f64; [r.iter().map(|p| p[0]).sum::<f64>() / n, r.iter().map(|p| p[1]).sum::<f64>() / n] } else { [cx / (3.0 * a), cy / (3.0 * a)] }
+        };
         let sw = shi[1] - slo[1];
         let sdep = shi[0] - slo[0];
         for (a, b, n) in segs.clone() {
@@ -615,7 +691,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 let Some((dist, hp, m)) = hit else { continue };
                 let view = dist - sdep - (thi[0] - tlo[0]);
                 // narrow living rooms (2.6 m) seat the sofa across from the TV at 1.3 m
-                if !(1.3..=4.2).contains(&view) { continue }
+                // (large rooms, 30 m2 and up: facing each other across the room beats a TV on a side wall)
+                if !(1.3..=if room_area >= 30.0 { 5.2 } else { 4.2 }).contains(&view) { continue }
                 if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
                 if !try_place(state, &tv, m[1].atan2(m[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [hp[0] + m[0] * 0.003, hp[1] + m[1] * 0.003, 0.0]) {
                     state.set_pose(&tv, tv_start); state.touch(&tv);
@@ -704,6 +781,13 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             let (clo, chi) = lohi(state, k);
             let mut ok = false;
             if class_of(o) == "CoffeeTableFactory" {
+                // about the sofa's seat width, three quarters of it (a 0.8 m table before a 2.6 m sofa reads as too small)
+                let target = ((shi[1] - slo[1]) * 0.75).clamp(0.6, 1.6);
+                if (target - (chi[1] - clo[1])).abs() > 0.1 {
+                    let base = state.objs[k].clone();
+                    let _ = super::solver::set_width(ctx, state, k, &base, target, 1.0);
+                }
+                let (clo, chi) = lohi(state, k);
                 for gap in [0.45f64, 0.35, 0.55, 0.3, 0.7] {
                     let off = gap + (chi[0] - clo[0]) / 2.0;
                     let at = [sfront[0] + sf[0] * off, sfront[1] + sf[1] * off, 0.0];
@@ -793,8 +877,9 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         for (k, o) in saved { state.objs.insert(k.clone(), o); state.touch(&k); }
         // a full set of chairs: copies of the first chair
         let tw = { let (l2, h2) = lohi(state, &t); let _ = (lo, hi); h2[1] - l2[1] };
-        // one chair per 0.7 m on each long side (no head chairs): 1.4 m -> 4, 2.1 m -> 6
-        let want = (2 * ((tw / 0.6).floor() as usize).max(1)).clamp(2, 6);
+        // one chair per 0.6 m on each long side and one at each end: 1.4 m -> 6, 2.1 m -> 8
+        // (a small table, under 1.2 m: one chair each side, four; two on adjacent sides read as lopsided)
+        let want = if tw < 1.2 { 4 } else { (2 * ((tw / 0.6).floor() as usize).max(1)).clamp(2, 6) + 2 };
         let mut chairs = chairs;
         if chairs.is_empty() {
             // a table without chairs: a first chair from scratch, the copies below make the set
