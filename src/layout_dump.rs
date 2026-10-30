@@ -1,6 +1,8 @@
 //! LAYOUT_DUMP=path: the furniture layout after the solve and the solve-level fixes (caps, chairs, coffee tables), before any mesh is
 //! built: room polygons, door / window / entrance cutters and, per object, its solver proxies as world-space point sets with height
 //! ranges (floor footprints), its front direction and its parent. Drawn by tools/layout_sheet.py.
+//! LAYOUT_DUMP_STAGE=furniture: the solver stops after the furniture stages (floor / wall pieces, then wall-mounted, ceiling and side
+//! pieces), skipping the small items on surfaces; the post-solve layout fixes still run before the dump.
 use crate::furn::tags::{Tag, TagSet};
 use crate::pipeline::Generated;
 use geos::Geom;
@@ -25,6 +27,7 @@ pub fn dump(path: &str, seed: u64, g: &Generated) {
         let parent = o.relations.iter().map(|r| r.target.clone()).find(|t| g.state.objs.get(t).map_or(false, |x| x.generator.is_some()));
         objs.push(json!({"key": k, "class": class, "parts": parts, "front": front, "parent": parent}));
     }
-    let d = json!({"seed": seed, "wall_thickness": g.c.wall_thickness, "wall_height": g.c.wall_height, "rooms": rooms, "cutters": cut, "objects": objs});
+    let stage = std::env::var("LAYOUT_DUMP_STAGE").unwrap_or_else(|_| "full".into());
+    let d = json!({"seed": seed, "stage": stage, "wall_thickness": g.c.wall_thickness, "wall_height": g.c.wall_height, "rooms": rooms, "cutters": cut, "objects": objs});
     std::fs::write(path, d.to_string()).unwrap();
 }

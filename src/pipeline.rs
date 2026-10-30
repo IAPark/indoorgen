@@ -398,6 +398,10 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     run_stage("on_ceiling", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("side_obj", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
     let tm = t.elapsed().as_secs_f64();
+    // LAYOUT_DUMP_STAGE=furniture: stop after the furniture layout (no small items on surfaces); LAYOUT_DUMP then writes it
+    if std::env::var("LAYOUT_DUMP_STAGE").as_deref() == Ok("furniture") {
+        return (tl, tm, 0.0);
+    }
     let t = Instant::now();
     let mut rng = Rng::seeded(hs("solve_small"));
     run_stage("obj_ontop_obj", "small", opt.steps_small, None, 3.0, state, &mut rng, &mut ctx);
