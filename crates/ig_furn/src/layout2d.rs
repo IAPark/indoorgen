@@ -741,6 +741,9 @@ pub fn repair(state: &mut State) -> Vec<String> {
 
 /// per-house state: prisms, floors and the house outline are keyed by object name and version, which repeat between houses
 pub fn reset_caches() {
+    // (a geometry first, so the geometry library's thread state is set up -- and torn down at exit -- before / after these maps:
+    // created first, the floors map outlived it and dropping its shapes at exit aborted the process)
+    let _ = shp::point(0.0, 0.0);
     PRISMS.with(|c| c.borrow_mut().clear());
     FLOORS.with(|c| c.borrow_mut().clear());
     HOUSE.with(|c| *c.borrow_mut() = None);
