@@ -2154,6 +2154,11 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
             // the largest first (one good picture over a sofa reads better than several small ones)
             ks.sort_by(|a, b| { let ar = |k: &str| { let (l, h) = wbox(state, k); ((h[0] - l[0]).max(h[1] - l[1])) * (h[2] - l[2]) }; ar(b).partial_cmp(&ar(a)).unwrap() });
             let mut kept = 0;
+            for k in ks.clone() {
+                // nothing stands on a picture or a mirror (the solver used their top edge as a shelf: desk lamps on the frames)
+                let on: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == k)).map(|(c, _)| c.clone()).collect();
+                for c in on { if state.objs.contains_key(&c) { layout2d::remove_tree(state, &c); log.push(format!("{room}: removed {c} (on {cls} {k})")); } }
+            }
             for k in ks {
                 if ig_core::env_on!("HANGDBG") { let o = &state.objs[&k]; eprintln!("HANGDBG {k} local {:.2?}..{:.2?} yaw {:.2}", o.geom.lo, o.geom.hi, yaw(&o.pose)); }
                 let (lo, hi) = wbox(state, &k);
@@ -2243,6 +2248,49 @@ pub fn kitchen_style(state: &mut State) -> Vec<String> {
             if g.factory_seed != fs { g.factory_seed = fs; n += 1; }
         }
         if n > 0 { log.push(format!("{room}: {n} {cls} restyled like {lead}")); }
+    }
+    log
+}
+
+/// items left behind: a piece resting on furniture (relation to a generated parent) whose centre is no longer over that parent -- the
+/// group passes move beds, nightstands and tables without what stood on them, and desk lamps floated at the old headboard height
+pub fn orphans(state: &mut State) -> Vec<String> {
+    let mut log = vec![];
+    let wb = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
+        let o = &st.objs[k];
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    let items: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| o.generator.is_some()).filter_map(|(k, o)| {
+        o.relations.iter().find(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some() && !layout2d::is_room(t))).map(|r| (k.clone(), r.target.clone()))
+    }).collect();
+    if ig_core::env_on!("ORPHDBG") {
+        for (k, o) in &state.objs { if class_of(o) == "DeskLampFactory" { eprintln!("ORPHDBG {k} z {:.2} rels {:?}", o.pose.t[2], o.relations.iter().map(|r| (r.target.clone(), format!("{:?}", r.relation).chars().take(40).collect::<String>())).collect::<Vec<_>>()); } }
+    }
+    for (k, p) in items {
+        if !state.objs.contains_key(&k) || !state.objs.contains_key(&p) { continue }
+        // dining chairs and nightstands relate to their table / bed but stand beside it
+        if matches!(class_of(&state.objs[&k]), "ChairFactory" | "SideTableFactory" | "OfficeChairFactory" | "BarChairFactory") { continue }
+        let (il, ih) = wb(state, &k);
+        let (pl, ph) = wb(state, &p);
+        let c = [(il[0] + ih[0]) / 2.0, (il[1] + ih[1]) / 2.0];
+        let over = c[0] > pl[0] - 0.05 && c[0] < ph[0] + 0.05 && c[1] > pl[1] - 0.05 && c[1] < ph[1] + 0.05;
+        let level = il[2] > pl[2] - 0.05 && il[2] < ph[2] + 0.1;
+        // nothing but bedding on a bed (the solver stood desk lamps on the bed's box, above the real headboard)
+        // and nothing at all on a potted plant (lamps stood on the foliage at 1.6 m)
+        let pc = class_of(&state.objs[&p]);
+        let on_bed = (pc == "BedFactory" && !matches!(class_of(&state.objs[&k]), "PillowFactory" | "BlanketFactory" | "ComforterFactory" | "BoxComforterFactory" | "TowelFactory" | "ClothFactory"))
+            || pc.contains("Plant");
+        if !(over && level) || on_bed {
+            let cls = class_of(&state.objs[&k]).to_string();
+            layout2d::remove_tree(state, &k);
+            log.push(format!("removed {cls} {k} (left behind by {p})"));
+        }
     }
     log
 }
