@@ -443,7 +443,8 @@ fn blocks_opening(fa: &FeatureAsset, s: &Span, c: &RoomConstants, cutters: &[Cut
         if !ct.rooms.iter().any(|r| r == room) { continue }
         let (cc, ss) = (ct.rot_z.cos(), ct.rot_z.sin());
         let is_win = ct.kind == CutKind::Window;
-        let (hw, depth) = (ct.dims[0] / 2.0, if is_win { 0.12 + c.wall_thickness / 2.0 } else { 0.6 });
+        // (a door keeps its swing clear and a hand's width beside its frame: built-in shelves beside the entrance read as blocking it)
+        let (hw, depth) = if is_win { (ct.dims[0] / 2.0, 0.12 + c.wall_thickness / 2.0) } else { (ct.dims[0] / 2.0 + 0.15, (ct.dims[0] + 0.1).max(0.6)) };
         let (zlo, zhi) = if is_win { (-ct.dims[2] / 2.0, ct.dims[2] / 2.0) } else { (-ct.dims[2] / 2.0 + 0.05, ct.dims[2] / 2.0 - 0.1) };
         // zone: |x| < hw - 0.02, |y| < depth - 0.03 (intrusion > 3 cm), zlo < z < zhi
         let (zx, zy) = (hw - 0.02, depth - 0.03);
