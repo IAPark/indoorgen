@@ -17,6 +17,12 @@ fn class_of(o: &ObjState) -> &str {
     o.generator.as_ref().map(|g| g.class.as_str()).unwrap_or("")
 }
 
+/// an object's footprint centre (world xy), for complaints
+fn at_of(state: &State, k: &str) -> Option<[f64; 2]> {
+    let o = state.objs.get(k)?;
+    let c = o.pose.apply([(o.geom.lo[0] + o.geom.hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0, 0.0]);
+    Some([c[0], c[1]])
+}
 fn yaw(p: &super::geom::Pose) -> f64 {
     p.r[1][0].atan2(p.r[0][0])
 }
@@ -751,6 +757,7 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
         for k in stands.into_iter().chain(failed) {
             if state.objs.contains_key(&k) { layout2d::remove_tree(state, &k); }
             log.push(format!("nightstand {k}: no slot by the headboard, removed"));
+            if let Some(room) = layout2d::room_of(state, &bed) { super::layers::complain(super::layers::Layer::Furniture, &room, "nightstand", at_of(state, &bed), "a free slot beside the headboard", false); }
         }
     }
     // a desk jammed against the bed or its nightstands reads as crammed in: removed
@@ -1216,6 +1223,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 state.set_pose(&sofa, start);
                 state.touch(&sofa);
                 log.push(format!("{room}: no spot for the sofa facing the TV"));
+                super::layers::complain(super::layers::Layer::Room, &room, "seating", at_of(state, &tv), "a wall or floor spot for the sofa facing the TV / fireplace", true);
             }
         }
         // put the lifted pieces back: the coffee table in front of the sofa, armchairs where they were or beside the coffee table
@@ -1323,6 +1331,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             } else {
                 state.objs.shift_remove(k);
                 log.push(format!("{room}: {} left out (no spot around the sofa)", class_of(o)));
+                super::layers::complain(super::layers::Layer::Furniture, &room, "armchair", at_of(state, &sofa), "floor beside the coffee table for an armchair", false);
             }
         }
     }
@@ -1407,6 +1416,7 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             }
         }
         log.push(format!("{room}: table {t} {} with {} chairs wanted", if placed { "in the middle" } else { "kept in place" }, want.max(have)));
+        if !placed { super::layers::complain(super::layers::Layer::Room, &room, "dining", at_of(state, &t), "open floor in the middle for the table and its chairs", true); }
     }
     log
 }
@@ -1414,7 +1424,15 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
 /// bed placement before the nightstands (see `bedroom_and_desk`)
 pub fn beds(state: &mut State) -> Vec<String> {
     let beds: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "BedFactory").map(|(k, _)| k.clone()).collect();
-    beds.iter().filter_map(|b| place_bed(state, b)).collect()
+    let mut log = vec![];
+    for b in beds {
+        match place_bed(state, &b) {
+            Some(l) => log.push(l),
+            // no wall spot: the bed stays where the solver left it (floating, or across the door)
+            None => if let Some(room) = layout2d::room_of(state, &b) { super::layers::complain(super::layers::Layer::Room, &room, "bed", at_of(state, &b), "a wall for the headboard", true); },
+        }
+    }
+    log
 }
 
 /// a piece placed against a wall of `room`: every wall spot (0.2 m steps) where the placement is valid is scored by `score(centre,
@@ -1482,7 +1500,10 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                     ok = place_on_wall(state, &name, &room, &score);
                     RELAX_WALK.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
-                if ok { log.push(format!("{room}: added a TV stand")); } else { state.objs.shift_remove(&name); }
+                if ok { log.push(format!("{room}: added a TV stand")); } else {
+                    state.objs.shift_remove(&name);
+                    super::layers::complain(super::layers::Layer::Room, &room, "tv", None, "a free wall for the TV stand", true);
+                }
             }
         }
         // closets: a wardrobe along the longest wall (the built-in fill then sizes it to the span)
@@ -1866,6 +1887,7 @@ pub fn rugs(state: &mut State) -> Vec<String> {
         } else {
             layout2d::remove_tree(state, &rug);
             log.push(format!("{room}: rug {rug} fits under no group, removed"));
+            super::layers::complain(super::layers::Layer::Furniture, &room, "rug", None, "floor for a rug under the group", false);
         }
     }
     log

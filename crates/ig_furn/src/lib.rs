@@ -13,6 +13,7 @@ pub mod layout2d;
 pub mod layout_rules;
 pub mod sizes;
 pub mod groups;
+pub mod layers;
 pub mod fcl;
 pub mod mpr;
 pub mod eval;

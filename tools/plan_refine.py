@@ -5,6 +5,9 @@ penalty drops.
     uv run --with shapely tools/plan_refine.py OUT SEED [SEED ...] [--iters 8]
 
 Writes OUT/l<seed>.json / .log for the refined house and OUT/refine.jsonl with every step.
+
+Superseded in-process by HIER=1 (src/scenegen.rs): the layers report complaints (furn::layers) and the plan layer moves the wall nearest
+the worst hard one. Note: a wall move re-rolls the whole house today (the plan's random draws cascade), so neither is a local repair yet.
 """
 import argparse
 import json

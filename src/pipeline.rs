@@ -28,6 +28,8 @@ pub struct Generated {
     pub room_polys: Vec<(String, crate::shp::G)>,
     /// room features built before the solve (also present in `state` as fixed objects)
     pub features: Vec<crate::features::PlacedFeature>,
+    /// what the room / furniture layers could not do (furn::layers), per room, for the plan layer above
+    pub complaints: Vec<crate::furn::layers::Complaint>,
 }
 
 fn sem_room_tag(rt: &str) -> Tag {
@@ -52,6 +54,9 @@ pub struct Options {
     pub passage_prob: f64,
     /// room grammar of the floor plan
     pub rooms: crate::rooms::graph::RoomSet,
+    /// shared-wall moves applied to the floor plan before the house is built: (room a, room b, metres a grows by) -- the plan layer's
+    /// answers to the complaints of the layers below (scenegen, HIER=1)
+    pub nudges: Vec<(String, String, f64)>,
 }
 
 /// constraint program for a scene seed (params drawn from the global numpy stream like the python)
@@ -112,6 +117,10 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             let ok = crate::rooms::nudge::nudge(&mut st, f[0].trim(), f[1].trim(), d);
             if std::env::var_os("GROUPDBG").is_some() { eprintln!("NUDGE {} {} {d}: {}", f[0], f[1], if ok { "moved" } else { "does not fit" }); }
         }
+    }
+    for (a, b, d) in &opt.nudges {
+        let ok = crate::rooms::nudge::nudge(&mut st, a, b, *d);
+        if std::env::var_os("GROUPDBG").is_some() || std::env::var_os("LAYERDBG").is_some() { eprintln!("NUDGE {a} {b} {d}: {}", if ok { "moved" } else { "does not fit" }); }
     }
     if std::env::var_os("PLAN_STATS").is_some() {
         for (k, ar, cv, asp) in crate::rooms::score::room_stats(&st) {
@@ -334,8 +343,10 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             *d = domain_tag_substitute(d, Tag::var("room"), &rt).0;
         }
     }
+    let mut complaints = vec![];
     if opt.whole_house {
-        let (tl, tm, ts) = solve_whole_house(opt, assets, &prog, &usage, &stages, &mut state);
+        let ((tl, tm, ts), cs) = solve_whole_house(opt, assets, &prog, &usage, &stages, &mut state);
+        complaints = cs;
         timings.push(("solve_large".into(), tl));
         timings.push(("solve_medium".into(), tm));
         timings.push(("solve_small".into(), ts));
@@ -347,14 +358,14 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         timings.push(("solve_medium".into(), tm));
         timings.push(("solve_small".into(), ts));
     }
-    Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features }
+    Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features, complaints }
 }
 
 /// rooms + cutters only (no furniture): used for validation against reference dumps
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer, nudges: vec![] }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives
@@ -500,7 +511,7 @@ fn clone_state(s: &State) -> State {
 /// Furnish every room: rooms are independent in the constraint program (the solver only looks at the active room's objects), so each
 /// room is solved on its own copy of the room state with its own rng stream and the results are merged in room-key order.
 /// The first room of the target room type keeps the single-room rng stream (same furniture as `--only-target`).
-fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usage, stages: &IndexMap<String, Domain>, state: &mut State) -> (f64, f64, f64) {
+fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usage, stages: &IndexMap<String, Domain>, state: &mut State) -> ((f64, f64, f64), Vec<crate::furn::layers::Complaint>) {
     use rayon::prelude::*;
     let no_limits = HashMap::default();
     let mut rooms: Vec<String> = iterate_assignments(&stages["on_floor_and_wall"], state, &["room"], &no_limits).into_iter().filter_map(|a| a.get("room").cloned()).collect();
@@ -517,17 +528,26 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
     unsafe impl Sync for SyncAssets<'_> {}
     impl SyncAssets<'_> { fn get(&self) -> &dyn Assets { self.0 } }
     let sa = SyncAssets(assets);
-    let work = |(r, mut st): (&String, State)| -> (State, (f64, f64, f64)) {
+    let work = |(r, mut st): (&String, State)| -> (State, (f64, f64, f64), Vec<crate::furn::layers::Complaint>) {
         let tag = if target.as_ref() == Some(r) { None } else { Some(r.as_str()) };
+        let _ = crate::furn::layers::drain();
         let t = solve_stages(opt, sa.get(), prog, usage, stages, &mut st, &no_limits, Some(r), tag);
+        // the furniture layer's own check: every door of the room joined by walkable floor (the walkway repair after the solve deletes
+        // pieces to get there)
+        let (connected, bad) = crate::furn::layout2d::walk_status(&st, r);
+        let door_at = st.objs.keys().filter(|k| k.starts_with(&format!("doorclear/{r}/"))).find_map(|k| crate::furn::layout2d::prisms(&st, k).first().map(|p| { let n = p.poly.len() as f64; [p.poly.iter().map(|v| v[0]).sum::<f64>() / n, p.poly.iter().map(|v| v[1]).sum::<f64>() / n] }));
+        if !connected { crate::furn::layers::complain(crate::furn::layers::Layer::Furniture, r, "door_paths", door_at, "walkable floor joining every door", true); }
+        for b in bad { crate::furn::layers::complain(crate::furn::layers::Layer::Furniture, r, "reach", None, format!("{b} reachable from the doors"), false); }
         if std::env::var_os("ROOMTIMES").is_some() { eprintln!("ROOMTIME {r} large {:.2} medium {:.2} small {:.2} objs {}", t.0, t.1, t.2, st.objs.len()); }
-        (st, t)
+        (st, t, crate::furn::layers::drain())
     };
     let jobs: Vec<(&String, State)> = rooms.iter().map(|r| (r, clone_state(state))).collect();
-    let results: Vec<(State, (f64, f64, f64))> = if serial { jobs.into_iter().map(work).collect() } else { jobs.into_par_iter().map(work).collect() };
+    let results: Vec<(State, (f64, f64, f64), Vec<crate::furn::layers::Complaint>)> = if serial { jobs.into_iter().map(work).collect() } else { jobs.into_par_iter().map(work).collect() };
     let mut tot = (0.0, 0.0, 0.0);
-    for (r, (st, t)) in rooms.iter().zip(results) {
+    let mut complaints = vec![];
+    for (r, (st, t, cs)) in rooms.iter().zip(results) {
         tot = (tot.0 + t.0, tot.1 + t.1, tot.2 + t.2);
+        complaints.extend(cs);
         for (k, o) in st.objs {
             if base_keys.contains(&k) { continue }
             if state.objs.contains_key(&k) {
@@ -540,5 +560,5 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
     for o in state.objs.values_mut() { o.active = true; }
     let keys: Vec<String> = state.objs.keys().cloned().collect();
     for k in keys { state.touch(&k); }
-    tot
+    (tot, complaints)
 }

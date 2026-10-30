@@ -151,7 +151,46 @@ pub fn build_scene(p: &Params) -> Built {
     let assets = indoorgen::assets::RealAssets { fallback: p.fallback.clone() };
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
-    let mut g = generate(&Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() } }, &assets, prog);
+    let mk = |nudges: Vec<(String, String, f64)>| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges };
+    let mut g = generate(&mk(vec![]), &assets, prog);
+    // the plan layer answers the layers below (HIER=1): while hard complaints remain, the shared wall of the complaining room nearest
+    // the complaint moves (0.25 / 0.5 m either way) and the house is solved again; a move stays when it leaves fewer hard complaints
+    // (then fewer soft ones). At most 3 tries, within twice the first solve's time.
+    if ig_core::envx::var_os("HIER").is_some() && !only_target {
+        let base = t.elapsed().as_secs_f64();
+        let key = |g: &Generated| (g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
+        let mut best = key(&g);
+        let mut kept: Vec<(String, String, f64)> = vec![];
+        let mut tried: std::collections::HashSet<(String, String, i64)> = Default::default();
+        eprintln!("HIER start: {} hard / {} soft complaints", best.0, best.1);
+        for c in g.complaints.iter().filter(|c| c.hard) { eprintln!("HIER   {} {} {:?}: {}", c.room, c.kind, c.at, c.need); }
+        let mut tries = 0;
+        while best.0 > 0 && tries < 3 && t.elapsed().as_secs_f64() < 2.0 * base {
+            let Some(c) = g.complaints.iter().find(|c| c.hard).cloned() else { break };
+            // the room's shared walls (1 m or more), nearest the complaint first (the longest when it has no location)
+            let Some(rp) = g.room_polys.iter().find(|(n, _)| *n == c.room).map(|(_, p)| crate::shp::buffer(p, 0.05)) else { break };
+            let mut walls: Vec<(f64, String)> = g.room_polys.iter().filter(|(n, _)| *n != c.room).filter_map(|(n, p)| {
+                let shared = crate::shp::intersection(&rp, &crate::shp::buffer(p, 0.05));
+                let len = crate::shp::area(&shared) / 0.1;
+                if len < 1.0 { return None }
+                let d = c.at.map_or(-len, |a| crate::shp::distance(&crate::shp::point(a[0], a[1]), &shared));
+                Some((d, n.clone()))
+            }).collect();
+            walls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let Some((nb, d)) = walls.iter().flat_map(|(_, n)| [0.25f64, -0.25, 0.5, -0.5].map(|d| (n.clone(), d))).find(|(n, d)| !tried.contains(&(c.room.clone(), n.clone(), (d * 100.0) as i64))) else { break };
+            tried.insert((c.room.clone(), nb.clone(), (d * 100.0) as i64));
+            tries += 1;
+            let mut ns = kept.clone();
+            ns.push((c.room.clone(), nb.clone(), d));
+            let ng = generate(&mk(ns.clone()), &assets, prog);
+            let k = key(&ng);
+            eprintln!("HIER try {tries}: {} grows {d:+.2} m into {nb} for {} -> {} hard / {} soft ({})", c.room, c.kind, k.0, k.1, if k < best { "kept" } else { "dropped" });
+            if k < best { g = ng; best = k; kept = ns; }
+        }
+        eprintln!("HIER done: {} hard / {} soft complaints, {} wall moves, {:.1} s (first solve {base:.1} s)", best.0, best.1, kept.len(), t.elapsed().as_secs_f64());
+    } else if ig_core::envx::var_os("LAYERDBG").is_some() {
+        eprintln!("LAYERS {} hard / {} soft complaints", g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
+    }
     if cfg.program.realism && !orig_prog {
         if let Some(spec) = &rules {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
