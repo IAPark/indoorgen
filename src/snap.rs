@@ -328,6 +328,9 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
                 continue;
             }
             let hit = a.parts.iter().any(|(al, ah)| b.parts.iter().any(|(bl, bh)| (0..3).all(|d| ah[d].min(bh[d]) - al[d].max(bl[d]) > min_ov)));
+            if hit && std::env::var_os("OVDBG").is_some() {
+                for (al, ah) in &a.parts { for (bl, bh) in &b.parts { if (0..3).all(|d| ah[d].min(bh[d]) - al[d].max(bl[d]) > min_ov) { eprintln!("OVDBG {} {:.2?}..{:.2?} x {} {:.2?}..{:.2?}", a.key, al, ah, b.key, bl, bh); } } }
+            }
             if hit && ess_pair(a, b) {
                 // two essential fixtures (toilet against a pedestal sink): slide one of them clear along the axis of least overlap; a shift
                 // must keep its footprint inside the room (0.18 m in from the wall centre line: half a wall + 3 cm) and off every other object

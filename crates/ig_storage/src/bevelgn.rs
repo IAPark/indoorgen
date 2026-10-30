@@ -368,6 +368,13 @@ fn oven_params_r(mut r: Rng) -> (Sampled, Rng) {
     let buttons = r.randint(1, 3) * 2;
     let button_r = r.uniform(0.05, 0.1) * width;
     let button_t = r.uniform(0.02, 0.04) * depth;
+    // a standard range, as the layout's appliance (appliances.rs): 76 cm wide, 64 cm deep, its body at counter height (0.92 m), a low
+    // back guard; the draws above are kept so the stream is unchanged. (The sampled 1 m box overlapped the counter runs beside it and
+    // the overlap pass deleted the range.)
+    let (sd, sw, sh) = (0.64 / depth, 0.76 / width, 0.92 / height);
+    let (depth, width, height) = (0.64, 0.76, 0.92);
+    let (door_t, rack_r, panel_t, button_t, button_r) = (door_t * sd, rack_r * sd, panel_t * sd, button_t * sd, button_r * sw);
+    let panel_h = (panel_h * sh).clamp(0.1, 0.18);
     let heat = r.uniform(0.1, 0.2);
     let brand = appliances::generate_text(&mut r);
     let use_gas = r.randint(0, 2);

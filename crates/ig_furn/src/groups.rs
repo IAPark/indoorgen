@@ -2011,7 +2011,24 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         if !on_run.is_empty() {
             let ovens0: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "OvenFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
             let tight = on_run.iter().any(|sk| ovens0.iter().any(|o| layout2d::dist(state, o, sk) < super::layout_rules::get().sink_range_gap));
-            if !tight { continue }
+            if !tight {
+                // (it stays, set on the counter top: the solver stood it on the run's box, the top of the wall cabinets under the ceiling)
+                let prs = layout2d::prisms(state, &run);
+                let base = prs.iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min);
+                let top = prs.iter().map(|p| p.z[1]).filter(|z| *z > base + 0.7 && *z < base + 1.2).fold(f64::NAN, f64::max);
+                let top = if top.is_finite() { top } else { base + 0.91 };
+                for sk in &on_run {
+                    let bottom = layout2d::prisms(state, sk).iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min);
+                    if bottom.is_finite() && (bottom - top).abs() > 0.03 {
+                        let mut p = state.objs[sk].pose;
+                        p.translate([0.0, 0.0, top - bottom]);
+                        state.set_pose(sk, p);
+                        state.touch(sk);
+                        log.push(format!("{run}: sink {sk} set on the counter ({:+.2} m)", top - bottom));
+                    }
+                }
+                continue
+            }
             for k in on_run { layout2d::remove_tree(state, &k); log.push(format!("{run}: sink against the range, placed again")); }
         }
         // one sink per kitchen, on the run the range stands at (else the longest): a sink on a separate counter read as disjoint
@@ -2037,7 +2054,12 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         let rp = state.objs[&run].pose;
         let (rlo, rhi) = lohi(state, &run);
         // the counter top: the top of the run's lowest part
-        let top = layout2d::prisms(state, &run).iter().map(|p| (p.z[0], p.z[1])).fold((f64::INFINITY, 0.0), |a, b| if b.0 < a.0 { b } else { a }).1;
+        // (the highest part top 0.7-1.2 m above the run's base: a run whose parts came as one box -- base and wall cabinets together --
+        // put the sink on top of the wall cabinets, under the ceiling; else the standard 0.91 m)
+        let prs = layout2d::prisms(state, &run);
+        let base = prs.iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min);
+        let top = prs.iter().map(|p| p.z[1]).filter(|z| *z > base + 0.7 && *z < base + 1.2).fold(f64::NAN, f64::max);
+        let top = if top.is_finite() { top } else { base + 0.91 };
         let name = format!("{run}_sink");
         if !new_piece(ctx, state, rng, "SinkFactory", &room, &name) { continue }
         if let Some(r) = state.objs[&run].relations.iter().find(|r| r.target == room && r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom")))).cloned() {
