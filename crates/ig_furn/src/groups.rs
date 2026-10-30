@@ -1628,6 +1628,16 @@ pub fn wardrobes(state: &mut State) -> Vec<String> {
     log
 }
 
+/// dining rooms: the solver's storage and plants out before the chairs are seated (a cabinet it left beside the table took a chair's
+/// slot; dining_furnish puts a sideboard and a corner plant back afterwards)
+pub fn dining_clear(state: &mut State, only_room: Option<&str>) -> Vec<String> {
+    let mut log = vec![];
+    let gone: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "SingleCabinetFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "LargePlantContainerFactory")
+        && layout2d::room_of(state, k).map_or(false, |r| room_type_of(&r) == "dining-room" && only_room.map_or(true, |o| o == r.as_str()))).map(|(k, _)| k.clone()).collect();
+    for k in gone { layout2d::remove_tree(state, &k); log.push(format!("dining: cleared {k} before seating the chairs")); }
+    log
+}
+
 /// dining rooms furnished past the table: a sideboard on the best free wall (centred, away from the doors, 0.9-2.5 m from the
 /// table so the chairs pull out), a tall cabinet on another wall in large rooms, a rug for the rugs pass to put under the table
 /// (layout_rules: dining_sideboard, dining_cabinet_m2, dining_rug)

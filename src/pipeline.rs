@@ -455,6 +455,7 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
         lg.extend(crate::furn::groups::beds(state));
         let mut rd = Rng::seeded(hs("groups_dining"));
         lg.extend(crate::furn::groups::dining(&mut ctx, state, &mut rd));
+        lg.extend(crate::furn::groups::dining_clear(state, only_room));
         lg.extend(crate::table_setting::gather_chairs(state));
         lg.extend(crate::furn::groups::dining_furnish(&mut ctx, state, &mut rd, only_room));
         lg.extend(crate::furn::groups::room_extras(&mut ctx, state, &mut rd, only_room));

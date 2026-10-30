@@ -102,6 +102,14 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
         if far.is_empty() { continue }
         let room = state.objs[&far[0]].relations.iter().map(|x| x.target.clone()).find(|x| state.objs.get(x).map_or(false, |o| o.polygon.is_some()));
         let poly = room.and_then(|k| state.objs[&k].polygon.clone());
+        // a round table seats its chairs at the four diagonals when the four sides leave some out (one chair against a wall
+        // went missing and the table read as half set)
+        let round = t.tags.contains(crate::furn::tags::Tag::sem("RoundTable"));
+        let saved: Vec<(String, crate::furn::geom::Pose)> = far.iter().map(|k| (k.clone(), state.objs[k].pose)).collect();
+        let mut best: Option<(usize, Vec<(String, crate::furn::geom::Pose)>, Vec<String>, usize)> = None;
+        for diag in if round { vec![false, true] } else { vec![false] } {
+        for (k, p) in &saved { state.objs.get_mut(k).unwrap().pose = *p; }
+        let mut unseated: Vec<String> = vec![];
         // candidate slots: (local position on the edge, outward normal)
         let mut slots: Vec<([f64; 2], [f64; 2])> = vec![];
         // fill order: the middle slots of the long sides first, alternating sides, then outward, then the short sides -- a set that
@@ -120,6 +128,11 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 let from_mid = ((i as f64 + 0.5) - n as f64 / 2.0).abs().floor() as usize;
                 prio.push((if axis == long_axis { from_mid } else { 100 + from_mid }, si % 2));
             }
+        }
+        if diag {
+            let (c, rad) = ([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], (hi[0] - lo[0]).min(hi[1] - lo[1]) / 2.0);
+            slots = (0..4).map(|k| { let a = std::f64::consts::FRAC_PI_4 + k as f64 * std::f64::consts::FRAC_PI_2; ([c[0] + rad * a.cos(), c[1] + rad * a.sin()], [a.cos(), a.sin()]) }).collect();
+            prio = (0..4).map(|k| (0, k % 2)).collect();
         }
         let mut moved = 0;
         let mut taken: Vec<usize> = vec![];
@@ -146,7 +159,13 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 np.set_loc([sc[0] - cc[0], sc[1] - cc[1], c.pose.t[2]]);
                 let mut cand = c.clone(); cand.pose = np;
                 let b = wbox(&cand);
-                if others.iter().any(|o| ov(&b, o)) { continue }
+                if others.iter().any(|o| ov(&b, o)) {
+                    if std::env::var_os("CHAIR_DEBUG").is_some() {
+                        let hit: Vec<&String> = state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && ov(&b, &wbox(o))).map(|(k, _)| k).collect();
+                        eprintln!("CHAIRDBG {ck} slot {si} diag {diag}: hits {hit:?}");
+                    }
+                    continue
+                }
                 if let Some(pg) = &poly {
                     if ![[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.0[0], b.1[1]], [b.1[0], b.1[1]]].iter().all(|q| crate::shp::contains_pt(pg, *q)) { continue }
                 }
@@ -154,9 +173,18 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 taken.push(si);
                 done = true; moved += 1; break;
             }
-            if !done { remove.push(ck.clone()); }
+            if !done { unseated.push(ck.clone()); }
         }
-        log.push(format!("{} of {} chairs seated at {tk} ({} slots, {} removed)", moved, far.len(), slots.len(), far.len() - moved));
+        if best.as_ref().map_or(true, |b| moved > b.0) {
+            best = Some((moved, far.iter().map(|k| (k.clone(), state.objs[k].pose)).collect(), unseated.clone(), slots.len()));
+        }
+        if moved == far.len() { break }
+        }
+        let (moved, poses, unseated, nslots) = best.unwrap();
+        for (k, p) in poses { state.objs.get_mut(&k).unwrap().pose = p; }
+        remove.extend(unseated.iter().cloned());
+        let slots_len = nslots;
+        log.push(format!("{} of {} chairs seated at {tk} ({} slots, {} removed)", moved, far.len(), slots_len, far.len() - moved));
     }
     // and anything resting on a removed chair
     let mut all = remove.clone();
