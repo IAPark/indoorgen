@@ -12,6 +12,7 @@ use crate::mesh::{Mesh, Scene};
 pub mod bath;
 pub mod counter;
 pub mod fireplace;
+pub mod nightstand;
 pub mod props;
 
 /// furniture / feature classes whose surfaces belong to a dresser
@@ -208,5 +209,6 @@ pub fn run(scene: &mut Scene, state: &State, visuals: &std::collections::HashMap
     log.extend(fireplace::dress(scene, state, features, assets, seed));
     log.extend(counter::dress(scene, state, visuals, assets, seed));
     log.extend(bath::dress(scene, state, visuals, assets, seed));
+    log.extend(nightstand::dress(scene, state, visuals, assets, seed));
     log
 }
