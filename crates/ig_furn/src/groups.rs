@@ -273,7 +273,9 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
             let start = state.objs[&a].pose;
             let (lo, hi) = lohi(state, &a);
             let hw = (hi[1] - lo[1]) / 2.0;
-            if place_on_wall(state, &a, &room, &move |_, _c, t, len, n| -(t - hw).min(len - t - hw) - if n[0].abs() > 0.99 || n[1].abs() > 0.99 { 0.0 } else { 10.0 }) {
+            // (a range goes mid-wall, where counter can meet it on both sides; a fridge into the corner)
+            let is_range = class_of(&state.objs[&a]) == "OvenFactory";
+            if place_on_wall(state, &a, &room, &move |_, _c, t, len, n| (if is_range { -(t - len / 2.0).abs() } else { -(t - hw).min(len - t - hw) }) - if n[0].abs() > 0.99 || n[1].abs() > 0.99 { 0.0 } else { 10.0 }) {
                 log.push(format!("{room}: {a} slid into a corner"));
             } else {
                 state.set_pose(&a, start);
@@ -413,7 +415,7 @@ fn kitchen_template(ctx: &mut Ctx, state: &mut State, log: &mut Vec<String>) -> 
         }
         let start_state = state.objs.clone();
         let mut best: Option<(f64, _)> = None;
-        for (c, ua, na, la, ub, nb, lb) in cands {
+        for (c, ua, na, la, ub, nb, lb) in cands.clone() {
             state.objs = start_state.clone();
             // the template's pieces out of the room until each is placed: the solver's spots block each other (parked far off they
             // still count as the room's pieces for the walkway check)
@@ -441,12 +443,17 @@ fn kitchen_template(ctx: &mut Ctx, state: &mut State, log: &mut Vec<String>) -> 
             }
             if wa == 0.0 { if dbg { eprintln!("KTPL {room} corner {c:?}: no run A (fridge at {sf:.2})"); } continue }
             // leg B: past leg A's depth, the range as far along as it fits, the run up to it (none when the leg is short)
+            // the range mid-leg, with counter on both sides (0.6 m or more toward the corner, 1.25 m or more beyond it, which the
+            // extra-runs pass fills): at the leg's far end it often sat in another corner, turned along the neighbouring run
             let mut sr = None;
             put(state, &range);
-            for k in 0..40 {
-                let st = lb - ow - 0.02 - k as f64 * 0.2;
-                if st < depth_a + 0.01 { break }
-                if place_along(state, &range, c, ub, nb, st) { sr = Some(st); break }
+            let mid = depth_a + 0.62 + ((lb - 1.25) - (depth_a + 0.62) - ow).max(0.0) / 2.0;
+            let mut cands: Vec<f64> = (0..12).flat_map(|k| { let o = (k as f64 / 2.0).ceil() * 0.2 * if k % 2 == 0 { 1.0 } else { -1.0 }; [mid + o] }).filter(|&st| st >= depth_a + 0.62 && st + ow <= lb - 1.25).collect();
+            let n_mid = cands.len();
+            cands.extend((0..40).map(|k| lb - ow - 0.02 - k as f64 * 0.2).filter(|&st| st >= depth_a + 0.01));
+            let mut range_mid = false;
+            for (ci, st) in cands.into_iter().enumerate() {
+                if place_along(state, &range, c, ub, nb, st) { sr = Some(st); range_mid = ci < n_mid; break }
             }
             let Some(sr) = sr else { if dbg { eprintln!("KTPL {room} corner {c:?} lb {lb:.2}: no range spot"); } continue };
             let mut wb = 0.0;
@@ -460,7 +467,42 @@ fn kitchen_template(ctx: &mut Ctx, state: &mut State, log: &mut Vec<String>) -> 
                 if place_along(state, &leg_b, c, ub, nb, depth_a + 0.01) { wb = w; break }
             }
             if wb == 0.0 { state.objs.shift_remove(&leg_b); }
-            let score = wa + wb + if wb > 0.0 { 1.0 } else { 0.0 };
+            // (a range at the leg's end sits in a corner: any layout with it mid-leg wins)
+            let score = wa + wb + if wb > 0.0 { 1.0 } else { 0.0 } + if range_mid { 4.0 } else { 0.0 };
+            if best.as_ref().map_or(true, |(s, _)| score > *s) { best = Some((score, state.objs.clone())); }
+        }
+        // one wall: from the corner a counter, the range mid-wall, a counter, the fridge at the far end (short second legs left the
+        // range in a corner); the extra-runs pass then adds counters on the other walls
+        for (c, ua, na, la, _, _, _) in cands {
+            state.objs = start_state.clone();
+            let parked: std::collections::HashMap<String, ObjState> = [&proto, &leg_b, &fridge, &range].into_iter().map(|k| (k.clone(), state.objs.shift_remove(k.as_str()).unwrap())).collect();
+            let put = |state: &mut State, k: &str| { if !state.objs.contains_key(k) { state.objs.insert(k.to_string(), parked[k].clone()); state.touch(k); } };
+            put(state, &fridge);
+            let mut sf = None;
+            for k in 0..40 {
+                let st = la - fw - 0.02 - k as f64 * 0.2;
+                if st < 1.2 + ow + 1.2 + 0.05 { break }
+                if place_along(state, &fridge, c, ua, na, st) { sf = Some(st); break }
+            }
+            let Some(sf) = sf else { continue };
+            put(state, &range);
+            let mid = (sf - ow) / 2.0;
+            let mut sr = None;
+            for k in 0..12 {
+                let st = mid + (k as f64 / 2.0).ceil() * 0.2 * if k % 2 == 0 { 1.0 } else { -1.0 };
+                if st < 1.22 || st + ow > sf - 1.22 { continue }
+                if place_along(state, &range, c, ua, na, st) { sr = Some(st); break }
+            }
+            let Some(sr) = sr else { continue };
+            // the counter from the corner to the range, and from the range to the fridge
+            let (w1, s2, w2) = (sr - 0.02, sr + ow + 0.01, sf - 0.02 - (sr + ow + 0.01));
+            put(state, &proto);
+            let _ = super::solver::set_width(ctx, state, &proto, &base_a, w1, 1.0);
+            if !place_along(state, &proto, c, ua, na, 0.0) { continue }
+            put(state, &leg_b);
+            let _ = super::solver::set_width(ctx, state, &leg_b, &base_b, w2, 1.0);
+            if !place_along(state, &leg_b, c, ua, na, s2) { continue }
+            let score = w1 + w2 + 1.0 + 4.0;
             if best.as_ref().map_or(true, |(s, _)| score > *s) { best = Some((score, state.objs.clone())); }
         }
         match best {
@@ -1745,7 +1787,16 @@ fn slot_free(state: &State, room: &str, owner: &str, corners: &[[f64; 2]]) -> bo
 /// against the backsplash; further spots along the run when items already stand there
 pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<&str>) -> Vec<String> {
     let mut log = vec![];
-    let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && only_room.map_or(true, |r| layout2d::room_of(state, k).as_deref() == Some(r))).map(|(k, _)| k.clone()).collect();
+    let mut runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && only_room.map_or(true, |r| layout2d::room_of(state, k).as_deref() == Some(r))).map(|(k, _)| k.clone()).collect();
+    // per kitchen, the runs in order of preference: the one the range stands at (else the longest) first; a run without room for
+    // the sink hands it to the next
+    let rank = |st: &State, r: &str| -> (String, f64, f64) {
+        let room = layout2d::room_of(st, r).unwrap_or_default();
+        let d = st.objs.iter().filter(|(k, o)| class_of(o) == "OvenFactory" && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| layout2d::dist(st, r, k)).fold(9.0f64, f64::min);
+        let w = st.objs[r].generator.as_ref().and_then(super::solver::cur_size).map_or(0.0, |c| c[0]);
+        (room, d, -w)
+    };
+    runs.sort_by(|a, b| rank(state, a).partial_cmp(&rank(state, b)).unwrap());
     for run in runs.clone() {
         let Some(room) = layout2d::room_of(state, &run) else { continue };
         // a sink already on this run stays unless it stands against the range (no counter between): then it is placed again
@@ -1765,11 +1816,14 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
             (d, -w)
         };
         let main = in_room.iter().min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap()).map(|r| r.to_string());
-        if main.as_deref() != Some(run.as_str()) { continue }
+        let first = main.as_deref() == Some(run.as_str());
+        if !first && state.objs.iter().any(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())) { continue }
         // a sink the solver put on another run moves here (removed; the one below takes its place)
-        let elsewhere: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())
-            && !o.relations.iter().any(|r| r.target == run)).map(|(k, _)| k.clone()).collect();
-        for k in elsewhere { layout2d::remove_tree(state, &k); log.push(format!("{room}: sink {k} on a run away from the range, moved")); }
+        if first {
+            let elsewhere: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())
+                && !o.relations.iter().any(|r| r.target == run)).map(|(k, _)| k.clone()).collect();
+            for k in elsewhere { layout2d::remove_tree(state, &k); log.push(format!("{room}: sink {k} on a run away from the range, moved")); }
+        }
         // the solver's loose items on the run go first (the counter dresser removes and redresses them by zone anyway: dress::purge)
         let loose: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == run) && class_of(o) != "SinkFactory").map(|(k, _)| k.clone()).collect();
         for k in loose { if state.objs.contains_key(&k) { layout2d::remove_tree(state, &k); } }
