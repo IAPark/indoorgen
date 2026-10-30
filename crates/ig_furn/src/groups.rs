@@ -951,7 +951,8 @@ fn place_bed(state: &mut State, bed: &str) -> Option<String> {
             // (a headboard against a window read as a bed blocking the window)
             let win = Tag::sem("Window");
             let on_window = state.objs.iter().any(|(k, o)| o.tags.contains(win.clone()) && layout2d::dist(state, k, bed) < 0.25);
-            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } + centred * 0.6 + straight * 2.0 - if on_window { 2.5 } else { 0.0 };
+            // (no slot at all: a bed wedged into a corner with no nightstand read as unfinished, worse than one by a window)
+            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } - if side_room == 0.0 { 3.0 } else { 0.0 } + centred * 0.6 + straight * 2.0 - if on_window { 2.5 } else { 0.0 };
             if best.as_ref().map_or(true, |(s, _)| score > *s) {
                 best = Some((score, state.objs[bed].pose));
             }
@@ -1937,10 +1938,15 @@ fn slot_free(state: &State, room: &str, owner: &str, corners: &[[f64; 2]]) -> bo
     if !corners.iter().all(|c| layout2d::in_rings(&rings, *c)) { return false }
     let probe = layout2d::prism_of(&corners.iter().map(|c| [c[0], c[1], 0.0]).chain(corners.iter().map(|c| [c[0], c[1], 0.7])).collect::<Vec<_>>());
     let nc = Tag::sem("NoCollision");
-    state.objs.iter().all(|(k, o)| {
+    let ok = |(k, o): (&String, &ObjState)| {
         k == owner || layout2d::is_room(o) || o.tags.contains(nc) || o.relations.iter().any(|r| r.target == owner) || k.starts_with("doorclear/") && false
             || layout2d::prisms(state, k).iter().all(|p| layout2d::prism_depth(&probe, p) <= 1e-4)
-    })
+    };
+    if ig_core::env_on!("SLOTDBG") {
+        let bad: Vec<&String> = state.objs.iter().filter(|e| !ok(*e)).map(|(k, _)| k).collect();
+        eprintln!("SLOTDBG {owner}: blocked by {bad:?}");
+    }
+    state.objs.iter().all(ok)
 }
 
 /// counter runs without a sink get one on their top: under a window that overlooks the run (the usual spot), else at the middle,
