@@ -1274,7 +1274,10 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     let t = state.objs[k].pose.t;
                     let ahead = (t[0] - sfront[0]) * sf[0] + (t[1] - sfront[1]) * sf[1];
                     let near = ((t[0] - c[0]).powi(2) + (t[1] - c[1]).powi(2)).sqrt() < 2.2;
-                    ok = ahead > 0.1 && near && free_ok(state, k);
+                    // (nor between the sofa and the TV: one in the line of sight blocked the screen)
+                    let lateral = ((t[0] - sfront[0]) * -sf[1] + (t[1] - sfront[1]) * sf[0]).abs();
+                    let in_view = lateral < (shi[1] - slo[1]) / 2.0 + 0.2 && ahead > 0.9;
+                    ok = ahead > 0.1 && near && !in_view && free_ok(state, k);
                     // left where the solver had it: square to the room, turned toward the coffee table (a chair at 45 degrees read
                     // as dropped)
                     if ok {
