@@ -109,6 +109,9 @@ impl Appliance {
                 a.depth = 1.0 + r.normal(0.0, 0.1);
                 a.width = 1.0 + r.normal(0.0, 0.1);
                 a.height = 1.0 + r.normal(0.0, 0.1);
+                // a range is counter sized (0.76 m wide, 0.65 m deep, its body at counter height under the backsplash panel): the
+                // 1 m cube stood half a metre proud of the counter run it belongs to
+                if k == K::Oven { a.depth *= 0.65; a.width *= 0.78; a.height *= 0.9; }
                 a.door_t = r.uniform(0.05, 0.1) * a.depth;
                 a.rack_r = r.uniform(0.01, 0.02) * a.depth;
                 match k {

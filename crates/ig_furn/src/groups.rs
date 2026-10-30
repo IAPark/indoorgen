@@ -1148,6 +1148,10 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     if !(1.5..=lr.side_wall_max).contains(&dist) { continue }
                     let cos = (v[0] * n[0] + v[1] * n[1]) / dist;
                     if cos < 0.77 { continue }
+                    // and in front of the screen / firebox, not off to its side looking at it edge-on (a sofa against the far wall
+                    // of a 45 m2 room watched the fireplace from 60 degrees off its axis)
+                    let ahead = -(v[0] * f[0] + v[1] * f[1]) / dist;
+                    if ahead < 0.8 { continue }
                     if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
                     // (centred on a fireplace: it cannot move, so the sofa lines up with it)
                     let score = 100.0 + cos * if fixed { 10.0 } else { 3.0 } - (dist - 2.6).abs();
@@ -1249,10 +1253,11 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 // beside the coffee table, turned to face it across a 0.45 m gap: the side away from the room's walls first, then
                 // the other; else where the solver had it
                 let half = (chi[0] - clo[0]) / 2.0;
-                'a: for gap in [0.45f64, 0.6, 0.35] {
+                // (then slid along the sofa's axis: toward the TV, or back level with the sofa's arm)
+                'a: for (gap, fwd) in [(0.45f64, 0.0f64), (0.6, 0.0), (0.35, 0.0), (0.45, 0.35), (0.45, -0.35), (0.45, 0.7), (0.6, -0.35)] {
                     for side in [1.0f64, -1.0] {
                         let dd = coffee_hw + gap + half;
-                        let at = [c[0] - sf[1] * side * dd, c[1] + sf[0] * side * dd, 0.0];
+                        let at = [c[0] - sf[1] * side * dd + sf[0] * fwd, c[1] + sf[0] * side * dd + sf[1] * fwd, 0.0];
                         let face = (c[1] - at[1]).atan2(c[0] - at[0]);
                         if try_place(state, k, face, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], at) { ok = true; break 'a; }
                     }
@@ -1260,7 +1265,11 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 if !ok {
                     state.set_pose(k, saved);
                     state.touch(k);
-                    ok = free_ok(state, k);
+                    // (only near the group and on the sofa's front side: one behind the sofa faced its back)
+                    let t = state.objs[k].pose.t;
+                    let ahead = (t[0] - sfront[0]) * sf[0] + (t[1] - sfront[1]) * sf[1];
+                    let near = ((t[0] - c[0]).powi(2) + (t[1] - c[1]).powi(2)).sqrt() < 2.2;
+                    ok = ahead > -0.3 && near && free_ok(state, k);
                     // left where the solver had it: square to the room, turned toward the coffee table (a chair at 45 degrees read
                     // as dropped)
                     if ok {
@@ -1425,6 +1434,18 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
         let has = |state: &State, c: &str| state.objs.iter().any(|(k, o)| class_of(o) == c && layout2d::room_of(state, k).as_deref() == Some(room.as_str()));
         let doors = door_points(state, &room);
         let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
+        if rt == "living-room" {
+            // the solver's plants go before the TV and the sofa look for their walls (room_extras puts plants in free corners
+            // afterwards), and so does its storage where room_extras adds a bookcase instead
+            let lr = super::layout_rules::get();
+            let area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
+            let built_in = has(state, "BookshelfWallFeature");
+            let gone: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::room_of(state, k).as_deref() == Some(room.as_str())
+                && (class_of(o) == "LargePlantContainerFactory" || (lr.living_bookcase && area >= 20.0 && !built_in
+                    && matches!(class_of(o), "SingleCabinetFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory"))))
+                .map(|(k, _)| k.clone()).collect();
+            for k in gone { layout2d::remove_tree(state, &k); log.push(format!("{room}: cleared {k} for the TV and sofa")); }
+        }
         if rt == "living-room" && !has(state, "TVStandFactory") {
             let name = format!("{room}_tvstand").replace('/', "_");
             if new_piece(ctx, state, rng, "TVStandFactory", &room, &name) {

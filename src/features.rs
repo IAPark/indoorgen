@@ -273,6 +273,7 @@ pub fn plan(cfg: &FeatureCfg, c: &RoomConstants, room_polys: &[(String, G)], cut
                 if blo[0] < -0.005 || bhi[0] > s.span.length + 0.005 || blo[1] < -0.005 { continue } // past the span ends / behind the wall face
                 if blocks_opening(&fa, s, c, cutters, room) { continue }
                 if !inside_room(&fa, s, &inner_ring) { continue } // e.g. a seat on a diagonal wall whose ends cross the neighbouring walls
+                if fa.class == "FireplaceFeature" && !seating_zone(&fa, s, &inner_ring, cutters, room) { continue }
                 let fp = world_aabb(&fa.footprint, s);
                 if out.iter().any(|o| o.room == *room && aabb_overlap(fp, poly_aabb(&o.footprint)) > 0.0025) { continue }
                 chosen = Some((si, iv, fa));
@@ -518,6 +519,39 @@ fn box_sequence(m: &ig_core::mesh::Mesh) -> Option<Vec<([f64; 3], [f64; 3])>> {
 }
 
 /// every vertex of the built feature (world xy) inside the room's inner wall polygon (grown by 5 mm)
+/// a fireplace is the living room's focal point: the sofa faces it from 2-3 m, so the floor in front of it (2.4 m wide, 3.4 m
+/// deep) must be in the room and clear of door passages (one on a wall beside a corridor-wide strip of floor left the sofa no
+/// spot but the walkway)
+fn seating_zone(fa: &FeatureAsset, s: &Span, ring: &[[f64; 2]], cutters: &[Cutter], room: &str) -> bool {
+    if ring.len() < 3 { return true }
+    let (blo, bhi) = fa.asset.bounds();
+    let (c, sn) = (s.yaw.cos(), s.yaw.sin());
+    let world = |x: f64, y: f64| [s.origin[0] + c * x - sn * y, s.origin[1] + sn * x + c * y];
+    let cx = (blo[0] + bhi[0]) / 2.0;
+    let inside = |p: [f64; 2]| {
+        let (mut k, n) = (false, ring.len());
+        let mut j = n - 1;
+        for i in 0..n {
+            let (a, b) = (ring[i], ring[j]);
+            if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] { k = !k; }
+            j = i;
+        }
+        k
+    };
+    for i in 0..=8 {
+        for j in 0..=10 {
+            let (x, y) = (cx - 1.2 + 2.4 * i as f64 / 8.0, bhi[1] + 0.05 + 3.35 * j as f64 / 10.0);
+            if !inside(world(x, y)) { return false }
+        }
+    }
+    // door centres (in this room) 0.5 m or more outside the zone, in the span frame
+    cutters.iter().filter(|ct| ct.kind != CutKind::Window && ct.rooms.iter().any(|r| r == room)).all(|ct| {
+        let (dx, dy) = (ct.loc[0] - s.origin[0], ct.loc[1] - s.origin[1]);
+        let (x, y) = (c * dx + sn * dy, -sn * dx + c * dy);
+        !(x > cx - 1.7 && x < cx + 1.7 && y > bhi[1] - 0.5 && y < bhi[1] + 3.9)
+    })
+}
+
 fn inside_room(fa: &FeatureAsset, s: &Span, ring: &[[f64; 2]]) -> bool {
     if ring.len() < 3 { return true }
     let (c, sn) = (s.yaw.cos(), s.yaw.sin());

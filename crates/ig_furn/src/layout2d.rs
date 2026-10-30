@@ -695,7 +695,8 @@ pub fn repair(state: &mut State) -> Vec<String> {
             let pick = |chairs: bool| -> Vec<(f64, String)> {
                 let mut c: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| {
                     let cls = class_of(o);
-                    let ok_cls = if chairs { false } else { !anchor(cls) && !cls.starts_with("Chair") };
+                    // (built-in features neither: a fireplace or window seat is part of the wall)
+                    let ok_cls = if chairs { false } else { !anchor(cls) && !cls.starts_with("Chair") && !cls.ends_with("Feature") };
                     o.generator.is_some() && !is_room(o) && ok_cls && !no_block(cls) && cls != "Door" && cls != "Window" && floor_foot(state, k).is_some() && room_of(state, k).as_deref() == Some(room.as_str())
                 }).map(|(k, _)| (prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone())).collect();
                 c.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
