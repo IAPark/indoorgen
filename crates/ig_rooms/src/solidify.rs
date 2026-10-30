@@ -19,6 +19,19 @@ pub enum CutKind {
 
 thread_local! { static HOUSE_KEY: std::cell::RefCell<String> = std::cell::RefCell::new(String::new()); }
 fn house_key() -> String { HOUSE_KEY.with(|h| h.borrow().clone()) }
+/// the own stream of one opening: keyed by the house, what it is and where (rooms, the wall segment's rounded ends), so moving one
+/// wall re-draws only the openings on that wall (one shared stream for every door and window moved them all when any wall moved)
+fn opening_rng(what: &str, parts: &[&str], seg: &G) -> Rng {
+    // (the segment's bounds: shared walls come as multi-line strings)
+    let (x0, y0, x1, y1) = bounds(seg);
+    let ends = format!("{x0:.2},{y0:.2},{x1:.2},{y1:.2}");
+    let mut key: Vec<&str> = vec![what];
+    let hk = house_key();
+    key.push(&hk);
+    key.extend_from_slice(parts);
+    key.push(&ends);
+    Rng::seeded(crate::int_hash(&key))
+}
 
 /// How a door opening closes (kind Door): a hinged leaf, a pair of leaves, an interior slider, a sliding glass patio door
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -257,7 +270,7 @@ impl<'a> Solidifier<'a> {
                 if std::env::var_os("PASSAGE_DEBUG").is_some() && self.passage_prob > 0.0 { eprintln!("PASSAGEDBG {k} {l} fn {fn_} len {:.2}", length(se)); }
                 let passage_p = self.passage_prob.max(crate::plan_rules::get().open_plan_p);
                 if fn_ == "door" && passage_p > 0.0 && open_pair(room_type(k)) && open_pair(room_type(l)) && length(se) >= 2.2 {
-                    let mut pr = Rng::seeded(crate::int_hash(&["passage", &format!("{:?}", rng.peek()), k, l]));
+                    let mut pr = Rng::seeded(crate::int_hash(&["passage", &house_key(), k, l]));
                     if pr.f64() < passage_p {
                         let mut cut = self.make_passage_cutter(&mut pr, se);
                         cut.rooms = vec![k.clone(), l.clone()];
@@ -267,7 +280,8 @@ impl<'a> Solidifier<'a> {
                     }
                 }
                 if fn_ == "door" {
-                    let mut cut = self.make_door_cutter(rng, se, direction);
+                    let mut dr = opening_rng("door", &[k, l], se);
+                    let mut cut = self.make_door_cutter(&mut dr, se, direction);
                     cut.rooms = vec![k.clone(), l.clone()];
                     self.restyle(&mut cut, k, l, se);
                     door_map.entry(k.clone()).or_default().insert(l.clone(), cut.clone());
@@ -373,7 +387,7 @@ impl<'a> Solidifier<'a> {
                 let pano_p = if k.starts_with("living-room") || k.starts_with("dining-room") { std::env::var("PANO_P").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3) } else { 0.0 };
                 let pano = pano_p > 0.0 && Rng::seeded(ig_core::int_hash(&["pano", k, &format!("{:.3}", length(&ls))])).f64() < pano_p;
                 if pano && std::env::var_os("PANO_DEBUG").is_some() { eprintln!("PANO {k} wall {:.2} m", length(&ls)); }
-                let mut cs = self.make_window_cutter(rng, &ls, if pano { -1.0 } else { 0.0 });
+                let mut cs = self.make_window_cutter(&mut opening_rng("window", &[k], &ls), &ls, if pano { -1.0 } else { 0.0 });
                 for c in cs.iter_mut() {
                     c.rooms = vec![k.clone()];
                 }
@@ -384,14 +398,14 @@ impl<'a> Solidifier<'a> {
             if Some(k) == entrance.as_ref() && self.level == 0 {
                 let (x, y, x_, y_) = max_mls(mls);
                 let ls = linestring(&[[x, y], [x_, y_]]).unwrap();
-                let mut cutter = self.make_entrance_cutter(rng, &ls);
+                let mut cutter = self.make_entrance_cutter(&mut opening_rng("entrance", &[k], &ls), &ls);
                 cutter.rooms = vec![k.clone()];
                 entrance_cutters.entry(k.clone()).or_default().push(cutter);
                 let rest = difference(mls, &ls);
                 if length(&rest) > 0.0 {
                     let pano_p = if k.starts_with("living-room") || k.starts_with("dining-room") { std::env::var("PANO_P").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3) } else { 0.0 };
                     let pano = pano_p > 0.0 && Rng::seeded(ig_core::int_hash(&["pano", k, &format!("{:.3}", length(&rest))])).f64() < pano_p;
-                    let mut cs = self.make_window_cutter(rng, &rest, if pano { -1.0 } else { 0.0 });
+                    let mut cs = self.make_window_cutter(&mut opening_rng("window", &[k], &rest), &rest, if pano { -1.0 } else { 0.0 });
                     for c in cs.iter_mut() {
                         c.rooms = vec![k.clone()];
                     }
