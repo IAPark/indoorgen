@@ -371,18 +371,56 @@ fn styled_doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::
                 let mut fm = frame_box(w, h, wt);
                 place(&mut fm, ct, &Mat4::identity());
                 out.push(Piece { name: format!("{name}.frame"), class: "Door".into(), mesh: fm, mat: white.clone() });
-                // the panel hangs on the room side, just off the casing, slid 30-90 % of the way open along the wall
-                let (t, pw) = (0.035, w + 0.08);
-                let yc = swing * (wt / 2.0 + CASING_T + 0.02 + t / 2.0);
+                // panels hang on the room side, just off the casing: one panel slid 30-90 % open (closets, single openings), or two
+                // bypass panels on parallel tracks for a wide opening (one slid over the other). Solid, or glazed (a frame round a
+                // glass pane) for the wide living / dining sliders half the time; closets stay solid
+                let t = 0.035;
+                let closet = ct.rooms.iter().any(|r| crate::rooms::state::room_type(r) == "closet");
+                let glazed = !closet && w > 1.2 && (r.f64() < 0.5 || std::env::var_os("SLIDE_GLAZED").is_some()); // (SLIDE_GLAZED: testing)
+                let base = swing * (wt / 2.0 + CASING_T + 0.02 + t / 2.0);
+                let top = zt + LINING + 0.02;
                 let dir = if r.f64() < 0.5 { -1.0 } else { 1.0 };
-                let off = dir * r.uniform(0.3, 0.9) * w;
-                let mut panel = Mesh::cuboid([off - pw / 2.0, yc - t / 2.0, zb], [off + pw / 2.0, yc + t / 2.0, zt + LINING + 0.02]);
-                // recessed pull
-                panel.append(&Mesh::cuboid([off - dir * (pw / 2.0 - 0.06) - 0.012, yc + swing * t / 2.0, -0.10], [off - dir * (pw / 2.0 - 0.06) + 0.012, yc + swing * (t / 2.0 + 0.004), 0.10]));
-                let mut rail = Mesh::cuboid([-w / 2.0 - pw * 0.9, yc - 0.02, zt + LINING + 0.02], [w / 2.0 + pw * 0.9, yc + 0.02, zt + LINING + 0.08]);
-                place(&mut panel, ct, &Mat4::identity());
+                let mut solid = Mesh::new();
+                let mut glass = Mesh::new();
+                let mut panel = |x0: f64, x1: f64, yc: f64, solid: &mut Mesh, glass: &mut Mesh| {
+                    if glazed {
+                        let b = 0.07;
+                        solid.append(&Mesh::cuboid([x0, yc - t / 2.0, zb], [x0 + b, yc + t / 2.0, top]));
+                        solid.append(&Mesh::cuboid([x1 - b, yc - t / 2.0, zb], [x1, yc + t / 2.0, top]));
+                        solid.append(&Mesh::cuboid([x0, yc - t / 2.0, zb], [x1, yc + t / 2.0, zb + 0.15]));
+                        solid.append(&Mesh::cuboid([x0, yc - t / 2.0, top - b], [x1, yc + t / 2.0, top]));
+                        glass.append(&Mesh::cuboid([x0 + b, yc - 0.004, zb + 0.15], [x1 - b, yc + 0.004, top - b]));
+                    } else {
+                        solid.append(&Mesh::cuboid([x0, yc - t / 2.0, zb], [x1, yc + t / 2.0, top]));
+                    }
+                    // recessed pull near the leading edge
+                    let px = if dir > 0.0 { x0 + 0.05 } else { x1 - 0.05 };
+                    solid.append(&Mesh::cuboid([px - 0.012, yc + swing * t / 2.0, -0.10], [px + 0.012, yc + swing * (t / 2.0 + 0.004), 0.10]));
+                };
+                let (rail_lo, rail_hi);
+                if w > 1.2 {
+                    // two panels, each half the opening plus an overlap; the front one slid over the back one by 30-90 %
+                    let pw = w / 2.0 + 0.04;
+                    let open = r.uniform(0.3, 0.9) * pw;
+                    panel(-w / 2.0 - 0.02, -w / 2.0 - 0.02 + pw, base, &mut solid, &mut glass);
+                    let x0 = w / 2.0 + 0.02 - pw - open;
+                    panel(x0, x0 + pw, base + swing * (t + 0.01), &mut solid, &mut glass);
+                    rail_lo = -w / 2.0 - 0.05; rail_hi = w / 2.0 + 0.05;
+                } else {
+                    let pw = w + 0.08;
+                    let off = dir * r.uniform(0.3, 0.9) * w;
+                    panel(off - pw / 2.0, off + pw / 2.0, base, &mut solid, &mut glass);
+                    rail_lo = -w / 2.0 - pw * 0.9; rail_hi = w / 2.0 + pw * 0.9;
+                }
+                let ry = base + swing * if w > 1.2 { (t + 0.01) / 2.0 } else { 0.0 };
+                let mut rail = Mesh::cuboid([rail_lo, ry - 0.03, top], [rail_hi, ry + 0.03, top + 0.06]);
+                place(&mut solid, ct, &Mat4::identity());
                 place(&mut rail, ct, &Mat4::identity());
-                out.push(Piece { name: format!("{name}.slide"), class: "Door".into(), mesh: panel, mat: spec(&format!("{name}.slide"), leaf_cls, sd, [0.6, 0.5, 0.4]) });
+                out.push(Piece { name: format!("{name}.slide"), class: "Door".into(), mesh: solid, mat: spec(&format!("{name}.slide"), leaf_cls, sd, [0.6, 0.5, 0.4]) });
+                if !glass.is_empty() {
+                    place(&mut glass, ct, &Mat4::identity());
+                    out.push(Piece { name: format!("{name}.slideglass"), class: "Door".into(), mesh: glass, mat: spec(&format!("{name}.slideglass"), "ceramic.Glass", sd, [0.8, 0.9, 1.0]) });
+                }
                 out.push(Piece { name: format!("{name}.rail"), class: "Door".into(), mesh: rail, mat: spec(&format!("{name}.rail"), "metal.BrushedMetal", sd, [0.6, 0.6, 0.6]) });
             }
             DoorStyle::SlidingGlass => {
