@@ -142,6 +142,10 @@ pub fn build_scene(p: &Params) -> Built {
         }
         if gone > 0 { eprintln!("TRINKETS kept {kept}, removed {gone}"); }
     }
+    if let Ok(path) = std::env::var("LAYOUT_DUMP") {
+        crate::layout_dump::dump(&path, seed, &g);
+        std::process::exit(0);
+    }
     if ig_core::envx::var_r("EVAL").is_ok() {
         let (prog, _) = indoorgen::pipeline::load_program(seed, prog);
         let mut memo = indoorgen::furn::eval::Memo::new(&prog, None);

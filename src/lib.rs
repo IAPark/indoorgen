@@ -21,6 +21,7 @@ pub mod features;
 pub mod rules;
 pub mod openings;
 pub mod pipeline;
+pub mod layout_dump;
 pub mod qc;
 pub mod scenegen;
 pub mod realism;
