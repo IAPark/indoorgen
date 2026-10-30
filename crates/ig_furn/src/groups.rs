@@ -735,6 +735,8 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
             } else if name.contains("_pair") || name.contains("_nightstand") {
                 state.objs.shift_remove(&name);
             } else {
+                // out of the room at once: left standing where it was, it blocked the other side's slot
+                if state.objs.contains_key(&name) { layout2d::remove_tree(state, &name); }
                 failed.push(name);
             }
         }
@@ -1066,7 +1068,10 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 let view = dist - sdep - (thi[0] - tlo[0]);
                 // narrow living rooms (2.6 m) seat the sofa across from the TV at 1.3 m
                 // (raters read more than ~4 m between sofa and TV as "far"; past that the sofa faces the TV from mid-room)
-                if !(lr.tv_view_min..=lr.tv_view_max).contains(&view) { continue }
+                // (the short views are for narrow rooms: a 45 m2 room seated the sofa 1.4 m off the TV and the coffee table between
+                // them closed the walkway)
+                let vmin = if room_area >= 18.0 { lr.tv_view_min.max(2.0) } else { lr.tv_view_min };
+                if !(vmin..=lr.tv_view_max).contains(&view) { continue }
                 if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
                 if !try_place(state, &tv, m[1].atan2(m[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [hp[0] + m[0] * 0.003, hp[1] + m[1] * 0.003, 0.0]) {
                     state.set_pose(&tv, tv_start); state.touch(&tv);
