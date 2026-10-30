@@ -14,6 +14,65 @@ use crate::dhash::HashMap;
 use crate::shp;
 use std::sync::Arc;
 
+/// runtime switches of the 2D layout (set per run: from the environment natively, by the caller in the browser build)
+pub mod knobs {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+    static RULES: AtomicBool = AtomicBool::new(true);
+    static SIZES: AtomicBool = AtomicBool::new(true);
+    static BUILTIN_FIT: AtomicBool = AtomicBool::new(true);
+    static GROUPS: AtomicBool = AtomicBool::new(true);
+    static FURNITURE_ONLY: AtomicBool = AtomicBool::new(false);
+    static GROUP_W: AtomicU64 = AtomicU64::new(0x4008000000000000); // 3.0
+    static SIZE_W: AtomicU64 = AtomicU64::new(0x3fe0000000000000); // 0.5
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    pub struct Knobs {
+        /// walkway / hallway rules in the move check
+        pub rules: bool,
+        /// real-world size densities for placeholders (off: assets' own sizes)
+        pub sizes: bool,
+        /// built-ins extended to their wall span
+        pub builtin_fit: bool,
+        /// slot groups (fridge / dishwasher at the run, nightstands, desk chairs)
+        pub groups: bool,
+        /// stop after the furniture stages (no small items on surfaces)
+        pub furniture_only: bool,
+        /// weight of the living-room grouping loss (sofa / TV / coffee table / armchairs)
+        pub group_w: f64,
+        /// weight of the size -log density loss
+        pub size_w: f64,
+    }
+    impl Default for Knobs {
+        fn default() -> Self { Knobs { rules: true, sizes: true, builtin_fit: true, groups: true, furniture_only: false, group_w: 3.0, size_w: 0.5 } }
+    }
+    pub fn set(k: &Knobs) {
+        RULES.store(k.rules, Relaxed);
+        SIZES.store(k.sizes, Relaxed);
+        BUILTIN_FIT.store(k.builtin_fit, Relaxed);
+        GROUPS.store(k.groups, Relaxed);
+        FURNITURE_ONLY.store(k.furniture_only, Relaxed);
+        GROUP_W.store(k.group_w.to_bits(), Relaxed);
+        SIZE_W.store(k.size_w.to_bits(), Relaxed);
+    }
+    pub fn get() -> Knobs {
+        Knobs { rules: rules(), sizes: sizes(), builtin_fit: builtin_fit(), groups: groups(), furniture_only: furniture_only(), group_w: group_w(), size_w: size_w() }
+    }
+    /// native runs: NO_LAYOUT_RULES, NO_SIZES, NO_BUILTIN_FIT, NO_GROUPS, LAYOUT_DUMP_STAGE=furniture, LAYOUT_W, LAYOUT_SIZE_W
+    pub fn from_env() -> Knobs {
+        let on = |k: &str| std::env::var_os(k).is_some();
+        let num = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        Knobs { rules: !on("NO_LAYOUT_RULES"), sizes: !on("NO_SIZES"), builtin_fit: !on("NO_BUILTIN_FIT"), groups: !on("NO_GROUPS"),
+            furniture_only: std::env::var("LAYOUT_DUMP_STAGE").as_deref() == Ok("furniture"), group_w: num("LAYOUT_W", 3.0), size_w: num("LAYOUT_SIZE_W", 0.5) }
+    }
+    pub fn rules() -> bool { RULES.load(Relaxed) }
+    pub fn sizes() -> bool { SIZES.load(Relaxed) }
+    pub fn builtin_fit() -> bool { BUILTIN_FIT.load(Relaxed) }
+    pub fn groups() -> bool { GROUPS.load(Relaxed) }
+    pub fn furniture_only() -> bool { FURNITURE_ONLY.load(Relaxed) }
+    pub fn group_w() -> f64 { f64::from_bits(GROUP_W.load(Relaxed)) }
+    pub fn size_w() -> f64 { f64::from_bits(SIZE_W.load(Relaxed)) }
+}
+
 #[derive(Clone, Debug)]
 pub struct Prism {
     /// convex footprint, counter-clockwise
@@ -465,7 +524,7 @@ fn min_width(poly: &[[f64; 2]]) -> f64 {
 
 /// layout rules for a floor move of `name` (after the collision test passed)
 pub fn layout_ok(state: &State, name: &str) -> bool {
-    if ig_core::env_on!("NO_LAYOUT_RULES") {
+    if !knobs::rules() {
         return true;
     }
     let o = &state.objs[name];
@@ -536,7 +595,7 @@ fn angle_off(f: [f64; 2], from: [f64; 2], to: [f64; 2]) -> (f64, f64) {
 /// living-room grouping: sofa faces the TV stand (within 20 deg, 2-4 m) and the stand faces the sofa; armchairs turn to the coffee
 /// table (or the sofa); each degree beyond the limit / metre outside the range costs (x / 30)^2 / (x / 1 m)^2, times LAYOUT_W
 pub fn extra_loss(state: &State) -> f64 {
-    let w: f64 = ig_core::env_str!("LAYOUT_W").and_then(|v| v.parse().ok()).unwrap_or(3.0);
+    let w: f64 = knobs::group_w();
     if w == 0.0 {
         return 0.0;
     }
@@ -545,7 +604,7 @@ pub fn extra_loss(state: &State) -> f64 {
 
     let mut loss = 0.0;
     // sizes: -log density of every sized piece relative to its class's most likely size (furn::sizes), weight LAYOUT_SIZE_W
-    let ws: f64 = ig_core::env_str!("LAYOUT_SIZE_W").and_then(|v| v.parse().ok()).unwrap_or(0.5);
+    let ws: f64 = knobs::size_w();
     for o in state.objs.values() {
         let Some(g) = &o.generator else { continue };
         let (Some((lo, hi)), Some(m)) = (g.fit_box, super::sizes::model(&g.class)) else { continue };

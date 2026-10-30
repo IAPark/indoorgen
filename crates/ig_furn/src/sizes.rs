@@ -53,7 +53,7 @@ pub fn models() -> &'static crate::dhash::FxMap<String, Model> {
 }
 
 pub fn model(class: &str) -> Option<&'static Model> {
-    if ig_core::env_on!("NO_SIZES") {
+    if !super::layout2d::knobs::sizes() {
         return None;
     }
     models().get(class)

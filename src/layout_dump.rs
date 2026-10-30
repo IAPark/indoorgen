@@ -5,11 +5,27 @@
 //! pieces), skipping the small items on surfaces; the post-solve layout fixes still run before the dump.
 use crate::furn::tags::{Tag, TagSet};
 use crate::pipeline::Generated;
-use geos::Geom;
 use serde_json::json;
 
 pub fn dump(path: &str, seed: u64, g: &Generated) {
-    let rooms: serde_json::Map<String, serde_json::Value> = g.room_polys.iter().filter_map(|(k, p)| Some((k.clone(), json!(p.to_wkt().ok()?)))).collect();
+    std::fs::write(path, to_json(seed, g).to_string()).unwrap();
+}
+
+/// the layout as JSON (also returned by the browser build's `layout()`): rooms (WKT, outline coordinates, inner floor, walkway status),
+/// cutters, and per object its footprint prisms, front, parent, room, size and seeds
+pub fn to_json(seed: u64, g: &Generated) -> serde_json::Value {
+    use crate::furn::layout2d;
+    let ring = |p: &crate::shp::G| -> Vec<Vec<[f64; 2]>> { crate::shp::parts(p).iter().filter(|q| crate::shp::is_polygon(q)).map(|q| crate::shp::exterior(q)).collect() };
+    let room_info: serde_json::Map<String, serde_json::Value> = g.room_polys.iter().map(|(k, p)| {
+        let (connected, bad) = if g.state.objs.contains_key(k) { layout2d::walk_status(&g.state, k) } else { (true, vec![]) };
+        let floor = if g.state.objs.contains_key(k) { ring(&layout2d::room_floor(&g.state, k)) } else { vec![] };
+        (k.clone(), json!({"type": crate::rooms::state::room_type(k), "outline": ring(p), "floor": floor, "area": crate::shp::area(p), "doors_connected": connected, "unreachable": bad}))
+    }).collect();
+    // WKT (native only: the browser build has no GEOS); room_info carries the outlines as coordinates everywhere
+    #[cfg(not(target_arch = "wasm32"))]
+    let rooms: serde_json::Map<String, serde_json::Value> = { use geos::Geom; g.room_polys.iter().filter_map(|(k, p)| Some((k.clone(), json!(p.to_wkt().ok()?)))).collect() };
+    #[cfg(target_arch = "wasm32")]
+    let rooms: serde_json::Map<String, serde_json::Value> = Default::default();
     let cut: Vec<_> = g.cutters.iter().map(|ct| json!({"kind": format!("{:?}", ct.kind), "loc": ct.loc, "rot": ct.rot_z, "dim": ct.dims, "rooms": ct.rooms})).collect();
     let mut objs = vec![];
     for (k, o) in &g.state.objs {
@@ -25,9 +41,12 @@ pub fn dump(path: &str, seed: u64, g: &Generated) {
             pl.first().map(|&i| { let (n, _) = g.state.plane_nd(k, i); [n[0], n[1]] })
         };
         let parent = o.relations.iter().map(|r| r.target.clone()).find(|t| g.state.objs.get(t).map_or(false, |x| x.generator.is_some()));
-        objs.push(json!({"key": k, "class": class, "parts": parts, "front": front, "parent": parent}));
+        let gen = o.generator.as_ref();
+        let size = gen.and_then(crate::furn::solver::cur_size);
+        let room = layout2d::room_of(&g.state, k);
+        objs.push(json!({"key": k, "class": class, "parts": parts, "front": front, "parent": parent, "room": room, "size": size,
+            "factory_seed": gen.map(|x| x.factory_seed), "inst_seed": gen.map(|x| x.inst_seed), "yaw_deg": o.pose.r[1][0].atan2(o.pose.r[0][0]).to_degrees(), "pos": o.pose.t}));
     }
-    let stage = std::env::var("LAYOUT_DUMP_STAGE").unwrap_or_else(|_| "full".into());
-    let d = json!({"seed": seed, "stage": stage, "wall_thickness": g.c.wall_thickness, "wall_height": g.c.wall_height, "rooms": rooms, "cutters": cut, "objects": objs});
-    std::fs::write(path, d.to_string()).unwrap();
+    let stage = if crate::furn::layout2d::knobs::furniture_only() { "furniture" } else { "full" };
+    json!({"seed": seed, "stage": stage, "knobs": crate::furn::layout2d::knobs::get(), "wall_thickness": g.c.wall_thickness, "wall_height": g.c.wall_height, "rooms": rooms, "room_info": room_info, "cutters": cut, "objects": objs})
 }

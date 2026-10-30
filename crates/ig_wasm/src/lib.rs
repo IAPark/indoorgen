@@ -123,6 +123,43 @@ pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsVal
     Ok(glb)
 }
 
+/// Furniture layout of house `seed` as JSON (furn layout dump: rooms with outlines, inner floors and walkway status, door / window
+/// cutters, objects with footprints, front, parent, room, size, seeds). `opts_json` (all optional):
+/// `{"knobs": {"rules":true,"sizes":true,"builtin_fit":true,"groups":true,"furniture_only":true,"group_w":3,"size_w":0.5},
+///   "rooms": "curated" | "fewer" | "full", ...any partial GenConfig}`
+#[wasm_bindgen]
+pub fn layout(seed: u32, opts_json: &str) -> Result<String, JsValue> {
+    use indoorgen::furn::layout2d::knobs;
+    let mut j: serde_json::Value = if opts_json.trim().is_empty() { serde_json::json!({}) } else { serde_json::from_str(opts_json).map_err(|e| JsValue::from_str(&format!("bad options: {e}")))? };
+    let o = j.as_object_mut().ok_or_else(|| JsValue::from_str("options must be a JSON object"))?;
+    let kj = o.remove("knobs").unwrap_or(serde_json::json!({}));
+    let fo_given = kj.get("furniture_only").is_some();
+    let mut k: knobs::Knobs = serde_json::from_value(kj).map_err(|e| JsValue::from_str(&format!("bad knobs: {e}")))?;
+    // the layout page stops after the furniture stages unless asked for the small items too
+    if !fo_given { k.furniture_only = true; }
+    let rooms = o.remove("rooms").and_then(|v| v.as_str().map(|s| s.to_string()));
+    knobs::set(&k);
+    let mut cfg = config_from_opts(&j.to_string()).map_err(|e| JsValue::from_str(&format!("bad options: {e}")))?;
+    cfg.house.seed = seed as u64;
+    cfg.house.room = Some("LivingRoom".into());
+    cfg.house.only_target = false;
+    if let Some(r) = rooms { cfg.house.rooms = r; }
+    cfg.people.count = 0;
+    cfg.mess.level = 0.0;
+    cfg.cloth.on = false;
+    cfg.cameras.count = 0;
+    cfg.output = Default::default();
+    ig_core::envx::clear_vars();
+    let prog: serde_json::Value = serde_json::from_str(&unpack(PROGRAM_DENSE)).map_err(|e| JsValue::from_str(&format!("program: {e}")))?;
+    let mut fallback = TableAssets::default();
+    fallback.add_str(&unpack(BBOX_TABLE));
+    fallback.add_str(&unpack(SAMPLES));
+    let t0 = web_time::Instant::now();
+    let mut v = indoorgen::scenegen::layout_only(&Params { cfg, prog, fallback });
+    v["ms"] = serde_json::json!(t0.elapsed().as_secs_f64() * 1000.0);
+    Ok(v.to_string())
+}
+
 /// JSON Schema (draft-07) of the generation config: sections, field types, ranges, descriptions
 #[wasm_bindgen]
 pub fn config_schema() -> String {

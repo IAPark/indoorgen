@@ -33,7 +33,24 @@ impl Built {
     }
 }
 
+thread_local! {
+    /// set by `layout_only`: build_scene stops after the layout and leaves its JSON here
+    static LAYOUT_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LAYOUT_OUT: std::cell::RefCell<Option<serde_json::Value>> = const { std::cell::RefCell::new(None) };
+}
+
+/// run the generator up to the furniture layout (the solve and its layout fixes) and return the layout JSON (layout_dump::to_json);
+/// the 2D layout switches (furn::layout2d::knobs) must be set by the caller
+pub fn layout_only(p: &Params) -> serde_json::Value {
+    LAYOUT_ONLY.with(|c| c.set(true));
+    let _ = build_scene(p);
+    LAYOUT_ONLY.with(|c| c.set(false));
+    LAYOUT_OUT.with(|o| o.borrow_mut().take()).unwrap_or(serde_json::Value::Null)
+}
+
 pub fn build_scene(p: &Params) -> Built {
+    #[cfg(not(target_arch = "wasm32"))]
+    if !LAYOUT_ONLY.with(|c| c.get()) { indoorgen::furn::layout2d::knobs::set(&indoorgen::furn::layout2d::knobs::from_env()); }
     indoorgen::assets::bed::set_clean_geometry(true);
     let cfg = &p.cfg;
     cfg.install();
@@ -70,9 +87,27 @@ pub fn build_scene(p: &Params) -> Built {
             serde_json::to_string(&p.prog).unwrap_or_default().hash(&mut h);
             serde_json::to_string(spec).unwrap_or_default().hash(&mut h);
             (feat_cfg.on() && !orig_prog).hash(&mut h);
+            #[cfg(not(target_arch = "wasm32"))]
             std::env::current_exe().ok().and_then(|e| std::fs::metadata(e).ok()).and_then(|m| m.modified().ok()).map(|t| format!("{t:?}")).hash(&mut h);
             h.finish()
         };
+        // browser build: no filesystem; the merged program is kept in memory for the next generate call of the page
+        #[cfg(target_arch = "wasm32")]
+        {
+            thread_local! { static MEM: std::cell::RefCell<Option<(u64, serde_json::Value)>> = const { std::cell::RefCell::new(None) }; }
+            prog_owned = match MEM.with(|m| m.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
+                Some(v) => v,
+                None => {
+                    let mut v = p.prog.clone();
+                    crate::rules::apply(&mut v, spec);
+                    if feat_cfg.on() && !orig_prog { crate::rules::add_feature_scores(&mut v); }
+                    MEM.with(|m| *m.borrow_mut() = Some((key, v.clone())));
+                    v
+                }
+            };
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let path = std::env::temp_dir().join("indoorgen_rules_cache").join(format!("{key:016x}.json"));
         let cached = if std::env::var_os("RULES_NOCACHE").is_some() { None } else { std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) };
         if let Some(v) = cached { prog_owned = v; } else {
@@ -84,6 +119,7 @@ pub fn build_scene(p: &Params) -> Built {
                 let tmp = path.with_extension(format!("tmp{}", std::process::id()));
                 if std::fs::write(&tmp, serde_json::to_vec(&prog_owned).unwrap_or_default()).is_ok() { let _ = std::fs::rename(&tmp, &path); }
             }
+        }
         }
         prog = &prog_owned;
     }
@@ -142,6 +178,10 @@ pub fn build_scene(p: &Params) -> Built {
             }
         }
         if gone > 0 { eprintln!("TRINKETS kept {kept}, removed {gone}"); }
+    }
+    if LAYOUT_ONLY.with(|c| c.get()) {
+        LAYOUT_OUT.with(|o| *o.borrow_mut() = Some(crate::layout_dump::to_json(seed, &g)));
+        return Built { scene: Scene::default(), room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene: web_time::Instant::now(), done: false, variation: None, objects: vec![] };
     }
     if let Ok(path) = std::env::var("LAYOUT_DUMP") {
         crate::layout_dump::dump(&path, seed, &g);
