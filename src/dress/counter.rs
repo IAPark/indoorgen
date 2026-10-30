@@ -140,5 +140,39 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
         }
         log.push(format!("counter {k}: {n} of {} planned (sink {:?}, stove {:?})", plan.len(), sink.map(|x| (x * 100.0).round() / 100.0), stove.map(|x| (x * 100.0).round() / 100.0)));
     }
+    // cookware on the ranges: a pot and / or a pan on burners of the cooktop (the plateau under the backsplash panel), one to two
+    for (k, o) in &state.objs {
+        if o.generator.as_ref().map_or(true, |g| g.class != "OvenFactory") { continue }
+        let Some(a) = visuals.get(k) else { continue };
+        let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "dress_range", k]));
+        let tris = tris_of(a);
+        let (lo, hi) = a.bounds();
+        let Some(ztop) = plateau(a, lo[2] + 0.6, lo[2] + 1.1, 10) else { continue };
+        let band = (ztop - 0.02, ztop + 0.02);
+        // burners: across the width (local y), toward the front (local +x, the door side)
+        let spots = [(0.62, 0.3), (0.62, 0.7), (0.4, 0.3), (0.4, 0.7)];
+        let mut occ = Occ::from_scene(scene, &[format!("{k}#")]);
+        let want = 1 + r.choice_idx(2);
+        let mut n = 0;
+        for (i, (fx, fy)) in spots.iter().enumerate() {
+            if n >= want { break }
+            if r.f64() < 0.3 { continue }
+            let cls = ["PotFactory", "PanFactory"][r.choice_idx(2)];
+            let item = assets.visual(cls, r.next_u64() % 1_000_000, 0);
+            let (dx, dy, _dz) = dims(&item);
+            // a burner holds about a 24 cm vessel (the pan's handle overhangs: its body is what counts)
+            let sc = (0.24 / dx.min(dy).max(0.05)).min(1.0);
+            let (x, y) = (lo[0] + (hi[0] - lo[0]) * fx, lo[1] + (hi[1] - lo[1]) * fy);
+            let Some(zt) = level_spot(&tris, x, y, 0.06, band, 0.15, None) else { continue };
+            let at = o.pose.apply([x, y, zt]);
+            let yaw = r.uniform(0.0, std::f64::consts::TAU);
+            let b = box_at(&item, at, yaw, sc);
+            if !occ.free(&b) { continue }
+            let bb = place(scene, &format!("dress_range_{}_{i}", k.replace('/', "_")), cls, &item, at, yaw, sc);
+            occ.boxes.push(bb);
+            n += 1;
+        }
+        log.push(format!("range {k}: {n} cookware"));
+    }
     log
 }
