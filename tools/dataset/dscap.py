@@ -50,11 +50,16 @@ def apply_walls(variation):
                 # base finish; painting only the lower part put the room colour below an off-white band -- upside down. Real wainscoting:
                 # off-white satin panelling below, the room colour above. So: .alt (upper) gets the colour, the plaster base under it the
                 # panel finish
-                has_alt = part == "walls" and any(x.name.startswith(room + ".wall.alt") for x in bpy.data.objects)
+                # a real half wall only when the upper part's material differs from the base's: the Rust side splits every wall, and on
+                # walls python left uniform ("none") the alt part just shares the base material
+                def _mats(prefix, alt):
+                    return {sl.material.name for x in bpy.data.objects if x.type == "MESH" and x.name.startswith(prefix) and ((".alt" in x.name) == alt) for sl in x.material_slots if sl.material}
+                has_alt = part == "walls" and bool(_mats(room + ".wall.alt", True)) and _mats(room + ".wall.alt", True) != _mats(room + ".wall", False)
                 wain = has_alt and ".alt" not in o.name
                 if part == "walls" and ".alt" in o.name and not os.environ.get("RAW_WAINSCOT"):
                     pass
                 elif part == "walls" and ".alt" in o.name: kept.append(o.name); continue
+                if os.environ.get("WALLDBG") and part == "walls": print("WALLDBG %s slots %s wain=%s" % (o.name, [(sl.material.name if sl.material else None) for sl in o.material_slots], wain))
                 for slot in o.material_slots:
                     m = slot.material
                     if m is None or not m.use_nodes: continue

@@ -122,6 +122,25 @@ fn main() {
         lap("usdc written");
     }
     if cams_k > 0 { add_cameras(&room, scene, room_polys, cams_k, seed, wall_t, &out); }
+    // DSPOOL=spec.json: the dataset camera pool (crates/ig_cams/src/pool.rs) for the target room, written to spec.pool_path unless it
+    // exists (variants of a house share it) -- the preview engine then needs no Blender process
+    if let Some(sp) = std::env::var_os("DSPOOL") {
+        if let Ok(spec) = std::fs::read_to_string(&sp).map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap_or_default()) {
+            let pp = spec["pool_path"].as_str().unwrap_or("").to_string();
+            if !pp.is_empty() && !std::path::Path::new(&pp).exists() {
+                let slug = spec["room_slug"].as_str().unwrap_or("").to_string();
+                let side: serde_json::Value = std::fs::read_to_string(out.with_extension("json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+                let rname = side["cameras"].as_array().and_then(|c| c.iter().filter_map(|c| c["room"].as_str()).find(|r| r.starts_with(&slug)).map(|s| s.to_string()))
+                    .or_else(|| scene.nodes.iter().find(|n| n.name.starts_with(&slug) && n.name.ends_with(".floor")).map(|n| n.name.rsplitn(2, '.').last().unwrap_or("").to_string()));
+                if let Some(rname) = rname {
+                    let pool = indoorgen::cams::pool::make(scene, &rname, &spec);
+                    if let Some(d) = std::path::Path::new(&pp).parent() { let _ = std::fs::create_dir_all(d); }
+                    let tmp = format!("{pp}.tmp{}", std::process::id());
+                    if std::fs::write(&tmp, serde_json::to_vec_pretty(&pool).unwrap()).is_ok() { let _ = std::fs::rename(&tmp, &pp); }
+                }
+            }
+        }
+    }
     {
         // sidecar `objects` (always) and `variation` record (only when some factor is not default)
         let sp = out.with_extension("json");

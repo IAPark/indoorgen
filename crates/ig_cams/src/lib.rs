@@ -2,6 +2,7 @@
 //! Candidates are sampled in the free floor space of each furnished room, aimed at a subject (people first, else the main furniture)
 //! with the subject on a rule-of-thirds point, and rejected by ray casting against the scene meshes (parry3d BVH): camera in/near
 //! furniture, near occluders, claustrophobic views, subject mostly hidden. Deterministic per seed.
+pub mod pool;
 use ig_core::mesh::{Scene, V3};
 use ig_core::rng::Rng;
 use parry3d_f64::na::{Point3, Vector3};

@@ -161,6 +161,15 @@ def main():
         glb = os.path.join(tmp, "%s_%s.glb" % (hname, variant["name"]))
         return hname, vdir, opt, fcfg, notes, gcfg, cfgp, glb
 
+    def pool_env(house, variant, hname, opt):
+        """DSPOOL spec for gen2's Rust camera pool (crates/ig_cams/src/pool.rs); POOL_RUST=0 leaves the pool to dscap / Blender"""
+        if os.environ.get("POOL_RUST", "1") == "0": return None
+        K, W, H = int(opt("views", 4)), int(opt("width", 960)), int(opt("height", 720))
+        room = house["room"]; slug = room.lower().replace("room", "-room") if room.endswith("Room") and room != "Room" else room.lower()
+        spec = dict(width=W, height=H, n_views=K, camera_seed=opt("camera_seed", house["seed"]), cameras=opt("cameras", {}), pool_path=os.path.join(out, hname, "cameras_pool.json"), room_slug=slug)
+        sp = os.path.join(tmp, "dspool_%s_%s.json" % (hname, variant["name"])); json.dump(spec, open(sp, "w"))
+        return dict(os.environ, DSPOOL=sp)
+
     def start_gen(i):
         if i >= len(jobs) or i in pending: return
         house, variant = jobs[i]
@@ -169,7 +178,7 @@ def main():
         if a.resume and os.path.exists(os.path.join(vdir, "meta.json")): return
         os.makedirs(vdir, exist_ok=True); json.dump(gcfg, open(cfgp, "w"))
         lf = open(os.path.join(vdir, "gen2.log"), "w")
-        pending[i] = (subprocess.Popen([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], stdout=lf, stderr=subprocess.STDOUT), lf, time.time())
+        pending[i] = (subprocess.Popen([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], stdout=lf, stderr=subprocess.STDOUT, env=pool_env(house, variant, hname, opt)), lf, time.time())
 
     for ji, (house, variant) in enumerate(jobs):
         hname = house.get("name") or "%s_%d" % (house["room"].lower(), house["seed"])
@@ -196,7 +205,7 @@ def main():
                 pr, lf, t0 = pending.pop(ji); rc = pr.wait(); lf.close(); t_gen = time.time() - t0
             else:
                 json.dump(gcfg, open(cfgp, "w"))
-                rc, t_gen = run([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], os.path.join(vdir, "gen2.log"))
+                rc, t_gen = run([gen2, str(house["seed"]), house["room"], glb, "--config", cfgp], os.path.join(vdir, "gen2.log"), env=pool_env(house, variant, hname, opt))
             if prefetch: start_gen(ji + 1)
             if rc != 0 or not os.path.exists(side): print("gen2 FAILED rc=%s, see %s/gen2.log" % (rc, vdir)); continue
             sidecar = json.load(open(side))
