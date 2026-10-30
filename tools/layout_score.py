@@ -56,6 +56,8 @@ def score(d):
             add(1.0, f"{k} {poly.area:.0f} m2")
         if t == "hallway" and poly.area > 12:
             add(1.0, f"{k} {poly.area:.0f} m2 hallway")
+        if t == "living-room" and poly.area > 36:
+            add(1.0, f"{k} living {poly.area:.0f} m2 (reads half empty)")
         if t == "living-room" and poly.area < 14:
             add(1.5, f"{k} living {poly.area:.0f} m2")
         if t == "bedroom" and poly.area < 8:
@@ -142,8 +144,8 @@ def score(d):
             n = sum(1 for c in objs if c["class"] == "ChairFactory" and c.get("parent") == o["key"])
             if n == 0:
                 n = sum(1 for c in objs if c["class"] == "ChairFactory" and c.get("room") == o.get("room"))
-            if n < 2:
-                add(1.5, f"{o.get('room')} dining table with {n} chair(s)")
+            if n < 4:
+                add(1.5 if n < 2 else 1.0, f"{o.get('room')} dining table with {n} chair(s)")
     return pen, why
 
 

@@ -1132,14 +1132,25 @@ fn center_table(state: &mut State, t: &str, room: &str) -> bool {
     let (lo, hi) = lohi(state, t);
     let yaw_ = if x1 - x0 >= y1 - y0 { std::f64::consts::FRAC_PI_2 } else { 0.0 };
     let anchor = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2]];
+    // room for the chairs: 0.75 m from the walls and 1 m from the doors all round (the first free spot without it lost chairs to
+    // blocked slots); else the first free spot
+    let doors = door_points(state, room);
+    let roomy = |st: &State| layout2d::prisms(st, t).iter().flat_map(|p| p.poly.iter().copied().collect::<Vec<_>>()).all(|v| {
+        layout2d::ring_dist(&rings, v) >= 0.75 && doors.iter().all(|d| ((d[0] - v[0]).powi(2) + (d[1] - v[1]).powi(2)).sqrt() >= 1.0)
+    });
+    let mut first: Option<super::geom::Pose> = None;
     for r in [0.0f64, 0.3, 0.6, 0.9, 1.2] {
         for (ox, oy) in [(0.0, 0.0), (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r), (r, r), (-r, -r), (r, -r), (-r, r)] {
             if r == 0.0 && (ox != 0.0 || oy != 0.0) { continue }
             for yy in [yaw_, yaw_ + std::f64::consts::FRAC_PI_2] {
-                if try_place(state, t, yy, anchor, [c[0] + ox, c[1] + oy, 0.0]) { return true; }
+                if try_place(state, t, yy, anchor, [c[0] + ox, c[1] + oy, 0.0]) {
+                    if roomy(state) { return true; }
+                    if first.is_none() { first = Some(state.objs[t].pose); }
+                }
             }
         }
     }
+    if let Some(p) = first { state.set_pose(t, p); state.touch(t); return true; }
     false
 }
 
