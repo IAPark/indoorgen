@@ -1572,7 +1572,14 @@ pub fn wardrobes(state: &mut State) -> Vec<String> {
     let bedrooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "bedroom").map(|(k, _)| k.clone()).collect();
     for room in bedrooms {
         let bd = door_points(state, &room);
-        let own = closets.iter().any(|c| door_points(state, c).iter().any(|p| bd.iter().any(|q| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() < 1.5)));
+        // (a closet too small for a wardrobe gets open shelving: the bedroom keeps its wardrobe then)
+        let fits = |c: &str| state.objs[c].polygon.as_ref().map_or(false, |p| {
+            let r = layout2d::rings(p);
+            let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for q in r.first().into_iter().flatten() { x0 = x0.min(q[0]); y0 = y0.min(q[1]); x1 = x1.max(q[0]); y1 = y1.max(q[1]); }
+            (x1 - x0).min(y1 - y0) >= 1.5 && (x1 - x0).max(y1 - y0) >= 1.8
+        });
+        let own = closets.iter().any(|c| fits(c) && door_points(state, c).iter().any(|p| bd.iter().any(|q| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() < 1.5)));
         if !own { continue }
         let ws: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "WardrobeFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
         for w in ws { layout2d::remove_tree(state, &w); log.push(format!("{room}: wardrobe {w} removed (the bedroom has its own closet)")); }
