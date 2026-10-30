@@ -1204,7 +1204,10 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         // one chair per 0.6 m on each long side and one at each end: 1.4 m -> 6, 2.1 m -> 8
         // (a small table, under 1.2 m: one chair each side, four; two on adjacent sides read as lopsided)
         let lr = super::layout_rules::get();
+        // (eight chairs read as crowded in a dining room under 20 m2: six at most there)
+        let room_m2 = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
         let want = if tw < lr.small_table { 4 } else { (2 * ((tw / lr.chair_spacing.max(0.4)).floor() as usize).max(1)).clamp(2, 6) + if lr.end_chairs { 2 } else { 0 } };
+        let want = if room_m2 < 20.0 { want.min(6) } else { want };
         let mut chairs = chairs;
         if chairs.is_empty() {
             // a table without chairs: a first chair from scratch, the copies below make the set
@@ -1424,7 +1427,8 @@ pub fn dining_furnish(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
         let doors = door_points(state, &room);
         let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
         let mut pieces = vec![];
-        if lr.dining_sideboard { pieces.push(("SingleCabinetFactory", "sideboard")); }
+        // (the sideboard is a bookcase placeholder widened along its wall: the cabinet factory's placeholder is its own small asset)
+        if lr.dining_sideboard { pieces.push(("SimpleBookcaseFactory", "sideboard")); }
         if area >= lr.dining_cabinet_m2 { pieces.push(("SimpleBookcaseFactory", "cabinet")); }
         // the solver's storage here stands wherever it landed: replaced by the placed pieces
         for k in in_room(state, &|c| matches!(c, "SingleCabinetFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "LargePlantContainerFactory")) { layout2d::remove_tree(state, &k); }
@@ -1432,6 +1436,10 @@ pub fn dining_furnish(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
         for (cls, what) in pieces {
             let name = format!("{room}_{what}").replace('/', "_");
             if !new_piece(ctx, state, rng, cls, &room, &name) { log.push(format!("{room}: no {cls} placeholder")); continue }
+            if what == "sideboard" {
+                let base = state.objs[&name].clone();
+                let _ = super::solver::set_width(ctx, state, &name, &base, 1.3, 1.0);
+            }
             // scored on the placed piece (place_on_wall scores after placing): the table gap, the doors, centred on its wall
             // (a second piece on another wall than the first: two cabinets side by side read as a storage wall)
             let (tg, nm, dd, pl) = (table.clone(), name.clone(), door_d.clone(), placed.clone());

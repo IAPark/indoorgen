@@ -173,6 +173,11 @@ def symbol(ax, o, f, fx, fy):
         ax.add_patch(Ellipse(P(D / 2, W / 2), D * 0.8, W * 0.86, angle=ang, fc="#d6eff2", ec="#333", lw=0.4, zorder=4.5))
     elif cl == "StandingSinkFactory":
         ax.add_patch(Ellipse(P(D * 0.55, W / 2), D * 0.6, W * 0.7, angle=ang, fc="#e8f4f4", ec="#333", lw=0.4, zorder=4.5))
+    elif "Plant" in cl:
+        # a pot seen from above: a round planter with leaves
+        r = min(D, W) * 0.48
+        ax.add_patch(Circle(P(D / 2, W / 2), r, fc="#cfe3b0", ec="#3c6b2a", lw=0.6, zorder=4.6))
+        ax.add_patch(Circle(P(D / 2, W / 2), r * 0.45, fc="#8fb85a", ec="none", zorder=4.7))
     elif cl == "OvenFactory":
         for a in (0.3, 0.7):
             for b in (0.3, 0.7):
@@ -191,6 +196,7 @@ def draw(d, ax, small=False):
         n, col = cat(o["class"])
         for g in getattr(f, "geoms", [f]):
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc=col, ec="#222", lw=0.4, alpha=0.55 if n == "rug" else 0.9, zorder=3 if n != "rug" else 2))
+        if CLEAN and re.search("Plant", o["class"]) and f.area > 0.02: symbol(ax, o, f, 1.0, 0.0)
         if o.get("front") and (n in ("bed", "seat", "storage", "kitchen", "bath", "screen") or re.search("Desk|TVStand", o["class"])) and f.area > 0.04:
             fx, fy = o["front"]
             if CLEAN:
@@ -217,6 +223,10 @@ def draw(d, ax, small=False):
                 c = f.centroid
                 ax.annotate("", xy=(c.x + fx * 0.35, c.y + fy * 0.35), xytext=(c.x, c.y), arrowprops=dict(arrowstyle="-|>", lw=0.5, color="#111"), zorder=5)
         lab = ABBR.get(o["class"]) or (re.sub(r"([a-z])([A-Z])", r"\1 \2", o["class"].replace("Factory", "")).split(" ")[-1].lower() if CLEAN else None)
+        # what a piece is for in its room: a dining room's low cabinet is a sideboard, its bookcase a display cabinet
+        if (o.get("room") or "").startswith("dining") and o["class"] in ("SingleCabinetFactory", "SimpleBookcaseFactory"):
+            lab = "sideboard" if o["class"] == "SingleCabinetFactory" or o["key"].endswith("_sideboard") else "cabinet"
+        if re.search("Plant", o["class"]): lab = "plant"
         if CLEAN and n == "rug": lab = None
         if lab and (not small or CLEAN):
             c = f.centroid; ax.text(c.x, c.y - 0.12, lab, fontsize=5, ha="center", va="top", zorder=6, color="#111")
