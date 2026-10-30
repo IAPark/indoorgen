@@ -1205,20 +1205,34 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     let base = state.objs[k].clone();
                     let _ = super::solver::set_width(ctx, state, k, &base, target, 1.0);
                 }
-                let (clo, chi) = lohi(state, k);
-                for gap in [0.45f64, 0.35, 0.55, 0.3, 0.7] {
-                    let off = gap + (chi[0] - clo[0]) / 2.0;
-                    let at = [sfront[0] + sf[0] * off, sfront[1] + sf[1] * off, 0.0];
-                    if try_place(state, k, sy, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], at) {
-                        log.push(format!("{room}: coffee table {gap:.2} m before the sofa"));
-                        coffee_c = Some([at[0], at[1]]);
-                        coffee_hw = (chi[1] - clo[1]) / 2.0;
-                        ok = true;
-                        break;
+                // before the sofa: the usual gaps, then shifted sideways, then a smaller table (a 0.6 sofa-width one)
+                'c: for (shrink, lats) in [(false, &[0.0f64][..]), (false, &[0.3, -0.3][..]), (true, &[0.0, 0.3, -0.3][..])] {
+                    if shrink {
+                        let base = state.objs[k].clone();
+                        let _ = super::solver::set_width(ctx, state, k, &base, ((shi[1] - slo[1]) * 0.6).clamp(0.6, 1.6), 1.0);
+                    }
+                    let (clo, chi) = lohi(state, k);
+                    for gap in [0.45f64, 0.35, 0.55, 0.3, 0.7] {
+                        for &lat in lats {
+                            let off = gap + (chi[0] - clo[0]) / 2.0;
+                            let at = [sfront[0] + sf[0] * off - sf[1] * lat, sfront[1] + sf[1] * off + sf[0] * lat, 0.0];
+                            if try_place(state, k, sy, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], at) {
+                                log.push(format!("{room}: coffee table {gap:.2} m before the sofa"));
+                                coffee_c = Some([at[0], at[1]]);
+                                coffee_hw = (chi[1] - clo[1]) / 2.0;
+                                ok = true;
+                                break 'c;
+                            }
+                        }
                     }
                 }
-                // no spot before the sofa: back where the solver had it, if that is still free
-                if !ok { ok = free_ok(state, k); }
+                // no spot before the sofa: where the solver had it only when that is in front of the sofa (behind it or at its
+                // side it read as detached), else left out
+                if !ok {
+                    let t = state.objs[k].pose.t;
+                    let ahead = (t[0] - sfront[0]) * sf[0] + (t[1] - sfront[1]) * sf[1];
+                    ok = ahead > 0.0 && ahead < 1.5 && free_ok(state, k);
+                }
             } else {
                 let saved = state.objs[k].pose;
                 let c = coffee_c.unwrap_or([sfront[0] + sf[0] * 0.8, sfront[1] + sf[1] * 0.8]);
