@@ -20,6 +20,29 @@ def foot(o):
     return Polygon(pts).convex_hull if len(pts) >= 3 else None
 
 
+def usable_rect(poly, cell=0.25):
+    """largest axis-aligned rectangle inside `poly` on a raster: (area, short side)"""
+    from matplotlib.path import Path
+    x0, y0, x1, y1 = poly.bounds
+    nx, ny = max(1, int(math.ceil((x1 - x0) / cell))), max(1, int(math.ceil((y1 - y0) / cell)))
+    path = Path(list(poly.exterior.coords))
+    pts = [(x0 + (i + 0.5) * cell, y0 + (j + 0.5) * cell) for j in range(ny) for i in range(nx)]
+    ins = path.contains_points(pts)
+    h = [0] * nx
+    best = (0.0, 0.0)
+    for j in range(ny):
+        for i in range(nx): h[i] = h[i] + 1 if ins[j * nx + i] else 0
+        st = []
+        for i in range(nx + 1):
+            cur = h[i] if i < nx else 0
+            while st and h[st[-1]] > cur:
+                t = st.pop(); w = i - st[-1] - 1 if st else i
+                a, b = w * cell, h[t] * cell
+                if a * b > best[0]: best = (a * b, min(a, b))
+            st.append(i)
+    return best
+
+
 def score(d):
     pen, why = 0.0, []
 
@@ -63,6 +86,67 @@ def score(d):
         if t == "bedroom" and poly.area < 8:
             add(1.5, f"{k} bedroom {poly.area:.0f} m2")
 
+    # circulation: rooms joined by their doors (doors, passages); walking distance from the entrance door to every room's door,
+    # through door points; private rooms must be reachable without passing through another bedroom, a bathroom or the kitchen
+    import heapq
+    doors = [c for c in d["cutters"] if c["kind"] in ("Door", "Passage", "Entrance")]
+    ent = [c for c in doors if c["kind"] == "Entrance"]
+    nbr = {}
+    for c in doors:
+        if len(c["rooms"]) == 2:
+            a, b = c["rooms"]
+            nbr.setdefault(a, set()).add(b); nbr.setdefault(b, set()).add(a)
+    if ent:
+        e0 = ent[0]; er = e0["rooms"][0] if e0["rooms"] else None
+        if er and rtype.get(er) in ("bedroom", "bathroom", "closet"):
+            add(2.0, f"entrance opens into the {rtype[er]}")
+        # door-point graph: points joined when they serve the same room
+        pts = [(tuple(c["loc"][:2]), set(c["rooms"])) for c in doors]
+        dist = {0: 0.0} if False else {}
+        si = doors.index(e0); dist[si] = 0.0; pq = [(0.0, si)]
+        while pq:
+            dd, i = heapq.heappop(pq)
+            if dd > dist.get(i, 1e9): continue
+            for j, (pj, rj) in enumerate(pts):
+                if j == i or not (pts[i][1] & rj): continue
+                # walking through a bedroom / bathroom to reach another door does not count as circulation
+                via = pts[i][1] & rj
+                if all(rtype.get(r) in ("bedroom", "bathroom", "closet") for r in via) and i != si: continue
+                nd = dd + math.dist(pts[i][0], pj)
+                if nd < dist.get(j, 1e9): dist[j] = nd; heapq.heappush(pq, (nd, j))
+        for k, t in rtype.items():
+            if t in ("closet",): continue
+            ds = [dist[i] for i, (_, rs) in enumerate(pts) if k in rs and i in dist]
+            if not ds:
+                if t == "bedroom": add(2.0, f"{k} reached only through another bedroom or bathroom")
+                continue
+            if min(ds) > 12: add(0.1 * (min(ds) - 12), f"{k} {min(ds):.0f} m walk from the entrance")
+        # reached only through the kitchen (bathroom / bedroom): BFS over rooms without kitchens and private rooms
+        if er:
+            seen, todo = {er}, [er]
+            while todo:
+                r = todo.pop()
+                for q in nbr.get(r, ()):
+                    if q in seen: continue
+                    seen.add(q)
+                    if rtype.get(q) not in ("kitchen", "bedroom", "bathroom", "closet"): todo.append(q)
+            for k, t in rtype.items():
+                if t in ("bedroom",) and k not in seen: add(1.5, f"{k} reached only through another room")
+                if t == "bathroom" and k not in seen and not any(rtype.get(q) == "bedroom" for q in nbr.get(k, ())): add(1.0, f"{k} reached only through the kitchen")
+    for k, t in rtype.items():
+        if t == "bathroom" and any(rtype.get(q) in ("living-room", "kitchen", "dining-room") for q in nbr.get(k, ())):
+            add(0.5, f"{k} opens off a public room")
+
+    # shape: the share of a main room in its largest axis-aligned rectangle (0.25 m raster), and its short side
+    for k, poly in rooms.items():
+        t = rtype.get(k, "")
+        if t not in ("living-room", "dining-room", "bedroom", "kitchen"): continue
+        ra, short = usable_rect(poly)
+        if poly.area > 0 and ra / poly.area < 0.7:
+            add(round(4 * (0.7 - ra / poly.area), 2), f"{k} only {100 * ra / poly.area:.0f}% in one rectangle")
+        need = 2.8 if t == "living-room" else 2.4
+        if short < need: add(1.0, f"{k} usable width {short:.1f} m")
+
     # furniture
     objs = [o for o in d["objects"] if o["class"] not in ("Keepout",)]
     by_room = {}
@@ -88,7 +172,10 @@ def score(d):
             b = has(k, "BedFactory")
             if not b:
                 add(3.0, f"{k} has no bed")
+            dps = [c["loc"][:2] for c in doors if k in c["rooms"]]
             for o in b:
+                if dps and min(math.dist(o["pos"][:2], q) for q in dps) < 1.2:
+                    add(1.0, f"{k} bed by the door")
                 g = wall_gap(o, k)
                 if g > FLOATING:
                     add(1.5, f"{k} bed headboard {g:.1f} m off the wall")
@@ -115,6 +202,15 @@ def score(d):
                 add(0.5, f"{k} no coffee table")
         elif t == "kitchen":
             run = has(k, "KitchenSpaceFactory")
+            # work triangle: sink, range, fridge 3.6-7.9 m around
+            tri = [o for c in ("SinkFactory", "OvenFactory", "FridgeFactory") for o in objs if o["class"] == c and (o.get("room") == k or c == "SinkFactory")][:3]
+            sinks = [o for o in objs if o["class"] == "SinkFactory"]
+            ov, fr = has(k, "OvenFactory"), has(k, "FridgeFactory")
+            if sinks and ov and fr:
+                sk = min(sinks, key=lambda o: math.dist(o["pos"][:2], ov[0]["pos"][:2]))
+                ps = [sk["pos"][:2], ov[0]["pos"][:2], fr[0]["pos"][:2]]
+                per = math.dist(ps[0], ps[1]) + math.dist(ps[1], ps[2]) + math.dist(ps[2], ps[0])
+                if not 3.6 <= per <= 7.9: add(round(0.3 * min(abs(per - 3.6), abs(per - 7.9)), 2), f"{k} work triangle {per:.1f} m")
             if not run:
                 add(3.0, f"{k} has no counter run")
             for c in ("FridgeFactory", "OvenFactory"):
@@ -141,9 +237,8 @@ def score(d):
     # chairs anywhere: count children of each dining table
     for o in objs:
         if o["class"] == "TableDiningFactory":
-            n = sum(1 for c in objs if c["class"] == "ChairFactory" and c.get("parent") == o["key"])
-            if n == 0:
-                n = sum(1 for c in objs if c["class"] == "ChairFactory" and c.get("room") == o.get("room"))
+            n = max(sum(1 for c in objs if c["class"] == "ChairFactory" and c.get("parent") == o["key"]),
+                    sum(1 for c in objs if c["class"] == "ChairFactory" and c.get("room") == o.get("room")))
             if n < 4:
                 add(1.5 if n < 2 else 1.0, f"{o.get('room')} dining table with {n} chair(s)")
     return pen, why

@@ -40,6 +40,44 @@ fn aspect_ratio(state: &RoomState, c: &str) -> f64 {
     a.max(1.0 / a)
 }
 
+/// the largest axis-aligned rectangle inside the room (0.25 m raster, maximal rectangle in a histogram): (area, short side, long
+/// side). A corridor-like or jagged room has little of its area in one usable rectangle.
+pub fn usable_rect(state: &RoomState, x: &str) -> (f64, f64, f64) {
+    let ring = exterior(state.poly(x));
+    let (x0, y0, x1, y1) = bounds(state.poly(x));
+    let cell = 0.25;
+    let (nx, ny) = (((x1 - x0) / cell).ceil() as usize, ((y1 - y0) / cell).ceil() as usize);
+    if nx == 0 || ny == 0 || nx * ny > 40_000 { return (0.0, 0.0, 0.0) }
+    let inside = |px: f64, py: f64| {
+        let mut c = false;
+        for i in 0..ring.len() {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            if (a[1] > py) != (b[1] > py) && px < (b[0] - a[0]) * (py - a[1]) / (b[1] - a[1]) + a[0] { c = !c; }
+        }
+        c
+    };
+    let mut h = vec![0usize; nx];
+    let mut best = (0.0, 0.0, 0.0);
+    for j in 0..ny {
+        let py = y0 + (j as f64 + 0.5) * cell;
+        for i in 0..nx { h[i] = if inside(x0 + (i as f64 + 0.5) * cell, py) { h[i] + 1 } else { 0 }; }
+        // largest rectangle in the histogram row
+        let mut st: Vec<usize> = vec![];
+        for i in 0..=nx {
+            let cur = if i < nx { h[i] } else { 0 };
+            while let Some(&t) = st.last() {
+                if h[t] <= cur { break }
+                st.pop();
+                let w = match st.last() { Some(&l) => i - l - 1, None => i };
+                let (a, b) = (w as f64 * cell, h[t] as f64 * cell);
+                if a * b > best.0 { best = (a * b, a.min(b), a.max(b)); }
+            }
+            st.push(i);
+        }
+    }
+    best
+}
+
 fn convexity(state: &RoomState, x: &str) -> f64 {
     area(&convex_hull(state.poly(x))) / area(state.poly(x))
 }
@@ -150,6 +188,19 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
         }
     }
     total += s * 40.0;
+
+    // usable shape: the share of a main room's area in its largest rectangle, and that rectangle's short side (a living room
+    // narrower than 2.8 m, a bedroom or kitchen narrower than 2.4 m, reads as a corridor)
+    let mut s = 0.0;
+    for k in rooms.iter().filter(|k| matches!(room_type(k), "living-room" | "dining-room" | "bedroom" | "kitchen")) {
+        let a = area(state.poly(k));
+        if a <= 0.0 { continue }
+        let (ra, short, _) = usable_rect(state, k);
+        s += -(ra / a).max(0.05).ln();
+        let need = if room_type(k) == "living-room" { 2.8 } else { 2.4 };
+        s += (need - short).max(0.0).powi(2) * 2.0;
+    }
+    total += s * crate::plan_rules::get().shape_w;
 
     // convexity, vertex count (non-hallway)
     let nonhall: Vec<&&String> = rooms.iter().filter(|k| room_type(k) != "hallway").collect();

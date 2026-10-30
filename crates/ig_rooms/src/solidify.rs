@@ -331,11 +331,14 @@ impl<'a> Solidifier<'a> {
                 }
             }
         }
-        // fewer windows where privacy or wall space matters: closets none, bathrooms their widest one, bedrooms their widest two
+        // windows per room capped (plan_rules: the widest kept; review read a window on every exterior stretch as too many)
         // (filtered after generation, so the random stream and every other room's windows stay as they were)
         for (k, cs) in window_cutters.iter_mut() {
             let pr = crate::plan_rules::get();
-            let keep = if k.starts_with("closet") { pr.closet_windows } else if k.starts_with("bathroom") { pr.bathroom_windows } else if k.starts_with("bedroom") { pr.bedroom_windows } else { usize::MAX };
+            let keep = match room_type(k) {
+                "closet" => pr.closet_windows, "bathroom" => pr.bathroom_windows, "bedroom" => pr.bedroom_windows, "living-room" => pr.living_windows,
+                "dining-room" => pr.dining_windows, "kitchen" => pr.kitchen_windows, "hallway" => pr.hallway_windows, _ => pr.other_windows,
+            };
             if cs.len() > keep {
                 cs.sort_by(|a, b| b.dims[0].partial_cmp(&a.dims[0]).unwrap());
                 cs.truncate(keep);

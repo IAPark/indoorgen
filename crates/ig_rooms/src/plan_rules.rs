@@ -16,10 +16,18 @@ pub struct PlanRules {
     pub closet_windows: usize,
     pub bathroom_windows: usize,
     pub bedroom_windows: usize,
+    pub living_windows: usize,
+    pub dining_windows: usize,
+    pub kitchen_windows: usize,
+    pub hallway_windows: usize,
+    /// any other room (utility, staircase room, garage)
+    pub other_windows: usize,
     /// chance of a second door between public rooms that share a wall
     pub extra_door_p: f64,
     /// chance a corner of the outline is cut or rounded
     pub angled_corner_p: f64,
+    /// weight of the usable-rectangle term in the room solver (share of a main room in its largest rectangle, narrow rooms)
+    pub shape_w: f64,
     /// chance a living / dining room gets a sliding glass patio door (its widest window, 1.4 m and up)
     pub patio_door_p: f64,
     /// chance a door between living / dining / hallway on a long shared wall is a double door
@@ -34,7 +42,8 @@ pub struct PlanRules {
 
 impl Default for PlanRules {
     fn default() -> Self {
-        PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 2, extra_door_p: 0.7, angled_corner_p: 0.08,
+        PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 1,
+            living_windows: 2, dining_windows: 1, kitchen_windows: 1, hallway_windows: 0, other_windows: 1, extra_door_p: 0.7, angled_corner_p: 0.08, shape_w: 120.0,
             patio_door_p: 0.5, double_door_p: 0.4, sliding_closet_p: 0.5, sliding_interior_p: 0.3, open_plan_p: 0.3 }
     }
 }
