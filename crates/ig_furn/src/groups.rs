@@ -1237,6 +1237,20 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     state.set_pose(k, saved);
                     state.touch(k);
                     ok = free_ok(state, k);
+                    // left where the solver had it: square to the room, turned toward the coffee table (a chair at 45 degrees read
+                    // as dropped)
+                    if ok {
+                        let p0 = state.objs[k].pose;
+                        let here = p0.apply([(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, 0.0]);
+                        let to = (c[1] - here[1]).atan2(c[0] - here[0]);
+                        let snapped = (to / std::f64::consts::FRAC_PI_2).round() * std::f64::consts::FRAC_PI_2;
+                        if (yaw(&p0) - snapped).sin().abs() > 0.02 || (yaw(&p0) - snapped).cos() < 0.0 {
+                            if !try_place(state, k, snapped, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], [here[0], here[1], 0.0]) {
+                                state.set_pose(k, p0);
+                                state.touch(k);
+                            }
+                        }
+                    }
                 }
             }
             if ok {
@@ -1377,9 +1391,15 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
             let name = format!("{room}_tvstand").replace('/', "_");
             if new_piece(ctx, state, rng, "TVStandFactory", &room, &name) {
                 let dd = door_d.clone();
-                if place_on_wall(state, &name, &room, &|_, c, t, len, _n| dd(c).min(3.0) + len * 0.15 - (t - len / 2.0).abs() * 0.5) {
-                    log.push(format!("{room}: added a TV stand"));
-                } else { state.objs.shift_remove(&name); }
+                let score = |_: &State, c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| dd(c).min(3.0) + len * 0.15 - (t - len / 2.0).abs() * 0.5;
+                let mut ok = place_on_wall(state, &name, &room, &score);
+                // (no wall spot keeps every walkway in a room with many doors: a living room without a TV read as unfinished)
+                if !ok {
+                    RELAX_WALK.store(true, std::sync::atomic::Ordering::Relaxed);
+                    ok = place_on_wall(state, &name, &room, &score);
+                    RELAX_WALK.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                if ok { log.push(format!("{room}: added a TV stand")); } else { state.objs.shift_remove(&name); }
             }
         }
         // closets: a wardrobe along the longest wall (the built-in fill then sizes it to the span)
