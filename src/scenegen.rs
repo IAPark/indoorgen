@@ -385,6 +385,16 @@ pub fn build_scene(p: &Params) -> Built {
                 }
                 if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
                     let (lo, hi) = a.bounds();
+                    if std::env::var_os("FITDBG").is_some() { eprintln!("FITDBG {k} {} asset {:.2?}..{:.2?} box {:.2?}..{:.2?}", gen.class, lo, hi, tlo, thi); }
+                    // tables read the same from every side: one built long along x for a box long along y is turned a quarter turn
+                    // first (fitted per axis, a 1.75 m dining table came out 0.9 m long and knee high)
+                    let (lo, hi) = if matches!(gen.class.as_str(), "TableDiningFactory" | "CoffeeTableFactory") && ((hi[0] - lo[0]) - (hi[1] - lo[1])) * ((thi[0] - tlo[0]) - (thi[1] - tlo[1])) < 0.0 {
+                        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, 0.0];
+                        let rt = indoorgen::mesh::Mat4::translation(c).mul(&indoorgen::mesh::Mat4::rot_z(std::f64::consts::FRAC_PI_2)).mul(&indoorgen::mesh::Mat4::translation([-c[0], -c[1], 0.0]));
+                        a.transform(&rt);
+                        for cc in a.cols.iter_mut() { let (p, q) = (rt.apply(cc.0), rt.apply(cc.1)); *cc = ([p[0].min(q[0]), p[1].min(q[1]), p[2].min(q[2])], [p[0].max(q[0]), p[1].max(q[1]), p[2].max(q[2])]); }
+                        a.bounds()
+                    } else { (lo, hi) };
                     let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
                     let mut mt = indoorgen::mesh::Mat4::scale(s);
                     for k in 0..3 { mt.0[k][3] = off[k]; }
