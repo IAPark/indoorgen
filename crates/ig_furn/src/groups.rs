@@ -92,7 +92,10 @@ fn lohi(state: &State, name: &str) -> (V3, V3) {
 /// kitchens: fridge and dishwasher at the ends of the counter run
 pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
     let mut log = vec![];
-    let runs: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "KitchenSpaceFactory").map(|(k, _)| k.clone()).collect();
+    // designed kitchens first (an L from a corner: counter + fridge on one leg, counter + range on the other); the rooms it lays out
+    // skip the per-run appliance placement below
+    let done = kitchen_template(ctx, state, &mut log);
+    let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && !layout2d::room_of(state, k).map_or(false, |r| done.contains(&r))).map(|(k, _)| k.clone()).collect();
     // floor-standing kitchen cabinets box the counter run in and read as stray units: removed (wall cabinets stay)
     let _runs: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "KitchenSpaceFactory").map(|(k, _)| k.clone()).collect();
     let lone: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenCabinetFactory" && layout2d::room_of(state, k).map_or(false, |r| r.starts_with("kitchen"))
@@ -333,6 +336,233 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
                         break 'r;
                     }
                 }
+            }
+        }
+    }
+    log
+}
+
+/// place `name` with its back on a wall line through `c` (inward normal `n`), covering [start, start + its width] along `u` from `c`
+fn place_along(state: &mut State, name: &str, c: [f64; 2], u: [f64; 2], n: [f64; 2], start: f64) -> bool {
+    let (lo, hi) = lohi(state, name);
+    let yaw_ = n[1].atan2(n[0]);
+    let ly = [-n[1], n[0]];
+    let anchor = if ly[0] * u[0] + ly[1] * u[1] > 0.0 { [lo[0], lo[1], lo[2]] } else { [lo[0], hi[1], lo[2]] };
+    let at = [c[0] + u[0] * start + n[0] * 0.003, c[1] + u[1] * start + n[1] * 0.003, 0.0];
+    try_place(state, name, yaw_, anchor, at)
+}
+
+/// kitchens laid out from a template: an L at the corner of two straight walls -- leg A a counter run from the corner with the
+/// fridge at its far end, leg B a run from the corner (past A's depth) with the range at its far end. Every corner and both leg
+/// assignments are tried on a copy of the room's pieces and the layout with the most counter (fridge and range placed) kept.
+/// The solver's runs, sinks and dishwashers in the room go; the extra-runs pass then lines the remaining walls (U / galley).
+/// Returns the rooms laid out.
+fn kitchen_template(ctx: &mut Ctx, state: &mut State, log: &mut Vec<String>) -> Vec<String> {
+    let mut done = vec![];
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let in_room = |st: &State, c: &str| -> Vec<String> { st.objs.iter().filter(|(k, o)| class_of(o) == c && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect() };
+        let runs = in_room(state, "KitchenSpaceFactory");
+        let (Some(proto), Some(fridge), Some(range)) = (runs.first().cloned(), in_room(state, "FridgeFactory").first().cloned(), in_room(state, "OvenFactory").first().cloned()) else { continue };
+        let saved = state.objs.clone();
+        // clear the room's counter pieces: other runs (with what stands on them), dishwashers, loose sinks, items on the prototype
+        for r in runs.iter().skip(1) { layout2d::remove_tree(state, r); }
+        for k in in_room(state, "DishwasherFactory") { layout2d::remove_tree(state, &k); }
+        // wall cabinets too: the runs carry their own upper units
+        for k in in_room(state, "KitchenCabinetFactory") { layout2d::remove_tree(state, &k); }
+        let kids: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == proto)).map(|(k, _)| k.clone()).collect();
+        for k in kids { layout2d::remove_tree(state, &k); }
+        // the prototype keeps only its floor relation (its wall relation names the solver's wall)
+        let floor_rel: Vec<_> = state.objs[&proto].relations.iter().filter(|r| r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom")))).cloned().collect();
+        state.objs.get_mut(&proto).unwrap().relations = floor_rel.clone();
+        state.touch(&proto);
+        let leg_b = format!("{room}_legb").replace('/', "_");
+        let mut rng = Rng::seeded(ig_core::int_hash(&["kitchen_template", &room]));
+        if !new_piece(ctx, state, &mut rng, "KitchenSpaceFactory", &room, &leg_b) {
+            state.objs = saved;
+            for k in state.objs.keys().cloned().collect::<Vec<_>>() { state.touch(&k); }
+            continue;
+        }
+        state.objs.get_mut(&leg_b).unwrap().relations = floor_rel.clone();
+        state.touch(&leg_b);
+        let base_a = state.objs[&proto].clone();
+        let base_b = state.objs[&leg_b].clone();
+        let (flo, fhi) = lohi(state, &fridge);
+        let fw = fhi[1] - flo[1];
+        let (olo, ohi) = lohi(state, &range);
+        let ow = ohi[1] - olo[1];
+        let depth_a = { let (l, h) = lohi(state, &proto); h[0] - l[0] };
+        // corners: two straight perpendicular wall segments sharing an end
+        let segs: Vec<_> = wall_segments(state, &room).into_iter().filter(|(_, _, n)| n[0].abs() > 0.99 || n[1].abs() > 0.99).collect();
+        let mut cands = vec![];
+        for (i, (a0, a1, na)) in segs.iter().enumerate() {
+            for (j, (b0, b1, nb)) in segs.iter().enumerate() {
+                if i == j || (na[0] * nb[0] + na[1] * nb[1]).abs() > 0.05 { continue }
+                for (ca, fa) in [(*a0, *a1), (*a1, *a0)] {
+                    for (cb, fb) in [(*b0, *b1), (*b1, *b0)] {
+                        if (ca[0] - cb[0]).hypot(ca[1] - cb[1]) > 0.05 { continue }
+                        let la = (fa[0] - ca[0]).hypot(fa[1] - ca[1]);
+                        let lb = (fb[0] - cb[0]).hypot(fb[1] - cb[1]);
+                        let ua = [(fa[0] - ca[0]) / la, (fa[1] - ca[1]) / la];
+                        let ub = [(fb[0] - cb[0]) / lb, (fb[1] - cb[1]) / lb];
+                        cands.push((ca, ua, *na, la, ub, *nb, lb));
+                    }
+                }
+            }
+        }
+        let start_state = state.objs.clone();
+        let mut best: Option<(f64, _)> = None;
+        for (c, ua, na, la, ub, nb, lb) in cands {
+            state.objs = start_state.clone();
+            // the template's pieces out of the room until each is placed: the solver's spots block each other (parked far off they
+            // still count as the room's pieces for the walkway check)
+            let parked: std::collections::HashMap<String, ObjState> = [&proto, &leg_b, &fridge, &range].into_iter().map(|k| (k.clone(), state.objs.shift_remove(k.as_str()).unwrap())).collect();
+            let put = |state: &mut State, k: &str| { if !state.objs.contains_key(k) { state.objs.insert(k.to_string(), parked[k].clone()); state.touch(k); } };
+            put(state, &fridge);
+            // leg A: the fridge as far along as it fits, the run from the corner up to it
+            let mut sf = None;
+            for k in 0..40 {
+                let st = la - fw - 0.02 - k as f64 * 0.2;
+                if st < 1.2 { break }
+                if place_along(state, &fridge, c, ua, na, st) { sf = Some(st); break }
+            }
+            let dbg = ig_core::env_on!("GROUPDBG");
+            let Some(sf) = sf else { if dbg { eprintln!("KTPL {room} corner {c:?} la {la:.2} lb {lb:.2}: no fridge spot"); } continue };
+            let mut wa = 0.0;
+            put(state, &proto);
+            for k in 0..8 {
+                let w = sf - 0.02 - k as f64 * 0.2;
+                if w < 1.2 { break }
+                *state.objs.get_mut(&proto).unwrap() = base_a.clone();
+                state.touch(&proto);
+                if !super::solver::set_width(ctx, state, &proto, &base_a, w, 1.0) && state.objs[&proto].generator.as_ref().and_then(super::solver::cur_size).map_or(true, |cs| (cs[0] - w).abs() > 0.05) { continue }
+                if place_along(state, &proto, c, ua, na, 0.0) { wa = w; break }
+            }
+            if wa == 0.0 { if dbg { eprintln!("KTPL {room} corner {c:?}: no run A (fridge at {sf:.2})"); } continue }
+            // leg B: past leg A's depth, the range as far along as it fits, the run up to it (none when the leg is short)
+            let mut sr = None;
+            put(state, &range);
+            for k in 0..40 {
+                let st = lb - ow - 0.02 - k as f64 * 0.2;
+                if st < depth_a + 0.01 { break }
+                if place_along(state, &range, c, ub, nb, st) { sr = Some(st); break }
+            }
+            let Some(sr) = sr else { if dbg { eprintln!("KTPL {room} corner {c:?} lb {lb:.2}: no range spot"); } continue };
+            let mut wb = 0.0;
+            put(state, &leg_b);
+            for k in 0..8 {
+                let w = sr - depth_a - 0.03 - k as f64 * 0.2;
+                if w < 0.6 { break }
+                *state.objs.get_mut(&leg_b).unwrap() = base_b.clone();
+                state.touch(&leg_b);
+                let _ = super::solver::set_width(ctx, state, &leg_b, &base_b, w, 1.0);
+                if place_along(state, &leg_b, c, ub, nb, depth_a + 0.01) { wb = w; break }
+            }
+            if wb == 0.0 { state.objs.shift_remove(&leg_b); }
+            let score = wa + wb + if wb > 0.0 { 1.0 } else { 0.0 };
+            if best.as_ref().map_or(true, |(s, _)| score > *s) { best = Some((score, state.objs.clone())); }
+        }
+        match best {
+            Some((sc, objs)) => {
+                state.objs = objs;
+                for k in [&proto, &leg_b, &fridge, &range] { if state.objs.contains_key(k.as_str()) { state.touch(k); } }
+                log.push(format!("{room}: kitchen laid out as an L ({sc:.1} m of counter)"));
+                done.push(room.clone());
+            }
+            None => {
+                state.objs = saved;
+                for k in state.objs.keys().cloned().collect::<Vec<_>>() { state.touch(&k); }
+                log.push(format!("{room}: no corner takes the L template, solver layout kept"));
+            }
+        }
+    }
+    done
+}
+
+/// bathrooms laid out from a template: the tub (or shower) along one wall from a corner, then the sink and toilet along the
+/// perpendicular wall past it (or the toilet along the tub's wall after it), each 0.2 m apart; every corner is tried on a copy and
+/// the layout with the toilet farthest from the door (and nothing within 0.6 m of it) kept. Returns log lines.
+pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<String> {
+    let mut log = vec![];
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "bathroom" && only_room.map_or(true, |r| r == k.as_str())).map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let first = |st: &State, c: &str| st.objs.iter().find(|(k, o)| class_of(o) == c && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone());
+        let Some(wc) = first(state, "ToiletFactory") else { continue };
+        let Some(sink) = first(state, "StandingSinkFactory") else { continue };
+        let Some(tub) = first(state, "BathtubFactory").or_else(|| first(state, "ShowerFactory")) else { continue };
+        let doors = door_points(state, &room);
+        let door_d = |st: &State, k: &str| { let t = st.objs[k].pose.t; doors.iter().map(|d| ((d[0] - t[0]).powi(2) + (d[1] - t[1]).powi(2)).sqrt()).fold(9.0f64, f64::min) };
+        let w_of = |st: &State, k: &str| { let (l, h) = lohi(st, k); (h[1] - l[1], h[0] - l[0]) };
+        let (tw, td) = w_of(state, &tub);
+        let (sw, _) = w_of(state, &sink);
+        let (ww, _) = w_of(state, &wc);
+        let segs: Vec<_> = wall_segments(state, &room).into_iter().filter(|(_, _, n)| n[0].abs() > 0.99 || n[1].abs() > 0.99).collect();
+        let start_state = state.objs.clone();
+        let mut best: Option<(f64, _)> = None;
+        for (i, (a0, a1, na)) in segs.iter().enumerate() {
+            for (j, (b0, b1, nb)) in segs.iter().enumerate() {
+                if i == j || (na[0] * nb[0] + na[1] * nb[1]).abs() > 0.05 { continue }
+                for (c, fa) in [(*a0, *a1), (*a1, *a0)] {
+                    for fb in [*b0, *b1] {
+                        let cb = if fb == *b0 { *b1 } else { *b0 };
+                        if (c[0] - cb[0]).hypot(c[1] - cb[1]) > 0.05 { continue }
+                        let la = (fa[0] - c[0]).hypot(fa[1] - c[1]);
+                        let lb = (fb[0] - c[0]).hypot(fb[1] - c[1]);
+                        if la < tw + 0.01 { continue }
+                        let ua = [(fa[0] - c[0]) / la, (fa[1] - c[1]) / la];
+                        let ub = [(fb[0] - c[0]) / lb, (fb[1] - c[1]) / lb];
+                        let (na, nb) = (*na, *nb);
+                        // variants: (sink, wc) along B past the tub; wc along A after the tub and the sink along B
+                        for variant in 0..2 {
+                            state.objs = start_state.clone();
+                            let parked: std::collections::HashMap<String, ObjState> = [&tub, &sink, &wc].into_iter().map(|k| (k.clone(), state.objs.shift_remove(k.as_str()).unwrap())).collect();
+                            let put = |state: &mut State, k: &str| { state.objs.insert(k.to_string(), parked[k].clone()); state.touch(k); };
+                            put(state, &tub);
+                            if !place_along(state, &tub, c, ua, na, 0.0) { continue }
+                            let mut ok = true;
+                            put(state, &sink);
+                            put(state, &wc);
+                            if variant == 0 {
+                                let mut placed = false;
+                                for k in 0..10 {
+                                    let s0 = td + 0.15 + k as f64 * 0.15;
+                                    if s0 + sw + 0.2 + ww > lb { break }
+                                    if place_along(state, &sink, c, ub, nb, s0) && place_along(state, &wc, c, ub, nb, s0 + sw + 0.2) { placed = true; break }
+                                }
+                                ok &= placed;
+                            } else {
+                                let mut placed = false;
+                                for k in 0..10 {
+                                    let s0 = tw + 0.2 + k as f64 * 0.15;
+                                    if s0 + ww > la { break }
+                                    if place_along(state, &wc, c, ua, na, s0) { placed = true; break }
+                                }
+                                let mut placed2 = false;
+                                for k in 0..10 {
+                                    let s0 = td + 0.2 + k as f64 * 0.15;
+                                    if s0 + sw > lb { break }
+                                    if place_along(state, &sink, c, ub, nb, s0) { placed2 = true; break }
+                                }
+                                ok &= placed && placed2;
+                            }
+                            if !ok { continue }
+                            let score = door_d(state, &wc).min(2.5) + if door_d(state, &wc) > door_d(state, &sink) { 0.5 } else { 0.0 } - if door_d(state, &sink) < 0.8 { 1.0 } else { 0.0 };
+                            if best.as_ref().map_or(true, |(s, _)| score > *s) { best = Some((score, state.objs.clone())); }
+                        }
+                    }
+                }
+            }
+        }
+        match best {
+            Some((sc, objs)) => {
+                state.objs = objs;
+                for k in [&tub, &sink, &wc] { state.touch(k); }
+                log.push(format!("{room}: bathroom laid out on a wet wall (toilet {sc:.1})"));
+            }
+            None => {
+                state.objs = start_state;
+                for k in state.objs.keys().cloned().collect::<Vec<_>>() { state.touch(&k); }
+                log.push(format!("{room}: no corner takes the bathroom template"));
             }
         }
     }
