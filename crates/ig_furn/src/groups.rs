@@ -343,6 +343,16 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
             log.push(format!("nightstand {k}: no slot by the headboard, removed"));
         }
     }
+    // a desk jammed against the bed or its nightstands reads as crammed in: removed
+    let desks: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "SimpleDeskFactory").map(|(k, _)| k.clone()).collect();
+    for desk in &desks {
+        let tight = state.objs.iter().any(|(k, o)| (class_of(o) == "BedFactory" && layout2d::dist(state, k, desk) < 0.6)
+            || (class_of(o) == "SideTableFactory" && layout2d::dist(state, k, desk) < 0.3));
+        if tight {
+            layout2d::remove_tree(state, desk);
+            log.push(format!("desk {desk}: crammed against the bed, removed"));
+        }
+    }
     // desk chairs
     let desks: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "SimpleDeskFactory").map(|(k, _)| k.clone()).collect();
     for desk in desks {
@@ -375,7 +385,8 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
             log.push(format!("desk chair {name} at {desk}"));
         } else {
             state.objs.shift_remove(&name);
-            log.push(format!("desk {desk}: no room for a chair"));
+            layout2d::remove_tree(state, &desk);
+            log.push(format!("desk {desk}: no room for a chair, removed"));
         }
     }
     log
@@ -399,7 +410,8 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         "DishwasherFactory" => ("dishwashers", if room_type == "kitchen" { 1 } else { 0 }),
         "SimpleDeskFactory" => ("desks", n(0, 0, 1, 0, 0)),
         "KitchenCabinetFactory" if room_type == "kitchen" => return None,
-        _ if storage => ("storage", match room_type { "living-room" => 1, "utility" => 2, _ => 0 }),
+        // (a lone cabinet on a living-room wall reads as stray: the TV stand is the room's storage)
+        _ if storage => ("storage", match room_type { "utility" => 2, _ => 0 }),
         // a closet is fitted with a wardrobe (missing_pieces), not loose storage; small bathrooms keep a tub or a shower, not both
         "BathtubFactory" | "ShowerFactory" if room_type == "bathroom" => ("tub / shower", 2),
         _ => return None,
@@ -421,9 +433,9 @@ pub fn caps(state: &mut State) -> Vec<String> {
         let Some(room) = layout2d::room_of(state, k) else { continue };
         let Some((grp, mut max)) = cap(room_type_of(&room), class_of(o)) else { continue };
         let area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
-        // a desk only in a bedroom of 18 m2 or more; a tub and a shower together only in a bathroom of 10 m2 or more
+        // a desk only in a bedroom of 18 m2 or more; a tub and a shower together only in a bathroom of 14 m2 or more
         if grp == "desks" && area < 18.0 { max = 0; }
-        if grp == "tub / shower" && area < 10.0 { max = 1; }
+        if grp == "tub / shower" && area < 14.0 { max = 1; }
         let e = groups.entry((room, grp)).or_insert((max, vec![]));
         e.1.push(k.clone());
     }
@@ -558,8 +570,10 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             .map(|(k, o)| (k.clone(), o.clone())).collect();
         // a living room of 20 m2 or more without an armchair gets one (placed with the others beside the coffee table, or left out)
         let room_area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
-        if room_area >= 20.0 && !lifted.iter().any(|(_, o)| class_of(o) == "ArmChairFactory") {
-            let an = format!("{room}_armchair").replace('/', "_");
+        // (30 m2 or more: a pair, one each side of the coffee table, so a large room does not read as half empty)
+        let want = if room_area >= 30.0 { 2 } else if room_area >= 20.0 { 1 } else { 0 };
+        for i in lifted.iter().filter(|(_, o)| class_of(o) == "ArmChairFactory").count()..want {
+            let an = format!("{room}_armchair{i}").replace('/', "_");
             if new_piece(ctx, state, rng, "ArmChairFactory", &room, &an) {
                 let o = state.objs.shift_remove(&an).unwrap();
                 lifted.push((an, o));
@@ -915,6 +929,41 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                 } else { state.objs.shift_remove(&name); }
             }
         }
+    }
+    log
+}
+
+/// bathrooms: a toilet within 1 m of the door moves to the wall spot farthest from the doors (kept where it is if none is free)
+pub fn toilets(state: &mut State, only_room: Option<&str>) -> Vec<String> {
+    let mut log = vec![];
+    let wcs: Vec<(String, String)> = state.objs.iter().filter(|(k, o)| class_of(o) == "ToiletFactory")
+        .filter_map(|(k, _)| layout2d::room_of(state, k).map(|r| (k.clone(), r))).filter(|(_, r)| only_room.map_or(true, |o| o == r)).collect();
+    for (wc, room) in wcs {
+        let doors = door_points(state, &room);
+        let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
+        // clearance to the other fixtures (a toilet touching the tub reads as jammed in)
+        let wc2 = wc.clone();
+        let room2 = room.clone();
+        let clr = move |st: &State| st.objs.iter().filter(|(k, o)| matches!(class_of(o), "BathtubFactory" | "ShowerFactory" | "StandingSinkFactory")
+            && layout2d::room_of(st, k).as_deref() == Some(room2.as_str())).map(|(k, _)| layout2d::dist(st, k, &wc2)).fold(1.0f64, f64::min);
+        let t = state.objs[&wc].pose.t;
+        let d0 = door_d([t[0], t[1]]);
+        let c0 = clr(state);
+        if d0 >= 1.0 && c0 >= 0.15 { continue }
+        let s0 = d0.min(2.5) + 2.0 * c0.min(0.3);
+        let start = state.objs[&wc].pose;
+        let dd = door_d.clone();
+        let clr2 = clr.clone();
+        if place_on_wall(state, &wc, &room, &move |st, c, _t, _len, _n| dd(c).min(2.5) + 2.0 * clr2(st).min(0.3)) {
+            let t1 = state.objs[&wc].pose.t;
+            let s1 = door_d([t1[0], t1[1]]).min(2.5) + 2.0 * clr(state).min(0.3);
+            if s1 > s0 + 0.2 {
+                log.push(format!("{room}: toilet moved (door {d0:.1} -> {:.1} m, clearance {c0:.2} -> {:.2} m)", door_d([t1[0], t1[1]]), clr(state)));
+                continue;
+            }
+        }
+        state.set_pose(&wc, start);
+        state.touch(&wc);
     }
     log
 }
