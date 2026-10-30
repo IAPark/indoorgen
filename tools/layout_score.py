@@ -35,6 +35,8 @@ def score(d):
     beds, baths = count("bedroom"), count("bathroom")
 
     # plan
+    if beds >= 1 and not count("dining-room"):
+        add(1.5, "no dining room")
     if baths > max(1, beds):
         add(2.0 * (baths - max(1, beds)), f"{baths} bathrooms for {beds} bedrooms")
     for k, poly in rooms.items():

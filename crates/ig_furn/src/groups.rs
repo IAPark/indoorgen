@@ -32,7 +32,7 @@ pub fn free_ok(state: &State, name: &str) -> bool {
     // (ranges and dishwashers are counter height: under a window like the run they belong to)
     // anything lower than a sill (sofas, tables, stands) stands under a window too
     let top = layout2d::prisms(state, name).iter().map(|p| p.z[1]).fold(f64::NEG_INFINITY, f64::max);
-    let skip_win = top < 1.0 || matches!(class_of(o), "BedFactory" | "KitchenSpaceFactory" | "OvenFactory" | "DishwasherFactory" | "SinkFactory");
+    let skip_win = (top < 1.0 && class_of(o) != "TVStandFactory") || matches!(class_of(o), "BedFactory" | "KitchenSpaceFactory" | "OvenFactory" | "DishwasherFactory" | "SinkFactory");
     let win = Tag::sem("Window");
     for (k, b) in &state.objs {
         if k == name || b.tags.contains(nc) || layout2d::is_room(b) || (skip_win && b.tags.contains(win)) {
@@ -48,6 +48,13 @@ pub fn free_ok(state: &State, name: &str) -> bool {
         }
         if layout2d::depth(state, name, k) > 1e-4 {
             return false;
+        }
+        // a TV stand clears windows in plan too (its screen would stand in front of the glass, above the sill the 3D test starts at)
+        if class_of(o) == "TVStandFactory" && b.tags.contains(win.clone()) {
+            let (pa, pb) = (layout2d::prisms(state, name), layout2d::prisms(state, k));
+            if pa.iter().any(|x| pb.iter().any(|y| layout2d::poly_dist(&x.poly, &y.poly) < 0.05)) {
+                return false;
+            }
         }
     }
     let own = layout2d::room_of(state, name).map_or(0.0, |r| layout2d::outside_room_depth(state, name, &r));
@@ -487,7 +494,6 @@ fn room_type_of(room: &str) -> &str {
 /// relation: plants placed as free floor pieces escaped the against-wall caps); None = no cap
 fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
     let storage = ["SingleCabinetFactory", "SimpleBookcaseFactory", "LargeShelfFactory", "CellShelfFactory"].contains(&cls) || (cls == "KitchenCabinetFactory" && room_type != "kitchen");
-    let n = |living, dining, bedroom, hallway, other| match room_type { "living-room" => living, "dining-room" => dining, "bedroom" => bedroom, "hallway" => hallway, _ => other };
     Some(match cls {
         "LargePlantContainerFactory" => ("plants", 0),
         "FloorLampFactory" => ("floor lamps", 0),
@@ -495,7 +501,8 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         "FridgeFactory" => ("fridges", if room_type == "kitchen" { 1 } else { 0 }),
         "OvenFactory" => ("ovens", if room_type == "kitchen" { 1 } else { 0 }),
         "DishwasherFactory" => ("dishwashers", if room_type == "kitchen" { 1 } else { 0 }),
-        "SimpleDeskFactory" => ("desks", n(0, 0, 1, 0, 0)),
+        // (desks read as crammed beside the bed even in large bedrooms: none)
+        "SimpleDeskFactory" => ("desks", 0),
         "KitchenCabinetFactory" if room_type == "kitchen" => return None,
         // (a lone cabinet on a living-room wall reads as stray: the TV stand is the room's storage)
         _ if storage => ("storage", match room_type { "utility" => 2, _ => 0 }),

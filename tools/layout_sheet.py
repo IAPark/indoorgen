@@ -220,6 +220,14 @@ def draw(d, ax, small=False):
         if CLEAN and n == "rug": lab = None
         if lab and (not small or CLEAN):
             c = f.centroid; ax.text(c.x, c.y - 0.12, lab, fontsize=5, ha="center", va="top", zorder=6, color="#111")
+    # kitchen counters: runs and the appliances standing in line with them are one continuous counter -- one outline around the
+    # pieces that touch, so an L of a run, a range and a fridge reads as joined
+    if CLEAN:
+        kp = [f.buffer(0.03) for o, f, z0, z1, r in floor if re.search("KitchenSpace|Fridge|Oven|Dishwasher", o["class"])]
+        if kp:
+            u = unary_union(kp)
+            for g in getattr(u, "geoms", [u]):
+                ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#1d3b1d", lw=1.4, zorder=4.6))
     # wall-mounted / raised pieces (no furniture parent, above 0.25 m): dashed outlines
     for o in d["objects"]:
         if re.search("Light|Lamp|Art|Mirror|Window|Door|Trinket|Book|Hardware", o["class"]): continue

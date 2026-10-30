@@ -366,7 +366,8 @@ fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
         // beds under a window are common; small bedrooms with windows on the free walls got no bed at all (headboard vs the cutter box)
         || class == "BedFactory"
         // anything lower than a sill (sofas, stands, tables) stands under a window too
-        || super::layout2d::prisms(state, name).iter().map(|p| p.z[1]).fold(f64::NEG_INFINITY, f64::max) < 1.0);
+        // (not a TV: a screen in front of the glass reads badly)
+        || (class != "TVStandFactory" && super::layout2d::prisms(state, name).iter().map(|p| p.z[1]).fold(f64::NEG_INFINITY, f64::max) < 1.0));
     let win = Tag::sem("Window");
     let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc) && !(skip_win && o.tags.contains(win.clone()))).map(|(k, _)| k).collect();
     if others.is_empty() {

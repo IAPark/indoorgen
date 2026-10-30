@@ -184,7 +184,7 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     ((p[0] - a[0] - t * dx).powi(2) + (p[1] - a[1] - t * dy).powi(2)).sqrt()
 }
 
-fn poly_dist(a: &[[f64; 2]], b: &[[f64; 2]]) -> f64 {
+pub fn poly_dist(a: &[[f64; 2]], b: &[[f64; 2]]) -> f64 {
     if sat_depth(a, b) > 0.0 {
         return 0.0;
     }
