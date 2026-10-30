@@ -42,6 +42,14 @@ pub fn free_ok(state: &State, name: &str) -> bool {
         if matches!(class_of(b), "WallArtFactory" | "MirrorFactory") {
             continue;
         }
+        // another room's door clearance and feature keep-outs stop at its walls (a bedroom's built-in shelves kept the living
+        // room's sofa off the far side of the wall)
+        if k.starts_with("doorclear/") || b.tags.contains(Tag::sem("FeatureKeepout")) || class_of(b).ends_with("Feature") {
+            // door clearances carry their room in the name (doorclear/<room>/<i>); features and their keep-outs by relation
+            let rb = if let Some(rest) = k.strip_prefix("doorclear/") { rest.rsplit_once('/').map(|(r, _)| r.to_string()) }
+                else { layout2d::room_of(state, k).or_else(|| k.rsplit_once(".keepout").and_then(|(f, _)| layout2d::room_of(state, f))) };
+            if rb.zip(layout2d::room_of(state, name)).map_or(false, |(rb, ra)| rb != ra) { continue }
+        }
         // a piece's own children (items on it) are not obstacles
         if b.relations.iter().any(|r| r.target == name) {
             continue;
@@ -58,8 +66,11 @@ pub fn free_ok(state: &State, name: &str) -> bool {
         }
     }
     let own = layout2d::room_of(state, name).map_or(0.0, |r| layout2d::outside_room_depth(state, name, &r));
-    own <= 1e-3 && layout2d::outside_depth(state, name) <= 1e-4 && layout2d::layout_ok(state, name)
+    own <= 1e-3 && layout2d::outside_depth(state, name) <= 1e-4 && (RELAX_WALK.load(std::sync::atomic::Ordering::Relaxed) || layout2d::layout_ok(state, name))
 }
+
+/// set while a pass retries with the walkway rule off (its last resort); free_ok then checks overlaps and the room only
+static RELAX_WALK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// pose `name` turned like `yaw_` with its local point `anchor` at world point `at`; keeps it if free_ok, else restores. Returns ok.
 fn try_place(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) -> bool {
@@ -913,7 +924,10 @@ fn place_bed(state: &mut State, bed: &str) -> Option<String> {
             // a bed square to the room: walls at an angle only when no straight wall works
             let straight = (n[0].abs() < 1e-3 || n[1].abs() < 1e-3) as i32 as f64;
             // (both slots free weighs most: a bed with one nightstand read as unfinished)
-            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } + centred * 0.6 + straight * 2.0;
+            // (a headboard against a window read as a bed blocking the window)
+            let win = Tag::sem("Window");
+            let on_window = state.objs.iter().any(|(k, o)| o.tags.contains(win.clone()) && layout2d::dist(state, k, bed) < 0.25);
+            let score = door_d.min(3.0) + side_room * 1.5 + if side_room >= 2.0 { 2.0 } else { 0.0 } + centred * 0.6 + straight * 2.0 - if on_window { 2.5 } else { 0.0 };
             if best.as_ref().map_or(true, |(s, _)| score > *s) {
                 best = Some((score, state.objs[bed].pose));
             }
@@ -954,12 +968,26 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         };
         let tp = state.objs[&tv].pose;
         let (tlo, thi) = lohi(state, &tv);
-        let ty = yaw(&tp);
+        let rings = layout2d::rings(&layout2d::room_floor(state, &room));
+        let mut ty = yaw(&tp);
+        let mut front = tp.apply([thi[0], (tlo[1] + thi[1]) / 2.0, 0.0]);
+        // a fireplace's front is not always its local +x (its depth can run along local y): the face toward the room is the one
+        // with floor 0.5 m and 1.5 m in front of it
+        if fixed {
+            let (cx, cy) = ((tlo[0] + thi[0]) / 2.0, (tlo[1] + thi[1]) / 2.0);
+            let y0 = yaw(&tp);
+            // (and the opposite face on the wall: the side faces of a fireplace have floor in front of them too)
+            for (face, back, ang) in [([thi[0], cy, 0.0], [tlo[0], cy, 0.0], 0.0), ([cx, thi[1], 0.0], [cx, tlo[1], 0.0], std::f64::consts::FRAC_PI_2),
+                                      ([cx, tlo[1], 0.0], [cx, thi[1], 0.0], -std::f64::consts::FRAC_PI_2), ([tlo[0], cy, 0.0], [thi[0], cy, 0.0], std::f64::consts::PI)] {
+                let (w, b) = (tp.apply(face), tp.apply(back));
+                let a = y0 + ang;
+                let ahead = |d: f64| layout2d::in_rings(&rings, [w[0] + a.cos() * d, w[1] + a.sin() * d]);
+                if ahead(0.5) && ahead(1.5) && layout2d::ring_dist(&rings, [b[0], b[1]]) < 0.25 { ty = a; front = w; break }
+            }
+        }
         let f = [ty.cos(), ty.sin()];
-        let front = tp.apply([thi[0], (tlo[1] + thi[1]) / 2.0, 0.0]);
         let (slo, shi) = lohi(state, &sofa);
         let start = state.objs[&sofa].pose;
-        let rings = layout2d::rings(&layout2d::room_floor(state, &room));
         // the coffee table and armchairs are placed around the sofa afterwards: out of the room while the sofa looks for its spot
         let mut lifted: Vec<(String, ObjState)> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "CoffeeTableFactory" | "ArmChairFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str()))
             .map(|(k, o)| (k.clone(), o.clone())).collect();
@@ -1117,7 +1145,12 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 }
             }
         }
-        // otherwise: facing the TV where it stands, 1.3 m (small rooms) to 4.2 m
+        // otherwise: facing the TV where it stands, 1.3 m (small rooms) to 4.2 m; with the walkway rule relaxed as a last resort
+        // (rooms with many doors, e.g. a merged hallway's, left no spot that keeps every door-to-door path, and the sofa stayed
+        // wherever the solver put it)
+        for relax in [false, true] {
+        if relax && (best.is_some() || pair.is_some() || walled) { break }
+        RELAX_WALK.store(relax, std::sync::atomic::Ordering::Relaxed);
         for di in 0..=24 {
             if pair.is_some() || walled { break }
             let d = 1.3 + di as f64 * 0.12;
@@ -1138,6 +1171,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 }
             }
         }
+        }
+        RELAX_WALK.store(false, std::sync::atomic::Ordering::Relaxed);
         match best {
             Some((_, p, d)) => {
                 state.set_pose(&sofa, p);
