@@ -36,6 +36,15 @@ pub fn text_x_bounds(s: &str) -> (f64, f64) {
     (-total / 2.0 + m(cs[0])[0], -total / 2.0 + before_last + m(cs[cs.len() - 1])[1])
 }
 
+/// size parameters (depth, width, height, panel width, door margin) of a microwave built to the layout box `h` [width (y), depth (x), height] (the factory stream `rng`)
+pub fn microwave_dims(rng: &Rng, h: [f64; 3]) -> [(&'static str, f64); 5] {
+    let saved = crate::api::size_hint();
+    crate::api::set_size_hint(Some(h));
+    let a = Appliance::new("MicrowaveFactory", &mut rng.clone());
+    crate::api::set_size_hint(saved);
+    [("Depth", a.depth), ("Width", a.width), ("Height", a.height), ("PanelWidth", a.panel_w), ("DoorMargin", a.door_margin)]
+}
+
 pub fn handles(c: &str) -> bool {
     matches!(c, "DishwasherFactory" | "BeverageFridgeFactory" | "MicrowaveFactory" | "OvenFactory" | "RugFactory")
 }
@@ -165,6 +174,20 @@ impl Appliance {
             }
         }
         a.seed = r.randint(0, 1_000_000) as u64;
+        // built to the layout box [width (y), depth (x), height] (microwaves): width and depth are corrected until the overall extents
+        // (door slab, brand text) are the box's
+        if let (K::Micro, Some(h)) = (k, crate::api::size_hint()) {
+            a.height = h[2];
+            for _ in 0..4 {
+                let Some((lo, hi)) = a.bounds_hint(0) else { break };
+                let e = [hi[1] - lo[1], hi[0] - lo[0]];
+                let f = h[0] / e[0];
+                a.width *= f;
+                a.panel_w *= f; // the control panel and the door margin keep their share of the width
+                a.door_margin *= f;
+                a.depth += h[1] - e[1];
+            }
+        }
         a
     }
 
@@ -352,6 +375,11 @@ impl Appliance {
 }
 
 impl Factory for Appliance {
+    fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
+        if self.k != K::Micro { return None; }
+        let (lo, hi) = self.bounds_hint(i)?;
+        Some([hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]])
+    }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
         match self.k {
             K::Dish | K::Fridge => {

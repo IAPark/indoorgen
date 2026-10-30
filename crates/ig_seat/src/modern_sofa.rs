@@ -83,25 +83,33 @@ impl ModernSofa {
         let arm_w = match arm { Arm::Slim => r.uniform(0.07, 0.12), Arm::Track => r.uniform(0.14, 0.24), Arm::Rolled => r.uniform(0.16, 0.24) };
         let width = if armchair { r.uniform(0.8, 1.0) } else { r.uniform(1.6, 2.6) };
         let arm_w = if armchair { arm_w.min(0.16) } else { arm_w };
+        let mut depth = r.uniform(0.85, 1.0);
+        let mut height = r.uniform(0.76, 0.9);
+        let mut seat_h = r.uniform(0.42, 0.47);
+        let mut arm_h = r.uniform(0.56, 0.68);
+        let legs = [Legs::Tapered, Legs::Block, Legs::Metal][r.choice_p(&[0.5, 0.25, 0.25])];
+        let leg_h = r.uniform(0.06, 0.16);
+        let cushion_t = r.uniform(0.12, 0.18);
+        let back_t = r.uniform(0.16, 0.24);
+        let back_tilt = r.uniform(0.15, 0.25);
+        let plinth = r.uniform(0.0, 0.03);
+        let seed = r.randint(0, 1_000_000) as u64;
+        let mut width = width;
+        // built to the layout box [width (y), depth (x), height]: the overall extents are the box's (rolled arms overhang, the seat
+        // front and the cushion bulge stand a little proud); heights of the seat and arms follow the total height
+        if let Some(h) = crate::api::size_hint() {
+            let hs = height;
+            width = h[0] - if arm == Arm::Rolled { 0.06 } else { 0.0 };
+            depth = h[1] - 0.01;
+            // total height = top of the tilted back cushions (see `top_z`); seat and arm heights keep their proportion of it
+            let cs = back_tilt.cos();
+            height = (h[2] + CUSHION_SHRINK) / (seat_h * (1.0 - cs) / hs + cs);
+            seat_h *= height / hs;
+            arm_h *= height / hs;
+        }
         let inner = width - 2.0 * arm_w;
         let n_seats = if armchair { 1 } else { ((inner / 0.68).round() as usize).clamp(2, 4) };
-        ModernSofa {
-            width,
-            depth: r.uniform(0.85, 1.0),
-            height: r.uniform(0.76, 0.9),
-            seat_h: r.uniform(0.42, 0.47),
-            arm_h: r.uniform(0.56, 0.68),
-            arm_w,
-            arm,
-            legs: [Legs::Tapered, Legs::Block, Legs::Metal][r.choice_p(&[0.5, 0.25, 0.25])],
-            leg_h: r.uniform(0.06, 0.16),
-            n_seats,
-            cushion_t: r.uniform(0.12, 0.18),
-            back_t: r.uniform(0.16, 0.24),
-            back_tilt: r.uniform(0.15, 0.25),
-            plinth: r.uniform(0.0, 0.03),
-            seed: r.randint(0, 1_000_000) as u64,
-        }
+        ModernSofa { width, depth, height, seat_h, arm_h, arm_w, arm, legs, leg_h, n_seats, cushion_t, back_t, back_tilt, plinth, seed }
     }
 
     fn build(&self) -> Asset {
@@ -176,7 +184,21 @@ impl ModernSofa {
     }
 }
 
+
+/// the bevelled, puffed back cushion tops out this far below the sharp-edged one
+const CUSHION_SHRINK: f64 = 0.013;
+
+impl ModernSofa {
+    /// overall height (legs included): the top edge of the back cushions (rear edge) after they lean back about their bottom edge
+    fn top_z(&self) -> f64 {
+        self.seat_h + self.back_tilt.cos() * (self.height - self.seat_h) - CUSHION_SHRINK
+    }
+}
+
 impl Factory for ModernSofa {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        Some([self.width + if self.arm == Arm::Rolled { 0.06 } else { 0.0 }, self.depth + 0.01, self.top_z()])
+    }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
         Some(([0.0, -self.width / 2.0, -self.leg_h], [self.depth + 0.02, self.width / 2.0, self.height - self.leg_h + 0.01]))
     }

@@ -184,11 +184,61 @@ impl OfficeChair {
             wheel_rot = r.uniform(0.0, 360.0);
             pole_len = r.uniform(1.6, 2.0);
         }
-        OfficeChair { x, z, top_t, wheeled, sp, bottom_scale, leg_d, curve, poles, joint_h, wheel_arc, wheel_w, wheel_rot, pole_len, seed: r.randint(0, 1_000_000) as u64 }
+        let mut c = OfficeChair { x, z, top_t, wheeled, sp, bottom_scale, leg_d, curve, poles, joint_h, wheel_arc, wheel_w, wheel_rot, pole_len, seed: r.randint(0, 1_000_000) as u64 };
+        // built to the layout box [width (y), depth (x), height]: the seat width x (and with it the stand / the wheel base) gives the
+        // footprint, the height scales the seat height and the stand with it
+        if let Some(h) = crate::api::size_hint() {
+            for _ in 0..3 {
+                let e = c.extents();
+                let f = (h[1] / e[0]).min(h[0] / e[1]);
+                c.x *= f;
+                c.sp.width = c.x;
+                if c.wheeled { c.pole_len *= f; c.wheel_w *= f } else { c.leg_d *= f }
+                let zf = h[2] / e[2];
+                c.z *= zf;
+                c.top_t *= zf;
+                c.sp.seat_height = c.top_t;
+                c.joint_h *= zf;
+            }
+        }
+        c
+    }
+
+    /// the parts as asset() builds them (seat at a coarse resolution: its bounds are what is needed), before the quarter turn
+    fn parts(&self, seat_res: (usize, usize)) -> Vec<Mesh> {
+        let top_h = self.z - self.top_t;
+        let mut seat = curvy_seat(&self.sp, seat_res.0, seat_res.1);
+        seat.transform(&Mat4::translation([0.0, 0.0, top_h]));
+        let mut parts: Vec<Mesh> = vec![];
+        if !self.wheeled {
+            let leg = leg_single_stand(&self.curve, 1.0, self.leg_d, 64);
+            parts.extend(legs_and_stretchers(&[[0.0, 0.0, 0.0]], top_h, self.bottom_scale, &leg, None));
+        } else {
+            parts.extend(wheeled_leg(self.joint_h, self.leg_d, top_h, self.wheel_arc, self.wheel_w, self.wheel_rot, self.pole_len, self.poles));
+        }
+        parts.push(seat);
+        parts
+    }
+
+    /// overall extents in the final frame (the parts are turned a quarter about z: x extent = y extent before)
+    fn extents(&self) -> [f64; 3] {
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for m in self.parts((48, 32)) {
+            let (a, b) = m.bounds();
+            for k in 0..3 {
+                lo[k] = lo[k].min(a[k]);
+                hi[k] = hi[k].max(b[k]);
+            }
+        }
+        [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]]
     }
 }
 
 impl Factory for OfficeChair {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        let e = self.extents();
+        Some([e[1], e[0], e[2]])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let seat_m = spec_material("seat", json!({"cls": weighted(&mut r, SEAT), "kwargs": {}, "seed": self.seed}), [0.35, 0.3, 0.3]);

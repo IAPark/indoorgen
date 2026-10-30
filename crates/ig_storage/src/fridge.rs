@@ -29,9 +29,20 @@ pub struct Fridge {
 }
 
 const GAP: f64 = 0.004;
+/// how far the handles stand proud of the door fronts (standoff + bar radius)
+const HANDLE_PROUD: f64 = 0.035 + 0.011;
 
 impl Fridge {
     fn new(rng: &mut Rng) -> Fridge {
+        let mut f = Fridge::draw(rng);
+        // built to the layout box [width (y), depth (x), height]: the bar handles stand proud of the doors
+        if let Some(h) = crate::api::size_hint() {
+            (f.width, f.depth, f.height) = (h[0], h[1] - HANDLE_PROUD, h[2]);
+        }
+        f
+    }
+
+    fn draw(rng: &mut Rng) -> Fridge {
         let r = rng;
         let u = r.f64();
         let style = if u < 0.3 { Style::TopFreezer } else if u < 0.55 { Style::BottomFreezer } else if u < 0.75 { Style::SideBySide } else { Style::French };
@@ -155,8 +166,11 @@ impl Fridge {
 }
 
 impl Factory for Fridge {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        Some([self.width, self.depth + HANDLE_PROUD, self.height])
+    }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
-        Some(([0.0, 0.0, 0.0], [self.depth + 0.035 + 0.011, self.width, self.height]))
+        Some(([0.0, 0.0, 0.0], [self.depth + HANDLE_PROUD, self.width, self.height]))
     }
     fn asset(&self, _i: u64) -> Asset {
         self.build()

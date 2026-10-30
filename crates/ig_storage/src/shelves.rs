@@ -178,30 +178,52 @@ fn large_shelf_frame(rng: &mut Rng, dims: [f64; 3], bottom_h: f64, side_t: f64, 
 
 pub struct LargeShelf {
     fseed: u64,
+    hint: Option<[f64; 3]>,
 }
 
 impl LargeShelf {
     fn new(_rng: &mut Rng, factory_seed: u64) -> LargeShelf {
         // the python factory has no init draws: LargeShelfFactory.get_asset_params samples everything per instance
-        LargeShelf { fseed: factory_seed }
+        LargeShelf { fseed: factory_seed, hint: crate::api::size_hint() }
     }
 }
 
 impl LargeShelf {
-    fn params(&self, inst: u64) -> (cabnodes::ShelfParams, &'static str) {
-        let mut r = inst_rng(self.fseed, inst);
-        // sample_params()
+    /// the draws that fix the overall size, in python order: dims [depth, width, height], side board and division thicknesses
+    fn size_draws(&self, r: &mut Rng) -> ([f64; 3], f64, f64, f64) {
         let dims = [r.uniform(0.25, 0.35), r.uniform(0.3, 2.0), r.uniform(0.9, 2.0)];
-        let bottom_h = 0.083;
-        let depth = dims[0] - 0.01;
-        let num_h = (((dims[2] - 0.083) / 0.3) as usize).max(1);
-        let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
-        let num_v = ((dims[1] / 0.5) as usize).max(1);
-        let cell_w = vec![dims[1] / num_v as f64; num_v];
-        // get_asset_params(): remaining draws in python order
         let side_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
         let y_gap = r.uniform(0.01, 0.05);
         let div_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        (dims, side_t, y_gap, div_t)
+    }
+    /// overall [width, depth, height] of the frame for drawn dims: boards add to the cells
+    fn totals(dims: [f64; 3], side_t: f64, div_t: f64) -> [f64; 3] {
+        let nv = ((dims[1] / 0.5) as usize).max(1) as f64;
+        let nh = (((dims[2] - 0.083) / 0.3) as usize).max(1) as f64;
+        [dims[1] + 2.0 * side_t + (nv - 1.0) * (2.0 * side_t + 0.001), dims[0] + LS_DEPTH_EXTRA, dims[2] + (nh + 1.0) * div_t]
+    }
+    /// dims and cell counts giving overall size `h` [width (y), depth (x), height] exactly: the counts follow the size the way the
+    /// generator derives them (cells 0.5 m wide, 0.3 m high at least) and the cells take up the rest
+    fn dims_for(h: [f64; 3], side_t: f64, div_t: f64) -> ([f64; 3], usize, usize) {
+        let nv = (((h[0] - 2.0 * side_t) / 0.5) as usize).max(1);
+        let nh = (((h[2] - 0.083 - 2.0 * div_t) / 0.3) as usize).max(1);
+        let dims = [h[1] - LS_DEPTH_EXTRA, h[0] - 2.0 * side_t - (nv as f64 - 1.0) * (2.0 * side_t + 0.001), h[2] - (nh as f64 + 1.0) * div_t];
+        (dims, nv, nh)
+    }
+    fn params(&self, inst: u64) -> (cabnodes::ShelfParams, &'static str) {
+        let mut r = inst_rng(self.fseed, inst);
+        // sample_params() and the first draws of get_asset_params()
+        let (mut dims, side_t, y_gap, div_t) = self.size_draws(&mut r);
+        let mut counts = None;
+        if let Some(h) = self.hint { let (d, nv, nh) = Self::dims_for(h, side_t, div_t); dims = d; counts = Some((nv, nh)); }
+        let bottom_h = 0.083;
+        let depth = dims[0] - 0.01;
+        let num_h = counts.map_or((((dims[2] - 0.083) / 0.3) as usize).max(1), |c| c.1);
+        let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
+        let num_v = counts.map_or(((dims[1] / 0.5) as usize).max(1), |c| c.0);
+        let cell_w = vec![dims[1] / num_v as f64; num_v];
+        // get_asset_params(): remaining draws in python order (side_t, y_gap and div_t were drawn above)
         let screw_depth = r.uniform(0.001, 0.004);
         let screw_r = r.uniform(0.001, 0.004);
         let screw_wgap = r.uniform(0.0, 0.02);
@@ -215,7 +237,14 @@ impl LargeShelf {
     }
 }
 
+/// the box depth minus the drawn depth (screw heads / attach gadgets stand proud; measured)
+const LS_DEPTH_EXTRA: f64 = 0.002;
+
 impl Factory for LargeShelf {
+    fn natural_size(&self, inst: u64) -> Option<[f64; 3]> {
+        let (dims, side_t, _, div_t) = self.size_draws(&mut inst_rng(self.fseed, inst));
+        Some(Self::totals(dims, side_t, div_t)).map(|t| [t[0], t[1], t[2]])
+    }
     fn asset(&self, inst: u64) -> Asset {
         // large_shelf.py get_material_func: frame_material = shader_shelves_<kind>[_z] (z texture), board_material = the plain variant
         let (p, kind) = self.params(inst);
@@ -229,18 +258,24 @@ impl Factory for LargeShelf {
 
 pub struct SimpleBookcase {
     fseed: u64,
+    hint: Option<[f64; 3]>,
 }
 
 impl SimpleBookcase {
     fn new(_rng: &mut Rng, factory_seed: u64) -> SimpleBookcase {
         // python factory has no init draws; everything is sampled per instance in get_asset_params
-        SimpleBookcase { fseed: factory_seed }
+        SimpleBookcase { fseed: factory_seed, hint: crate::api::size_hint() }
     }
 }
 
 pub use super::cabnodes::BookParams;
 
 impl SimpleBookcase {
+    /// built to the layout box [width (y), depth (x), height]: the back board adds its thickness to the depth and the screw heads
+    /// their length to the width
+    fn sized(&self, d: f64, w: f64, h: f64, bt: f64, screw_depth: f64) -> (f64, f64, f64) {
+        match self.hint { Some(b) => (b[1] - bt, b[0] - screw_depth, b[2]), None => (d, w, h) }
+    }
     fn params(&self, i: u64) -> BookParams {
         let mut r = inst_rng(self.fseed, i);
         let dims = [r.uniform(0.25, 0.4), r.uniform(0.5, 0.7), r.uniform(0.7, 0.9)];
@@ -256,11 +291,20 @@ impl SimpleBookcase {
         let aw = r.uniform(0.01, 0.04);
         let atl = r.uniform(0.03, 0.1);
         let abl = r.uniform(0.02, 0.05);
+        let (d, w, h) = self.sized(d, w, h, bt, screw_depth);
         BookParams { d, w, h, st, dt, gap, bt, screw_depth, screw_r, screw_gap, at, aw, atl, abl }
     }
 }
 
 impl Factory for SimpleBookcase {
+    fn natural_size(&self, inst: u64) -> Option<[f64; 3]> {
+        let mut r = inst_rng(self.fseed, inst);
+        let dims = [r.uniform(0.25, 0.4), r.uniform(0.5, 0.7), r.uniform(0.7, 0.9)];
+        let _ = (r.uniform(0.005, 0.03), r.normal(0.015, 0.005), r.normal(0.14, 0.05));
+        let bt = r.uniform(0.01, 0.02);
+        let screw_depth = r.uniform(0.002, 0.008);
+        Some([dims[1] + screw_depth, dims[0] - 0.015 + bt, dims[2]])
+    }
     fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
         Some(cabnodes::bookcase_gmesh(&self.params(i)).to_exact())
     }
@@ -282,6 +326,7 @@ impl Factory for SimpleBookcase {
         let aw = r.uniform(0.01, 0.04);
         let atl = r.uniform(0.03, 0.1);
         let abl = r.uniform(0.02, 0.05);
+        let (d, w, h) = self.sized(d, w, h, bt, screw_depth);
         // get_asset_params tail: frame_material = get_shelf_material("white"), metal_material = get_shelf_material("metal") (stream continues after the 11 draws above)
         let m = shelf_white_choice(&mut r, self.fseed * 1000 + i);
         let metal = shelf_metal(&mut r, self.fseed * 1000 + i + 1);
@@ -336,6 +381,8 @@ impl Factory for SimpleBookcase {
 pub struct CellShelf {
     dims: [f64; 3],
     cell: f64,
+    /// cell height (= `cell` unless built to a size)
+    cell_z: f64,
     hn: usize,
     vn: usize,
     div_t: f64,
@@ -343,6 +390,7 @@ pub struct CellShelf {
     attach: f64,
     mat: Material,
     screw: Material,
+    natural: [f64; 3],
 }
 
 const METALS_TABLE: Weighted = &[("metal.MetalBasic", 3.0), ("metal.BrushedMetal", 2.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 0.7), ("metal.BrushedBlackMetal", 0.3)];
@@ -357,29 +405,46 @@ impl CellShelf {
         } else {
             [r.uniform(0.3, 0.45), r.uniform(0.7, 2.1), r.uniform(0.35, 2.1)]
         };
-        let hn = ((dims[1] / 0.35) as usize).max(1);
-        let cell = dims[1] / hn as f64;
-        let vn = ((dims[2] / cell) as usize).max(1);
+        let mut hn = ((dims[1] / 0.35) as usize).max(1);
+        let mut cell = dims[1] / hn as f64;
+        let mut vn = ((dims[2] / cell) as usize).max(1);
         dims[2] = vn as f64 * cell;
         let div_t = clip(r.normal(0.015, 0.005), 0.008, 0.022);
         let ext_t = clip(r.normal(0.04, 0.005), 0.028, 0.052);
+        let natural = [2.0 * ext_t + div_t * (hn as f64 - 1.0) + cell * hn as f64 + 0.002, dims[0], 2.0 * ext_t + div_t * (vn as f64 - 1.0) + cell * vn as f64];
+        let mut cell_z = cell;
+        // built to the layout box [width (y), depth (x), height]: the cell counts follow the width as the generator derives them and
+        // the cells (wider than high for a low stand) take up the rest; boards keep their thickness
+        if let Some(h) = crate::api::size_hint() {
+            dims[0] = h[1];
+            hn = (((h[0] - 2.0 * ext_t) / 0.35) as usize).max(1);
+            cell = (h[0] - 0.002 - 2.0 * ext_t - div_t * (hn as f64 - 1.0)) / hn as f64;
+            vn = (((h[2] - 2.0 * ext_t) / (cell + div_t)).round() as usize).max(1);
+            cell_z = (h[2] - 2.0 * ext_t - div_t * (vn as f64 - 1.0)) / vn as f64;
+            dims[1] = h[0];
+            dims[2] = h[2];
+        }
         let attach = clip(r.normal(0.05, 0.02), 0.02, 0.1);
         let mat = plywood(["black_wood", "white", "wood"][r.choice_p(&[0.3, 0.2, 0.5]).min(2)], false, fseed);
         // screw heads: weighted_sample(material_assignments.metals)()()
         let screw = weighted(&mut r, METALS_TABLE);
         let screw = cls_spec("shelf_screw", screw, fseed + 1, [0.5, 0.5, 0.52]);
-        CellShelf { dims, cell, hn, vn, div_t, ext_t, attach, mat, screw }
+        CellShelf { dims, cell, cell_z, hn, vn, div_t, ext_t, attach, mat, screw, natural }
     }
 }
 
 impl Factory for CellShelf {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        Some(self.natural)
+    }
     fn exact(&self, _i: u64) -> Option<cabnodes::ExactMesh> {
-        Some(cabnodes::cellshelf_gmesh(self.dims[0], self.cell, self.hn, self.vn, self.div_t, self.ext_t, self.attach).to_exact())
+        Some(cabnodes::cellshelf_gmesh(self.dims[0], self.cell, self.cell_z, self.hn, self.vn, self.div_t, self.ext_t, self.attach).to_exact())
     }
     fn asset(&self, _i: u64) -> Asset {
         use cabnodes::*;
         let mut a = Asset::default();
         let (d, c, h, v, dv, e) = (self.dims[0], self.cell, self.hn as f64, self.vn as f64, self.div_t, self.ext_t);
+        let cz = self.cell_z;
         let leg = 0.0;
         let m = &self.mat;
         let push = |a: &mut Asset, mesh: Mesh, sup: bool| {
@@ -389,7 +454,7 @@ impl Factory for CellShelf {
                 a.supports.push(b);
             }
         };
-        let z5 = (v - 1.0) * dv + v * c; // inner height (side_z)
+        let z5 = (v - 1.0) * dv + v * cz; // inner height (side_z)
         // side boards
         let add7 = c * h + (e + dv * (h - 1.0));
         let sx = 0.5 * add7;
@@ -399,7 +464,7 @@ impl Factory for CellShelf {
         // top / bottom boards
         let bx = (e * 2.0 + dv * (h - 1.0)) + c * h + 0.002;
         let zb = e * 0.5 + leg;
-        let zt = zb + e + v * c + dv * (v - 1.0);
+        let zt = zb + e + v * cz + dv * (v - 1.0);
         push(&mut a, cube_at([bx, d, e], [0.0, d * 0.5, zb]), true);
         push(&mut a, cube_at([bx, d, e], [0.0, d * 0.5, zt]), true);
         // vertical divisions
@@ -411,7 +476,7 @@ impl Factory for CellShelf {
         // horizontal divisions
         for j in 1..self.vn {
             let j = j as f64;
-            let z = j * c + (j - 1.0) * dv + (e + leg + dv * 0.5);
+            let z = j * cz + (j - 1.0) * dv + (e + leg + dv * 0.5);
             push(&mut a, cube_at([h * c + (h - 1.0) * dv, d, dv], [0.0, d * 0.5, z]), true);
         }
         // attach gadget (no backboard)
@@ -446,11 +511,15 @@ impl Factory for CellShelf {
 pub struct SimpleDesk {
     side: bool,
     fseed: u64,
+    hint: Option<[f64; 3]>,
 }
 
 impl SimpleDesk {
+    fn clone_unhinted(&self) -> SimpleDesk {
+        SimpleDesk { side: self.side, fseed: self.fseed, hint: None }
+    }
     fn new(_rng: &mut Rng, side: bool, fseed: u64) -> SimpleDesk {
-        SimpleDesk { side, fseed }
+        SimpleDesk { side, fseed, hint: crate::api::size_hint() }
     }
 }
 
@@ -480,11 +549,21 @@ impl SimpleDesk {
         let leg_r = r.uniform(0.01, 0.025);
         let leg_dist = r.uniform(0.035, 0.07);
         let t = r.uniform(0.01, 0.03);
+        // built to the layout box [width (y), depth (x), height] (the legs sit at leg_dist from the corners)
+        let (d, w, h) = match self.hint { Some(b) => (b[1] - DESK_EXTRA[0], b[0] - DESK_EXTRA[1], b[2] - DESK_EXTRA[2]), None => (d, w, h) };
         DeskParams { d, w, h, top_white, leg_white, leg_r, leg_dist, t }
     }
 }
 
+/// overall extents minus the drawn [depth, width, height] (measured)
+const DESK_EXTRA: [f64; 3] = [0.0, 0.0, 0.0];
+
 impl Factory for SimpleDesk {
+    fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
+        let mut h = self.clone_unhinted();
+        let p = h.params(i);
+        Some([p.w + DESK_EXTRA[1], p.d + DESK_EXTRA[0], p.h + DESK_EXTRA[2]])
+    }
     fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
         let p = self.params(i);
         Some(cabnodes::desk_gmesh(p.d, p.w, p.h, p.leg_r, p.leg_dist, p.t).to_exact())
@@ -509,6 +588,9 @@ impl Factory for SimpleDesk {
 pub struct SingleCabinet {
     dims: [f64; 3],
     fseed: u64,
+    /// built to the layout box [width (y), depth (x), height] (size hint at construction)
+    hint: Option<[f64; 3]>,
+    sized: std::cell::RefCell<Option<(u64, [f64; 3], usize)>>,
 }
 
 impl SingleCabinet {
@@ -516,19 +598,56 @@ impl SingleCabinet {
         // init draws only the dimensions (SingleCabinetFactory.sample_params under FixedSeed)
         let mut r = rng.clone();
         let dims = [r.uniform(0.25, 0.35), r.uniform(0.3, 0.7), r.uniform(0.9, 1.8)];
-        SingleCabinet { dims, fseed }
+        SingleCabinet { dims, fseed, hint: crate::api::size_hint(), sized: Default::default() }
+    }
+    /// overall extents [width, depth, height] of the exact mesh for drawn dims and instance stream
+    fn extents(&self, dims: [f64; 3], inst: u64, num_h: Option<usize>) -> [f64; 3] {
+        let g = cabdoor::single_cabinet_gmesh(&mut inst_rng(self.fseed, inst), dims, Default::default(), num_h);
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for v in &g.v {
+            for k in 0..3 {
+                lo[k] = lo[k].min(v[k] as f64);
+                hi[k] = hi[k].max(v[k] as f64);
+            }
+        }
+        [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]]
+    }
+    /// the dims the frame is drawn with: with a size hint, dims whose overall extents (boards, doors and knobs included) are the box's.
+    /// The board thicknesses are the first instance draws, the door depth is measured on the mesh.
+    fn dims_for(&self, inst: u64) -> ([f64; 3], Option<usize>) {
+        let Some(h) = self.hint else { return (self.dims, None) };
+        if let Some((i, d, n)) = *self.sized.borrow() { if i == inst { return (d, Some(n)); } }
+        let mut r = inst_rng(self.fseed, inst);
+        let side_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        let _ = r.uniform(0.01, 0.05);
+        let div_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
+        let nh = (((h[2] - 0.083 - 2.0 * div_t) / 0.3) as usize).max(1);
+        let mut dims = [h[1] - 0.045, h[0] - 2.0 * side_t - 0.002, h[2] - (nh as f64 + 1.0) * div_t];
+        for _ in 0..2 {
+            let e = self.extents(dims, inst, Some(nh));
+            dims[0] += h[1] - e[1];
+            dims[1] += h[0] - e[0];
+            dims[2] += h[2] - e[2];
+        }
+        *self.sized.borrow_mut() = Some((inst, dims, nh));
+        (dims, Some(nh))
     }
 }
 
 impl Factory for SingleCabinet {
+    fn natural_size(&self, inst: u64) -> Option<[f64; 3]> {
+        Some(self.extents(self.dims, inst, None))
+    }
     fn exact(&self, inst: u64) -> Option<cabnodes::ExactMesh> {
         let mut r = inst_rng(self.fseed, inst);
-        Some(cabdoor::single_cabinet_gmesh(&mut r, self.dims, Default::default()).to_exact())
+        let (dims, nh) = self.dims_for(inst);
+        Some(cabdoor::single_cabinet_gmesh(&mut r, dims, Default::default(), nh).to_exact())
     }
     fn exact_slots(&self, inst: u64) -> Option<(Vec<u16>, Vec<Material>)> {
         let mut r = inst_rng(self.fseed, inst);
         let mut pan = cabdoor::SinglePanels::default();
-        let g = cabdoor::single_cabinet_core(&mut r, self.dims, Default::default(), Some(&mut pan));
+        let (dims, nh) = self.dims_for(inst);
+        let g = cabdoor::single_cabinet_core(&mut r, dims, Default::default(), Some(&mut pan), nh);
         let kind = fixed_kind(self.fseed, &[0.5, 0.2, 0.3]);
         // doors get the kind as a string: frame white / black_wood_z / wood (NOT z, doors.py get_material_func); panels white / black_wood_z / wood_z or glass
         let door_frame = plywood(kind, kind == "black_wood", 0);
@@ -538,8 +657,8 @@ impl Factory for SingleCabinet {
         Some((g.tag.iter().map(|&t| (t >> 1) as u16).collect(), mats))
     }
     fn asset(&self, inst: u64) -> Asset {
-        let dims = self.dims;
-        let num_h = (((dims[2] - 0.083) / 0.3) as usize).max(1);
+        let (dims, nh) = self.dims_for(inst);
+        let num_h = nh.unwrap_or((((dims[2] - 0.083) / 0.3) as usize).max(1));
         let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
         // per-instance draws (python get_asset_params): frame material choice, then the large-shelf parameters
         let mut r = inst_rng(self.fseed, inst);

@@ -176,6 +176,8 @@ pub struct BevFactory {
     pub cache: std::sync::Mutex<Option<GGeom>>,
     /// material slot name ("stub.001", "gn", ...) -> python's sampled material for that socket
     pub slot_mats: Vec<(String, Material)>,
+    /// built to the layout box [width (y), depth (x), height] (microwaves): the size hint at construction
+    pub hint: Option<[f64; 3]>,
 }
 
 impl BevFactory {
@@ -193,7 +195,12 @@ impl BevFactory {
     }
 
     pub fn try_geometry(&self, _inst: u64) -> Result<GGeom, String> {
-        let s = (self.sample)(&self.rng);
+        let mut s = (self.sample)(&self.rng);
+        if let Some(h) = self.hint {
+            for (k, v) in appliances::microwave_dims(&self.rng, h) {
+                num(&mut s, k, v);
+            }
+        }
         let tpl = self.tpls[s.variant];
         let pre = tpl.step(0, &s)?;
         let fin = tpl.step(1, &s)?;
@@ -224,6 +231,9 @@ impl Factory for BevFactory {
             self.slot_mats.iter().find(|x| x.0 == n).map(|x| x.1.clone()).unwrap_or_else(|| mat(n, [0.6, 0.6, 0.62], 0.4))
         });
         a
+    }
+    fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
+        self.inner.natural_size(i)
     }
     fn placeholder(&self, i: u64) -> Option<Asset> {
         self.inner.placeholder(i)
@@ -279,7 +289,7 @@ pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
         _ => microwave_params_r(rng.clone()).1,
     };
     let slot_mats = super::matpick::gn_appliance_mats(c, after, fseed);
-    Some(Box::new(BevFactory { tpls, sample, rng: rng.clone(), offset: if c == "MicrowaveFactory" { 0.03 } else { 0.01 }, segments: 8, inner, supports_variants, gas: c == "OvenFactory", cache: std::sync::Mutex::new(None), slot_mats }))
+    Some(Box::new(BevFactory { tpls, sample, rng: rng.clone(), offset: if c == "MicrowaveFactory" { 0.03 } else { 0.01 }, segments: 8, inner, supports_variants, gas: c == "OvenFactory", cache: std::sync::Mutex::new(None), slot_mats, hint: if c == "MicrowaveFactory" { crate::api::size_hint() } else { None } }))
 }
 
 fn num(s: &mut Sampled, k: &str, v: f64) {

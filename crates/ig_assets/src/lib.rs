@@ -91,6 +91,14 @@ pub struct RealAssets {
 }
 
 impl Assets for RealAssets {
+    fn natural_size(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<[f64; 3]> {
+        // the factory built without a size hint: its constructor draws give the size
+        let saved = ig_kit::api::size_hint();
+        ig_kit::api::set_size_hint(None);
+        let r = make_factory(class, factory_seed).and_then(|f| f.natural_size(inst_seed));
+        ig_kit::api::set_size_hint(saved);
+        r
+    }
     fn placeholder(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
         let t = thread_cpu();
         let key = cache_key(class, factory_seed, inst_seed, &format!("{kind:?}"));

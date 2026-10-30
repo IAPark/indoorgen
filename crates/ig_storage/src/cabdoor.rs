@@ -555,8 +555,8 @@ fn clip_(x: f64, lo: f64, hi: f64) -> f64 {
 }
 
 /// SingleCabinetBaseFactory.create_asset(i): shelf frame + doors + hinge attachments (instance stream `r`)
-pub fn single_cabinet_gmesh(r: &mut Rng, dims: [f64; 3], o: RampedOpts) -> GMesh {
-    single_cabinet_core(r, dims, o, None)
+pub fn single_cabinet_gmesh(r: &mut Rng, dims: [f64; 3], o: RampedOpts, num_h: Option<usize>) -> GMesh {
+    single_cabinet_core(r, dims, o, None, num_h)
 }
 
 /// door panels of a SingleCabinet (door nodegroup mid boards): lower / upper glass flags (`has_mid` false: one panel = lower)
@@ -569,12 +569,13 @@ pub struct SinglePanels {
 
 /// Same with per-face material slots in `tag >> 1` when `panels` is given: 0 shelf frame, 1 division boards, 2 door frame + knob, 3 lower panel,
 /// 4 upper panel (hinge plates: 0, python gives them no material = material index 0 = the first slot).
-pub fn single_cabinet_core(r: &mut Rng, dims: [f64; 3], o: RampedOpts, mut panels: Option<&mut SinglePanels>) -> GMesh {
+/// `num_h`: the number of shelf rows when the size is built to (default: derived from the height)
+pub fn single_cabinet_core(r: &mut Rng, dims: [f64; 3], o: RampedOpts, mut panels: Option<&mut SinglePanels>, num_h: Option<usize>) -> GMesh {
     let tagged = panels.is_some();
     let f = |x: f64| x as f32;
     let depth = dims[0] - 0.01;
     let bottom_h = 0.083;
-    let num_h = ((dims[2] - 0.083) / 0.3) as usize;
+    let num_h = num_h.unwrap_or(((dims[2] - 0.083) / 0.3) as usize);
     let cell_h = vec![(dims[2] - 0.083) / num_h as f64; num_h];
     // LargeShelfBaseFactory.get_asset_params
     let side_t = clip_(r.normal(0.02, 0.002), 0.015, 0.025);

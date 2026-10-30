@@ -44,7 +44,7 @@ pub fn models() -> &'static crate::dhash::FxMap<String, Model> {
                 continue;
             }
             let comps: Vec<Comp> = m["components"].as_array().unwrap().iter().map(|c| Comp { p: c["p"].as_f64().unwrap(), mean: a3(&c["mean"]), sd: a3(&c["sd"]) }).collect();
-            let mut md = Model { uniform: m["policy"].as_str() == Some("uniform"), exact: m["policy"].as_str() == Some("exact"), min: a3(&m["min"]), max: a3(&m["max"]), comps, nll0: 0.0 };
+            let mut md = Model { uniform: m["policy"].as_str() == Some("uniform"), exact: m["policy"].as_str() == Some("exact") || m["exact"].as_bool() == Some(true), min: a3(&m["min"]), max: a3(&m["max"]), comps, nll0: 0.0 };
             md.nll0 = md.comps.iter().map(|c| nll_raw(&md, c.mean)).fold(f64::INFINITY, f64::min);
             out.insert(k.clone(), md);
         }
@@ -78,6 +78,15 @@ pub fn nll(m: &Model, x: [f64; 3]) -> f64 {
 }
 
 fn clamp(m: &Model, mut x: [f64; 3]) -> [f64; 3] {
+    if m.uniform {
+        // uniform classes keep their proportions: one factor brings all axes into range when it can
+        let lo = (0..3).map(|i| m.min[i] / x[i]).fold(0.0, f64::max);
+        let hi = (0..3).map(|i| m.max[i] / x[i]).fold(f64::INFINITY, f64::min);
+        if lo <= hi {
+            let f = 1.0f64.clamp(lo, hi);
+            return [x[0] * f, x[1] * f, x[2] * f];
+        }
+    }
     for i in 0..3 {
         x[i] = x[i].clamp(m.min[i], m.max[i]);
     }
@@ -103,7 +112,7 @@ pub fn sample(m: &Model, rng: &mut Rng) -> [f64; 3] {
 
 /// resize move: a fresh sample (1 in 4), else one axis (uniform classes: all axes) scaled by exp(N(0, 0.08))
 pub fn perturb(m: &Model, x: [f64; 3], rng: &mut Rng) -> [f64; 3] {
-    if rng.f64() < 0.25 {
+    if rng.f64() < 0.25 && !(m.exact && m.uniform) {
         return sample(m, rng);
     }
     let f = rng.normal(0.0, 0.08).exp();

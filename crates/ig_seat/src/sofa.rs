@@ -661,11 +661,37 @@ impl Sofa {
         } else {
             sofa_params(&mut r, None)
         };
+        let mut params = params;
+        // built to the layout box [width (y), depth (x), height]: the node group's dims are [depth, width, height]; the overall extents
+        // (footrest pieces, legs below the frame, subdivision) are measured on the node group's outline and the dims corrected
+        if let Some(h) = crate::api::size_hint() {
+            params.dims = [h[1], h[0], h[2]];
+            params.footrest = params.footrest && h[0] > 2.0 && h[1] >= 0.8 * params.scaling_footrest;
+            for _ in 0..4 {
+                params.seat[0] = params.dims[0];
+                params.arm[2] = params.arm[2].min(0.8 * params.dims[2]);
+                params.back[2] = params.back[2].min(0.8 * params.dims[2]);
+                params.arm[0] = params.dims[0]; // the arms run the full depth (python draws exactly 1.0 for dims 0.95-1.1)
+                let Some((lo, hi)) = sofa_geometry_gn_lvl(&params, Some(0)).map(|(m, _)| m.bounds()) else { break };
+                let e = [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]];
+                if (0..3).all(|k| (e[k] - h[k]).abs() < 0.003) { break }
+                params.dims[0] *= h[1] / e[1];
+                params.dims[1] *= h[0] / e[0];
+                params.dims[2] += h[2] - e[2];
+            }
+            params.seat[0] = params.dims[0];
+            params.arm[0] = params.dims[0];
+        }
         Sofa { params, seed: r.randint(0, 1_000_000) as u64 }
     }
 }
 
 impl Factory for Sofa {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        let p = &self.params;
+        let (lo, hi) = sofa_geometry_gn_lvl(p, Some(0))?.0.bounds();
+        Some([hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]])
+    }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         // create_placeholder(): the node group output (PlaceholderBBox uses its bounding box)
         let mut r = Rng::seeded(self.seed);

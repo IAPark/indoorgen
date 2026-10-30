@@ -227,6 +227,11 @@ pub trait Factory {
     fn bounds_hint(&self, _inst_seed: u64) -> Option<(V3, V3)> {
         None
     }
+    /// natural bounding-box size [width (local y), depth (local x), height (z)] from the constructor's draws alone (no mesh); the layout
+    /// solver starts the piece at this size, and the final build is then given the solver's size as `size_hint` (build-to-size classes)
+    fn natural_size(&self, _inst_seed: u64) -> Option<[f64; 3]> {
+        None
+    }
     /// vertex-order-exact python placeholder mesh when it is not a plain box (e.g. KitchenSpace: two joined tagged boxes)
     fn placeholder_exact(&self, _inst_seed: u64) -> Option<cabnodes::ExactMesh> {
         None

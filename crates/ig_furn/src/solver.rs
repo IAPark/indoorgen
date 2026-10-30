@@ -255,7 +255,7 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             let sized = boxkind && super::sizes::model(class).is_some();
             // 'exact' classes with a real placeholder (counter runs, kitchen cabinets): the factory builds it at a size sampled from the
             // class density; 'exact' box classes (wardrobe, bathtub, shower) are boxes like the others and only the final build is hinted
-            let exact = if boxkind { None } else { super::sizes::model(class).filter(|m| m.exact).map(|m| super::sizes::sample(m, rng)) };
+            let exact = if boxkind { None } else { super::sizes::model(class).filter(|m| m.exact).map(|m| { let sx = super::sizes::sample(m, rng); ctx.assets.natural_size(class, fac_seed, inst_seed).unwrap_or(sx) }) };
             EXACT_SIZE.with(|c| c.set(exact));
             if let Some(x) = exact { crate::api::set_size_hint(Some(x)); }
             // sized classes: one reference build per class and kind (only its box position is used), cached here
@@ -282,7 +282,10 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
         fit_box = Some((geom.lo, geom.hi));
     } else if matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) {
         if let Some(m) = super::sizes::model(class) {
-            let x = super::sizes::sample(m, rng);
+            let sx = super::sizes::sample(m, rng);
+            // build-to-size classes start at the size their factory's own constructor draws give (no mesh built); the draw above is
+            // still taken so the random stream does not depend on it
+            let x = if m.exact { ctx.assets.natural_size(class, fac_seed, inst_seed).unwrap_or(sx) } else { sx };
             let (lo, hi) = super::sizes::target_box(geom.lo, geom.hi, x);
             geom = crate::api::box_from_corners_geom(lo, hi);
             fit_box = Some((lo, hi));

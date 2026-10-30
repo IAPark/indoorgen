@@ -613,9 +613,10 @@ pub fn sin_cos_from_fraction(k: usize, n: usize) -> (f32, f32) {
 }
 
 /// cell_shelf.py geometry_nodes (float32, vertex order exact). has_base_frame = False, has_backboard = False, tag_support = True.
-pub fn cellshelf_gmesh(depth: f64, cell: f64, hn: usize, vn: usize, div_t: f64, ext_t: f64, attach: f64) -> GMesh {
+/// `cell_z`: the height of a cell (python: the same as `cell`; build-to-size boxes make cells taller or lower than wide)
+pub fn cellshelf_gmesh(depth: f64, cell: f64, cell_z: f64, hn: usize, vn: usize, div_t: f64, ext_t: f64, attach: f64) -> GMesh {
     let f = |x: f64| x as f32;
-    let (d, c, dv, e, sz) = (f(depth), f(cell), f(div_t), f(ext_t), f(attach));
+    let (d, c, cz, dv, e, sz) = (f(depth), f(cell), f(cell_z), f(div_t), f(ext_t), f(attach));
     let (h, v) = (hn as f32, vn as f32);
     let leg = 0.0f32;
     let z3 = [0f32; 3];
@@ -623,7 +624,7 @@ pub fn cellshelf_gmesh(depth: f64, cell: f64, hn: usize, vn: usize, div_t: f64, 
     let z5 = {
         let sub = v - 1.0;
         let m = sub * dv;
-        let m1 = v * c;
+        let m1 = v * cz;
         m + m1
     };
     let side = {
@@ -651,7 +652,7 @@ pub fn cellshelf_gmesh(depth: f64, cell: f64, hn: usize, vn: usize, div_t: f64, 
         let add_10 = m4 + leg;
         let bottom = cube.translated([0.0, m3, add_10]);
         let add_11 = add_10 + e;
-        let m5 = v * c;
+        let m5 = v * cz;
         let add_13 = add_11 + m5;
         let m6 = dv * (v - 1.0);
         let add_15 = add_13 + m6;
@@ -689,7 +690,7 @@ pub fn cellshelf_gmesh(depth: f64, cell: f64, hn: usize, vn: usize, div_t: f64, 
         for j in 1..vn {
             let j = j as f32;
             let m = d * 0.5;
-            let m1 = j * c;
+            let m1 = j * cz;
             let add1 = j + -1.0;
             let m2 = add1 * dv;
             let add3 = m1 + m2;

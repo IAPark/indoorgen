@@ -376,6 +376,16 @@ pub fn build_scene(p: &Params) -> Built {
                 if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
                 ig_kit::api::set_round_hint(false);
+                // SIZEDBG: a class built to a size must come out at it (extents [width (y), depth (x), height (z)] against the hint)
+                if exact && std::env::var_os("SIZEDBG").is_some() {
+                    if let Some(h) = indoorgen::furn::solver::cur_size(gen) {
+                        let (lo, hi) = a.bounds();
+                        let e = [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]];
+                        let err = [0, 1, 2].map(|k| (e[k] - h[k]).abs());
+                        let bad = err.iter().any(|v| *v > 0.02);
+                        eprintln!("SIZEDBG {k} {} fs {} inst {} round {} hint [{:.3}, {:.3}, {:.3}] built [{:.3}, {:.3}, {:.3}] err [{:.3}, {:.3}, {:.3}]{}", gen.class, gen.factory_seed, gen.inst_seed, round, h[0], h[1], h[2], e[0], e[1], e[2], err[0], err[1], err[2], if bad { " OFF" } else { "" });
+                    }
+                }
                 if exact { ig_kit::api::set_size_hint(None); }
                 // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
                 if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {
@@ -386,15 +396,6 @@ pub fn build_scene(p: &Params) -> Built {
                 if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
                     let (lo, hi) = a.bounds();
                     if std::env::var_os("FITDBG").is_some() { eprintln!("FITDBG {k} {} asset {:.2?}..{:.2?} box {:.2?}..{:.2?}", gen.class, lo, hi, tlo, thi); }
-                    // tables read the same from every side: one built long along x for a box long along y is turned a quarter turn
-                    // first (fitted per axis, a 1.75 m dining table came out 0.9 m long and knee high)
-                    let (lo, hi) = if matches!(gen.class.as_str(), "TableDiningFactory" | "CoffeeTableFactory") && ((hi[0] - lo[0]) - (hi[1] - lo[1])) * ((thi[0] - tlo[0]) - (thi[1] - tlo[1])) < 0.0 {
-                        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, 0.0];
-                        let rt = indoorgen::mesh::Mat4::translation(c).mul(&indoorgen::mesh::Mat4::rot_z(std::f64::consts::FRAC_PI_2)).mul(&indoorgen::mesh::Mat4::translation([-c[0], -c[1], 0.0]));
-                        a.transform(&rt);
-                        for cc in a.cols.iter_mut() { let (p, q) = (rt.apply(cc.0), rt.apply(cc.1)); *cc = ([p[0].min(q[0]), p[1].min(q[1]), p[2].min(q[2])], [p[0].max(q[0]), p[1].max(q[1]), p[2].max(q[2])]); }
-                        a.bounds()
-                    } else { (lo, hi) };
                     let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
                     let mut mt = indoorgen::mesh::Mat4::scale(s);
                     for k in 0..3 { mt.0[k][3] = off[k]; }

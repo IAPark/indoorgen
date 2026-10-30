@@ -898,5 +898,10 @@ pub trait Assets {
     fn solver_asset(&self, _class: &str, _factory_seed: u64, _inst_seed: u64) -> Option<ObjGeom> {
         None
     }
+    /// natural bounding-box size [width (y), depth (x), height] of a build-to-size class from its factory's constructor draws alone
+    /// (no mesh); the solver starts the piece at this size
+    fn natural_size(&self, _class: &str, _factory_seed: u64, _inst_seed: u64) -> Option<[f64; 3]> {
+        None
+    }
 }
 

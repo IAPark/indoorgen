@@ -21,6 +21,7 @@ enum Style {
     Square,
 }
 
+
 pub struct Table {
     x: f64,
     y: f64,
@@ -45,7 +46,59 @@ pub struct Table {
 }
 
 impl Table {
+    /// bounding box of the table as built: the top (its rim sweeps a little beyond the nominal outline) and the legs (the tips of
+    /// straight legs end a little under z = 0, a wide stance reaches past the top)
+    fn overall(&self) -> (V3, V3) {
+        let top_h = self.z - self.top_t;
+        let mut top = table_top_exact(self.top_n, self.top_w, self.top_aspect, self.fillet, self.top_t, self.vfillet);
+        top.transform(&Mat4::translation([0.0, 0.0, top_h]));
+        let (mut lo, mut hi) = top.bounds();
+        let (_, meshes) = self.leg_meshes(top_h);
+        for m in &meshes {
+            let (a, b) = m.bounds();
+            for k in 0..3 {
+                lo[k] = lo[k].min(a[k]);
+                hi[k] = hi[k].max(b[k]);
+            }
+        }
+        (lo, hi)
+    }
+    fn set_outline(&mut self, nx: f64, ny: f64) {
+        if self.style == Style::Stand {
+            self.leg_d *= nx / self.x;
+        }
+        let round = self.top_n == 32;
+        self.x = nx;
+        self.y = ny;
+        self.top_w = if round { ny } else { 1.414 * nx };
+        self.top_aspect = if round { 1.0 } else { ny / nx };
+    }
+    /// built to the layout box [width (y), depth (x), height]: the table's overall extents are the box's, the legs follow the top
+    fn fit(&mut self, h: [f64; 3]) {
+        if self.cocktail {
+            return;
+        }
+        let round = self.top_n == 32;
+        let (nx, ny) = if round { let d = h[0].min(h[1]); (d, d) } else { (h[1], h[0]) };
+        self.z = h[2];
+        self.set_outline(nx, ny);
+        for _ in 0..4 {
+            let (lo, hi) = self.overall();
+            let (ex, ey, ez) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+            if (ex - nx).abs() < 5e-4 && (ey - ny).abs() < 5e-4 && (ez - h[2]).abs() < 5e-4 { break }
+            let (cx, cy) = (self.x, self.y);
+            self.set_outline(cx - (ex - nx), cy - (ey - ny));
+            self.z -= ez - h[2];
+        }
+    }
     fn new(cls: &str, rng: &mut Rng) -> Table {
+        let mut t = Table::new_raw(cls, rng);
+        if let Some(h) = crate::api::size_hint() {
+            t.fit(h);
+        }
+        t
+    }
+    fn new_raw(cls: &str, rng: &mut Rng) -> Table {
         // exact python draw order (dining_table.py / cocktail_table.py sample_parameters), fresh FixedSeed stream
         let mut r = rng.clone();
         let r = &mut r;
@@ -136,14 +189,8 @@ impl Table {
         Table { x, y, z, style, legs, leg_d, top_scale, bottom_scale, curve, top_t, top_n: 4, top_w: 1.414 * x, top_aspect: y / x, fillet, vfillet, leg_ngon: 4, stretch_pos, incr, seed, cocktail: false }
     }
 
-    fn build(&self) -> Asset {
-        let mut r = Rng::seeded(self.seed);
-        let topm = spec_material("table_top", json!({"cls": weighted(&mut r, TOP), "kwargs": {}, "seed": self.seed}), [0.6, 0.45, 0.3]);
-        let legm = spec_material("table_leg", json!({"cls": weighted(&mut r, LEG), "kwargs": {}, "seed": self.seed + 1}), [0.3, 0.3, 0.3]);
-        let mut a = Asset::default();
-        let top_h = self.z - self.top_t;
-        let mut top = table_top_exact(self.top_n, self.top_w, self.top_aspect, self.fillet, self.top_t, self.vfillet);
-        top.transform(&Mat4::translation([0.0, 0.0, top_h]));
+    /// leg anchors and the leg / stretcher meshes for a top at height `top_h`
+    fn leg_meshes(&self, top_h: f64) -> (Vec<V3>, Vec<Mesh>) {
         let anch = anchor_points(self.legs, self.top_scale * self.top_w, self.top_aspect);
         let meshes = match self.style {
             Style::Straight => {
@@ -161,6 +208,18 @@ impl Table {
                 legs_and_stretchers(&anch, top_h, self.bottom_scale, &leg, None)
             }
         };
+        (anch, meshes)
+    }
+
+    fn build(&self) -> Asset {
+        let mut r = Rng::seeded(self.seed);
+        let topm = spec_material("table_top", json!({"cls": weighted(&mut r, TOP), "kwargs": {}, "seed": self.seed}), [0.6, 0.45, 0.3]);
+        let legm = spec_material("table_leg", json!({"cls": weighted(&mut r, LEG), "kwargs": {}, "seed": self.seed + 1}), [0.3, 0.3, 0.3]);
+        let mut a = Asset::default();
+        let top_h = self.z - self.top_t;
+        let mut top = table_top_exact(self.top_n, self.top_w, self.top_aspect, self.fillet, self.top_t, self.vfillet);
+        top.transform(&Mat4::translation([0.0, 0.0, top_h]));
+        let (anch, meshes) = self.leg_meshes(top_h);
         // Join Geometry output order: the last-linked input first -> [stretchers, legs] then the top
         let nl = anch.len();
         let (legs, st) = meshes.split_at(nl);
@@ -176,6 +235,14 @@ impl Table {
 }
 
 impl Factory for Table {
+    fn natural_size(&self, _inst_seed: u64) -> Option<[f64; 3]> {
+        if self.cocktail {
+            return None;
+        }
+        let (lo, hi) = self.overall();
+        let (ex, ey) = (hi[0] - lo[0], hi[1] - lo[1]);
+        Some([ex.max(ey), ex.min(ey), hi[2] - lo[2]])
+    }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         if !self.cocktail {
             return None;
