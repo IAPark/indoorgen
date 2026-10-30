@@ -690,18 +690,18 @@ pub fn repair(state: &mut State) -> Vec<String> {
         let score = |st: &State| { let (c, bad) = walk_status(st, &room); (if c || !base { 0 } else { 1 }, bad.len()) };
         let mut cur = score(state);
         while cur != (0, 0) {
-            // non-anchor pieces first (smallest first); dining chairs only when none of those helps
+            // non-anchor pieces (smallest first); dining chairs never (they tuck under the table: a path past them is fine, and
+            // removing them left tables with one chair)
             let pick = |chairs: bool| -> Vec<(f64, String)> {
                 let mut c: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| {
                     let cls = class_of(o);
-                    let ok_cls = if chairs { cls.starts_with("Chair") } else { !anchor(cls) };
+                    let ok_cls = if chairs { false } else { !anchor(cls) && !cls.starts_with("Chair") };
                     o.generator.is_some() && !is_room(o) && ok_cls && !no_block(cls) && cls != "Door" && cls != "Window" && floor_foot(state, k).is_some() && room_of(state, k).as_deref() == Some(room.as_str())
                 }).map(|(k, _)| (prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone())).collect();
                 c.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                 c
             };
-            let mut cands = pick(false);
-            cands.extend(pick(true));
+            let cands = pick(false);
             // remove candidates cumulatively (smallest first) until the room improves (two pieces can close a gap together), then put
             // back every removed piece the improvement does not need
             let mut trial = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };

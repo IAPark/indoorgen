@@ -526,14 +526,14 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
                                 let mut placed = false;
                                 for k in 0..10 {
                                     let s0 = td + 0.15 + k as f64 * 0.15;
-                                    if s0 + sw + 0.2 + ww > lb { break }
-                                    if place_along(state, &sink, c, ub, nb, s0) && place_along(state, &wc, c, ub, nb, s0 + sw + 0.2) { placed = true; break }
+                                    if s0 + sw + 0.35 + ww > lb { break }
+                                    if place_along(state, &sink, c, ub, nb, s0) && place_along(state, &wc, c, ub, nb, s0 + sw + 0.35) { placed = true; break }
                                 }
                                 ok &= placed;
                             } else {
                                 let mut placed = false;
                                 for k in 0..10 {
-                                    let s0 = tw + 0.2 + k as f64 * 0.15;
+                                    let s0 = tw + 0.35 + k as f64 * 0.15;
                                     if s0 + ww > la { break }
                                     if place_along(state, &wc, c, ua, na, s0) { placed = true; break }
                                 }
@@ -546,7 +546,8 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
                                 ok &= placed && placed2;
                             }
                             if !ok { continue }
-                            let score = door_d(state, &wc).min(2.5) + if door_d(state, &wc) > door_d(state, &sink) { 0.5 } else { 0.0 } - if door_d(state, &sink) < 0.8 { 1.0 } else { 0.0 };
+                            // (toilet and sink on different walls read as less crammed)
+                            let score = door_d(state, &wc).min(2.5) + if door_d(state, &wc) > door_d(state, &sink) { 0.5 } else { 0.0 } - if door_d(state, &sink) < 0.8 { 1.0 } else { 0.0 } + if variant == 1 { 0.4 } else { 0.0 };
                             if best.as_ref().map_or(true, |(s, _)| score > *s) { best = Some((score, state.objs.clone())); }
                         }
                     }
