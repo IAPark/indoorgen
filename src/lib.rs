@@ -23,6 +23,7 @@ pub mod openings;
 pub mod pipeline;
 pub mod layout_dump;
 pub mod qc;
+pub mod invariants;
 pub mod scenegen;
 pub mod realism;
 pub mod ceiling_decor;

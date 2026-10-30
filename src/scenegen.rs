@@ -745,6 +745,12 @@ pub fn build_scene(p: &Params) -> Built {
     if cfg.program.bed_decor && !orig_prog {
         for l in crate::bed_decor::add(&mut scene, &g.state, &g.room_polys, &door_zones, &assets, seed) { eprintln!("BEDDECOR {l}"); } lap("bed decor");
     }
+    // invariant checks on the finished scene (every dresser has run): INVARIANTS=1
+    if ig_core::envx::var_os("INVARIANTS").is_some() {
+        let qi = qcin(&scene, &g, &door_infos, &cut_keys);
+        let _ = crate::invariants::check(&crate::invariants::Inv { scene: &scene, state: &g.state, visuals: &visuals, qc: &qi, floor_z: g.c.wall_thickness / 2.0, ceiling_z: g.c.wall_height - g.c.wall_thickness / 2.0 });
+        lap("invariants");
+    }
     // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
     let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {
         Some(serde_json::json!({
