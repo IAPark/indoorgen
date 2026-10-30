@@ -10,6 +10,9 @@ pub fn handles(c: &str) -> bool {
 
 type F3 = [f32; 3];
 
+/// overall width / height over the nominal ones (the star profile's rim overshoots, the subdivision shrinks the top; measured)
+const VASE_K: [f64; 2] = [1.045, 0.985];
+
 pub struct Vase {
     inner: f64,
     points: usize,
@@ -51,7 +54,13 @@ impl Vase {
         let shoulder_t = r.uniform(0.1, 0.25);
         let foot_scale = r.uniform(0.4, 0.6);
         let foot_h = r.uniform(0.01, 0.1);
-        Vase { inner, points, height: z, diameter: x, top_scale, neck_mid, neck_pos, neck_scale, shoulder_pos, shoulder_t, foot_scale, foot_h, fs }
+        let mut v = Vase { inner, points, height: z, diameter: x, top_scale, neck_mid, neck_pos, neck_scale, shoulder_pos, shoulder_t, foot_scale, foot_h, fs };
+        // built to the layout box [width (y), depth (x), height]: round, the smaller of width and depth is the diameter
+        if let Some(h) = crate::api::size_hint() {
+            v.diameter = h[0].min(h[1]) / 2.0 / VASE_K[0];
+            v.height = h[2] / VASE_K[1];
+        }
+        v
     }
 }
 
@@ -116,6 +125,10 @@ fn catmull_rom_eval(p: &[F3], res: usize) -> Vec<F3> {
 }
 
 impl Factory for Vase {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        let w = 2.0 * self.diameter * VASE_K[0];
+        Some([w, w, self.height * VASE_K[1]])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let f = |x: f64| x as f32;
         let (h, d) = (f(self.height), f(self.diameter));

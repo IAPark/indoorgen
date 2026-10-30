@@ -59,7 +59,21 @@ impl Cup {
         matdraw::sample_call(&mut r, matdraw::GRAPHICDESIGN);
         let _has_inside = r.uniform(0.0, 1.0) < 0.5;
         let scale = r.log_uniform(0.15, 0.3);
-        Cup { x_end, straight, x_lowest, depth, has_guard, thickness, handle_location, handle_radius, handle_inner: inner, taper_x: tx, taper_y: ty, x_lower_ratio, wrap_margin, scale, fs }
+        let mut c = Cup { x_end, straight, x_lowest, depth, has_guard, thickness, handle_location, handle_radius, handle_inner: inner, taper_x: tx, taper_y: ty, x_lower_ratio, wrap_margin, scale, fs };
+        // built to the layout box [width (y), depth (x), height]: the scale gives the diameter (y), the depth the height; the handle
+        // (x side) follows the depth. The x extent is then what the handle makes it.
+        if let Some(h) = crate::api::size_hint() {
+            for _ in 0..3 {
+                let (lo, hi) = c.outline(0);
+                c.scale *= h[0] / (hi[1] - lo[1]);
+                let (lo, hi) = c.outline(0);
+                let zf = h[2] / (hi[2] - lo[2]);
+                c.depth *= zf;
+                c.handle_radius *= zf;
+                c.handle_inner *= zf;
+            }
+        }
+        c
     }
 }
 
@@ -140,12 +154,23 @@ impl Factory for Cup {
         a
     }
 
+    fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
+        let (lo, hi) = self.outline(i);
+        Some([hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]])
+    }
     /// dense mode: the solver only needs the outline, so skip solidify / subsurf / the exact handle boolean:
     /// body = bevelled revolve (+ the 1.01 wrap), handle = the torus vertices that lie outside the cup on its +x side
     fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
         if !crate::dense() {
             return None;
         }
+        Some(self.outline(i))
+    }
+}
+
+impl Cup {
+    /// bounding box of the cup, handle ring included (the instance's bevel draws taken for instance `i`)
+    fn outline(&self, i: u64) -> (V3, V3) {
         let mut r = inst_rng(self.fs, i);
         let sc = self.scale;
         let (xs, zs): (Vec<f64>, Vec<f64>) = if self.straight {
@@ -211,7 +236,7 @@ impl Factory for Cup {
         }
         let sc32 = sc as f32;
         let f = |v: f64| (v as f32 * sc32) as f64;
-        Some(([f(lo[0]), f(lo[1]), f(lo[2])], [f(hi[0]), f(hi[1]), f(hi[2])]))
+        ([f(lo[0]), f(lo[1]), f(lo[2])], [f(hi[0]), f(hi[1]), f(hi[2])])
     }
 }
 

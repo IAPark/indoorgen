@@ -62,7 +62,30 @@ impl Jar {
         r.uniform(0.0, 1.0);
         r.uniform(0.0, 1.0);
         let cap_subsurf = r.uniform(0.0, 1.0) < 0.5;
-        Jar { z_length, x_length, thickness, n_base, x_cap, z_cap, z_neck, surface, cap_surface, cap_subsurf, fs }
+        let mut j = Jar { z_length, x_length, thickness, n_base, x_cap, z_cap, z_neck, surface, cap_surface, cap_subsurf, fs };
+        // built to the layout box [width (y), depth (x), height]: the prism (square / hexagon / round) fits the box; the wall
+        // thickness stays what it was drawn
+        if let Some(h) = crate::api::size_hint() {
+            for _ in 0..3 {
+                let (lo, hi) = j.outline(0);
+                j.x_length *= (h[0] / (hi[1] - lo[1])).min(h[1] / (hi[0] - lo[0]));
+                j.z_length *= h[2] / (hi[2] - lo[2]);
+            }
+        }
+        j
+    }
+
+    /// bounding box from the subdivided base prism and the neck / cap heights (no bridge, solidify or second subsurf)
+    fn outline(&self, i: u64) -> (V3, V3) {
+        let mut r = inst_rng(self.fs, i);
+        let (m, _) = self.stage_mesh(i, 0);
+        let (lo, hi) = m.bounds();
+        let _shape = r.uniform(0.0, 0.1);
+        let capz = (1.0 + self.z_neck + self.z_cap * r.uniform(0.5, 0.8)) * self.z_length;
+        let top = (capz + self.z_cap * self.z_length).max((1.0 + self.z_neck + self.z_cap) * self.z_length);
+        let rc = self.x_cap * self.x_length + 1e-3;
+        let (rx, ry) = (hi[0].max(-lo[0]).max(rc), hi[1].max(-lo[1]).max(rc));
+        ([-rx, -ry, 0.0], [rx, ry, top])
     }
 
     /// cylinder primitive (depth 1, location z .5) scaled and baked; faces: side quads then the bottom ngon (top ngon optional)
@@ -187,20 +210,16 @@ impl Jar {
 }
 
 impl Factory for Jar {
+    fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
+        let (lo, hi) = self.outline(i);
+        Some([hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]])
+    }
     /// dense mode: outline from the subdivided base prism and the neck / cap heights (no bridge, solidify or second subsurf)
     fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
         if !crate::dense() {
             return None;
         }
-        let mut r = inst_rng(self.fs, i);
-        let (m, _) = self.stage_mesh(i, 0);
-        let (lo, hi) = m.bounds();
-        let _shape = r.uniform(0.0, 0.1);
-        let capz = (1.0 + self.z_neck + self.z_cap * r.uniform(0.5, 0.8)) * self.z_length;
-        let top = (capz + self.z_cap * self.z_length).max((1.0 + self.z_neck + self.z_cap) * self.z_length);
-        let rc = self.x_cap * self.x_length + 1e-3;
-        let (rx, ry) = (hi[0].max(-lo[0]).max(rc), hi[1].max(-lo[1]).max(rc));
-        Some(([-rx, -ry, 0.0], [rx, ry, top]))
+        Some(self.outline(i))
     }
     fn asset(&self, i: u64) -> Asset {
         let (m, cap) = self.stage_mesh(i, 9);

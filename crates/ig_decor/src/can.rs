@@ -8,6 +8,9 @@ pub fn handles(c: &str) -> bool {
     c == "CanFactory"
 }
 
+/// overall extents minus the nominal ones (x half-extent, y half-extent, height; measured)
+const CAN_EXTRA: [f64; 3] = [0.0, 0.0, 0.0];
+
 pub struct Can {
     x_length: f64,
     z_length: f64,
@@ -23,7 +26,14 @@ impl Can {
         let z_length = x_length * r.log_uniform(0.5, 2.5);
         let rect = r.randint(0, 2) == 1;
         let skewness = if r.uniform(0.0, 1.0) < 0.5 { r.uniform(1.0, 2.5) } else { 1.0 };
-        Can { x_length, z_length, rect, skewness, fs }
+        let mut c = Can { x_length, z_length, rect, skewness, fs };
+        // built to the layout box [width (y), depth (x), height]: the outline is x_length wide in x and x_length / skewness in y
+        if let Some(h) = crate::api::size_hint() {
+            c.x_length = h[1] / 2.0 - CAN_EXTRA[0];
+            c.skewness = (h[1] - 2.0 * CAN_EXTRA[0]) / (h[0] - 2.0 * CAN_EXTRA[1]);
+            c.z_length = h[2] - CAN_EXTRA[2];
+        }
+        c
     }
 
     /// make_coords(): shapely buffer -> affinity.scale -> boundary.segmentize(0.01) -> coords[:-1]
@@ -104,6 +114,9 @@ fn extrude_single_faces(m: &mut Mesh, sel: &[usize], offsets: &[F3]) {
 }
 
 impl Factory for Can {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        Some([2.0 * self.x_length / self.skewness + 2.0 * CAN_EXTRA[1], 2.0 * self.x_length + 2.0 * CAN_EXTRA[0], self.z_length + CAN_EXTRA[2]])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let coords = self.coords(&mut r);

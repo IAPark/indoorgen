@@ -29,16 +29,27 @@ impl Plate {
         let _has_inside = r.uniform(0.0, 1.0) < 0.2;
         let scale = r.log_uniform(0.2, 0.4);
         let thickness = r.uniform(0.01, 0.03) * scale;
-        Plate { x_end, z_length, x_mid, z_mid, scale, thickness, fs }
-    }
-}
-
-impl Factory for Plate {
-    /// dense mode: outline of the revolved profile (no subsurf / solidify), padded by the shell thickness
-    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
-        if !crate::dense() {
-            return None;
+        let mut p = Plate { x_end, z_length, x_mid, z_mid, scale, thickness, fs };
+        // built to the layout box [width (y), depth (x), height]: round, the smaller of width and depth is the diameter; the shell
+        // thickness is a fixed fraction of the scale
+        if let Some(h) = crate::api::size_hint() {
+            let d = h[0].min(h[1]);
+            for _ in 0..3 {
+                let e = p.extents();
+                let f = d / e[0].max(e[1]);
+                p.scale *= f;
+                p.thickness *= f;
+                let e = p.extents();
+                let zf = ((h[2] - p.thickness) / (e[2] - p.thickness)).max(0.05);
+                p.z_length *= zf;
+                p.z_mid *= zf;
+            }
         }
+        p
+    }
+
+    /// bounding box of the revolved profile padded by the shell thickness below
+    fn outline(&self) -> (V3, V3) {
         let sc = self.scale;
         let xs = [0.0, self.x_mid * sc, self.x_mid * sc, self.x_end * sc];
         let zs = [0.0, 0.0, self.z_mid * sc, self.z_length * sc];
@@ -48,7 +59,26 @@ impl Factory for Plate {
         let t = self.thickness as f32 as f64;
         lo[2] -= t;
         hi[2] += 0.0;
-        Some((lo, hi))
+        (lo, hi)
+    }
+
+    fn extents(&self) -> [f64; 3] {
+        let (lo, hi) = self.outline();
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+    }
+}
+
+impl Factory for Plate {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        let e = self.extents();
+        Some([e[1], e[0], e[2]])
+    }
+    /// dense mode: outline of the revolved profile (no subsurf / solidify), padded by the shell thickness
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        Some(self.outline())
     }
     fn asset(&self, _i: u64) -> Asset {
         let sc = self.scale;

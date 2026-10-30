@@ -139,16 +139,22 @@ impl Bottle {
         r.uniform(0.0, 1.0); // texture_shared
         let cap_subsurf = r.uniform(0.0, 1.0) < 0.5;
         let is_vector: Vec<usize> = is_vec.iter().enumerate().filter(|(_, &v)| v != 0).map(|(i, _)| i).collect();
-        Bottle { z_length, x_length, x_cap, bottle_width, z_neck, z_waist, z_cap, x_anchors, z_anchors, is_vector, cap_subsurf, fs }
-    }
-}
-
-impl Factory for Bottle {
-    /// dense mode: outline from the revolved profile (no subsurf / solidify / label / cap meshes)
-    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
-        if !crate::dense() {
-            return None;
+        let mut b = Bottle { z_length, x_length, x_cap, bottle_width, z_neck, z_waist, z_cap, x_anchors, z_anchors, is_vector, cap_subsurf, fs };
+        // built to the layout box [width (y), depth (x), height]: round, so the smaller of width and depth is the diameter; the wall
+        // thickness stays what it was drawn
+        if let Some(h) = crate::api::size_hint() {
+            let d = h[0].min(h[1]);
+            for _ in 0..3 {
+                let e = b.extents();
+                b.x_length *= d / e[0].max(e[1]);
+                b.z_length += (h[2] - e[2]) / 1.01;
+            }
         }
+        b
+    }
+
+    /// bounding box of the bottle (the revolved profile padded by the wall, the cap and the label), no meshes beyond the profile spin
+    fn outline(&self) -> (V3, V3) {
         let anchors: Vec<[f64; 3]> = (0..self.x_anchors.len()).map(|k| [self.x_anchors[k] * self.x_length, 0.0, self.z_anchors[k] * self.z_length]).collect();
         let m = spin_anchors(&anchors, &self.is_vector);
         let (lo, hi) = m.bounds();
@@ -156,7 +162,27 @@ impl Factory for Bottle {
         let rx = hi[0].max(-lo[0]).max((self.x_cap + 0.1) * self.x_length);
         let ry = hi[1].max(-lo[1]).max((self.x_cap + 0.1) * self.x_length);
         let top = hi[2].max((1.0 + 0.01) * self.z_length);
-        Some(([-rx, -ry, lo[2] - w], [rx, ry, top]))
+        ([-rx, -ry, lo[2] - w], [rx, ry, top])
+    }
+
+    /// overall [x extent, y extent, z extent]
+    fn extents(&self) -> [f64; 3] {
+        let (lo, hi) = self.outline();
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+    }
+}
+
+impl Factory for Bottle {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        let e = self.extents();
+        Some([e[1], e[0], e[2]])
+    }
+    /// dense mode: outline from the revolved profile (no subsurf / solidify / label / cap meshes)
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        Some(self.outline())
     }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);

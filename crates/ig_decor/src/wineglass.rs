@@ -36,16 +36,27 @@ impl Wineglass {
         r.choice_p(&[1.0]); // weighted_sample(material_assignments.glasses)()() : one class, no further draws
         let scale = r.log_uniform(0.1, 0.3);
         if std::env::var("WGDBG").is_ok() { eprintln!("ATTR {} {} {} {} {} {} {} {}", z_length, z_cup, z_mid, x_neck, x_top, x_mid, thickness, scale); }
-        Wineglass { x_end, z_length, z_cup, z_mid, x_neck, x_top, x_mid, thickness, scale, fs }
-    }
-}
-
-impl Factory for Wineglass {
-    /// dense mode: outline of the revolved profile (the solidify shell only adds the wall thickness)
-    fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
-        if !crate::dense() {
-            return None;
+        let mut w = Wineglass { x_end, z_length, z_cup, z_mid, x_neck, x_top, x_mid, thickness, scale, fs };
+        // built to the layout box [width (y), depth (x), height]: round, the smaller of width and depth is the diameter. The scale
+        // gives the width; the stem and bowl heights (z_length, z_cup, z_mid) follow the height.
+        if let Some(h) = crate::api::size_hint() {
+            let d = h[0].min(h[1]);
+            for _ in 0..3 {
+                let e = w.extents();
+                w.scale *= d / e[0].max(e[1]);
+                let e = w.extents();
+                let zf = (h[2] / e[2]).max(0.05);
+                w.z_length *= zf;
+                w.z_cup *= zf;
+                w.z_mid *= zf;
+            }
         }
+        w
+    }
+
+    /// bounding box of the revolved profile (the solidify shell only adds the wall thickness below); the stem-foot height is the
+    /// instance's draw, taken here for instance 0
+    fn outline(&self, i: u64) -> (V3, V3) {
         let mut r = inst_rng(self.fs, i);
         let z_bottom = self.z_length * r.log_uniform(0.01, 0.05);
         let xs = [self.x_end, self.x_end / 2.0, self.x_neck, self.x_neck, self.x_mid, self.x_top];
@@ -57,7 +68,26 @@ impl Factory for Wineglass {
         lo[2] -= t;
         let sc = self.scale as f32;
         let f = |v: f64| (v as f32 * sc) as f64;
-        Some(([f(lo[0]), f(lo[1]), f(lo[2])], [f(hi[0]), f(hi[1]), f(hi[2])]))
+        ([f(lo[0]), f(lo[1]), f(lo[2])], [f(hi[0]), f(hi[1]), f(hi[2])])
+    }
+
+    fn extents(&self) -> [f64; 3] {
+        let (lo, hi) = self.outline(0);
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+    }
+}
+
+impl Factory for Wineglass {
+    fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
+        let (lo, hi) = self.outline(i);
+        Some([hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]])
+    }
+    /// dense mode: outline of the revolved profile (the solidify shell only adds the wall thickness)
+    fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
+        if !crate::dense() {
+            return None;
+        }
+        Some(self.outline(i))
     }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);

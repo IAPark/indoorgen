@@ -154,7 +154,42 @@ impl StandLamp {
         let z2 = r.uniform(z1, height);
         let z3 = height;
         let p = LampParams { stand_radius, base_radius, base_height, shade_height, top_radius, bot_radius, rack_t, cp: [[0.0, 0.0, z1], [0.0, 0.0, z2], [0.0, 0.0, z3]] };
-        StandLamp { p, seed: fs }
+        let mut l = StandLamp { p, seed: fs };
+        // built to the layout box [width (y), depth (x), height]: round, the smaller of width and depth is the diameter. The radii
+        // (base, shade) scale together; the stand reaches the height with the bends keeping their share of it, the shade (which hangs
+        // 0.4 of its height below the stand's end) shrinks if the stand is too short for it.
+        if let Some(h) = crate::api::size_hint() {
+            let d = h[0].min(h[1]);
+            for _ in 0..4 {
+                let e = l.extents();
+                let f = d / e[0].max(e[1]);
+                l.p.base_radius *= f;
+                l.p.top_radius *= f;
+                l.p.bot_radius *= f;
+                let z3 = l.p.cp[2][2];
+                let z3n = (z3 + h[2] - e[2]).max(l.p.base_height + 0.05);
+                let k = (z3n - l.p.base_height) / (z3 - l.p.base_height);
+                for q in 0..2 {
+                    l.p.cp[q][2] = l.p.base_height + (l.p.cp[q][2] - l.p.base_height) * k;
+                }
+                l.p.cp[2][2] = z3n;
+                l.p.shade_height = l.p.shade_height.min((z3n - l.p.base_height - 0.02) / 0.4);
+            }
+        }
+        l
+    }
+
+    /// overall [x extent, y extent, z extent] of the lamp parts
+    fn extents(&self) -> [f64; 3] {
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for m in lamp_parts(&self.p) {
+            let (a, b) = m.bounds();
+            for k in 0..3 {
+                lo[k] = lo[k].min(a[k]);
+                hi[k] = hi[k].max(b[k]);
+            }
+        }
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
     }
 }
 
@@ -250,6 +285,10 @@ pub fn lamp_parts(p: &LampParams) -> [Mesh; 4] {
 }
 
 impl Factory for StandLamp {
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
+        let e = self.extents();
+        Some([e[1], e[0], e[2]])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let shade_m = spec_material("lampshade", json!({"cls": weighted(&mut r, LAMPSHADE), "kwargs": {}, "seed": self.seed}), [0.9, 0.85, 0.7]);
