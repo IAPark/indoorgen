@@ -983,9 +983,54 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             state.touch(&sofa);
             best = Some((1e9, sp, view));
         }
-        // otherwise: back on any wall that looks toward the TV where it stands (1.5-4.5 m, within ~40 degrees)
+        // otherwise the TV moves too: every TV spot on a wall (clear of windows by free_ok, away from the doors) with the sofa
+        // facing it 2.2-3.2 m off, its back on a wall when that distance meets one; the group near the room's middle
         let mut walled = false;
         if pair.is_none() {
+            let mut tvbest: Option<(f64, super::geom::Pose, super::geom::Pose, f64)> = None;
+            for (a, b, n) in segs.clone() {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let len = (dx * dx + dy * dy).sqrt();
+                let tw = thi[1] - tlo[1];
+                if len < tw + 0.1 { continue }
+                let u = [dx / len, dy / len];
+                let steps = ((len - tw) / 0.25).floor() as usize;
+                for i in 0..=steps {
+                    let tt = tw / 2.0 + 0.02 + (len - tw - 0.04) * if steps == 0 { 0.5 } else { i as f64 / steps as f64 };
+                    let base = [a[0] + u[0] * tt, a[1] + u[1] * tt];
+                    // the sofa out of the room while the TV tries the spot (wherever its last try left it, it blocks)
+                    let so = state.objs.shift_remove(&sofa).unwrap();
+                    let ok = try_place(state, &tv, n[1].atan2(n[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]);
+                    state.objs.insert(sofa.clone(), so);
+                    state.touch(&sofa);
+                    if !ok { continue }
+                    let tv_door = ldoors.iter().map(|d| ((d[0] - base[0]).powi(2) + (d[1] - base[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
+                    let tfront = [base[0] + n[0] * (thi[0] - tlo[0]), base[1] + n[1] * (thi[0] - tlo[0])];
+                    for k in 0..6 {
+                        let d = 2.2 + k as f64 * 0.2;
+                        let at = [tfront[0] + n[0] * d, tfront[1] + n[1] * d, 0.0];
+                        // sofa front (local +x) toward the TV
+                        if !try_place(state, &sofa, (-n[1]).atan2(-n[0]), [shi[0], (slo[1] + shi[1]) / 2.0, slo[2]], at) { continue }
+                        let back = state.objs[&sofa].pose.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
+                        let on_wall = layout2d::ring_dist(&rings, [back[0], back[1]]) < 0.15;
+                        let mid = [(base[0] + back[0]) / 2.0, (base[1] + back[1]) / 2.0];
+                        let score = if on_wall { 2.0 } else { 0.0 } - (d - 2.6).abs() - (1.6 - tv_door).max(0.0) * 1.5
+                            - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.3 - (tt - len / 2.0).abs() / len;
+                        if tvbest.as_ref().map_or(true, |b| score > b.0) { tvbest = Some((score, state.objs[&tv].pose, state.objs[&sofa].pose, d)); }
+                    }
+                }
+            }
+            state.set_pose(&tv, tv_start); state.touch(&tv);
+            if let Some((_, tvp, sp, d)) = tvbest {
+                move_with_children(state, &tv, tvp);
+                state.set_pose(&sofa, sp);
+                state.touch(&sofa);
+                best = Some((1e8, sp, d));
+                walled = true;
+            }
+        }
+        // otherwise: back on any wall that looks toward the TV where it stands (1.5-4.5 m, within ~40 degrees)
+        if pair.is_none() && !walled {
             let tc = { let (a, b) = (tlo, thi); state.objs[&tv].pose.apply([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, 0.0]) };
             for (a, b, n) in segs.clone() {
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
