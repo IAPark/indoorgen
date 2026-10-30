@@ -626,7 +626,8 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
         // each goes back in as its slot is tried
         let lifted: Vec<(String, ObjState)> = stands.iter().map(|k| (k.clone(), state.objs[k].clone())).collect();
         for k in &stands { state.objs.shift_remove(k); }
-        let want = if bhi[1] - blo[1] < 1.2 { 1 } else { 2 };
+        // a pair from 0.9 m wide (one nightstand by a full / double bed read as unfinished in review)
+        let want = if bhi[1] - blo[1] < 0.9 { 1 } else { 2 };
         // a second nightstand: a copy of this bed's (a pair) or of any nightstand in the house
         let template = stands.first().cloned().or_else(|| state.objs.iter().find(|(_, o)| class_of(o) == "SideTableFactory").map(|(k, _)| k.clone()));
         let mut placed = 0;
