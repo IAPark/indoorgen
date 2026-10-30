@@ -1,5 +1,5 @@
 #!/bin/zsh
-# best_of.sh OUT N [K]: houses 1..N, each the lowest-penalty (tools/layout_score.py) of K candidate seeds (i, i+100, i+200, ...);
+# best_of.sh OUT N [K]: houses START..START+N-1 (START=1 by default), each the lowest-penalty (tools/layout_score.py) of K candidate seeds (i, i+100, i+200, ...);
 # keeps OUT/l<i>.json/.log of the winner and writes OUT/best_of.jsonl with every candidate's score
 set -e
 OUT=$1; N=$2; K=${3:-3}
@@ -8,7 +8,8 @@ TOOLS=${0:A:h}
 mkdir -p $OUT/cand && cd $OUT
 [ -f cfg.json ] || echo '{"cloth":{"on":false},"people":{"count":0}}' > cfg.json
 : > best_of.jsonl
-for i in $(seq 1 $N); do
+S0=${START:-1}
+for i in $(seq $S0 $((S0 + N - 1))); do
   best=""; bp=1e9
   for k in $(seq 0 $((K-1))); do
     s=$((i + 100*k))

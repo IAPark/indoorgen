@@ -1605,8 +1605,15 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
     let mut log = vec![];
     let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && only_room.map_or(true, |r| layout2d::room_of(state, k).as_deref() == Some(r))).map(|(k, _)| k.clone()).collect();
     for run in runs.clone() {
-        if state.objs.iter().any(|(_, o)| class_of(o) == "SinkFactory" && o.relations.iter().any(|r| r.target == run)) { continue }
         let Some(room) = layout2d::room_of(state, &run) else { continue };
+        // a sink already on this run stays unless it stands against the range (no counter between): then it is placed again
+        let on_run: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "SinkFactory" && o.relations.iter().any(|r| r.target == run)).map(|(k, _)| k.clone()).collect();
+        if !on_run.is_empty() {
+            let ovens0: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "OvenFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            let tight = on_run.iter().any(|sk| ovens0.iter().any(|o| layout2d::dist(state, o, sk) < 0.4));
+            if !tight { continue }
+            for k in on_run { layout2d::remove_tree(state, &k); log.push(format!("{run}: sink against the range, placed again")); }
+        }
         // one sink per kitchen, on the run the range stands at (else the longest): a sink on a separate counter read as disjoint
         let in_room: Vec<&String> = runs.iter().filter(|r| layout2d::room_of(state, r).as_deref() == Some(room.as_str())).collect();
         let ovens: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "OvenFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
@@ -1649,10 +1656,14 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         for k in 0..8 { let off = (k as f64 / 2.0).ceil() * 0.3 * if k % 2 == 0 { 1.0 } else { -1.0 }; ys.push(mid + off); }
         let sd = shi[0] - slo[0];
         let mut ok = false;
-        for y in ys {
-            if y - (shi[1] - slo[1]) / 2.0 < rlo[1] + 0.05 || y + (shi[1] - slo[1]) / 2.0 > rhi[1] - 0.05 { continue }
-            let at = rp.apply([rlo[0] + 0.06 + sd / 2.0, y, 0.0]);
-            if try_place(state, &name, yaw(&rp), [(slo[0] + shi[0]) / 2.0, (slo[1] + shi[1]) / 2.0, slo[2]], [at[0], at[1], top]) { ok = true; break; }
+        // counter to work on between the sink and the range: 0.4 m or more first, then any free spot
+        let range_gap = |st: &State| ovens.iter().map(|o| layout2d::dist(st, o, &name)).fold(9.0f64, f64::min);
+        'pass: for strict in [true, false] {
+            for &y in &ys {
+                if y - (shi[1] - slo[1]) / 2.0 < rlo[1] + 0.05 || y + (shi[1] - slo[1]) / 2.0 > rhi[1] - 0.05 { continue }
+                let at = rp.apply([rlo[0] + 0.06 + sd / 2.0, y, 0.0]);
+                if try_place(state, &name, yaw(&rp), [(slo[0] + shi[0]) / 2.0, (slo[1] + shi[1]) / 2.0, slo[2]], [at[0], at[1], top]) && (!strict || range_gap(state) >= 0.4) { ok = true; break 'pass; }
+            }
         }
         if ok { log.push(format!("{run}: sink added")); } else { state.objs.shift_remove(&name); log.push(format!("{run}: no room for a sink")); }
     }
