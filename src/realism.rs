@@ -18,7 +18,7 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("LivingRoom", "SofaFactory", "on_floor", 1, 2, false),
     ("LivingRoom", "TVFactory", "ontop:TVStandFactory", 1, 1, false),
     ("LivingRoom", "Storage", "against_wall", 1, 4, false),
-    ("LivingRoom", "ArmChairFactory", "on_floor", 0, 2, false),
+    ("LivingRoom", "ArmChairFactory", "on_floor", 0, 3, false),
     // walls dressed like real living spaces (Hypersim / 3D-FRONT: picture groups over the sofa, a mirror, plants)
     ("LivingRoom", "WallArtFactory", "against_wall", 2, 6, true),
     ("LivingRoom", "LargePlantContainerFactory", "against_wall", 1, 2, false),

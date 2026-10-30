@@ -1713,6 +1713,30 @@ pub fn room_extras(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: O
         for k in in_room(state, &|c| c == "LargePlantContainerFactory") { layout2d::remove_tree(state, &k); }
         let doors = door_points(state, &room);
         let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
+        // a reading corner in a large living room (30 m2 and up): an armchair with its back on a wall near a corner, 1.8 m or more
+        // from the seating group, with a side table beside it (a 45 m2 room held one small group and read as empty)
+        if rt == "living-room" && area >= 30.0 {
+            let group = in_room(state, &|c| matches!(c, "SofaFactory" | "TVStandFactory" | "FireplaceFeature" | "ArmChairFactory" | "CoffeeTableFactory"));
+            let name = format!("{room}_readchair").replace('/', "_");
+            if new_piece(ctx, state, rng, "ArmChairFactory", &room, &name) {
+                let (nm, dd, g) = (name.clone(), door_d.clone(), group.clone());
+                let ok = place_on_wall(state, &name, &room, &move |st, c, t, len, _n| {
+                    let gap = g.iter().map(|k| layout2d::dist(st, k, &nm)).fold(9.0f64, f64::min);
+                    if gap < 1.8 || dd(c) < 1.2 { return -100.0 }
+                    -t.min(len - t) + gap.min(3.0) * 0.3 + dd(c).min(2.0) * 0.5
+                });
+                let gap = group.iter().map(|k| layout2d::dist(state, k, &name)).fold(9.0f64, f64::min);
+                if ok && gap >= 1.8 {
+                    log.push(format!("{room}: reading corner ({gap:.1} m from the group)"));
+                    let sname = format!("{room}_readside").replace('/', "_");
+                    if new_piece(ctx, state, rng, "SideTableFactory", &room, &sname) {
+                        let (sn, an) = (sname.clone(), name.clone());
+                        let ok2 = place_on_wall(state, &sname, &room, &move |st, _c, _t, _len, _n| { let d = layout2d::dist(st, &an, &sn); if d > 0.15 { -100.0 } else { 1.0 - d } });
+                        if !ok2 || layout2d::dist(state, &name, &sname) > 0.15 { state.objs.shift_remove(&sname); }
+                    }
+                } else { state.objs.shift_remove(&name); }
+            }
+        }
         // a bookcase on a free wall (living rooms): away from the sofa and the TV, centred, clear of the doors
         if rt == "living-room" && lr.living_bookcase && area >= 20.0 && in_room(state, &|c| c == "BookshelfWallFeature").is_empty() {
             for k in in_room(state, &|c| matches!(c, "SingleCabinetFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory")) { layout2d::remove_tree(state, &k); }
