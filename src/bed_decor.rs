@@ -32,6 +32,9 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     let mut taken: Vec<Box3> = state.objs.values().filter(|o| o.generator.is_some()).map(|o| world_box(o, o.geom.lo, o.geom.hi)).collect();
     taken.extend(scene.nodes.iter().filter(|n| ["mess_", "dress_", "cushion_", "pendant_", "gallery_"].iter().any(|p| n.name.starts_with(p))).map(|n| n.mesh.bounds()));
     taken.extend(keepout.iter().map(|(c, h, _)| ([c[0] - h[0], c[1] - h[1], 0.0], [c[0] + h[0], c[1] + h[1], 3.0])));
+    // windows and doors (cutters, no generator) with their frames: nothing hangs over them
+    taken.extend(state.objs.iter().filter(|(k, o)| o.generator.is_none() && ["window", "door", "entrance", "passage"].iter().any(|p| k.starts_with(p)))
+        .map(|(_, o)| { let (l, h) = world_box(o, o.geom.lo, o.geom.hi); ([l[0] - 0.08, l[1] - 0.08, l[2] - 0.08], [h[0] + 0.08, h[1] + 0.08, h[2] + 0.08]) }));
     let fits = |taken: &[Box3], b: &Box3| -> bool {
         let corners = [[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.1[0], b.1[1]], [b.0[0], b.1[1]]];
         inner.iter().any(|g| corners.iter().all(|c| crate::shp::contains_pt(g, *c))) && !taken.iter().any(|t| overlaps(b, t))

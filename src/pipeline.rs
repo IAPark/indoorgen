@@ -380,6 +380,27 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         timings.push(("solve_medium".into(), tm));
         timings.push(("solve_small".into(), ts));
     }
+    // features the room layer moved (a fireplace and its alcove shelves travel with the living-room group): the built asset follows its
+    // solver object (span origin / yaw), with its footprint and keep-out boxes moved the same way
+    let mut features = features;
+    for pf in features.iter_mut() {
+        let Some(o) = state.objs.get(&pf.key) else { continue };
+        let (oy, ny) = (pf.yaw, o.pose.r[1][0].atan2(o.pose.r[0][0]));
+        let (oo, no) = (pf.origin, o.pose.t);
+        if (0..2).all(|d| (oo[d] - no[d]).abs() < 1e-6) && (oy - ny).sin().abs() < 1e-6 && (oy - ny).cos() > 0.0 { continue }
+        let dy = ny - oy;
+        let (s_, c_) = dy.sin_cos();
+        let mv = |q: [f64; 2]| { let d = [q[0] - oo[0], q[1] - oo[1]]; [no[0] + c_ * d[0] - s_ * d[1], no[1] + s_ * d[0] + c_ * d[1]] };
+        pf.footprint = pf.footprint.iter().map(|q| mv(*q)).collect();
+        pf.keepout = pf.keepout.iter().map(|(lo, hi)| {
+            let cs: Vec<[f64; 2]> = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]].iter().map(|q| mv(*q)).collect();
+            ([cs.iter().map(|q| q[0]).fold(f64::MAX, f64::min), cs.iter().map(|q| q[1]).fold(f64::MAX, f64::min), lo[2]],
+             [cs.iter().map(|q| q[0]).fold(f64::MIN, f64::max), cs.iter().map(|q| q[1]).fold(f64::MIN, f64::max), hi[2]])
+        }).collect();
+        pf.origin = [no[0], no[1], oo[2]];
+        pf.yaw = ny;
+        if std::env::var_os("LAYERDBG").is_some() { eprintln!("FEATURE {} moved to ({:.2}, {:.2}), turned {:+.0} deg", pf.key, no[0], no[1], dy.to_degrees()); }
+    }
     if wall_layer && !deferred.is_empty() {
         let intents: Vec<String> = state.objs.iter().filter(|(_, o)| o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| k.clone()).collect();
         for k in intents { state.objs.shift_remove(&k); }
@@ -589,7 +610,13 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
         tot = (tot.0 + t.0, tot.1 + t.1, tot.2 + t.2);
         complaints.extend(cs);
         for (k, o) in st.objs {
-            if base_keys.contains(&k) { continue }
+            if base_keys.contains(&k) {
+                // the room's built-ins the room layer moved (a fireplace with the living-room group) keep their new place
+                if k.contains("Feature_") && k.contains(&r.replace('/', "_")) {
+                    if let Some(b) = state.objs.get_mut(&k) { if b.pose.t != o.pose.t || b.pose.r != o.pose.r { b.pose = o.pose; } }
+                }
+                continue
+            }
             if state.objs.contains_key(&k) {
                 eprintln!("NAME COLLISION across rooms: {k} ({r}) dropped");
                 continue;

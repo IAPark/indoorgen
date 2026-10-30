@@ -1049,6 +1049,22 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             for (c, co) in state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| &r.target == k)) { kids.push((c.clone(), co.clone())); }
         }
         for (k, _) in lifted.iter().chain(kids.iter()) { state.objs.shift_remove(k); }
+        // the annealed group (LIVING_SA=0: the branch chain below); items that stood on the coffee table / armchairs follow them
+        if std::env::var("LIVING_SA").map_or(true, |v| v != "0") {
+            if let Some(l) = living_sa(ctx, state, rng, &room, &tv, &sofa, fixed, (ty, front), &lifted, want) {
+                log.extend(l);
+                for (c, co) in &kids {
+                    let Some(pk) = co.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.contains_key(t)) else { continue };
+                    let Some((_, po)) = lifted.iter().find(|(k, _)| *k == pk) else { continue };
+                    let mut co = co.clone();
+                    let (d, nt) = ([po.pose.t[0], po.pose.t[1]], state.objs[&pk].pose.t);
+                    co.pose.translate([nt[0] - d[0], nt[1] - d[1], 0.0]);
+                    state.objs.insert(c.clone(), co);
+                    state.touch(c);
+                }
+                continue;
+            }
+        }
         let mut best: Option<(f64, super::geom::Pose, f64)> = None;
         // first choice: the sofa's back on a wall and the TV stand on the opposite (parallel) wall facing it, 1.8-4.2 m apart
         let tv_start = state.objs[&tv].pose;
@@ -2325,4 +2341,247 @@ pub fn orphans(state: &mut State) -> Vec<String> {
         }
     }
     log
+}
+
+/// pose `name` like try_place (local point `anchor` at world `at`, turned `yaw_`, keeping its height when at.z is 0) without testing it
+fn pose_at(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) {
+    let old = state.objs[name].pose;
+    let (s, c) = yaw_.sin_cos();
+    let ra = [c * anchor[0] - s * anchor[1], s * anchor[0] + c * anchor[1], anchor[2]];
+    let tz = if at[2] == 0.0 { old.t[2] } else { at[2] - ra[2] };
+    state.set_pose(name, super::geom::Pose::from_euler([at[0] - ra[0], at[1] - ra[1], tz], [0.0, 0.0, yaw_]));
+    state.touch(name);
+}
+
+/// The living-room group as one annealed layout (the room layer's first real solver; LIVING_SA=0 keeps the old branch chain).
+/// Parameters: the TV's wall and position along it (fixed for a fireplace), the viewing distance, the sofa's sideways offset, whether
+/// it backs onto the wall behind it when one is near, and where the armchairs go (none / left / right / both, beside the coffee table,
+/// facing it). Each candidate builds the whole group -- TV, sofa, coffee table, armchairs -- and is scored as one: every piece placed
+/// legally (free_ok: no overlaps, the room, the walkways), the sofa's back on a wall, a 2.6 m view, the TV clear of the doors, the
+/// group near the room's middle, the wanted armchairs placed. Returns None (nothing changed) when no candidate seats the sofa.
+#[allow(clippy::too_many_arguments)]
+fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &str, sofa: &str, fixed: bool, fixed_front: (f64, [f64; 3]),
+             lifted: &[(String, ObjState)], want: usize) -> Option<Vec<String>> {
+    let mut log = vec![];
+    let lr = super::layout_rules::get();
+    let segs = wall_segments(state, room);
+    let doors = door_points(state, room);
+    let rings = layout2d::rings(&layout2d::room_floor(state, room));
+    if rings.is_empty() { return None }
+    let fc = { let r = &rings[0]; let n = r.len() as f64; [r.iter().map(|p| p[0]).sum::<f64>() / n, r.iter().map(|p| p[1]).sum::<f64>() / n] };
+    let (tlo, thi) = lohi(state, tv);
+    let (slo, shi) = lohi(state, sofa);
+    let (tv0, sofa0) = (state.objs[tv].pose, state.objs[sofa].pose);
+    let sw = shi[1] - slo[1];
+    // the coffee table sized to the sofa once (three quarters of its width)
+    let mut coffee: Option<(String, ObjState)> = lifted.iter().find(|(_, o)| class_of(o) == "CoffeeTableFactory").cloned();
+    if let Some((k, o)) = coffee.as_mut() {
+        state.objs.insert(k.clone(), o.clone());
+        let target = (sw * lr.coffee_ratio).clamp(0.6, 1.6);
+        let base = state.objs[k.as_str()].clone();
+        let _ = super::solver::set_width(ctx, state, k, &base, target, 1.0);
+        *o = state.objs.shift_remove(k.as_str()).unwrap();
+    }
+    let arms: Vec<(String, ObjState)> = lifted.iter().filter(|(_, o)| class_of(o) == "ArmChairFactory").take(want.max(0)).cloned().collect();
+    // a fireplace moves with the group (FIRE_MOVE=0 keeps it where the plan built it): it, its keep-outs, the built-in shelves in
+    // its alcoves (bookshelf walls beside it) and what stands on them move as one rigid piece along any wall long enough
+    let fire_move = fixed && std::env::var("FIRE_MOVE").map_or(true, |v| v != "0");
+    let wbox = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
+        let o = &st.objs[k];
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    let mut members: Vec<(String, super::geom::Pose)> = vec![];
+    let (fire_w, fire_depth) = if fire_move {
+        let (fl, fh) = wbox(state, tv);
+        let mut ks = vec![tv.to_string()];
+        for (k, o) in &state.objs {
+            if class_of(o) == "BookshelfWallFeature" && layout2d::room_of(state, k).as_deref() == Some(room) {
+                let (l, h) = wbox(state, k);
+                if (0..2).all(|d| l[d] < fh[d] + 0.15 && fl[d] - 0.15 < h[d]) { ks.push(k.clone()); }
+            }
+        }
+        let base_ks = ks.clone();
+        for k in &base_ks {
+            ks.extend(state.objs.keys().filter(|kk| kk.starts_with(&format!("{k}.keepout"))).cloned());
+            ks.extend(state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| &r.target == k) && o.generator.is_some()).map(|(kk, _)| kk.clone()));
+        }
+        ks.sort(); ks.dedup();
+        members = ks.into_iter().map(|k| { let p = state.objs[&k].pose; (k, p) }).collect();
+        let all: Vec<([f64; 3], [f64; 3])> = members.iter().filter(|(k, _)| !k.contains(".keepout") && (k == tv || state.objs[k].generator.as_ref().map_or(false, |g| g.class.ends_with("Feature")))).map(|(k, _)| wbox(state, k)).collect();
+        let w = all.iter().map(|(l, h)| (h[0] - l[0]).max(h[1] - l[1])).fold(0.0, f64::max);
+        let (fty, ffront) = fixed_front;
+        let span_w = { let perp = [-fty.sin(), fty.cos()]; let pr: Vec<f64> = all.iter().flat_map(|(l, h)| [[l[0], l[1]], [h[0], l[1]], [h[0], h[1]], [l[0], h[1]]]).map(|q| (q[0] - ffront[0]) * perp[0] + (q[1] - ffront[1]) * perp[1]).collect(); pr.iter().cloned().fold(f64::MIN, f64::max) - pr.iter().cloned().fold(f64::MAX, f64::min) };
+        (span_w.max(w * 0.0), layout2d::ring_dist(&rings, [ffront[0], ffront[1]]))
+    } else { (0.0, 0.0) };
+    let member_keys: Vec<String> = members.iter().map(|(k, _)| k.clone()).collect();
+    // the fireplace group at a wall spot: rigid move of every member from where the plan put it (turned about its face's centre)
+    let place_fire = |state: &mut State, wall: usize, t: f64| -> Option<(f64, [f64; 3])> {
+        let (a, b, n) = segs[wall];
+        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        if len < fire_w + 0.2 { return None }
+        let tt = fire_w / 2.0 + 0.1 + (len - fire_w - 0.2) * t;
+        let base = [a[0] + (b[0] - a[0]) / len * tt, a[1] + (b[1] - a[1]) / len * tt];
+        let ny = n[1].atan2(n[0]);
+        let (oy, of) = fixed_front;
+        let nf = [base[0] + n[0] * fire_depth, base[1] + n[1] * fire_depth];
+        let dy = ny - oy;
+        let (s_, c_) = dy.sin_cos();
+        for (k, p0) in &members {
+            let d = [p0.t[0] - of[0], p0.t[1] - of[1]];
+            let w = [nf[0] + c_ * d[0] - s_ * d[1], nf[1] + s_ * d[0] + c_ * d[1]];
+            state.set_pose(k, super::geom::Pose::from_euler([w[0], w[1], p0.t[2]], [0.0, 0.0, yaw(p0) + dy]));
+            state.touch(k);
+        }
+        // the moved pieces clear of everything else (doors, windows, door clearances, furniture) and inside the room
+        let nc = Tag::sem("NoCollision");
+        for (k, _) in members.iter().filter(|(k, _)| !k.contains(".keepout") && state.objs[k.as_str()].generator.as_ref().map_or(false, |g| g.class.ends_with("Feature"))) {
+            if layout2d::outside_room_depth(state, k, room) > 1e-3 { return None }
+            for (o, b) in &state.objs {
+                if member_keys.contains(o) || b.tags.contains(nc) || layout2d::is_room(b) { continue }
+                if o.starts_with("doorclear/") && !o.starts_with(&format!("doorclear/{room}/")) { continue }
+                if layout2d::depth(state, k, o) > 1e-4 { return None }
+            }
+        }
+        Some((ny, [nf[0], nf[1], 0.0]))
+    };
+    #[derive(Clone, Copy, Debug)]
+    struct P { wall: usize, t: f64, d: f64, lat: f64, back: bool, arms: u8 }
+    let tv_walls: Vec<usize> = (0..segs.len()).filter(|&i| { let (a, b, _) = segs[i]; ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt() > (thi[1] - tlo[1]) + 0.2 }).collect();
+    let tv_walls: Vec<usize> = if fire_move { (0..segs.len()).filter(|&i| { let (a, b, _) = segs[i]; ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt() > fire_w + 0.2 }).collect() } else { tv_walls };
+    if !fixed && tv_walls.is_empty() { return None }
+    // build a candidate into the state; returns its score (None: the TV or the sofa cannot stand there) and which optional pieces
+    // were placed. The optional pieces are inserted only while they are tried.
+    let build = |state: &mut State, p: &P, keep: bool| -> Option<(f64, Vec<String>)> {
+        // (the sofa out of the way while the TV finds its spot: it is placed after, facing it)
+        let sofa_i = state.objs.get_index_of(sofa)?;
+        let sofa_o = state.objs.shift_remove(sofa)?;
+        // the TV and the direction it faces
+        let tv_r: Option<(f64, [f64; 3])> = if fire_move { place_fire(state, p.wall, p.t) } else if fixed { Some(fixed_front) } else {
+            let (a, b, n) = segs[p.wall];
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let tw = thi[1] - tlo[1];
+            let tt = tw / 2.0 + 0.05 + (len - tw - 0.1).max(0.0) * p.t;
+            let base = [a[0] + (b[0] - a[0]) / len * tt, a[1] + (b[1] - a[1]) / len * tt];
+            pose_at(state, tv, n[1].atan2(n[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]);
+            let td = thi[0] - tlo[0];
+            free_ok(state, tv).then(|| (n[1].atan2(n[0]), [base[0] + n[0] * td, base[1] + n[1] * td, 0.0]))
+        };
+        state.objs.shift_insert(sofa_i, sofa.to_string(), sofa_o);
+        state.touch(sofa);
+        let (ty, tfront) = tv_r?;
+        let f = [ty.cos(), ty.sin()];
+        let perp = [-f[1], f[0]];
+        // the sofa facing it at distance d, shifted sideways; backed onto a wall behind it when one is within 0.6 m
+        let mut d = p.d;
+        if p.back {
+            let sdep = shi[0] - slo[0];
+            let back_at = |d: f64| [tfront[0] + f[0] * (d + sdep) + perp[0] * p.lat, tfront[1] + f[1] * (d + sdep) + perp[1] * p.lat];
+            for k in 0..=12 {
+                let q = back_at(d + k as f64 * 0.05);
+                if !layout2d::in_rings(&rings, q) { d += (k as f64 * 0.05 - 0.02).max(0.0); break }
+            }
+        }
+        if d > lr.tv_view_max + 0.4 { return None }
+        let at = [tfront[0] + f[0] * d + perp[0] * p.lat, tfront[1] + f[1] * d + perp[1] * p.lat, 0.0];
+        pose_at(state, sofa, ty + std::f64::consts::PI, [shi[0], (slo[1] + shi[1]) / 2.0, slo[2]], at);
+        if !free_ok(state, sofa) { return None }
+        let back = state.objs[sofa].pose.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
+        let on_wall = layout2d::ring_dist(&rings, [back[0], back[1]]) < 0.15;
+        let tv_door = doors.iter().map(|q| ((q[0] - tfront[0]).powi(2) + (q[1] - tfront[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
+        let mid = [(tfront[0] + at[0]) / 2.0, (tfront[1] + at[1]) / 2.0];
+        let mut score = if on_wall { 5.0 } else { 0.0 } - (d - 2.6).abs() * 1.5 - (2.6 - tv_door).max(0.0) * 3.0 - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.3 - p.lat.abs() * 0.5;
+        if d < 1.8 { score -= 3.0; }
+        // the coffee table before the sofa, 0.45 m off its front
+        let sy = ty + std::f64::consts::PI;
+        let sf = [sy.cos(), sy.sin()];
+        let sfront = [at[0], at[1]];
+        let mut placed = vec![];
+        let mut coffee_c = [sfront[0] + sf[0] * 0.8, sfront[1] + sf[1] * 0.8];
+        let mut coffee_hw = 0.4;
+        if let Some((k, o)) = &coffee {
+            state.objs.insert(k.clone(), o.clone());
+            state.touch(k);
+            let (clo, chi) = lohi(state, k);
+            let off = 0.45 + (chi[0] - clo[0]) / 2.0;
+            let c = [sfront[0] + sf[0] * off, sfront[1] + sf[1] * off, 0.0];
+            pose_at(state, k, sy, [(clo[0] + chi[0]) / 2.0, (clo[1] + chi[1]) / 2.0, clo[2]], c);
+            if free_ok(state, k) { score += 2.0; placed.push(k.clone()); coffee_c = [c[0], c[1]]; coffee_hw = (chi[1] - clo[1]) / 2.0; }
+            else { state.objs.shift_remove(k); score -= 1.0; }
+        }
+        // armchairs beside the coffee table, facing it
+        let sides: &[f64] = match p.arms { 1 => &[1.0], 2 => &[-1.0], 3 => &[1.0, -1.0], _ => &[] };
+        let mut n_arm = 0;
+        for (i, side) in sides.iter().enumerate() {
+            let Some((k, o)) = arms.get(i) else { break };
+            state.objs.insert(k.clone(), o.clone());
+            state.touch(k);
+            let (alo, ahi) = lohi(state, k);
+            let dd = coffee_hw + 0.45 + (ahi[0] - alo[0]) / 2.0;
+            let c = [coffee_c[0] + perp[0] * side * dd, coffee_c[1] + perp[1] * side * dd, 0.0];
+            let face = (coffee_c[1] - c[1]).atan2(coffee_c[0] - c[0]);
+            pose_at(state, k, face, [(alo[0] + ahi[0]) / 2.0, (alo[1] + ahi[1]) / 2.0, alo[2]], c);
+            if free_ok(state, k) { n_arm += 1; placed.push(k.clone()); } else { state.objs.shift_remove(k); }
+        }
+        score += 3.0 * n_arm.min(want) as f64 - 3.0 * (want.saturating_sub(n_arm)) as f64;
+        if !keep { for k in &placed { state.objs.shift_remove(k); } }
+        Some((score, placed))
+    };
+    // annealing over the parameters: 120 random starts, then 400 steps from the best (temperature 2 -> 0.05)
+    let rnd_p = |rng: &mut Rng| P { wall: if tv_walls.is_empty() { 0 } else { tv_walls[rng.randint(0, tv_walls.len() as i64) as usize] }, t: rng.uniform(0.0, 1.0),
+        d: rng.uniform(lr.tv_view_min.max(1.6), lr.tv_view_max), lat: rng.uniform(-0.6, 0.6), back: rng.f64() < 0.7, arms: [0u8, 1, 2, 3][rng.choice_idx(4)] };
+    let mut cur: Option<(f64, P)> = None;
+    for _ in 0..120 {
+        let p = rnd_p(rng);
+        if let Some((s, _)) = build(state, &p, false) { if cur.map_or(true, |c| s > c.0) { cur = Some((s, p)); } }
+    }
+    if ig_core::env_on!("SADBG") {
+        let mut why = [0usize; 3];
+        for _ in 0..60 {
+            let p = rnd_p(rng);
+            match build(state, &p, false) { Some(_) => why[2] += 1, None => { if state.objs.contains_key(tv) && !fire_move && !fixed && !free_ok(state, tv) { why[0] += 1 } else { why[1] += 1 } } }
+        }
+        eprintln!("SADBG {room}: tv_walls {} fire_move {fire_move} fire_w {fire_w:.2} members {} -> tv-fail {} sofa-fail {} ok {}", tv_walls.len(), members.len(), why[0], why[1], why[2]);
+    }
+    let Some(mut cur) = cur else {
+        for (k, p0) in &members { state.set_pose(k, *p0); state.touch(k); }
+        state.set_pose(tv, tv0); state.touch(tv);
+        state.set_pose(sofa, sofa0); state.touch(sofa);
+        return None;
+    };
+    let mut best = cur;
+    let steps = 400;
+    for i in 0..steps {
+        let temp = 2.0 * (0.025f64).powf(i as f64 / steps as f64);
+        let mut p = cur.1;
+        match rng.choice_idx(6) {
+            0 if (!fixed || fire_move) && !tv_walls.is_empty() => { p.wall = tv_walls[rng.randint(0, tv_walls.len() as i64) as usize]; }
+            1 => { p.t = (p.t + rng.normal(0.0, 0.1)).clamp(0.0, 1.0); }
+            2 => { p.d = (p.d + rng.normal(0.0, 0.2)).clamp(lr.tv_view_min, lr.tv_view_max); }
+            3 => { p.lat = (p.lat + rng.normal(0.0, 0.2)).clamp(-1.0, 1.0); }
+            4 => { p.back = !p.back; }
+            _ => { p.arms = [0u8, 1, 2, 3][rng.choice_idx(4)]; }
+        }
+        let Some((s, _)) = build(state, &p, false) else { continue };
+        if s > cur.0 || rng.f64() < ((s - cur.0) / temp).exp() { cur = (s, p); }
+        if cur.0 > best.0 { best = cur; }
+    }
+    // the best layout, built for good
+    let (score, placed) = build(state, &best.1, true)?;
+    log.push(format!("{room}: living group annealed (score {score:.2}: TV wall {} at {:.2}, view {:.2} m, lateral {:+.2}, backed {}, armchairs {} of {want})",
+        best.1.wall, best.1.t, best.1.d, best.1.lat, best.1.back, placed.iter().filter(|k| k.contains("ArmChair") || k.contains("armchair")).count()));
+    for (k, _) in lifted {
+        if !placed.contains(k) {
+            log.push(format!("{room}: {} left out (no spot in the annealed group)", class_of(&lifted.iter().find(|(kk, _)| kk == k).unwrap().1)));
+            if class_of(&lifted.iter().find(|(kk, _)| kk == k).unwrap().1) == "ArmChairFactory" && lifted.iter().filter(|(_, o)| class_of(o) == "ArmChairFactory").position(|(kk, _)| kk == k).map_or(false, |i| i < want) {
+                super::layers::complain(super::layers::Layer::Furniture, room, "armchair", at_of(state, sofa), "floor beside the coffee table for an armchair", false);
+            }
+        }
+    }
+    Some(log)
 }
