@@ -735,7 +735,8 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
     let storage = ["SingleCabinetFactory", "SimpleBookcaseFactory", "LargeShelfFactory", "CellShelfFactory"].contains(&cls) || (cls == "KitchenCabinetFactory" && room_type != "kitchen");
     Some(match cls {
         // (one in a dining room's corner: groups::dining_furnish; dotted around everywhere else)
-        "LargePlantContainerFactory" => ("plants", if room_type == "dining-room" { 1 } else { 0 }),
+        // (placed in corners by groups::dining_furnish / room_extras; the solver dotted them around the floor)
+        "LargePlantContainerFactory" => ("plants", match room_type { "dining-room" | "bedroom" | "hallway" => 1, "living-room" => 2, _ => 0 }),
         "FloorLampFactory" => ("floor lamps", 0),
         "BeverageFridgeFactory" => ("beverage fridges", 0),
         "FridgeFactory" => ("fridges", if room_type == "kitchen" { 1 } else { 0 }),
@@ -745,7 +746,7 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         "SimpleDeskFactory" => ("desks", if room_type == "bedroom" && super::layout_rules::get().desks { 1 } else { 0 }),
         "KitchenCabinetFactory" if room_type == "kitchen" => return None,
         // (a lone cabinet on a living-room wall reads as stray: the TV stand is the room's storage)
-        _ if storage => ("storage", match room_type { "utility" => 2, "dining-room" => 2, _ => 0 }),
+        _ if storage => ("storage", match room_type { "utility" => 2, "dining-room" => 2, "living-room" => 1, _ => 0 }),
         // a closet is fitted with a wardrobe (missing_pieces), not loose storage; small bathrooms keep a tub or a shower, not both
         "BathtubFactory" | "ShowerFactory" if room_type == "bathroom" => ("tub / shower", 2),
         _ => return None,
@@ -1480,6 +1481,57 @@ pub fn dining_furnish(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
         if lr.dining_rug && in_room(state, &|c| c == "RugFactory").is_empty() {
             let name = format!("{room}_rug").replace('/', "_");
             if new_piece(ctx, state, rng, "RugFactory", &room, &name) { log.push(format!("{room}: rug added for the table")); }
+        }
+    }
+    log
+}
+
+/// more furnishing past the anchors (layout_rules): potted plants in free corners of living rooms (two from 20 m2), bedrooms
+/// (14 m2 and up) and hallways (6 m2 and up), and a bookcase on a free wall of a living room of 20 m2 or more without built-in
+/// shelves, clear of the sofa and the TV. The solver's own plants and storage in those rooms go first (dotted around the floor).
+pub fn room_extras(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<&str>) -> Vec<String> {
+    let mut log = vec![];
+    let lr = super::layout_rules::get();
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && matches!(room_type_of(k), "living-room" | "bedroom" | "hallway") && only_room.map_or(true, |r| r == k.as_str())).map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let rt = room_type_of(&room).to_string();
+        let area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
+        let in_room = |st: &State, f: &dyn Fn(&str) -> bool| st.objs.iter().filter(|(k, o)| f(class_of(o)) && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect::<Vec<_>>();
+        for k in in_room(state, &|c| c == "LargePlantContainerFactory") { layout2d::remove_tree(state, &k); }
+        let doors = door_points(state, &room);
+        let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
+        // a bookcase on a free wall (living rooms): away from the sofa and the TV, centred, clear of the doors
+        if rt == "living-room" && lr.living_bookcase && area >= 20.0 && in_room(state, &|c| c == "BookshelfWallFeature").is_empty() {
+            for k in in_room(state, &|c| matches!(c, "SingleCabinetFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory")) { layout2d::remove_tree(state, &k); }
+            let name = format!("{room}_bookcase").replace('/', "_");
+            if new_piece(ctx, state, rng, "SimpleBookcaseFactory", &room, &name) {
+                let keys = in_room(state, &|c| matches!(c, "SofaFactory" | "TVStandFactory" | "FireplaceFeature" | "ArmChairFactory"));
+                let (nm, dd) = (name.clone(), door_d.clone());
+                let ok = place_on_wall(state, &name, &room, &move |st, c, t, len, _n| {
+                    let gap = keys.iter().map(|k| layout2d::dist(st, k, &nm)).fold(9.0f64, f64::min);
+                    if gap < 0.8 { return -100.0 }
+                    gap.min(2.0) + dd(c).min(1.5) - (t - len / 2.0).abs() / len.max(0.1)
+                });
+                if ok { log.push(format!("{room}: bookcase on a free wall")); } else { state.objs.shift_remove(&name); }
+            }
+        }
+        let want = match rt.as_str() {
+            "living-room" => if area >= 20.0 { lr.living_plants } else { lr.living_plants.min(1) },
+            "bedroom" if area >= 14.0 => lr.bedroom_plants,
+            "hallway" if area >= 6.0 => lr.hallway_plants,
+            _ => 0,
+        };
+        for i in 0..want {
+            let name = format!("{room}_plant{i}").replace('/', "_");
+            if !new_piece(ctx, state, rng, "LargePlantContainerFactory", &room, &name) { break }
+            let (nm, dd) = (name.clone(), door_d.clone());
+            let ok = place_on_wall(state, &name, &room, &move |st, c, t, len, _n| {
+                // in a corner, away from the doors, not hard against another piece (a plant squeezed beside the sofa reads as clutter)
+                let near = st.objs.iter().filter(|(k, o)| k.as_str() != nm && o.generator.is_some() && !layout2d::is_room(o) && !matches!(class_of(o), "RugFactory" | "WallArtFactory" | "MirrorFactory" | "CeilingLightFactory"))
+                    .map(|(k, _)| layout2d::dist(st, k, &nm)).fold(9.0f64, f64::min);
+                -t.min(len - t) * 2.0 + dd(c).min(1.5) + near.min(0.6)
+            });
+            if ok { log.push(format!("{room}: plant in a corner")); } else { state.objs.shift_remove(&name); break }
         }
     }
     log

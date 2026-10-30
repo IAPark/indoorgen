@@ -49,7 +49,7 @@ pub struct Features {
 impl Default for Features {
     fn default() -> Self {
         let rf = |fireplace, bookshelf_wall, window_seat, max| RoomFeatures { fireplace, bookshelf_wall, window_seat, max };
-        let rooms = [("LivingRoom", rf(0.5, 0.3, 0.15, 3)), ("Bedroom", rf(0.2, 0.2, 0.3, 3)), ("DiningRoom", rf(0.15, 0.0, 0.1, 1))]
+        let rooms = [("LivingRoom", rf(0.5, 0.4, 0.35, 3)), ("Bedroom", rf(0.2, 0.25, 0.4, 3)), ("DiningRoom", rf(0.15, 0.2, 0.2, 2))]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
