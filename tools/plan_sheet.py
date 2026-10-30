@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Arc, PathPatch, Polygon as MPoly
 from matplotlib.path import Path
 from shapely import wkt
-from shapely.geometry import Polygon, box
+from shapely.geometry import MultiPoint, Polygon, box
 from shapely.affinity import rotate, translate
-from shapely.ops import unary_union
+from shapely.ops import polylabel, unary_union
 
 COL = {"living-room": "#f3dfb8", "dining-room": "#f6c9a8", "kitchen": "#cfe3b4", "bedroom": "#bcd3ec", "bathroom": "#b9e4e1",
        "hallway": "#e4e0d8", "closet": "#d9cfe6", "utility": "#d8d8d8", "balcony": "#e8f0d0", "staircase": "#ffffff", "garage": "#cccccc"}
@@ -52,8 +52,20 @@ def draw(d, ax, small=False):
             hx, hy = cx - math.cos(along) * w / 2, cy - math.sin(along) * w / 2
             ax.add_patch(Arc((hx, hy), 2 * w, 2 * w, angle=math.degrees(along), theta1=0, theta2=90, lw=0.6, color="#c0392b" if c["kind"] == "Entrance" else "#555"))
             ax.plot([hx, hx - math.sin(along) * w], [hy, hy + math.cos(along) * w], lw=0.8, color="#c0392b" if c["kind"] == "Entrance" else "#555")
+    # labels in the room's largest furniture-free patch (a label over the dining table read as overlapping pieces)
+    furn = []
+    for o in d.get("objects", []):
+        if o["class"] in ("Keepout",) or re.search("Light|Art|Mirror|Rug|Hardware", o["class"]) or not o.get("parts"): continue
+        pts = [tuple(q) for part in o["parts"] for q in part["xy"]]
+        if len(pts) >= 3: furn.append(MultiPoint(pts).convex_hull.buffer(0.15))
+    furn_u = unary_union(furn) if furn else None
     for k, p in rooms.items():
         c = p.representative_point()
+        if furn_u is not None:
+            free = p.buffer(-0.3).difference(furn_u)
+            parts_ = [g for g in getattr(free, "geoms", [free]) if g.geom_type == "Polygon" and not g.is_empty]
+            if parts_:
+                c = polylabel(max(parts_, key=lambda g: g.area), tolerance=0.05)
         lab = kind(k).replace("-room", "").replace("-", " ")
         ax.text(c.x, c.y, f"{lab}\n{p.area:.0f} m²", ha="center", va="center", fontsize=5 if small else 8, color="#333")
     xs = [x for p in rooms.values() for x in p.bounds[0::2]]; ys = [y for p in rooms.values() for y in p.bounds[1::2]]
