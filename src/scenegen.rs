@@ -321,9 +321,18 @@ pub fn build_scene(p: &Params) -> Built {
             .par_iter()
             .map(|(k, gen)| {
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
+                // the size the solver chose (furn::sizes): 'exact' classes build to it, the others are fitted to the box
+                let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact);
+                if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
-                // the size the solver chose (furn::sizes): fit the built asset to its box
-                if let (Some((tlo, thi)), Some(m)) = (gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
+                if exact { ig_kit::api::set_size_hint(None); }
+                // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
+                if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {
+                    let (lo, hi) = a.bounds();
+                    let off = [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]];
+                    if off.iter().any(|v| v.abs() > 1e-6) { a.transform(&indoorgen::mesh::Mat4::translation(off)); }
+                }
+                if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
                     let (lo, hi) = a.bounds();
                     let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
                     let mut mt = indoorgen::mesh::Mat4::scale(s);

@@ -26,10 +26,15 @@ fn spec(name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> Material {
 
 impl Shower {
     fn new(r: &mut Rng) -> Shower {
+        let (mut depth, mut width, mut height) = (r.uniform(0.7, 0.95), r.uniform(0.7, 1.1), r.uniform(1.9, 2.0));
+        // the solver's chosen size (furn::sizes 'exact': built-ins fill their alcove)
+        if let Some(h) = crate::api::size_hint() {
+            (width, depth, height) = (h[0], h[1], h[2]);
+        }
         Shower {
-            depth: r.uniform(0.7, 0.95),
-            width: r.uniform(0.7, 1.1),
-            height: r.uniform(1.9, 2.0),
+            depth,
+            width,
+            height,
             tray_h: r.uniform(0.03, 0.06),
             corner: r.f64() < 0.5,
             door_side: r.f64() < 0.5,

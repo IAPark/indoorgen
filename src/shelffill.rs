@@ -76,7 +76,7 @@ fn add_decor(state: &mut State, visuals: &mut HashMap<String, Asset>, up: &Pose,
     for i in 0..4 { for j in 0..4 { wm[i][j] = (0..4).map(|k| um[i][k] * lm[k][j]).sum() } }
     let tags = TagSet::from([Tag::sem("Object"), Tag::sem("OfficeShelfItem"), Tag::gen(&cls), Tag::obj(&name)]);
     let mut o = ObjState::new(Arc::new(a.solver_geom()), Pose::from_matrix(wm), tags);
-    o.generator = Some(GenRef { class: cls, factory_seed: fs, inst_seed: 0, unseeded: None, fit_box: None });
+    o.generator = Some(GenRef { class: cls, factory_seed: fs, inst_seed: 0, unseeded: None, fit_box: None, size: None });
     o.relations.push(RelState { relation: Relation::Any, target: key.to_string(), child_plane: 0, parent_plane: 0 });
     o.relations.push(RelState { relation: Relation::Any, target: room.to_string(), child_plane: 0, parent_plane: 0 });
     state.objs.insert(name.clone(), o);
@@ -224,7 +224,7 @@ pub fn fill(state: &mut State, visuals: &mut HashMap<String, Asset>, seed: u64, 
                         kids.push((l, h));
                     }
                     let mut o = ObjState::new(Arc::new(col.solver_geom()), Pose::from_matrix(wm), tags);
-                    o.generator = Some(GenRef { class: "BookColumnFactory".into(), factory_seed: fs, inst_seed: 0, unseeded: None, fit_box: None });
+                    o.generator = Some(GenRef { class: "BookColumnFactory".into(), factory_seed: fs, inst_seed: 0, unseeded: None, fit_box: None, size: None });
                     o.relations.push(RelState { relation: Relation::Any, target: key.clone(), child_plane: 0, parent_plane: 0 });
                     o.relations.push(RelState { relation: Relation::Any, target: room.clone(), child_plane: 0, parent_plane: 0 });
                     state.objs.insert(name.clone(), o);

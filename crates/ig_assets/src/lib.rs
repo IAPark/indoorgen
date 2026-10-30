@@ -126,7 +126,8 @@ impl Assets for RealAssets {
 // Factories are pure functions of (class, factory seed, instance seed, unseeded ctor draws), so results are cached by exactly that key.
 type CacheKey = (String, u64, u64, String, Option<Vec<u64>>);
 fn cache_key(class: &str, fs: u64, inst: u64, what: &str) -> CacheKey {
-    (class.to_string(), fs, inst, what.to_string(), unseeded().map(|v| v.iter().map(|x| x.to_bits()).collect()))
+    let what = match ig_kit::api::size_hint() { Some(h) => format!("{what}|size {:?}", h.map(|x| x.to_bits())), None => what.to_string() };
+    (class.to_string(), fs, inst, what, unseeded().map(|v| v.iter().map(|x| x.to_bits()).collect()))
 }
 type Memo<T> = std::sync::Mutex<Option<std::collections::HashMap<CacheKey, T>>>;
 fn memo_get<T: Clone>(m: &Memo<T>, k: &CacheKey) -> Option<T> {

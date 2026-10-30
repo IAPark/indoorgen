@@ -593,7 +593,11 @@ impl KitchenCabinet {
     /// instance-level sampling in python order: dims (3 uniforms), then one U(0.55,1) per cell
     fn from_instance(fseed: u64, inst: u64) -> KitchenCabinet {
         let mut r = inst_rng(fseed, inst);
-        let dims = [r.uniform(0.25, 0.35), r.uniform(1.0, 4.0), r.uniform(0.5, 1.3)];
+        let mut dims = [r.uniform(0.25, 0.35), r.uniform(1.0, 4.0), r.uniform(0.5, 1.3)];
+        // the solver's chosen size (furn::sizes 'exact'): [width, depth, height] -> dims [depth, length, height]
+        if let Some(h) = crate::api::size_hint() {
+            dims = [h[1], h[0], h[2]];
+        }
         let n = ((dims[1] / 0.45) as usize).max(1);
         let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
         let s: f64 = ws.iter().sum();
@@ -676,6 +680,9 @@ impl KitchenSpace {
         let mut dims = [f(r.uniform(0.7, 1.0)), f(r.uniform(1.7, 5.0)), f(r.uniform(2.3, 2.5))];
         if island {
             dims[0] = f(dims[0] * r.uniform(1.5, 2.0));
+        } else if let Some(h) = crate::api::size_hint() {
+            // the solver's chosen size (furn::sizes): run length = width, depth, height incl. the top cabinets
+            dims = [f(h[1]), f(h[0]), f(h[2])];
         }
         let bottom_h = r.uniform(0.8, 1.0);
         let top_h = r.uniform(0.8, 1.0);

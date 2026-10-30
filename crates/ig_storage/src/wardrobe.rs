@@ -39,12 +39,21 @@ fn spec(name: &str, cls: &str, seed: u64) -> Material {
 impl Wardrobe {
     fn new(r: &mut Rng) -> Wardrobe {
         let sliding = r.f64() < 0.3;
-        let doors = if sliding { 2 } else { r.randint(2, 5) as usize };
-        let width = if sliding { r.uniform(1.4, 2.2) } else { doors as f64 * r.uniform(0.42, 0.55) };
+        let mut doors = if sliding { 2 } else { r.randint(2, 5) as usize };
+        let mut width = if sliding { r.uniform(1.4, 2.2) } else { doors as f64 * r.uniform(0.42, 0.55) };
+        let mut depth = r.uniform(0.55, 0.63);
+        let mut height = r.uniform(1.9, 2.25);
+        // the solver's chosen size (furn::sizes 'exact', built-ins fill their wall span): door count follows the width
+        if let Some(h) = crate::api::size_hint() {
+            (width, depth, height) = (h[0], h[1], h[2]);
+            if !sliding {
+                doors = ((width / 0.5).round() as usize).clamp(2, 6);
+            }
+        }
         Wardrobe {
-            depth: r.uniform(0.55, 0.63),
+            depth,
             width,
-            height: r.uniform(1.9, 2.25),
+            height,
             doors,
             sliding,
             drawers: !sliding && r.f64() < 0.35,

@@ -183,6 +183,8 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
     r
 }
 
+thread_local! { static EXACT_SIZE: std::cell::Cell<Option<[f64; 3]>> = const { std::cell::Cell::new(None) }; }
+
 fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
     let singleton = ctx.usage.has_usage(class, "SingleGenerator");
     let fac_seed = if singleton && ctx.singletons.contains_key(class) {
@@ -249,7 +251,13 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             }
             let _t = ProfGuard::new(3);
             let t0 = web_time::Instant::now();
-            let sized = matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) && super::sizes::model(class).is_some();
+            let boxkind = matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder);
+            let sized = boxkind && super::sizes::model(class).is_some();
+            // 'exact' classes with a real placeholder (counter runs, kitchen cabinets): the factory builds it at a size sampled from the
+            // class density; 'exact' box classes (wardrobe, bathtub, shower) are boxes like the others and only the final build is hinted
+            let exact = if boxkind { None } else { super::sizes::model(class).filter(|m| m.exact).map(|m| super::sizes::sample(m, rng)) };
+            EXACT_SIZE.with(|c| c.set(exact));
+            if let Some(x) = exact { crate::api::set_size_hint(Some(x)); }
             // sized classes: one reference build per class and kind (only its box position is used), cached here
             let r = if sized {
                 thread_local! { static REF: std::cell::RefCell<crate::dhash::FxMap<(String, u8), Option<ObjGeom>>> = std::cell::RefCell::new(Default::default()); }
@@ -259,6 +267,7 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
                     None => { let g = ctx.assets.placeholder(class, 1, 1, kind); REF.with(|c| c.borrow_mut().insert(k, g.clone())); g }
                 }
             } else { ctx.assets.placeholder(class, fac_seed, inst_seed, kind) };
+            if exact.is_some() { crate::api::set_size_hint(None); }
             if ig_core::env_on!("PHTIME") { eprintln!("PHTIME {class} {kind:?} {:.3} sized {sized} seeds {fac_seed} {inst_seed}", t0.elapsed().as_secs_f64()); }
             r?
         }
@@ -268,15 +277,127 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
     // bounding box of a freshly built asset (furn::sizes); the reference build (fixed seeds, memoised) only places the box
     let mut geom = geom;
     let mut fit_box = None;
-    if matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) {
+    let exact_size = EXACT_SIZE.with(|c| c.take());
+    if super::sizes::model(class).map_or(false, |m| m.exact) && !matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) {
+        fit_box = Some((geom.lo, geom.hi));
+    } else if matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) {
         if let Some(m) = super::sizes::model(class) {
             let x = super::sizes::sample(m, rng);
             let (lo, hi) = super::sizes::target_box(geom.lo, geom.hi, x);
             geom = crate::api::box_from_corners_geom(lo, hi);
             fit_box = Some((lo, hi));
+            if m.exact { return Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: None, fit_box, size: Some(x) })); }
         }
     }
-    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box }))
+    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box, size: exact_size }))
+}
+
+/// built-ins (counter runs, kitchen cabinets, wardrobes, bathtubs, showers) sized exactly for their space: each is extended along its
+/// wall to either side as far as the move validity check allows (corners, door clearance, neighbours, walkways), to the class maximum,
+/// by bisection to ~1 cm; the factories then build to that size (furn::sizes 'exact'). Returns a log line per piece.
+pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -> Vec<String> {
+    const BUILTIN: [&str; 5] = ["KitchenSpaceFactory", "KitchenCabinetFactory", "WardrobeFactory", "BathtubFactory", "ShowerFactory"];
+    let names: Vec<String> = state.objs.iter().filter(|(k, o)| {
+        o.generator.as_ref().map_or(false, |g| BUILTIN.contains(&g.class.as_str()) && g.fit_box.is_some())
+            && only_room.map_or(true, |r| super::layout2d::room_of(state, k).as_deref() == Some(r))
+    }).map(|(k, _)| k.clone()).collect();
+    let mut log = vec![];
+    for name in names {
+        let class = state.objs[&name].generator.as_ref().unwrap().class.clone();
+        let Some(m) = super::sizes::model(&class) else { continue };
+        let w0 = cur_size(state.objs[&name].generator.as_ref().unwrap()).unwrap()[0];
+        for side in [1.0f64, -1.0] {
+            let (lo, hi) = state.objs[&name].generator.as_ref().unwrap().fit_box.unwrap();
+            let cs = cur_size(state.objs[&name].generator.as_ref().unwrap()).unwrap();
+            let w = cs[0];
+            let room = m.max[0] - w;
+            if room < 0.02 { continue }
+            let base = state.objs[&name].clone();
+            // the world plane (normal, offset) of each relation's child face: a rebuilt placeholder (more cabinets = more faces) has
+            // another face order, so the faces are matched again after the rebuild
+            let child_planes: Vec<Option<(V3, f64)>> = base.relations.iter().map(|r| {
+                let g = r.relation.geo()?;
+                let pl = state.planes(&name, &g.child);
+                let &i = pl.get(r.child_plane)?;
+                let (n, p) = state.plane_nd(&name, i);
+                Some((n, dot(n, p)))
+            }).collect();
+            // try extending this side by e: width w + e, centre moved by side * e / 2 along the local width axis (the far end stays)
+            let mut try_ext = |state: &mut State, ctx: &mut Ctx, e: f64| -> bool {
+                let g0 = base.generator.as_ref().unwrap();
+                let x = [w + e, cs[1], cs[2]];
+                let Some((ng, fb)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
+                // keep the far end: compare the new box's y range with the old one
+                let far_old = if side > 0.0 { lo[1] } else { hi[1] };
+                let far_new = if side > 0.0 { fb.0[1] } else { fb.1[1] };
+                let shift = far_old - far_new;
+                let oo = state.objs.get_mut(name.as_str()).unwrap();
+                *oo = base.clone();
+                oo.geom = Arc::new(ng);
+                oo.generator.as_mut().unwrap().fit_box = Some(fb);
+                if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+                let mut p = oo.pose;
+                p.translate([base.pose.r[0][1] * shift, base.pose.r[1][1] * shift, base.pose.r[2][1] * shift]);
+                state.set_pose(name.as_str(), p);
+                state.touch(name.as_str());
+                for (ri, cp) in child_planes.iter().enumerate() {
+                    let Some((n0, d0)) = cp else { continue };
+                    let Some(g) = state.objs[name.as_str()].relations[ri].relation.geo().cloned() else { continue };
+                    let pl = state.planes(&name, &g.child);
+                    let best = (0..pl.len()).min_by(|&i, &j| {
+                        let f = |k: usize| { let (n, p) = state.plane_nd(&name, pl[k]); (1.0 - dot(n, *n0)) * 10.0 + (dot(n, p) - d0).abs() };
+                        f(i).partial_cmp(&f(j)).unwrap()
+                    });
+                    if let Some(bi) = best { state.objs.get_mut(name.as_str()).unwrap().relations[ri].child_plane = bi; }
+                }
+                state.touch(name.as_str());
+                let ok = super::dof::check_post_move_validity(state, name.as_str());
+                if !ok && e < 0.05 && ig_core::env_on!("BUILTINDBG") {
+                    let hits: Vec<String> = state.objs.keys().filter(|k| k.as_str() != name && !super::layout2d::is_room(&state.objs[k.as_str()]) && super::layout2d::depth(state, &name, k) > 1e-4).map(|k| k.chars().skip_while(|c| c.is_ascii_digit() || *c == '_').collect()).collect();
+                    eprintln!("BUILTINDBG {class} side {side} e {e:.3}: relations {} outside {:.3} hits {:?} layout {} far_old {far_old:.3} far_new {far_new:.3} fb {:?}", super::dof::all_relations_valid(state, &name), super::layout2d::outside_depth(state, &name), hits, super::layout2d::layout_ok(state, &name), fb);
+                }
+                ok
+            };
+            let (mut ok_e, mut bad_e) = (0.0f64, room);
+            if try_ext(state, ctx, room) { ok_e = room; } else {
+                while bad_e - ok_e > 0.01 {
+                    let mid = (ok_e + bad_e) / 2.0;
+                    if try_ext(state, ctx, mid) { ok_e = mid } else { bad_e = mid }
+                }
+            }
+            if ok_e > 0.0 { let _ = try_ext(state, ctx, ok_e); } else {
+                let o = state.objs.get_mut(name.as_str()).unwrap();
+                *o = base.clone();
+                state.touch(name.as_str());
+            }
+        }
+        let w1 = cur_size(state.objs[&name].generator.as_ref().unwrap()).unwrap()[0];
+        log.push(format!("{name}: {:.2} -> {:.2} m", w0, w1));
+    }
+    log
+}
+
+/// the current size of a sized piece: the size asked of an exact factory, else the chosen box's extents
+pub fn cur_size(g: &super::state::GenRef) -> Option<[f64; 3]> {
+    g.size.or_else(|| g.fit_box.map(|(lo, hi)| [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]]))
+}
+
+/// a sized piece's geometry at size `x` (furn::sizes): 'exact' classes rebuild the placeholder at that size, the others are a box placed
+/// like the current one. Returns (geometry, fit box).
+fn sized_geom(ctx: &mut Ctx, class: &str, g: &super::state::GenRef, m: &super::sizes::Model, lo: V3, hi: V3, x: [f64; 3]) -> Option<(ObjGeom, (V3, V3))> {
+    let _ = g;
+    if m.exact && ctx.usage.has_usage(class, "RealPlaceholder") {
+        crate::api::set_size_hint(Some(x));
+        let kind = if ctx.usage.has_usage(class, "RealPlaceholder") { PlaceholderKind::Real } else { PlaceholderKind::BboxOfAsset };
+        let ng = ctx.assets.placeholder(class, g.factory_seed, g.inst_seed, kind);
+        crate::api::set_size_hint(None);
+        let ng = ng?;
+        let fb = (ng.lo, ng.hi);
+        Some((ng, fb))
+    } else {
+        let (nlo, nhi) = super::sizes::target_box(lo, hi, x);
+        Some((crate::api::box_from_corners_geom(nlo, nhi), (nlo, nhi)))
+    }
 }
 
 pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng) -> bool {
@@ -299,7 +420,28 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             o.relations = assignments.clone();
             state.objs.insert(name.clone(), o);
             state.touch(name);
-            let okk = { let _t = ProfGuard::new(4); try_apply_relation_constraints(state, name, rng) };
+            let mut okk = { let _t = ProfGuard::new(4); try_apply_relation_constraints(state, name, rng) };
+            // sized anchors (counter run, sofa, dining table, bathtub) that fit nowhere: retry narrower (width x 0.75, to the class minimum)
+            if !okk && matches!(class.as_str(), "KitchenSpaceFactory" | "SofaFactory" | "TableDiningFactory" | "BathtubFactory") {
+                if let Some(m) = super::sizes::model(class) {
+                    for _ in 0..3 {
+                        let g0 = state.objs[name.as_str()].generator.clone().unwrap();
+                        let Some((lo, hi)) = g0.fit_box else { break };
+                        let Some(mut x) = cur_size(&g0) else { break };
+                        if x[0] <= m.min[0] + 1e-6 { break }
+                        x[0] = (x[0] * 0.75).max(m.min[0]);
+                        let Some((ng, fb)) = sized_geom(ctx, class, &g0, m, lo, hi, x) else { break };
+                        let oo = state.objs.get_mut(name.as_str()).unwrap();
+                        oo.geom = Arc::new(ng);
+                        oo.generator.as_mut().unwrap().fit_box = Some(fb);
+                        if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+                        oo.pose = Pose::identity();
+                        state.touch(name);
+                        okk = try_apply_relation_constraints(state, name, rng);
+                        if okk { break }
+                    }
+                }
+            }
             if ig_core::env_on!("ADDDBG") {
                 eprintln!("ADD {class}: relation placement ok={okk} parents={:?}", assignments.iter().map(|r| r.target.as_str()).collect::<Vec<_>>());
             }
@@ -338,13 +480,31 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             let class = o.generator.as_ref().unwrap().class.clone();
             let b = backup(&o);
             if let (Some((lo, hi)), Some(m)) = (o.generator.as_ref().unwrap().fit_box, super::sizes::model(&class)) {
-                if rng.f64() < 0.6 {
+                let real_exact = m.exact && ctx.usage.has_usage(&class, "RealPlaceholder");
+                if rng.f64() < 0.6 && real_exact {
+                    let g0 = o.generator.as_ref().unwrap().clone();
+                    let x = super::sizes::perturb(m, cur_size(&g0).unwrap(), rng);
+                    crate::api::set_size_hint(Some(x));
+                    let kind = if ctx.usage.has_usage(&class, "RealPlaceholder") { PlaceholderKind::Real } else { PlaceholderKind::BboxOfAsset };
+                    let ng = ctx.assets.placeholder(&class, g0.factory_seed, g0.inst_seed, kind);
+                    crate::api::set_size_hint(None);
+                    let Some(ng) = ng else { return false };
+                    *old = Some((o, b));
+                    let oo = state.objs.get_mut(name.as_str()).unwrap();
+                    oo.generator.as_mut().unwrap().fit_box = Some((ng.lo, ng.hi));
+                    oo.generator.as_mut().unwrap().size = Some(x);
+                    oo.geom = Arc::new(ng);
+                    state.touch(name);
+                    return check_post_move_validity(state, name);
+                }
+                if rng.f64() < 0.6 && !real_exact {
                     let x = super::sizes::perturb(m, [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]], rng);
                     let (nlo, nhi) = super::sizes::target_box(lo, hi, x);
                     *old = Some((o, b));
                     let oo = state.objs.get_mut(name.as_str()).unwrap();
                     oo.geom = Arc::new(crate::api::box_from_corners_geom(nlo, nhi));
                     oo.generator.as_mut().unwrap().fit_box = Some((nlo, nhi));
+                    if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
                     state.touch(name);
                     return check_post_move_validity(state, name);
                 }
@@ -833,8 +993,11 @@ impl Gen {
                 if cands.is_empty() {
                     return None;
                 }
-                let step = 2.0 * std::f64::consts::PI / 8.0;
                 let name = rng.choice(cands).clone();
+                // floor pieces turn in 90 degree steps (45 left sofas / beds diagonal in the room); armchairs keep 45 (angled seating)
+                let cls = state.objs[&name].generator.as_ref().map(|g| g.class.as_str()).unwrap_or("");
+                let floor = super::layout2d::prisms(state, &name).iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min) < 0.25;
+                let step = if floor && !cls.contains("ArmChair") { std::f64::consts::FRAC_PI_2 } else { 2.0 * std::f64::consts::PI / 8.0 };
                 let var = (std::f64::consts::PI * *temp).max(0.0);
                 let ang = rng.normal(0.0, var) / step;
                 let ang = if ang > 0.0 { ang.ceil() } else { ang.floor() };

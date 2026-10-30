@@ -261,7 +261,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         tags.insert(Tag::sem(pf.class));
         let mut o = ObjState::new(Arc::new(pf.asset.solver_geom()), pf.pose(), tags);
         o.relations.push(crate::furn::state::RelState { relation: crate::furn::relations::Relation::Traverse, target: pf.room.clone(), child_plane: 0, parent_plane: 0 });
-        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None });
+        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None, size: None });
         o.active = true;
         state.objs.insert(pf.key.clone(), o);
         state.touch(&pf.key);
@@ -362,6 +362,10 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     let mut rng = Rng::seeded(hs("solve_large"));
     run_stage("on_floor_and_wall", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("on_floor_freestanding", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
+    // built-ins sized exactly for their space (counter runs, kitchen cabinets, wardrobes, bathtubs, showers)
+    if !std::env::var_os("NO_BUILTIN_FIT").is_some() {
+        for l in crate::furn::solver::fit_builtins(&mut ctx, state, only_room) { if std::env::var_os("BUILTINDBG").is_some() { eprintln!("BUILTIN {l}"); } }
+    }
     let tl = t.elapsed().as_secs_f64();
     // populate_intermediate_pholders: shelves etc. become real assets so children can use their support surfaces
     for (k, o) in state.objs.iter_mut() {
@@ -378,7 +382,14 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
             o.pose = Pose::from_o32(ob);
             if let Some(geom) = ctx.populated.get(&(g.class.clone(), g.factory_seed, g.inst_seed)) {
                 o.geom = Arc::new(geom.clone());
-            } else if let Some(geom) = assets.solver_asset(&g.class, g.factory_seed, g.inst_seed).map(|geom| match (g.fit_box, crate::furn::sizes::model(&g.class)) {
+            } else if let Some(geom) = {
+                // 'exact' classes (kitchen cabinets) build to the chosen size
+                let ex = crate::furn::sizes::model(&g.class).map_or(false, |m| m.exact);
+                if ex { ig_kit::api::set_size_hint(crate::furn::solver::cur_size(&g)); }
+                let r = assets.solver_asset(&g.class, g.factory_seed, g.inst_seed);
+                if ex { ig_kit::api::set_size_hint(None); }
+                r
+            }.map(|geom| match (g.fit_box, crate::furn::sizes::model(&g.class).filter(|m| !m.exact)) {
                 (Some((tlo, thi)), Some(m)) => { let (s, off) = crate::furn::sizes::fit_matrix(m.uniform, geom.lo, geom.hi, tlo, thi); crate::furn::sizes::fit_geom(&geom, s, off) }
                 _ => geom,
             }) {

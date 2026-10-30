@@ -19,6 +19,8 @@ pub struct Comp {
 #[derive(Clone, Debug)]
 pub struct Model {
     pub uniform: bool,
+    /// 'exact': the factory builds to the size itself (ig_kit::api::set_size_hint), no fitting
+    pub exact: bool,
     pub min: [f64; 3],
     pub max: [f64; 3],
     pub comps: Vec<Comp>,
@@ -42,7 +44,7 @@ pub fn models() -> &'static crate::dhash::FxMap<String, Model> {
                 continue;
             }
             let comps: Vec<Comp> = m["components"].as_array().unwrap().iter().map(|c| Comp { p: c["p"].as_f64().unwrap(), mean: a3(&c["mean"]), sd: a3(&c["sd"]) }).collect();
-            let mut md = Model { uniform: m["policy"].as_str() == Some("uniform"), min: a3(&m["min"]), max: a3(&m["max"]), comps, nll0: 0.0 };
+            let mut md = Model { uniform: m["policy"].as_str() == Some("uniform"), exact: m["policy"].as_str() == Some("exact"), min: a3(&m["min"]), max: a3(&m["max"]), comps, nll0: 0.0 };
             md.nll0 = md.comps.iter().map(|c| nll_raw(&md, c.mean)).fold(f64::INFINITY, f64::min);
             out.insert(k.clone(), md);
         }

@@ -350,6 +350,11 @@ fn polys_g(ps: &[Vec<[f64; 2]>]) -> Vec<shp::G> {
 
 /// walkway status of a room: (doors connected, unreachable pieces)
 pub fn walk_status(state: &State, room: &str) -> (bool, Vec<String>) {
+    walk_status_f(state, room, &|_: &str| true, None)
+}
+
+/// walkway status counting only the pieces `keep` accepts, without `skip`
+pub fn walk_status_f(state: &State, room: &str, keep: &dyn Fn(&str) -> bool, skip: Option<&str>) -> (bool, Vec<String>) {
     let nc = Tag::sem("NoCollision");
     let floor = room_floor(state, room);
     let mut blocks = vec![];
@@ -362,6 +367,9 @@ pub fn walk_status(state: &State, room: &str) -> (bool, Vec<String>) {
         }
         let cls = class_of(o);
         if cls == "Door" || cls == "Window" || no_block(cls) {
+            continue;
+        }
+        if skip == Some(k.as_str()) || !keep(k) {
             continue;
         }
         let Some(f) = floor_foot(state, k) else { continue };
@@ -461,8 +469,22 @@ pub fn layout_ok(state: &State, name: &str) -> bool {
     if no_block(cls) {
         return true;
     }
-    let (connected, bad) = walk_status(state, &room);
-    let ok = (connected || !base_connected(state, &room)) && bad.is_empty();
+    // anchors (bed, sofa, counter run, dining table, bathroom fixtures) take precedence: they are held to the walkway rule against the
+    // other anchors only (the repair pass then removes lesser pieces in the way); any other piece is rejected when it makes the room
+    // worse than it is without it (doors disconnected, a piece cut off, or the piece itself unreachable)
+    let base = base_connected(state, &room);
+    let (connected, bad, ok);
+    if anchor(cls) {
+        (connected, bad) = walk_status_f(state, &room, &|k: &str| anchor(class_of(&state.objs[k])), None);
+        ok = (connected || !base) && bad.is_empty();
+    } else {
+        (connected, bad) = walk_status(state, &room);
+        ok = if (connected || !base) && bad.is_empty() { true } else {
+            let (c0, bad0) = walk_status_f(state, &room, &|_: &str| true, Some(name));
+            let cut = (c0 || !base) && !(connected || !base);
+            !cut && !bad.iter().any(|k| k == name || !bad0.contains(k))
+        };
+    }
     if !ok && ig_core::env_str!("LAYOUTDBG").map_or(false, |v| cls.contains(v)) {
         eprintln!("LAYOUTDBG reject {cls} in {room}: doors connected {connected}, unreachable {:?}", bad.iter().map(|k| class_of(&state.objs[k]).to_string()).collect::<Vec<_>>());
     }
@@ -568,7 +590,7 @@ pub fn prisms_of_obj(o: &ObjState) -> Vec<Prism> {
 }
 
 fn anchor(cls: &str) -> bool {
-    ["Bed", "Sofa", "KitchenSpace", "Toilet", "StandingSink", "BathroomSink", "Bathtub", "Shower", "TableDining", "Fridge", "Oven", "Chair", "Dishwasher", "Sink"].iter().any(|a| cls.starts_with(a))
+    ["Bed", "Sofa", "TVStand", "KitchenSpace", "Toilet", "StandingSink", "BathroomSink", "Bathtub", "Shower", "TableDining", "Fridge", "Oven", "Chair", "Dishwasher", "Sink"].iter().any(|a| cls.starts_with(a))
 }
 
 fn remove_tree(state: &mut State, k: &str) -> Vec<String> {
@@ -594,22 +616,46 @@ pub fn repair(state: &mut State) -> Vec<String> {
         let score = |st: &State| { let (c, bad) = walk_status(st, &room); (if c || !base { 0 } else { 1 }, bad.len()) };
         let mut cur = score(state);
         while cur != (0, 0) {
-            let mut cands: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| {
-                let cls = class_of(o);
-                o.generator.is_some() && !is_room(o) && !anchor(cls) && !no_block(cls) && cls != "Door" && cls != "Window" && floor_foot(state, k).is_some() && room_of(state, k).as_deref() == Some(room.as_str())
-            }).map(|(k, _)| (prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone())).collect();
-            cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            let mut done = None;
+            // non-anchor pieces first (smallest first); dining chairs only when none of those helps
+            let pick = |chairs: bool| -> Vec<(f64, String)> {
+                let mut c: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| {
+                    let cls = class_of(o);
+                    let ok_cls = if chairs { cls.starts_with("Chair") } else { !anchor(cls) };
+                    o.generator.is_some() && !is_room(o) && ok_cls && !no_block(cls) && cls != "Door" && cls != "Window" && floor_foot(state, k).is_some() && room_of(state, k).as_deref() == Some(room.as_str())
+                }).map(|(k, _)| (prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone())).collect();
+                c.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                c
+            };
+            let mut cands = pick(false);
+            cands.extend(pick(true));
+            // remove candidates cumulatively (smallest first) until the room improves (two pieces can close a gap together), then put
+            // back every removed piece the improvement does not need
+            let mut trial = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
+            let mut removed: Vec<String> = vec![];
+            let mut s = cur;
             for (_, k) in &cands {
-                let mut trial = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
+                if !trial.objs.contains_key(k) { continue }
                 remove_tree(&mut trial, k);
-                let s = score(&trial);
-                if s < cur { done = Some((k.clone(), s)); break; }
+                removed.push(k.clone());
+                s = score(&trial);
+                if s < cur { break; }
             }
-            let Some((k, s)) = done else { break };
-            let cls = class_of(&state.objs[&k]).to_string();
-            let gone = remove_tree(state, &k);
-            log.push(format!("{room}: removed {cls} ({} objects) -> doors {} unreachable {}", gone.len(), if s.0 == 0 { "ok" } else { "cut" }, s.1));
+            if !(s < cur) { break }
+            let mut keep_out = removed.clone();
+            for k in removed.iter().rev().skip(1) {
+                let mut t2 = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
+                for r in keep_out.iter().filter(|r| *r != k) { if t2.objs.contains_key(r) { remove_tree(&mut t2, r); } }
+                if score(&t2) <= s { keep_out.retain(|r| r != k); }
+            }
+            for k in &keep_out {
+                if !state.objs.contains_key(k) { continue }
+                let cls = class_of(&state.objs[k]).to_string();
+                let gone = remove_tree(state, k);
+                log.push(format!("{room}: removed {cls} ({} objects)", gone.len()));
+            }
+            let s = score(state);
+            log.push(format!("{room}: -> doors {} unreachable {}", if s.0 == 0 { "ok" } else { "cut" }, s.1));
+            if !(s < cur) { break }
             cur = s;
         }
         let (c, bad) = walk_status(state, &room);

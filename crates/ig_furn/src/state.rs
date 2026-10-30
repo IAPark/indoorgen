@@ -27,6 +27,8 @@ pub struct GenRef {
     pub unseeded: Option<Vec<f64>>,
     /// size chosen by the solver (furn::sizes): the local box the final asset is fitted to; None = the asset's own size
     pub fit_box: Option<(V3, V3)>,
+    /// the size asked of an 'exact' factory ([width, depth, height]; its mesh bounds can differ slightly, e.g. counter overhang)
+    pub size: Option<[f64; 3]>,
 }
 
 #[derive(Clone)]

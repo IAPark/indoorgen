@@ -546,3 +546,15 @@ pub fn dense() -> bool {
     static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *D.get_or_init(|| ig_core::envx::dense_env() && std::env::var_os("NO_CHEAP_PH").is_none())
 }
+
+thread_local! {
+    static SIZE_HINT: std::cell::Cell<Option<[f64; 3]>> = const { std::cell::Cell::new(None) };
+}
+/// size the next factory construction should build to, [width, depth, height] (furn::sizes 'exact' classes, e.g. KitchenSpace run
+/// length); None = the factory's own sampled size
+pub fn set_size_hint(h: Option<[f64; 3]>) {
+    SIZE_HINT.with(|c| c.set(h));
+}
+pub fn size_hint() -> Option<[f64; 3]> {
+    SIZE_HINT.with(|c| c.get())
+}

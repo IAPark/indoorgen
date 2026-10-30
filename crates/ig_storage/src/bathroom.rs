@@ -204,9 +204,13 @@ pub struct Bathtub {
 impl Bathtub {
     pub fn new(rng: &mut Rng) -> Bathtub {
         let mut r = rng.clone();
-        let width = r.uniform(1.5, 2.0);
-        let size = r.uniform(0.8, 1.0);
-        let depth = r.uniform(0.55, 0.7);
+        let mut width = r.uniform(1.5, 2.0);
+        let mut size = r.uniform(0.8, 1.0);
+        let mut depth = r.uniform(0.55, 0.7);
+        // the solver's chosen size (furn::sizes 'exact'): length along the wall, depth from it, rim height
+        if let Some(h) = crate::api::size_hint() {
+            (width, size, depth) = (h[0], h[1], h[2]);
+        }
         let alcove = r.choice_p(&[0.5, 0.5]) == 0;
         let has_curve = r.f64() < 0.5;
         let has_legs = r.f64() < 0.5;
