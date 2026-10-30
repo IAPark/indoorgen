@@ -32,6 +32,11 @@ pub struct LayoutRules {
     pub table_door_clear: f64,
     /// dining rooms smaller than this get a 1 m table, m2
     pub small_dining_m2: f64,
+    /// a sideboard on a free wall; a tall cabinet too from `dining_cabinet_m2`; a rug under the table
+    pub dining_sideboard: bool,
+    pub dining_cabinet_m2: f64,
+    pub dining_rug: bool,
+    pub dining_plant: bool,
     // kitchen
     /// the L template (fridge and range at the leg ends)
     pub kitchen_template: bool,
@@ -64,6 +69,7 @@ impl Default for LayoutRules {
             tv_view_min: 1.3, tv_view_max: 4.0, side_wall_max: 3.6, float_min: 2.2, float_max: 3.2,
             armchair_one_m2: 20.0, armchair_two_m2: 30.0, coffee_ratio: 0.75,
             chair_spacing: 0.6, end_chairs: true, small_table: 1.2, table_wall_clear: 0.75, table_door_clear: 1.0, small_dining_m2: 15.0,
+            dining_sideboard: true, dining_cabinet_m2: 18.0, dining_rug: true, dining_plant: true,
             kitchen_template: true, extra_runs: 3, kitchen_aisle: 1.0, sink_range_gap: 0.4,
             bathroom_template: true, fixture_gap: 0.35, tub_and_shower_m2: 14.0, toilet_door_min: 1.0,
             desks: false, desk_min_m2: 18.0, wardrobe_bed_min: 0.7,

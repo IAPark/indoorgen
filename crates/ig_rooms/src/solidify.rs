@@ -17,10 +17,25 @@ pub enum CutKind {
     Passage,
 }
 
+/// How a door opening closes (kind Door): a hinged leaf, a pair of leaves, an interior slider, a sliding glass patio door
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DoorStyle {
+    #[default]
+    Swing,
+    Double,
+    Sliding,
+    SlidingGlass,
+}
+
+impl DoorStyle {
+    pub fn name(self) -> &'static str { match self { DoorStyle::Swing => "swing", DoorStyle::Double => "double", DoorStyle::Sliding => "sliding", DoorStyle::SlidingGlass => "sliding_glass" } }
+}
+
 /// An oriented box cutter, centred at `loc`, rotated by `rot_z` about +z. `dims` are full local extents.
 #[derive(Clone, Debug)]
 pub struct Cutter {
     pub kind: CutKind,
+    pub style: DoorStyle,
     pub loc: [f64; 3],
     pub rot_z: f64,
     pub dims: [f64; 3],
@@ -221,6 +236,7 @@ impl<'a> Solidifier<'a> {
                 if let Some(mut er) = extra_rng {
                     let mut cut = self.make_door_cutter(&mut er, se, direction);
                     cut.rooms = vec![k.clone(), l.clone()];
+                    self.restyle(&mut cut, k, l, se);
                     door_map.entry(k.clone()).or_default().insert(l.clone(), cut.clone());
                     door_map.entry(l.clone()).or_default().insert(k.clone(), cut);
                     continue;
@@ -230,9 +246,10 @@ impl<'a> Solidifier<'a> {
                 // when passages are on so the door draws (and everything after them) are unchanged otherwise
                 let open_pair = |t: &str| matches!(t, "kitchen" | "dining-room" | "living-room");
                 if std::env::var_os("PASSAGE_DEBUG").is_some() && self.passage_prob > 0.0 { eprintln!("PASSAGEDBG {k} {l} fn {fn_} len {:.2}", length(se)); }
-                if fn_ == "door" && self.passage_prob > 0.0 && open_pair(room_type(k)) && open_pair(room_type(l)) && length(se) >= 2.2 {
+                let passage_p = self.passage_prob.max(crate::plan_rules::get().open_plan_p);
+                if fn_ == "door" && passage_p > 0.0 && open_pair(room_type(k)) && open_pair(room_type(l)) && length(se) >= 2.2 {
                     let mut pr = Rng::seeded(crate::int_hash(&["passage", &format!("{:?}", rng.peek()), k, l]));
-                    if pr.f64() < self.passage_prob {
+                    if pr.f64() < passage_p {
                         let mut cut = self.make_passage_cutter(&mut pr, se);
                         cut.rooms = vec![k.clone(), l.clone()];
                         door_map.entry(k.clone()).or_default().insert(l.clone(), cut.clone());
@@ -243,6 +260,7 @@ impl<'a> Solidifier<'a> {
                 if fn_ == "door" {
                     let mut cut = self.make_door_cutter(rng, se, direction);
                     cut.rooms = vec![k.clone(), l.clone()];
+                    self.restyle(&mut cut, k, l, se);
                     door_map.entry(k.clone()).or_default().insert(l.clone(), cut.clone());
                     door_map.entry(l.clone()).or_default().insert(k.clone(), cut);
                 }
@@ -323,7 +341,51 @@ impl<'a> Solidifier<'a> {
                 cs.truncate(keep);
             }
         }
+        // sliding glass patio doors: a living or dining room's widest window (1.4 m and up) becomes a floor-length sliding door to
+        // the outside (own stream per room)
+        let pr = crate::plan_rules::get();
+        let (wt, dh) = (self.c.wall_thickness, self.c.door_size);
+        for (k, cs) in window_cutters.iter_mut() {
+            if !(k.starts_with("living-room") || k.starts_with("dining-room")) { continue }
+            if Rng::seeded(crate::int_hash(&["patio", k])).f64() >= pr.patio_door_p { continue }
+            if let Some(c) = cs.iter_mut().filter(|c| c.dims[0] >= 1.4).max_by(|a, b| a.dims[0].partial_cmp(&b.dims[0]).unwrap()) {
+                c.kind = CutKind::Door;
+                c.style = DoorStyle::SlidingGlass;
+                c.dims[0] = c.dims[0].min(2.4);
+                c.dims[2] = dh;
+                c.loc[2] = dh / 2.0 + wt / 2.0;
+            }
+        }
         (window_cutters.into_values().flatten().collect(), entrance_cutters.into_values().flatten().collect())
+    }
+
+    /// door styles (plan_rules; own stream per room pair, so the plan's draws are unchanged): double doors between living / dining /
+    /// hallway on a long shared wall, sliders on closets, a wide slider between living and dining. Wide doors are centred on the
+    /// longest piece of the shared wall.
+    fn restyle(&self, cut: &mut Cutter, k: &str, l: &str, se: &G) {
+        let pr = crate::plan_rules::get();
+        let mut r = Rng::seeded(crate::int_hash(&["door_style", k, l]));
+        let (tk, tl) = (room_type(k), room_type(l));
+        let public = |t: &str| matches!(t, "living-room" | "dining-room" | "hallway");
+        let (x, y, x_, y_) = max_mls(se);
+        let len = ((x_ - x).powi(2) + (y_ - y).powi(2)).sqrt();
+        let wt = self.c.wall_thickness;
+        let mut widen = |cut: &mut Cutter, w: f64| -> bool {
+            if len < w + wt + 0.4 { return false }
+            cut.loc[0] = (x + x_) / 2.0;
+            cut.loc[1] = (y + y_) / 2.0;
+            cut.dims[0] = w;
+            cut.dims[1] = 2.0 * (w / 2.0 + wt / 2.0);
+            true
+        };
+        let living_dining = matches!((tk, tl), ("living-room", "dining-room") | ("dining-room", "living-room"));
+        if tk == "closet" || tl == "closet" {
+            if r.f64() < pr.sliding_closet_p { cut.style = DoorStyle::Sliding; }
+        } else if living_dining && r.f64() < pr.sliding_interior_p && widen(cut, 1.8) {
+            cut.style = DoorStyle::Sliding;
+        } else if public(tk) && public(tl) && r.f64() < pr.double_door_p && widen(cut, 1.5) {
+            cut.style = DoorStyle::Double;
+        }
     }
 
     fn make_door_cutter(&self, rng: &mut Rng, mls: &G, direction: P2) -> Cutter {
@@ -341,6 +403,7 @@ impl<'a> Solidifier<'a> {
         }
         Cutter {
             kind: CutKind::Door,
+            style: DoorStyle::Swing,
             loc: [x, y, self.c.door_size / 2.0 + wt / 2.0],
             rot_z: z_rot,
             dims: [self.c.door_width, 2.0 * (self.c.door_width + wt / 2.0), self.c.door_size],
@@ -358,6 +421,7 @@ impl<'a> Solidifier<'a> {
         let h = (self.c.wall_height - wt - rng.uniform(0.25, 0.45)).max(self.c.door_size);
         Cutter {
             kind: CutKind::Passage,
+            style: DoorStyle::Swing,
             loc: [(x + x_) / 2.0, (y + y_) / 2.0, h / 2.0 + wt / 2.0],
             rot_z: (y_ - y).atan2(x_ - x),
             dims: [w, 2.0 * wt + 0.2, h],
@@ -373,6 +437,7 @@ impl<'a> Solidifier<'a> {
         let wt = self.c.wall_thickness;
         Cutter {
             kind: CutKind::Entrance,
+            style: DoorStyle::Swing,
             loc: [lam * x + (1.0 - lam) * x_, lam * y + (1.0 - lam) * y_, self.c.door_size / 2.0 + wt / 2.0],
             rot_z: (y_ - y).atan2(x_ - x),
             dims: [self.c.door_width, self.c.door_width + 2.0 * wt, self.c.door_size],
@@ -403,6 +468,7 @@ impl<'a> Solidifier<'a> {
             }
             cutters.push(Cutter {
                 kind: CutKind::Window,
+                style: DoorStyle::Swing,
                 loc: [lam * x + (1.0 - lam) * x_, lam * y + (1.0 - lam) * y_, z_loc],
                 rot_z: (y - y_).atan2(x - x_),
                 dims: [2.0 * x_scale, 2.0 * wt, 2.0 * z_scale],

@@ -20,11 +20,22 @@ pub struct PlanRules {
     pub extra_door_p: f64,
     /// chance a corner of the outline is cut or rounded
     pub angled_corner_p: f64,
+    /// chance a living / dining room gets a sliding glass patio door (its widest window, 1.4 m and up)
+    pub patio_door_p: f64,
+    /// chance a door between living / dining / hallway on a long shared wall is a double door
+    pub double_door_p: f64,
+    /// chance a closet door slides
+    pub sliding_closet_p: f64,
+    /// chance the living-dining door is a wide slider
+    pub sliding_interior_p: f64,
+    /// chance a kitchen / dining / living door on a long shared wall is a wide doorless opening (open plan)
+    pub open_plan_p: f64,
 }
 
 impl Default for PlanRules {
     fn default() -> Self {
-        PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 2, extra_door_p: 0.7, angled_corner_p: 0.08 }
+        PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 2, extra_door_p: 0.7, angled_corner_p: 0.08,
+            patio_door_p: 0.5, double_door_p: 0.4, sliding_closet_p: 0.5, sliding_interior_p: 0.3, open_plan_p: 0.3 }
     }
 }
 

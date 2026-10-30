@@ -280,7 +280,15 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     // entrance; furniture must not stand in it, and its centre is the room's door point for the walkway rule (furn::layout2d)
     for (i, ct) in res.cutters.iter().enumerate() {
         // (as deep as the leaf swings, the opening's width: 0.8 m left wardrobes and chairs inside the drawn swing)
-        let depth = match ct.kind { CutKind::Door | CutKind::Entrance => (ct.dims[0] + 0.05).max(0.8), CutKind::Passage => 0.5, _ => continue };
+        // (a double door's leaves each sweep half the opening; sliders sweep nothing: walking room only)
+        use crate::rooms::solidify::DoorStyle;
+        let depth = match (ct.kind, ct.style) {
+            (CutKind::Door, DoorStyle::Double) => (ct.dims[0] / 2.0 + 0.05).max(0.8),
+            (CutKind::Door, DoorStyle::Sliding | DoorStyle::SlidingGlass) => 0.6,
+            (CutKind::Door | CutKind::Entrance, _) => (ct.dims[0] + 0.05).max(0.8),
+            (CutKind::Passage, _) => 0.5,
+            _ => continue,
+        };
         // cutter boxes: dims[0] = opening width along the wall (rot_z), dims[1] = depth through the wall
         let (along, w) = (ct.rot_z, ct.dims[0]);
         let n = [-along.sin(), along.cos()];
@@ -429,6 +437,7 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
         let mut rd = Rng::seeded(hs("groups_dining"));
         lg.extend(crate::furn::groups::dining(&mut ctx, state, &mut rd));
         lg.extend(crate::table_setting::gather_chairs(state));
+        lg.extend(crate::furn::groups::dining_furnish(&mut ctx, state, &mut rd, only_room));
         lg.extend(crate::furn::groups::square_up(state));
         lg.extend(crate::furn::groups::rugs(state));
         if std::env::var_os("GROUPDBG").is_some() { for l in &lg { eprintln!("GROUP {l}"); } }

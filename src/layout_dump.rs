@@ -26,7 +26,7 @@ pub fn to_json(seed: u64, g: &Generated) -> serde_json::Value {
     let rooms: serde_json::Map<String, serde_json::Value> = { use geos::Geom; g.room_polys.iter().filter_map(|(k, p)| Some((k.clone(), json!(p.to_wkt().ok()?)))).collect() };
     #[cfg(target_arch = "wasm32")]
     let rooms: serde_json::Map<String, serde_json::Value> = Default::default();
-    let cut: Vec<_> = g.cutters.iter().map(|ct| json!({"kind": format!("{:?}", ct.kind), "loc": ct.loc, "rot": ct.rot_z, "dim": ct.dims, "rooms": ct.rooms})).collect();
+    let cut: Vec<_> = g.cutters.iter().map(|ct| json!({"kind": format!("{:?}", ct.kind), "style": ct.style.name(), "loc": ct.loc, "rot": ct.rot_z, "dim": ct.dims, "rooms": ct.rooms})).collect();
     let mut objs = vec![];
     for (k, o) in &g.state.objs {
         let class = match &o.generator { Some(gen) => gen.class.clone(), None if o.tags.contains(Tag::sem("FeatureKeepout")) => "Keepout".into(), None => continue };

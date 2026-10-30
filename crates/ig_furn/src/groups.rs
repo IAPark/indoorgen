@@ -733,7 +733,8 @@ fn room_type_of(room: &str) -> &str {
 fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
     let storage = ["SingleCabinetFactory", "SimpleBookcaseFactory", "LargeShelfFactory", "CellShelfFactory"].contains(&cls) || (cls == "KitchenCabinetFactory" && room_type != "kitchen");
     Some(match cls {
-        "LargePlantContainerFactory" => ("plants", 0),
+        // (one in a dining room's corner: groups::dining_furnish; dotted around everywhere else)
+        "LargePlantContainerFactory" => ("plants", if room_type == "dining-room" { 1 } else { 0 }),
         "FloorLampFactory" => ("floor lamps", 0),
         "BeverageFridgeFactory" => ("beverage fridges", 0),
         "FridgeFactory" => ("fridges", if room_type == "kitchen" { 1 } else { 0 }),
@@ -743,7 +744,7 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         "SimpleDeskFactory" => ("desks", if room_type == "bedroom" && super::layout_rules::get().desks { 1 } else { 0 }),
         "KitchenCabinetFactory" if room_type == "kitchen" => return None,
         // (a lone cabinet on a living-room wall reads as stray: the TV stand is the room's storage)
-        _ if storage => ("storage", match room_type { "utility" => 2, _ => 0 }),
+        _ if storage => ("storage", match room_type { "utility" => 2, "dining-room" => 2, _ => 0 }),
         // a closet is fitted with a wardrobe (missing_pieces), not loose storage; small bathrooms keep a tub or a shower, not both
         "BathtubFactory" | "ShowerFactory" if room_type == "bathroom" => ("tub / shower", 2),
         _ => return None,
@@ -1409,6 +1410,62 @@ pub fn wardrobes(state: &mut State) -> Vec<String> {
     log
 }
 
+/// dining rooms furnished past the table: a sideboard on the best free wall (centred, away from the doors, 0.9-2.5 m from the
+/// table so the chairs pull out), a tall cabinet on another wall in large rooms, a rug for the rugs pass to put under the table
+/// (layout_rules: dining_sideboard, dining_cabinet_m2, dining_rug)
+pub fn dining_furnish(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<&str>) -> Vec<String> {
+    let mut log = vec![];
+    let lr = super::layout_rules::get();
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "dining-room" && only_room.map_or(true, |r| r == k.as_str())).map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let in_room = |st: &State, f: &dyn Fn(&str) -> bool| st.objs.iter().filter(|(k, o)| f(class_of(o)) && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect::<Vec<_>>();
+        let Some(table) = in_room(state, &|c| c == "TableDiningFactory").first().cloned() else { continue };
+        let area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
+        let doors = door_points(state, &room);
+        let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
+        let mut pieces = vec![];
+        if lr.dining_sideboard { pieces.push(("SingleCabinetFactory", "sideboard")); }
+        if area >= lr.dining_cabinet_m2 { pieces.push(("SimpleBookcaseFactory", "cabinet")); }
+        // the solver's storage here stands wherever it landed: replaced by the placed pieces
+        for k in in_room(state, &|c| matches!(c, "SingleCabinetFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "LargePlantContainerFactory")) { layout2d::remove_tree(state, &k); }
+        let mut placed: Vec<String> = vec![];
+        for (cls, what) in pieces {
+            let name = format!("{room}_{what}").replace('/', "_");
+            if !new_piece(ctx, state, rng, cls, &room, &name) { log.push(format!("{room}: no {cls} placeholder")); continue }
+            // scored on the placed piece (place_on_wall scores after placing): the table gap, the doors, centred on its wall
+            // (a second piece on another wall than the first: two cabinets side by side read as a storage wall)
+            let (tg, nm, dd, pl) = (table.clone(), name.clone(), door_d.clone(), placed.clone());
+            let ok = place_on_wall(state, &name, &room, &move |st, c, t, len, _n| {
+                let gap = layout2d::dist(st, &tg, &nm);
+                if !(0.9..=2.5).contains(&gap) { return -100.0 }
+                let beside = pl.iter().any(|p| layout2d::dist(st, p, &nm) < 0.6);
+                dd(c).min(1.5) - (t - len / 2.0).abs() / len.max(0.1) + gap.min(1.5) * 0.5 - if beside { 3.0 } else { 0.0 }
+            });
+            let gap = layout2d::dist(state, &table, &name);
+            if ok && (0.9..=2.5).contains(&gap) { log.push(format!("{room}: {what} added ({gap:.2} m from the table)")); placed.push(name.clone()); } else { state.objs.shift_remove(&name); }
+        }
+        // a potted plant in a free corner (the far end of a wall, away from the doors and the table)
+        if lr.dining_plant {
+            let name = format!("{room}_plant").replace('/', "_");
+            if new_piece(ctx, state, rng, "LargePlantContainerFactory", &room, &name) {
+                let (tg, nm, dd) = (table.clone(), name.clone(), door_d.clone());
+                let ok = place_on_wall(state, &name, &room, &move |st, c, t, len, _n| {
+                    let corner = t.min(len - t);
+                    let gap = layout2d::dist(st, &tg, &nm);
+                    if gap < 0.7 { return -100.0 }
+                    -corner * 2.0 + dd(c).min(1.5)
+                });
+                if ok { log.push(format!("{room}: plant in a corner")); } else { state.objs.shift_remove(&name); }
+            }
+        }
+        if lr.dining_rug && in_room(state, &|c| c == "RugFactory").is_empty() {
+            let name = format!("{room}_rug").replace('/', "_");
+            if new_piece(ctx, state, rng, "RugFactory", &room, &name) { log.push(format!("{room}: rug added for the table")); }
+        }
+    }
+    log
+}
+
 /// a table in the open middle of `room` (long side along the room's long axis), tried at the floor's bbox centre then rings of
 /// offsets; true when placed
 fn center_table(state: &mut State, t: &str, room: &str) -> bool {
@@ -1459,6 +1516,13 @@ pub fn rugs(state: &mut State) -> Vec<String> {
                 let c = in_room(state, "CoffeeTableFactory").map(|ct| { let t = state.objs[&ct].pose; let (l, h) = lohi(state, &ct); let w = t.apply([(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0, 0.0]); [w[0], w[1]] })
                     .unwrap_or_else(|| { let (l, h) = lohi(state, &s); let w = sp.apply([h[0] + 0.8, (l[1] + h[1]) / 2.0, 0.0]); [w[0], w[1]] });
                 (c, yaw(&sp))
+            }),
+            // dining: centred under the table, long side along it
+            "dining-room" => in_room(state, "TableDiningFactory").map(|t| {
+                let tp = state.objs[&t].pose;
+                let (l, h) = lohi(state, &t);
+                let w = tp.apply([(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0, 0.0]);
+                ([w[0], w[1]], yaw(&tp))
             }),
             "bedroom" => in_room(state, "BedFactory").map(|b| {
                 let bp = state.objs[&b].pose;

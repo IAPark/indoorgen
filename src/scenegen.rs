@@ -264,14 +264,15 @@ pub fn build_scene(p: &Params) -> Built {
         if !matches!(ct.kind, indoorgen::rooms::solidify::CutKind::Door | indoorgen::rooms::solidify::CutKind::Entrance | indoorgen::rooms::solidify::CutKind::Passage) {
             continue;
         }
-        let hw = if ct.kind == indoorgen::rooms::solidify::CutKind::Passage { ct.dims[0] / 2.0 } else { g.c.door_width / 2.0 };
+        // (wide openings, double doors and sliders: their own width)
+        let hw = if ct.kind == indoorgen::rooms::solidify::CutKind::Passage || ct.style != indoorgen::rooms::solidify::DoorStyle::Swing { ct.dims[0] / 2.0 } else { g.c.door_width / 2.0 };
         let hd = wt / 2.0 + 1e-4;
         let (c, s_) = (ct.rot_z.cos(), ct.rot_z.sin());
         let pt = |x: f64, y: f64| [ct.loc[0] + c * x - s_ * y, ct.loc[1] + s_ * x + c * y];
         floor_polys.push(indoorgen::shp::polygon(&[pt(-hw, -hd), pt(hw, -hd), pt(hw, hd), pt(-hw, hd), pt(-hw, -hd)], &[]).unwrap());
     }
     let mut passage_widths = vec![wt, g.c.door_width];
-    passage_widths.extend(g.cutters.iter().filter(|ct| ct.kind == indoorgen::rooms::solidify::CutKind::Passage).map(|ct| ct.dims[0]));
+    passage_widths.extend(g.cutters.iter().filter(|ct| ct.kind == indoorgen::rooms::solidify::CutKind::Passage || ct.style != indoorgen::rooms::solidify::DoorStyle::Swing).map(|ct| ct.dims[0]));
     for (nm, ceil, z) in [("skirting_floor", false, wt / 2.0), ("skirting_ceiling", true, g.c.wall_height - wt / 2.0)] {
         let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), nm]));
         let sk = if ceil { indoorgen::rooms::skirting::make(&polys, z, ceil, &mut r) } else { indoorgen::rooms::skirting::make_split(&floor_polys, z, ceil, &mut r, &passage_widths) };

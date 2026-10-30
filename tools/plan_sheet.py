@@ -46,12 +46,33 @@ def draw(d, ax, small=False):
             for g in getattr(f.intersection(solid), "geoms", [f.intersection(solid)]):
                 if g.geom_type == "Polygon" and not g.is_empty: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc="#9fd4ff", ec="#2a6fb0", lw=0.4))
         elif c["kind"] in ("Door", "Entrance"):
-            # swing arc: radius = opening width, hinged at one end of the opening
             w = dx; along = c["rot"]  # dim[0] = opening width along the wall (dim[1] is the cutter depth through it)
             cx, cy = c["loc"][0], c["loc"][1]
-            hx, hy = cx - math.cos(along) * w / 2, cy - math.sin(along) * w / 2
-            ax.add_patch(Arc((hx, hy), 2 * w, 2 * w, angle=math.degrees(along), theta1=0, theta2=90, lw=0.6, color="#c0392b" if c["kind"] == "Entrance" else "#555"))
-            ax.plot([hx, hx - math.sin(along) * w], [hy, hy + math.cos(along) * w], lw=0.8, color="#c0392b" if c["kind"] == "Entrance" else "#555")
+            col = "#c0392b" if c["kind"] == "Entrance" else "#555"
+            ux, uy = math.cos(along), math.sin(along)
+            style = c.get("style", "swing")
+            if style in ("sliding", "sliding_glass"):
+                # two panels in the wall line, overlapping in the middle, one a little behind the other
+                glass = style == "sliding_glass"
+                wt = d.get("wall_thickness", 0.2)
+                th = 0.032 if glass else 0.02
+                for k, off in ((-1, -0.03), (1, 0.03)):
+                    x0 = -w / 2 if k < 0 else -0.05
+                    x1 = 0.05 if k < 0 else w / 2
+                    nx, ny = -uy * off, ux * off
+                    pts = [(cx + ux * x0 + nx - uy * th, cy + uy * x0 + ny + ux * th), (cx + ux * x1 + nx - uy * th, cy + uy * x1 + ny + ux * th),
+                           (cx + ux * x1 + nx + uy * th, cy + uy * x1 + ny - ux * th), (cx + ux * x0 + nx + uy * th, cy + uy * x0 + ny - ux * th)]
+                    ax.add_patch(MPoly(pts, closed=True, fc="#9fd4ff" if glass else "#d9d2c5", ec="#2a6fb0" if glass else "#555", lw=0.6, zorder=3))
+                continue
+            hinges = [(-1, 1.0)] if style != "double" else [(-1, 0.5), (1, 0.5)]
+            for side, frac in hinges:
+                r_ = w * frac
+                hx, hy = cx + side * ux * w / 2, cy + side * uy * w / 2
+                if side < 0:
+                    ax.add_patch(Arc((hx, hy), 2 * r_, 2 * r_, angle=math.degrees(along), theta1=0, theta2=90, lw=0.6, color=col))
+                else:
+                    ax.add_patch(Arc((hx, hy), 2 * r_, 2 * r_, angle=math.degrees(along), theta1=90, theta2=180, lw=0.6, color=col))
+                ax.plot([hx, hx - uy * r_], [hy, hy + ux * r_], lw=0.8, color=col)
     # labels in the room's largest furniture-free patch (a label over the dining table read as overlapping pieces)
     furn = []
     for o in d.get("objects", []):
