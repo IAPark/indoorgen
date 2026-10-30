@@ -1089,7 +1089,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 let mid = [(base[0] + hp[0]) / 2.0, (base[1] + hp[1]) / 2.0];
                 // a TV beside a door (the entrance, a room door) reads as misplaced
                 let tv_door = ldoors.iter().map(|d| ((d[0] - hp[0]).powi(2) + (d[1] - hp[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
-                let score = -(view - 2.6).abs() - if view < 1.8 { 1.5 } else { 0.0 } - (2.0 - tv_door).max(0.0) * 3.0 - (tt - len / 2.0).abs() / len - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.6;
+                let score = -(view - 2.6).abs() - if view < 1.8 { 1.5 } else { 0.0 } - (2.6 - tv_door).max(0.0) * 3.0 - (tt - len / 2.0).abs() / len - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.6;
                 if pair.as_ref().map_or(true, |p| score > p.0) { pair = Some((score, state.objs[&sofa].pose, state.objs[&tv].pose, view)); }
                 state.set_pose(&tv, tv_start); state.touch(&tv);
             }
@@ -1134,7 +1134,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                         let mid = [(base[0] + back[0]) / 2.0, (base[1] + back[1]) / 2.0];
                         // (a floating sofa reads as unanchored: its back on a wall is worth a longer view)
                         // (raters read a floating sofa as "back to the room" and a TV beside a door as misplaced: both weigh more)
-                        let score = if on_wall { 5.0 } else { 0.0 } - (d - 2.6).abs() - (2.0 - tv_door).max(0.0) * 3.0
+                        let score = if on_wall { 5.0 } else { 0.0 } - (d - 2.6).abs() - (2.6 - tv_door).max(0.0) * 3.0
                             - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.3 - (tt - len / 2.0).abs() / len;
                         if tvbest.as_ref().map_or(true, |b| score > b.0) { tvbest = Some((score, state.objs[&tv].pose, state.objs[&sofa].pose, d)); }
                     }
