@@ -139,7 +139,7 @@ fn frame_mesh(c: &RoomConstants, swing: f64, t: f64) -> Mesh {
 /// it opens to. `desired` angles keep python's rot_z draw; `settle_doors` limits them against furniture and walls.
 fn doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::shp::G)], seed: u64, out: &mut Vec<Piece>, leaves: &mut Vec<DoorLeaf>) {
     let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "room_doors"]));
-    // hinged leaves only: double doors, sliders and patio doors are open holes in 3D for now
+    // hinged single leaves (the other styles: styled_doors)
     let dc: Vec<(usize, &Cutter)> = cutters.iter().enumerate().filter(|(_, c)| matches!(c.kind, CutKind::Door | CutKind::Entrance) && c.style == crate::rooms::solidify::DoorStyle::Swing).collect();
     let kinds = [DoorKind::Panel, DoorKind::GlassPanel, DoorKind::Louver, DoorKind::Lite];
     let mut facs = vec![];
@@ -293,10 +293,133 @@ fn windows(c: &RoomConstants, cutters: &[Cutter], seed: u64, out: &mut Vec<Piece
     }
 }
 
+/// jamb lining + architrave (both faces) around an opening `w` wide and `h` tall, cutter frame; no stop (sliders, double doors)
+fn frame_box(w: f64, h: f64, wt: f64) -> Mesh {
+    let (zf, zt) = (-h / 2.0, h / 2.0);
+    let mut m = Mesh::new();
+    let mut bx = |x0: f64, x1: f64, y0: f64, y1: f64, z0: f64, z1: f64| m.append(&Mesh::cuboid([x0, y0, z0], [x1, y1, z1]));
+    bx(-w / 2.0, -w / 2.0 + LINING, -wt / 2.0, wt / 2.0, zf, zt);
+    bx(w / 2.0 - LINING, w / 2.0, -wt / 2.0, wt / 2.0, zf, zt);
+    bx(-w / 2.0 + LINING, w / 2.0 - LINING, -wt / 2.0, wt / 2.0, zt - LINING, zt);
+    for sg in [-1.0, 1.0] {
+        let (ya, yb) = if sg > 0.0 { (wt / 2.0, wt / 2.0 + CASING_T) } else { (-wt / 2.0 - CASING_T, -wt / 2.0) };
+        bx(-w / 2.0 - CASING_W, -w / 2.0, ya, yb, zf, zt);
+        bx(w / 2.0, w / 2.0 + CASING_W, ya, yb, zf, zt);
+        bx(-w / 2.0 - CASING_W, w / 2.0 + CASING_W, ya, yb, zt, zt + CASING_W);
+    }
+    m
+}
+
+/// the door styles the plan draws (solidify::DoorStyle) beyond the single hinged leaf, on their own seeded stream so the swing doors'
+/// draws are untouched: double doors (two leaves hinged at the jambs, swung and settled like single doors), interior sliders (a
+/// panel on a track on the wall face, slid part open) and patio sliders (an aluminium frame with a fixed and a sliding glass panel)
+fn styled_doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::shp::G)], seed: u64, out: &mut Vec<Piece>, leaves: &mut Vec<DoorLeaf>) {
+    use crate::rooms::solidify::DoorStyle;
+    let white = plain_white(seed);
+    let wt = c.wall_thickness;
+    for (ci, ct) in cutters.iter().enumerate() {
+        if !matches!(ct.kind, CutKind::Door | CutKind::Entrance) || matches!(ct.style, DoorStyle::Swing | DoorStyle::HalfWall) { continue }
+        let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "door_style", &ci.to_string()]));
+        let (w, h) = (ct.dims[0], ct.dims[2]);
+        let (zb, zt) = (-h / 2.0 + GAP_BOTTOM, h / 2.0 - LINING - GAP_TOP);
+        let leaf_cls = ["wood.Wood", "wood.WhitePlywood", "wood.BlondePlywood", "plastic.PlasticRough"][r.choice_idx(4)];
+        let sd = r.randint(0, 10_000_000) as u64;
+        // the side to open toward: the higher-ranked room (as the hinged doors), else local +y
+        let dn = (-ct.rot_z.sin(), ct.rot_z.cos());
+        let side = |sg: f64| -> Option<(&String, i32)> {
+            let p = crate::shp::point(ct.loc[0] + sg * 0.5 * dn.0, ct.loc[1] + sg * 0.5 * dn.1);
+            polys.iter().find(|(_, g)| crate::shp::contains(g, &p)).map(|(n, _)| (n, rank(crate::rooms::state::room_type(n))))
+        };
+        let (sp, sm) = (side(1.0), side(-1.0));
+        let swing = match (&sp, &sm) { (Some(a), Some(b)) => if b.1 > a.1 { -1.0 } else { 1.0 }, (None, Some(_)) => -1.0, _ => 1.0 };
+        let room = (if swing > 0.0 { sp } else { sm }).map(|x| x.0.clone()).unwrap_or_default();
+        let name = format!("door{ci}");
+        match ct.style {
+            DoorStyle::Double => {
+                let mut fm = frame_box(w, h, wt);
+                place(&mut fm, ct, &Mat4::identity());
+                out.push(Piece { name: format!("{name}.frame"), class: "Door".into(), mesh: fm, mat: white.clone() });
+                let t = r.uniform(0.035, 0.045);
+                let lw = w / 2.0 - LINING - GAP_SIDE - 0.002;
+                // both leaves open about as far (one swing of the pair)
+                let desired = r.uniform(0.35, 1.0) * std::f64::consts::FRAC_PI_2;
+                for hs in [-1.0f64, 1.0] {
+                    let xh = hs * (w / 2.0 - LINING - GAP_SIDE);
+                    let (x0, x1) = if hs > 0.0 { (xh - lw, xh) } else { (xh, xh + lw) };
+                    let mut body = Mesh::cuboid([x0, -t / 2.0, zb], [x1, t / 2.0, zt]);
+                    // two raised panels on each face
+                    for (z0, z1) in [(zb + 0.12, (zb + zt) / 2.0 - 0.06), ((zb + zt) / 2.0 + 0.06, zt - 0.12)] {
+                        for fy in [-1.0, 1.0] {
+                            let (y0, y1) = if fy > 0.0 { (t / 2.0, t / 2.0 + 0.006) } else { (-t / 2.0 - 0.006, -t / 2.0) };
+                            body.append(&Mesh::cuboid([x0 + 0.09, y0, z0], [x1 - 0.09, y1, z1]));
+                        }
+                    }
+                    let free = xh - hs * lw;
+                    let mut hd = Mesh::new();
+                    for fy in [-1.0, 1.0] { hd.append(&Mesh::cuboid([free + hs * 0.05 - 0.008, fy * (t / 2.0 + 0.005) - 0.008, -0.05], [free + hs * 0.05 + 0.008, fy * (t / 2.0 + 0.005) + 0.008, 0.10])); }
+                    let ln = format!("{name}{}", if hs > 0.0 { "a" } else { "b" });
+                    let parts = vec![
+                        Piece { name: ln.clone(), class: "Door".into(), mesh: body, mat: spec(&ln, leaf_cls, sd, [0.6, 0.5, 0.4]) },
+                        Piece { name: format!("{ln}.handle"), class: "Door".into(), mesh: hd, mat: spec(&format!("{ln}.handle"), "metal.MetalBasic", sd, [0.7, 0.7, 0.7]) },
+                    ];
+                    leaves.push(DoorLeaf { ci, name: ln, parts, hs, swing, xh, t, w: lw, h: zt - zb, zb, desired, angle: 0.0, limiter: "none".into(), room: room.clone() });
+                }
+            }
+            DoorStyle::Sliding => {
+                let mut fm = frame_box(w, h, wt);
+                place(&mut fm, ct, &Mat4::identity());
+                out.push(Piece { name: format!("{name}.frame"), class: "Door".into(), mesh: fm, mat: white.clone() });
+                // the panel hangs on the room side, just off the casing, slid 30-90 % of the way open along the wall
+                let (t, pw) = (0.035, w + 0.08);
+                let yc = swing * (wt / 2.0 + CASING_T + 0.02 + t / 2.0);
+                let dir = if r.f64() < 0.5 { -1.0 } else { 1.0 };
+                let off = dir * r.uniform(0.3, 0.9) * w;
+                let mut panel = Mesh::cuboid([off - pw / 2.0, yc - t / 2.0, zb], [off + pw / 2.0, yc + t / 2.0, zt + LINING + 0.02]);
+                // recessed pull
+                panel.append(&Mesh::cuboid([off - dir * (pw / 2.0 - 0.06) - 0.012, yc + swing * t / 2.0, -0.10], [off - dir * (pw / 2.0 - 0.06) + 0.012, yc + swing * (t / 2.0 + 0.004), 0.10]));
+                let mut rail = Mesh::cuboid([-w / 2.0 - pw * 0.9, yc - 0.02, zt + LINING + 0.02], [w / 2.0 + pw * 0.9, yc + 0.02, zt + LINING + 0.08]);
+                place(&mut panel, ct, &Mat4::identity());
+                place(&mut rail, ct, &Mat4::identity());
+                out.push(Piece { name: format!("{name}.slide"), class: "Door".into(), mesh: panel, mat: spec(&format!("{name}.slide"), leaf_cls, sd, [0.6, 0.5, 0.4]) });
+                out.push(Piece { name: format!("{name}.rail"), class: "Door".into(), mesh: rail, mat: spec(&format!("{name}.rail"), "metal.BrushedMetal", sd, [0.6, 0.6, 0.6]) });
+            }
+            DoorStyle::SlidingGlass => {
+                // aluminium frame in the wall, two glazed panels on parallel tracks, the outer one fixed, the inner slid part open
+                let (fw, ft) = (0.05, 0.10);
+                let mut fr = Mesh::new();
+                fr.append(&Mesh::cuboid([-w / 2.0, -ft / 2.0, -h / 2.0], [-w / 2.0 + fw, ft / 2.0, h / 2.0]));
+                fr.append(&Mesh::cuboid([w / 2.0 - fw, -ft / 2.0, -h / 2.0], [w / 2.0, ft / 2.0, h / 2.0]));
+                fr.append(&Mesh::cuboid([-w / 2.0, -ft / 2.0, h / 2.0 - fw], [w / 2.0, ft / 2.0, h / 2.0]));
+                fr.append(&Mesh::cuboid([-w / 2.0, -ft / 2.0, -h / 2.0], [w / 2.0, ft / 2.0, -h / 2.0 + 0.03]));
+                let (iw, z0, z1) = (w - 2.0 * fw, -h / 2.0 + 0.03, h / 2.0 - fw);
+                let pw = iw / 2.0 + 0.04;
+                let open = r.uniform(0.0, 0.8) * (pw - 0.08);
+                let mut glass = Mesh::new();
+                for (k, (xc, yc)) in [(-iw / 2.0 + pw / 2.0, -0.025), (iw / 2.0 - pw / 2.0 - open, 0.025)].into_iter().enumerate() {
+                    let (a, b) = (xc - pw / 2.0, xc + pw / 2.0);
+                    let bar = 0.045;
+                    fr.append(&Mesh::cuboid([a, yc - 0.02, z0], [a + bar, yc + 0.02, z1]));
+                    fr.append(&Mesh::cuboid([b - bar, yc - 0.02, z0], [b, yc + 0.02, z1]));
+                    fr.append(&Mesh::cuboid([a, yc - 0.02, z0], [b, yc + 0.02, z0 + 0.08]));
+                    fr.append(&Mesh::cuboid([a, yc - 0.02, z1 - bar], [b, yc + 0.02, z1]));
+                    let _ = k;
+                    glass.append(&Mesh::cuboid([a + bar, yc - 0.004, z0 + 0.08], [b - bar, yc + 0.004, z1 - bar]));
+                }
+                place(&mut fr, ct, &Mat4::identity());
+                place(&mut glass, ct, &Mat4::identity());
+                out.push(Piece { name: format!("{name}.frame"), class: "Door".into(), mesh: fr, mat: spec(&format!("{name}.frame"), "metal.BrushedMetal", sd, [0.7, 0.7, 0.72]) });
+                out.push(Piece { name: format!("{name}.glass"), class: "Door".into(), mesh: glass, mat: spec(&format!("{name}.glass"), "ceramic.Glass", sd, [0.8, 0.9, 1.0]) });
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn make_openings(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::shp::G)], seed: u64) -> Openings {
     let mut pieces = vec![];
     let mut doors_v = vec![];
     doors(c, cutters, polys, seed, &mut pieces, &mut doors_v);
+    styled_doors(c, cutters, polys, seed, &mut pieces, &mut doors_v);
     windows(c, cutters, seed, &mut pieces);
     Openings { pieces, doors: doors_v }
 }
