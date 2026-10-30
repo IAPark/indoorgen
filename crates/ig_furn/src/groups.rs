@@ -1328,6 +1328,20 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 }
             }
         }
+        // a table up to 1.6 m is round some of the time (layout_rules.round_table_p): squared up to its depth (0.9-1.2 m),
+        // one chair per side, tagged for the drawing and the 3D build
+        let lr0 = super::layout_rules::get();
+        {
+            let (l, h) = lohi(state, &t);
+            let (w, dp) = (h[1] - l[1], h[0] - l[0]);
+            if w <= 1.6 && rng.f64() < lr0.round_table_p {
+                let base = state.objs[&t].clone();
+                let _ = super::solver::set_width(ctx, state, &t, &base, dp.clamp(0.9, 1.2), 1.0);
+                state.objs.get_mut(&t).unwrap().tags.insert(Tag::sem("RoundTable"));
+                state.touch(&t);
+                log.push(format!("{room}: table {t} round"));
+            }
+        }
         // tables in dining rooms go to the middle; eat-in tables (kitchen / living room) keep their spot clear of the seating
         let placed = if room_type_of(&room) == "dining-room" { center_table(state, &t, &room) } else { true };
         for (k, o) in saved { state.objs.insert(k.clone(), o); state.touch(&k); }

@@ -44,7 +44,7 @@ pub fn to_json(seed: u64, g: &Generated) -> serde_json::Value {
         let gen = o.generator.as_ref();
         let size = gen.and_then(crate::furn::solver::cur_size);
         let room = layout2d::room_of(&g.state, k);
-        objs.push(json!({"key": k, "class": class, "parts": parts, "front": front, "parent": parent, "room": room, "size": size,
+        objs.push(json!({"key": k, "class": class, "parts": parts, "front": front, "parent": parent, "room": room, "size": size, "round": o.tags.contains(Tag::sem("RoundTable")),
             "factory_seed": gen.map(|x| x.factory_seed), "inst_seed": gen.map(|x| x.inst_seed), "yaw_deg": o.pose.r[1][0].atan2(o.pose.r[0][0]).to_degrees(), "pos": o.pose.t}));
     }
     let stage = if crate::furn::layout2d::knobs::furniture_only() { "furniture" } else { "full" };

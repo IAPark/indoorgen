@@ -212,7 +212,14 @@ def draw(d, ax, small=False):
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#e07070", lw=0.4, hatch="////", zorder=2))
     for o, f, z0, z1, r in sorted(floor, key=lambda x: (cat(x[0]["class"])[0] != "rug", x[3])):
         n, col = cat(o["class"])
-        for g in getattr(f, "geoms", [f]):
+        if o.get("round"):
+            # a round table: the circle inscribed in its footprint
+            from matplotlib.patches import Circle
+            c = f.centroid; x0, y0, x1, y1 = f.bounds
+            r = (min(o["size"][0], o["size"][1]) if o.get("size") else min(x1 - x0, y1 - y0)) / 2
+            ax.add_patch(Circle((c.x, c.y), r, fc=col, ec="#222", lw=0.4, alpha=0.9, zorder=3))
+        else:
+          for g in getattr(f, "geoms", [f]):
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc=col, ec="#222", lw=0.4, alpha=0.55 if n == "rug" else 0.9, zorder=3 if n != "rug" else 2))
         if CLEAN and re.search("Plant", o["class"]) and f.area > 0.02: symbol(ax, o, f, 1.0, 0.0)
         if o.get("front") and (n in ("bed", "seat", "storage", "kitchen", "bath", "screen", "feature") or re.search("Desk|TVStand", o["class"])) and f.area > 0.04:
