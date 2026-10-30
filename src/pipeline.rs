@@ -119,7 +119,12 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         }
         std::process::exit(0);
     }
-    let sol = Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false, passage_prob: opt.passage_prob };
+    // hallways serving fewer than two private rooms go into a neighbour (plan_rules.merge_hallways)
+    let mut graph0 = solver.graphs[0].clone();
+    if crate::rooms::plan_rules::get().merge_hallways {
+        for l in crate::rooms::nudge::merge_useless_hallways(&mut st, &mut graph0) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("PLAN {l}"); } }
+    }
+    let sol = Solidifier { c: &c, graph: &graph0, level: 0, enable_open: false, passage_prob: opt.passage_prob };
     let res = sol.solidify(&mut Rng::seeded(seed), &st);
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(path) = std::env::var("PLAN_DUMP") {

@@ -77,8 +77,8 @@ def score(d):
             add(0.5 * angled, f"{k} {angled} angled wall(s)")
         if t == "bathroom" and not 5.0 <= poly.area <= 14:
             add(1.0, f"{k} {poly.area:.0f} m2")
-        if t == "hallway" and poly.area > 12:
-            add(1.0, f"{k} {poly.area:.0f} m2 hallway")
+        if t == "hallway" and poly.area > 8:
+            add(round(0.2 * (poly.area - 8), 2), f"{k} {poly.area:.0f} m2 hallway")
         if t == "living-room" and poly.area > 36:
             add(1.0, f"{k} living {poly.area:.0f} m2 (reads half empty)")
         if t == "living-room" and poly.area < 14:

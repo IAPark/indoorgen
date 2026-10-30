@@ -54,3 +54,47 @@ pub fn nudge(state: &mut RoomState, a: &str, b: &str, d: f64) -> bool {
     update_exterior(state, b);
     true
 }
+
+/// hallways that serve fewer than two private rooms (bedrooms, bathrooms), and stubs under 6 m2, do no work as hallways: each is merged into the
+/// neighbour it shares the longest wall with (public rooms first), which takes over its doors; an entrance hallway stays, and a
+/// merge that would not leave one polygon is skipped. Returns the merges made.
+pub fn merge_useless_hallways(state: &mut RoomState, graph: &mut RoomGraph) -> Vec<String> {
+    let mut log = vec![];
+    let halls: Vec<String> = state.valid_rooms().filter(|(k, _)| room_type(k) == "hallway").map(|(k, _)| k.clone()).collect();
+    for h in halls {
+        let Some(hi) = graph.names.iter().position(|n| *n == h) else { continue };
+        if graph.entrance == Some(hi) || graph.invalid.contains(&hi) { continue }
+        let ns: Vec<String> = graph.valid_neighbours(&h).into_iter().map(|s| s.to_string()).collect();
+        let private = ns.iter().filter(|n| matches!(room_type(n), "bedroom" | "bathroom")).count();
+        // (a stub under 6 m2 is a patch of floor in front of doors: the room it opens off can take those doors itself)
+        if private >= 2 && area(state.poly(&h)) >= 6.0 { continue }
+        let ph = state.poly(&h).clone();
+        // the neighbour to merge into: public rooms first, then the longest shared wall
+        let mut cands: Vec<(i32, f64, String)> = ns.iter().filter(|n| state.objs.contains_key(n.as_str())).map(|n| {
+            let pub_ = matches!(room_type(n), "living-room" | "dining-room" | "kitchen") as i32;
+            (pub_, length(&shared(&ph, state.poly(n))), n.clone())
+        }).filter(|c| c.1 >= 1.0).collect();
+        cands.sort_by(|a, b| (b.0, b.1).partial_cmp(&(a.0, a.1)).unwrap());
+        let Some((_, _, t)) = cands.into_iter().next() else { continue };
+        let merged = simplify(&union(state.poly(&t), &ph), 1e-3);
+        if !(is_polygon(&merged) && parts(&merged).len() <= 1) { continue }
+        state.objs.get_mut(&t).unwrap().polygon = Some(merged);
+        state.objs.shift_remove(&h);
+        for o in state.objs.values_mut() { o.relations.retain(|r| r.target != h); }
+        update_shared(state, &t);
+        update_exterior(state, &t);
+        // the hallway's neighbours now open off the merged room
+        let ti = graph.names.iter().position(|n| *n == t).unwrap();
+        for n in ns.iter().filter(|n| **n != t) {
+            if let Some(ni) = graph.names.iter().position(|x| x == n) {
+                if !graph.ns[ti].contains(&ni) { graph.ns[ti].push(ni); }
+                if !graph.ns[ni].contains(&ti) { graph.ns[ni].push(ti); }
+            }
+        }
+        for v in graph.ns.iter_mut() { v.retain(|&j| j != hi); }
+        graph.ns[hi].clear();
+        graph.invalid.insert(hi);
+        log.push(format!("hallway {h} ({private} private rooms off it) merged into {t}"));
+    }
+    log
+}

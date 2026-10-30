@@ -1121,7 +1121,9 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         for di in 0..=24 {
             if pair.is_some() || walled { break }
             let d = 1.3 + di as f64 * 0.12;
-            for lat in [0.0f64, 0.3, -0.3] {
+            // (a fireplace cannot move: the sofa may sit further off its axis)
+            let lats: &[f64] = if fixed { &[0.0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9] } else { &[0.0, 0.3, -0.3] };
+            for &lat in lats {
                 let at = [front[0] + f[0] * d - f[1] * lat, front[1] + f[1] * d + f[0] * lat, 0.0];
                 // sofa front (local +x) toward the TV: turned half a turn from the stand, its front face at distance d
                 if !try_place(state, &sofa, ty + std::f64::consts::PI, [shi[0], (slo[1] + shi[1]) / 2.0, slo[2]], at) {
