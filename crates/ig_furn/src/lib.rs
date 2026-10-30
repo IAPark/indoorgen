@@ -11,6 +11,7 @@ pub mod state;
 pub mod col;
 pub mod layout2d;
 pub mod sizes;
+pub mod groups;
 pub mod fcl;
 pub mod mpr;
 pub mod eval;

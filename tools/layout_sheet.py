@@ -30,7 +30,7 @@ CAT = [("bed", r"^Bed", "#7a9cc6"), ("seat", r"Sofa|ArmChair|^Chair|OfficeChair|
        ("bath", r"Toilet|Bathtub|Shower|StandingSink|BathroomSink", "#5fb0b0"), ("screen", r"^TV|Monitor", "#444444"),
        ("lamp", r"FloorLamp|LargePlant|Plant", "#9cbf6a"), ("rug", r"Rug", "#e9d7c0"), ("keepout", r"Keepout", "#ff8080")]
 ANCHOR = {"bedroom": [r"^Bed"], "living-room": [r"Sofa"], "dining-room": [r"TableDining|DiningTable"], "kitchen": [r"KitchenSpace"], "bathroom": [r"Toilet", r"StandingSink|BathroomSink"]}
-NO_REACH = re.compile(r"Rug|^Chair|BarChair|Stool|FloorLamp|Plant|Keepout|SideTable|TV$|Monitor|Hardware")
+NO_REACH = re.compile(r"Rug|^Chair|OfficeChair|BarChair|Stool|FloorLamp|Plant|Keepout|SideTable|TV$|Monitor|Hardware")
 ABBR = {"BedFactory": "bed", "SofaFactory": "sofa", "ArmChairFactory": "arm", "ChairFactory": "ch", "TableDiningFactory": "dining", "CoffeeTableFactory": "coffee",
         "SideTableFactory": "side", "SimpleDeskFactory": "desk", "WardrobeFactory": "wardrobe", "TVStandFactory": "tv", "KitchenSpaceFactory": "counter",
         "FridgeFactory": "fridge", "ToiletFactory": "wc", "BathtubFactory": "tub", "ShowerFactory": "shower", "StandingSinkFactory": "sink",
@@ -123,6 +123,7 @@ def analyse(d):
                 a, b = items[i], items[j]
                 if re.search("Rug", a[0]["class"] + b[0]["class"]): continue
                 if re.search("Chair", a[0]["class"] + b[0]["class"]) and re.search("Table|Desk", a[0]["class"] + b[0]["class"]): continue
+                if re.search("SideTable", a[0]["class"] + b[0]["class"]) and re.search("^Bed", a[0]["class"] + b[0]["class"]): continue
                 if a[3] < b[2] or b[3] < a[2]: continue
                 if a[1].intersection(b[1]).area > 0.02: ov.append((a[0]["class"], b[0]["class"]))
         if ov: fl["overlap"] = ov

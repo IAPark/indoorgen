@@ -292,6 +292,50 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
     Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box, size: exact_size }))
 }
 
+/// set a sized piece's width to `w_new` keeping one end fixed: `side` = +1 moves the +y end (local), -1 the -y end. Rebuilds the
+/// geometry (exact factories) or the box, re-matches the relation faces and runs the move validity check; returns ok (state changed
+/// either way: the caller restores `base` when it rejects).
+pub fn set_width(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, w_new: f64, side: f64) -> bool {
+    let g0 = base.generator.as_ref().unwrap();
+    let class = g0.class.clone();
+    let Some(m) = super::sizes::model(&class) else { return false };
+    let (Some((lo, hi)), Some(cs)) = (g0.fit_box, cur_size(g0)) else { return false };
+    // the child faces of the relations (world plane) before the rebuild
+    let child_planes: Vec<Option<(V3, f64)>> = base.relations.iter().map(|r| {
+        let g = r.relation.geo()?;
+        let pl = state.planes(name, &g.child);
+        let &i = pl.get(r.child_plane)?;
+        let (n, p) = state.plane_nd(name, i);
+        Some((n, dot(n, p)))
+    }).collect();
+    let x = [w_new, cs[1], cs[2]];
+    let Some((ng, fb)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
+    let far_old = if side > 0.0 { lo[1] } else { hi[1] };
+    let far_new = if side > 0.0 { fb.0[1] } else { fb.1[1] };
+    let shift = far_old - far_new;
+    let oo = state.objs.get_mut(name).unwrap();
+    *oo = base.clone();
+    oo.geom = Arc::new(ng);
+    oo.generator.as_mut().unwrap().fit_box = Some(fb);
+    if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+    let mut p = oo.pose;
+    p.translate([base.pose.r[0][1] * shift, base.pose.r[1][1] * shift, base.pose.r[2][1] * shift]);
+    state.set_pose(name, p);
+    state.touch(name);
+    for (ri, cp) in child_planes.iter().enumerate() {
+        let Some((n0, d0)) = cp else { continue };
+        let Some(g) = state.objs[name].relations[ri].relation.geo().cloned() else { continue };
+        let pl = state.planes(name, &g.child);
+        let best = (0..pl.len()).min_by(|&i, &j| {
+            let f = |k: usize| { let (n, p) = state.plane_nd(name, pl[k]); (1.0 - dot(n, *n0)) * 10.0 + (dot(n, p) - d0).abs() };
+            f(i).partial_cmp(&f(j)).unwrap()
+        });
+        if let Some(bi) = best { state.objs.get_mut(name).unwrap().relations[ri].child_plane = bi; }
+    }
+    state.touch(name);
+    super::dof::check_post_move_validity(state, name)
+}
+
 /// built-ins (counter runs, kitchen cabinets, wardrobes, bathtubs, showers) sized exactly for their space: each is extended along its
 /// wall to either side as far as the move validity check allows (corners, door clearance, neighbours, walkways), to the class maximum,
 /// by bisection to ~1 cm; the factories then build to that size (furn::sizes 'exact'). Returns a log line per piece.

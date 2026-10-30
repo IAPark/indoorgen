@@ -300,6 +300,21 @@ pub fn outside_depth(state: &State, name: &str) -> f64 {
     best
 }
 
+/// how far the object's footprint pokes out of its own room's floor (rooms are solved on separate copies of the house: a piece moved
+/// across a doorway into the next room would meet that room's furniture only when the copies are merged)
+pub fn outside_room_depth(state: &State, name: &str, room: &str) -> f64 {
+    let rs = rings(&room_floor(state, room));
+    let mut best = 0.0f64;
+    for p in prisms(state, name).iter() {
+        for v in &p.poly {
+            if !in_rings(&rs, *v) {
+                best = best.max(ring_dist(&rs, *v));
+            }
+        }
+    }
+    best
+}
+
 /// the room an object stands in: a relation target that is a room, else its parent's room
 pub fn room_of(state: &State, name: &str) -> Option<String> {
     let mut cur = name.to_string();

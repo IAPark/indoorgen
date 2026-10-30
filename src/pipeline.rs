@@ -362,6 +362,8 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     let mut rng = Rng::seeded(hs("solve_large"));
     run_stage("on_floor_and_wall", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("on_floor_freestanding", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
+    // kitchen group: fridge and dishwasher at the ends of the counter run (before the run grows into its span)
+    for l in crate::furn::groups::kitchen(&mut ctx, state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
     // built-ins sized exactly for their space (counter runs, kitchen cabinets, wardrobes, bathtubs, showers)
     if !std::env::var_os("NO_BUILTIN_FIT").is_some() {
         for l in crate::furn::solver::fit_builtins(&mut ctx, state, only_room) { if std::env::var_os("BUILTINDBG").is_some() { eprintln!("BUILTIN {l}"); } }
@@ -408,7 +410,20 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     run_stage("on_wall", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("on_ceiling", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("side_obj", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
+    // bedroom and desk groups: nightstands beside the headboard, a chair at every desk
+    {
+        let mut rg = Rng::seeded(hs("groups"));
+        for l in crate::furn::groups::bedroom_and_desk(&mut ctx, state, &mut rg) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
+    }
     let tm = t.elapsed().as_secs_f64();
+    if std::env::var_os("RELDUMP").is_some() {
+        for (k, o) in &state.objs {
+            let Some(g) = &o.generator else { continue };
+            if !["SideTableFactory", "ChairFactory", "OfficeChairFactory", "FridgeFactory", "DishwasherFactory", "SimpleDeskFactory", "BedFactory"].contains(&g.class.as_str()) { continue }
+            eprintln!("RELDUMP {} {k}: tags {:?}", g.class, o.tags);
+            for r in &o.relations { eprintln!("RELDUMP    -> {} {:?} child_plane {} parent_plane {}", r.target, r.relation, r.child_plane, r.parent_plane); }
+        }
+    }
     // LAYOUT_DUMP_STAGE=furniture: stop after the furniture layout (no small items on surfaces); LAYOUT_DUMP then writes it
     if std::env::var("LAYOUT_DUMP_STAGE").as_deref() == Ok("furniture") {
         return (tl, tm, 0.0);
