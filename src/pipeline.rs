@@ -364,6 +364,14 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     run_stage("on_floor_and_wall", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("on_floor_freestanding", "large", opt.steps_large, None, 3.0, state, &mut rng, &mut ctx);
     // kitchen group: fridge and dishwasher at the ends of the counter run (before the run grows into its span)
+    if crate::furn::layout2d::knobs::groups() {
+        for l in crate::furn::groups::caps(state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
+        let mut rg = Rng::seeded(hs("groups_add"));
+        for l in crate::furn::groups::missing_pieces(&mut ctx, state, &mut rg, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
+        let liv = crate::furn::groups::living(&mut ctx, state, &mut rg);
+        let eat = crate::furn::groups::eat_in(&mut ctx, state, &mut rg, only_room);
+        for l in liv.into_iter().chain(eat) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
+    }
     if crate::furn::layout2d::knobs::groups() { for l in crate::furn::groups::kitchen(&mut ctx, state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
     // built-ins sized exactly for their space (counter runs, kitchen cabinets, wardrobes, bathtubs, showers)
     if crate::furn::layout2d::knobs::builtin_fit() {
@@ -413,6 +421,14 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     run_stage("side_obj", "medium", opt.steps_medium, None, 3.0, state, &mut rng, &mut ctx);
     // bedroom and desk groups: nightstands beside the headboard, a chair at every desk
     if crate::furn::layout2d::knobs::groups() {
+        let mut lg = crate::furn::groups::caps(state);
+        lg.extend(crate::furn::groups::beds(state));
+        let mut rd = Rng::seeded(hs("groups_dining"));
+        lg.extend(crate::furn::groups::dining(&mut ctx, state, &mut rd));
+        lg.extend(crate::table_setting::gather_chairs(state));
+        lg.extend(crate::furn::groups::square_up(state));
+        lg.extend(crate::furn::groups::rugs(state));
+        if std::env::var_os("GROUPDBG").is_some() { for l in &lg { eprintln!("GROUP {l}"); } }
         let mut rg = Rng::seeded(hs("groups"));
         for l in crate::furn::groups::bedroom_and_desk(&mut ctx, state, &mut rg) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
     }
@@ -420,19 +436,21 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     if std::env::var_os("RELDUMP").is_some() {
         for (k, o) in &state.objs {
             let Some(g) = &o.generator else { continue };
-            if !["SideTableFactory", "ChairFactory", "OfficeChairFactory", "FridgeFactory", "DishwasherFactory", "SimpleDeskFactory", "BedFactory"].contains(&g.class.as_str()) { continue }
+            if !["SideTableFactory", "ChairFactory", "OfficeChairFactory", "FridgeFactory", "DishwasherFactory", "SimpleDeskFactory", "BedFactory", "KitchenSpaceFactory"].contains(&g.class.as_str()) { continue }
             eprintln!("RELDUMP {} {k}: tags {:?}", g.class, o.tags);
             for r in &o.relations { eprintln!("RELDUMP    -> {} {:?} child_plane {} parent_plane {}", r.target, r.relation, r.child_plane, r.parent_plane); }
         }
     }
     // LAYOUT_DUMP_STAGE=furniture: stop after the furniture layout (no small items on surfaces); LAYOUT_DUMP then writes it
     if crate::furn::layout2d::knobs::furniture_only() {
+        if crate::furn::layout2d::knobs::groups() { let mut rg = Rng::seeded(hs("sinks")); for l in crate::furn::groups::sinks(&mut ctx, state, &mut rg, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
         return (tl, tm, 0.0);
     }
     let t = Instant::now();
     let mut rng = Rng::seeded(hs("solve_small"));
     run_stage("obj_ontop_obj", "small", opt.steps_small, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("obj_on_support", "small", opt.steps_small, Some(vec![MoveKind::Addition]), 1.0, state, &mut rng, &mut ctx);
+    if crate::furn::layout2d::knobs::groups() { let mut rg = Rng::seeded(hs("sinks")); for l in crate::furn::groups::sinks(&mut ctx, state, &mut rg, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
     let ts = t.elapsed().as_secs_f64();
     (tl, tm, ts)
 }

@@ -378,7 +378,9 @@ impl FloorPlanSolver {
                     None => continue,
                 };
                 // rg(("weighted_choice", (1,"round"), (2,"sharp"), (7,"none")))
-                let corner = ["round", "sharp", "none"][rng.choice_p(&[0.1, 0.2, 0.7])];
+                // round / cut corners: Infinigen's 10% / 20% made angled walls common (diagonal counters, wedge-shaped rooms); real
+                // homes have few
+                let corner = ["round", "sharp", "none"][rng.choice_p(&[0.03, 0.05, 0.92])];
                 if corner == "none" {
                     continue;
                 }

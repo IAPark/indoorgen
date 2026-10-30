@@ -123,11 +123,20 @@ pub fn parse_relation(v: &Value, params: &Params) -> Relation {
                 "CoPlanar" => GeoKind::CoPlanar,
                 _ => GeoKind::StableAgainst,
             };
+            let child = parse_tagset(&o["child_tags"]);
+            let parent = parse_tagset(&o["parent_tags"]);
+            let mut margin = o.get("margin").map_or(0.0, |m| num(m, params));
+            // dense program: furniture backed against a wall stands 1 cm off it (just clear of the skirting), not the program's 7 cm
+            // (wardrobes, desks, counter runs read as pulled away from their walls)
+            if kind == GeoKind::StableAgainst && margin > 0.03 && ig_core::envx::dense_env()
+                && child.contains(crate::tags::Tag::sub("Back")) && parent.contains(crate::tags::Tag::sub("Wall")) {
+                margin = 0.01;
+            }
             Relation::Geometry(Geo {
                 kind,
-                child: parse_tagset(&o["child_tags"]),
-                parent: parse_tagset(&o["parent_tags"]),
-                margin: o.get("margin").map_or(0.0, |m| num(m, params)),
+                child,
+                parent,
+                margin,
                 check_z: o.get("check_z").map_or(true, |b| b.as_bool().unwrap()),
                 rev_normal: o.get("rev_normal").map_or(false, |b| b.as_bool().unwrap()),
             })

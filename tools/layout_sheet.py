@@ -13,6 +13,8 @@ Metrics (walk radius 0.3 m = a 0.6 m path):
   outside  a floor piece with > 0.02 m2 outside the room
   missing  the room's anchor piece is missing (bed / sofa / dining table / counter run / toilet + sink)"""
 import glob, json, math, os, re, sys
+# CLEAN=1: plans for review (no metric flags, no keep-out hatching, every piece labelled)
+CLEAN = bool(os.environ.get("CLEAN"))
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -35,7 +37,7 @@ ABBR = {"BedFactory": "bed", "SofaFactory": "sofa", "ArmChairFactory": "arm", "C
         "SideTableFactory": "side", "SimpleDeskFactory": "desk", "WardrobeFactory": "wardrobe", "TVStandFactory": "tv", "KitchenSpaceFactory": "counter",
         "FridgeFactory": "fridge", "ToiletFactory": "wc", "BathtubFactory": "tub", "ShowerFactory": "shower", "StandingSinkFactory": "sink",
         "SingleCabinetFactory": "cab", "LargeShelfFactory": "shelf", "SimpleBookcaseFactory": "books", "CellShelfFactory": "cells", "KitchenCabinetFactory": "kcab",
-        "DishwasherFactory": "dw", "OvenFactory": "oven"}
+        "DishwasherFactory": "dw", "OvenFactory": "oven", "SinkFactory": "sink"}
 
 def cat(cls):
     for n, rx, col in CAT:
@@ -58,8 +60,8 @@ def analyse(d):
         z0, z1 = zr(o)
         # floor pieces: unparented objects standing on the floor, plus chairs (dining chairs are parented to their table); items
         # inside low cabinets / shelves also start below 0.25 m but have a furniture parent
-        if z0 > 0.25 or re.search("Art|Mirror|Light|Window|Door|Keepout", o["class"]): continue
-        if o["parent"] is not None and not re.search("Chair|Stool", o["class"]): continue
+        if z0 > 0.25 or re.search("Art|Mirror|Light|Window|Door|Keepout|Hardware", o["class"]): continue
+        if o["parent"] is not None and not re.search("Chair|Stool|SideTable", o["class"]): continue
         f = foot(o)
         if f is None: continue
         c = f.centroid
@@ -137,8 +139,8 @@ def analyse(d):
 def draw(d, ax, small=False):
     draw_plan(d, ax, small=small)
     res, floor = analyse(d)
-    for o in d["objects"]:  # door clearance / hearth keep-outs: hatched, not furniture
-        if o["class"] != "Keepout": continue
+    for o in d["objects"]:  # door clearance / hearth keep-outs: hatched, not furniture (hidden in CLEAN mode)
+        if o["class"] != "Keepout" or CLEAN: continue
         f = foot(o, zmax=9)
         for g in getattr(f, "geoms", [f]) if f is not None else []:
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#e07070", lw=0.4, hatch="////", zorder=2))
@@ -146,25 +148,52 @@ def draw(d, ax, small=False):
         n, col = cat(o["class"])
         for g in getattr(f, "geoms", [f]):
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc=col, ec="#222", lw=0.4, alpha=0.55 if n == "rug" else 0.9, zorder=3 if n != "rug" else 2))
-        if o.get("front") and n in ("bed", "seat", "storage", "kitchen", "bath", "screen") and f.area > 0.15:
-            c = f.centroid; fx, fy = o["front"]
-            ax.annotate("", xy=(c.x + fx * 0.35, c.y + fy * 0.35), xytext=(c.x, c.y), arrowprops=dict(arrowstyle="-|>", lw=0.5, color="#111"), zorder=5)
-        lab = ABBR.get(o["class"])
-        if lab and not small:
+        if o.get("front") and (n in ("bed", "seat", "storage", "kitchen", "bath", "screen") or re.search("Desk|TVStand", o["class"])) and f.area > 0.04:
+            fx, fy = o["front"]
+            if CLEAN:
+                # the back edge (a sofa's backrest, a bed's headboard, the side against the wall) as a thick dark band
+                hull = f.convex_hull.exterior.coords
+                best = None
+                for (x1, y1), (x2, y2) in zip(hull[:-1], hull[1:]):
+                    L = math.hypot(x2 - x1, y2 - y1)
+                    if L < 1e-6: continue
+                    mx, my = (x1 + x2) / 2 - f.centroid.x, (y1 + y2) / 2 - f.centroid.y
+                    sc = -(mx * fx + my * fy) + L * 0.01   # the back edge (opposite the front)
+                    if best is None or sc > best[0]: best = (sc, (x1, x2), (y1, y2))
+                if best: ax.plot(best[1], best[2], color="#111", lw=2.2, solid_capstyle="butt", zorder=5)
+                # pieces that face something (seats, beds, TV stands, desks): a pointer outside the front edge, the way they face
+                if re.search("Sofa|Chair|^Bed|TVStand|Desk|Toilet", o["class"]):
+                    hx = [(x, y) for x, y in hull]
+                    fe = max(((x1 + x2) / 2 * fx + (y1 + y2) / 2 * fy, (x1, y1, x2, y2)) for (x1, y1), (x2, y2) in zip(hx[:-1], hx[1:]))[1]
+                    mx, my = (fe[0] + fe[2]) / 2, (fe[1] + fe[3]) / 2
+                    L = 0.22 if f.area > 0.3 else 0.14
+                    tri = [(mx - fy * L * 0.6, my + fx * L * 0.6), (mx + fy * L * 0.6, my - fx * L * 0.6), (mx + fx * L, my + fy * L)]
+                    ax.add_patch(MPoly(tri, closed=True, fc="#111", ec="none", zorder=6))
+            else:
+                c = f.centroid
+                ax.annotate("", xy=(c.x + fx * 0.35, c.y + fy * 0.35), xytext=(c.x, c.y), arrowprops=dict(arrowstyle="-|>", lw=0.5, color="#111"), zorder=5)
+        lab = ABBR.get(o["class"]) or (re.sub(r"([a-z])([A-Z])", r"\1 \2", o["class"].replace("Factory", "")).split(" ")[-1].lower() if CLEAN else None)
+        if CLEAN and n == "rug": lab = None
+        if lab and (not small or CLEAN):
             c = f.centroid; ax.text(c.x, c.y - 0.12, lab, fontsize=5, ha="center", va="top", zorder=6, color="#111")
     # wall-mounted / raised pieces (no furniture parent, above 0.25 m): dashed outlines
     for o in d["objects"]:
-        if re.search("Light|Lamp|Art|Mirror|Window|Door", o["class"]): continue
-        if o["parent"] is not None and not re.search("Cabinet|Shelf|TV$", o["class"]): continue
+        if re.search("Light|Lamp|Art|Mirror|Window|Door|Trinket|Book|Hardware", o["class"]): continue
+        if o["parent"] is not None and not re.search("Cabinet|Shelf|TV$|^Sink|^Oven|Cooktop", o["class"]): continue
         z0, z1 = zr(o)
         if z0 <= 0.25: continue
         f = foot(o, zmax=9)
         if f is None or f.area < 0.02: continue
+        is_sink = o["class"] == "SinkFactory"
         for g in getattr(f, "geoms", [f]):
-            ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#555", lw=0.5, ls="--", zorder=4))
+            if is_sink and CLEAN: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc="#a9d8f2", ec="#2a6f93", lw=0.6, zorder=4))
+            else: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#555", lw=0.5, ls="--", zorder=4))
+        lab = ABBR.get(o["class"]) or re.sub(r"([a-z])([A-Z])", r"\1 \2", o["class"].replace("Factory", "")).split(" ")[-1].lower()
+        if CLEAN and f.area > 0.03:
+            c = f.centroid; ax.text(c.x, c.y, lab, fontsize=6 if is_sink else 5, ha="center", va="center", zorder=6, color="#123" if is_sink else "#333", style="normal" if is_sink else "italic", weight="bold" if is_sink else "normal")
     flags = []
     for rk, r in res.items():
-        if not r["flags"]: continue
+        if not r["flags"] or CLEAN: continue
         flags.append(f"{r['type'].replace('-room','')}: " + ",".join(r["flags"].keys()))
         c = wkt.loads(d["rooms"][rk]).representative_point()
         ax.plot([c.x], [c.y + 0.5], marker="o", ms=4 if small else 6, color="#d62728", zorder=7)

@@ -129,7 +129,8 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
             for si in order {
                 let (p, nl) = (&slots[si].0, &slots[si].1);
                 // seat centre 0.5 depth out from the edge minus the tuck; chair faces -n (its +x toward the table)
-                let off = 0.5 * depth - 0.15;
+                // just outside the edge (a 5 cm gap): tucked under the top, chairs read as overlapping the table in a plan
+                let off = 0.5 * depth + 0.05;
                 let sc = to_world([p[0] + nl[0] * off, p[1] + nl[1] * off]);
                 let nw = [r[0][0] * nl[0] + r[0][1] * nl[1], r[1][0] * nl[0] + r[1][1] * nl[1]];
                 let yaw = (-nw[1]).atan2(-nw[0]);

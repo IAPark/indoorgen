@@ -667,7 +667,7 @@ fn anchor(cls: &str) -> bool {
     ["Bed", "Sofa", "TVStand", "KitchenSpace", "Toilet", "StandingSink", "BathroomSink", "Bathtub", "Shower", "TableDining", "Fridge", "Oven", "Chair", "Dishwasher", "Sink"].iter().any(|a| cls.starts_with(a))
 }
 
-fn remove_tree(state: &mut State, k: &str) -> Vec<String> {
+pub fn remove_tree(state: &mut State, k: &str) -> Vec<String> {
     let mut gone = vec![k.to_string()];
     let mut i = 0;
     while i < gone.len() {

@@ -42,6 +42,8 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Kitchen", "FridgeFactory", "against_wall", 1, 1, false),
     // a kitchen without a counter run (stove + fridge + cabinet only) read as a storeroom; the program allows zero
     ("Kitchen", "KitchenSpaceFactory", "against_wall", 1, 2, true),
+    // every counter run has its sink (the program left it optional: half the kitchens had none)
+    ("Kitchen", "SinkFactory", "ontop:KitchenSpaceFactory", 1, 1, true),
     ("LivingRoom", "FridgeFactory", "against_wall", 0, 0, false),
     ("Bedroom", "FridgeFactory", "against_wall", 0, 0, false),
     ("DiningRoom", "FridgeFactory", "against_wall", 0, 0, false),

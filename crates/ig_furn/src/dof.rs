@@ -363,7 +363,9 @@ fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     let skip_win = COUNTER_OVER_WINDOWS.load(std::sync::atomic::Ordering::Relaxed) && (
         (class == "KitchenSpaceFactory" && !state.objs.iter().any(|(k, o)| k.as_str() != name && o.generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")))
         // beds under a window are common; small bedrooms with windows on the free walls got no bed at all (headboard vs the cutter box)
-        || class == "BedFactory");
+        || class == "BedFactory"
+        // anything lower than a sill (sofas, stands, tables) stands under a window too
+        || super::layout2d::prisms(state, name).iter().map(|p| p.z[1]).fold(f64::NEG_INFINITY, f64::max) < 1.0);
     let win = Tag::sem("Window");
     let others: Vec<&String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && !o.tags.contains(nc) && !(skip_win && o.tags.contains(win.clone()))).map(|(k, _)| k).collect();
     if others.is_empty() {
