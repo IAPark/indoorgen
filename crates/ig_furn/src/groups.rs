@@ -711,10 +711,20 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
                     new
                 }
             };
-            let (lo, hi) = lohi(state, &name);
-            let at = bp.apply([blo[0], if s > 0.0 { bhi[1] + 0.04 } else { blo[1] - 0.04 }, blo[2]]);
-            let anchor = [lo[0], if s > 0.0 { lo[1] } else { hi[1] }, lo[2]];
-            if try_place(state, &name, by, anchor, at) {
+            // the usual gap, then tighter, then a narrow nightstand (0.35 m): one side of the bed hard against a wall or wardrobe
+            // left beds with a single nightstand
+            let mut placed_here = false;
+            for (shrink, gap) in [(false, 0.04), (false, 0.02), (true, 0.02)] {
+                if shrink {
+                    let base = state.objs[&name].clone();
+                    let _ = super::solver::set_width(ctx, state, &name, &base, 0.35, 1.0);
+                }
+                let (lo, hi) = lohi(state, &name);
+                let at = bp.apply([blo[0], if s > 0.0 { bhi[1] + gap } else { blo[1] - gap }, blo[2]]);
+                let anchor = [lo[0], if s > 0.0 { lo[1] } else { hi[1] }, lo[2]];
+                if try_place(state, &name, by, anchor, at) { placed_here = true; break }
+            }
+            if placed_here {
                 placed += 1;
                 log.push(format!("nightstand {name} on the {} side of {bed}", if s > 0.0 { "+y" } else { "-y" }));
             } else if name.contains("_pair") || name.contains("_nightstand") {
