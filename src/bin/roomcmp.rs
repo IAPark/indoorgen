@@ -102,7 +102,7 @@ fn main() {
             use indoorgen::furn::geom::{CEILING, INTERIOR, SUPPORT, VISIBLE, WALL};
             let (room, seed): (&str, u64) = (a[2].as_str(), a[3].parse().unwrap());
             let c = consts(seed);
-            let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+            let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: indoorgen::rooms::graph::RoomSet::Fewer };
             let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
             let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));
             let st = solver.solve(&mut r);
@@ -139,7 +139,7 @@ fn main() {
             // roomcmp try <seed0> <seed1>: does the exact builder succeed for these floor plans?
             for seed in a[2].parse::<u64>().unwrap()..a[3].parse::<u64>().unwrap() {
                 let c = consts(seed);
-                let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+                let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: indoorgen::rooms::graph::RoomSet::Fewer };
                 let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
                 let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));
                 let st = solver.solve(&mut r);
@@ -159,7 +159,7 @@ fn main() {
             let mut out = serde_json::Map::new();
             for seed in a[2].parse::<u64>().unwrap()..a[3].parse::<u64>().unwrap() {
                 let c = consts(seed);
-                let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+                let cfg = indoorgen::rooms::plan::PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: indoorgen::rooms::graph::RoomSet::Fewer };
                 let Ok(st) = std::panic::catch_unwind(|| {
                     let solver = indoorgen::rooms::plan::FloorPlanSolver::new(seed, &c, cfg);
                     let mut r = indoorgen::rng::Rng::seeded(indoorgen::int_hash(&[&seed.to_string(), "solve_rooms"]));

@@ -17,7 +17,7 @@ fn main() {
     let c = RoomConstants::sample(&mut rng0, 1);
     println!("{:?}", c);
     let t0 = std::time::Instant::now();
-    let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+    let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: indoorgen::rooms::graph::RoomSet::Fewer };
     let solver = FloorPlanSolver::new(seed, &c, cfg);
     println!("graphs {:?}\nwh {:?} {:?}", solver.graphs, solver.widths, solver.heights);
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));

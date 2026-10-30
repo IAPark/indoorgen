@@ -50,6 +50,8 @@ pub struct Options {
     pub features: crate::features::FeatureCfg,
     /// open plan: probability that a kitchen / dining / living door becomes a wide passage (0 = off)
     pub passage_prob: f64,
+    /// room grammar of the floor plan
+    pub rooms: crate::rooms::graph::RoomSet,
 }
 
 /// constraint program for a scene seed (params drawn from the global numpy stream like the python)
@@ -95,7 +97,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 
     // --- rooms ---
     let t = Instant::now();
-    let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+    let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: opt.rooms };
     let solver = FloorPlanSolver::new(seed, &c, cfg);
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
     let st = solver.solve(&mut a);
@@ -303,7 +305,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0 }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives

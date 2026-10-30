@@ -12,7 +12,7 @@ fn main() {
     let mut rng0 = Rng::seeded(seed);
     for _ in 0..42 { rng0.next_u32(); }
     let c = RoomConstants::sample(&mut rng0, 1);
-    let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, fewer_rooms: true };
+    let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: indoorgen::rooms::graph::RoomSet::Fewer };
     let solver = FloorPlanSolver::new(seed, &c, cfg);
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
     let st = solver.solve(&mut a);

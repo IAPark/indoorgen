@@ -194,21 +194,30 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
         }
     }
     total += s * 20.0;
-
-    // narrowness
-    let narrow_set = ["bathroom", "utility", "staircase-room", "hallway", "balcony"];
+    // hallways are corridors: a size target (they otherwise absorb the floor left over: 20-60 m2 halls) and no part wider than
+    // 2 m on wall centrelines (an opening at 2 m width leaves only the too-wide parts)
     let mut s = 0.0;
-    for k in &rooms {
-        if !narrow_set.contains(&room_type(k)) {
-            s += narrowness(state, k, c, 2.5);
+    for k in of("hallway") {
+        let p = state.poly(k);
+        s += hinge_sq(area(p), 5.0) * 500.0;
+        let wide = buffer_full(&buffer_full(p, -1.0, Join::Mitre, Cap::Flat, 16, false), 1.0, Join::Mitre, Cap::Flat, 16, false);
+        if !is_empty(&wide) {
+            s += area(&wide) * 100.0;
         }
     }
-    total += s * 2000.0;
+    total += s;
+
+    // narrowness
+    // minimum widths on wall centrelines (clear width ~0.3 m less): 2.5 m left strip bedrooms and dining rooms ~2.2 m clear
     let mut s = 0.0;
-    for t in narrow_set {
-        for k in of(t) {
-            s += narrowness(state, k, c, 2.0);
-        }
+    for k in &rooms {
+        let thresh = match room_type(k) {
+            "living-room" | "bedroom" | "dining-room" => 3.0,
+            "kitchen" | "garage" => 2.5, // galley kitchens are fine
+            "hallway" | "closet" => 1.5,
+            _ => 2.0, // bathroom, utility, staircase, balcony
+        };
+        s += narrowness(state, k, c, thresh);
     }
     total += s * 2000.0;
 

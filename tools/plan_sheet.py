@@ -13,6 +13,7 @@ from shapely.ops import unary_union
 
 COL = {"living-room": "#f3dfb8", "dining-room": "#f6c9a8", "kitchen": "#cfe3b4", "bedroom": "#bcd3ec", "bathroom": "#b9e4e1",
        "hallway": "#e4e0d8", "closet": "#d9cfe6", "utility": "#d8d8d8", "balcony": "#e8f0d0", "staircase": "#ffffff", "garage": "#cccccc"}
+COL["hallway"] = "#e9e4da"
 
 def kind(name): return name.split("_")[0]
 

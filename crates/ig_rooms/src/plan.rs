@@ -16,6 +16,7 @@ pub struct FloorPlanSolver {
     pub contours: Vec<G>,
     segment_makers: Vec<SegmentMaker>,
     n_divide_trials: usize,
+    best_of: usize,
     iter_per_room: usize,
     score_scale: f64,
 }
@@ -24,7 +25,7 @@ pub struct FloorPlanSolver {
 pub struct PlanConfig {
     pub n_divide_trials: usize,
     pub iters_mult: usize,
-    pub fewer_rooms: bool,
+    pub rooms: super::graph::RoomSet,
 }
 
 impl FloorPlanSolver {
@@ -36,7 +37,7 @@ impl FloorPlanSolver {
         let mut heights = vec![];
         let mut contours = vec![];
         for i in 0..c.n_stories {
-            let gm = GraphMaker::new(factory_seed, c, i, cfg.fewer_rooms);
+            let gm = GraphMaker::new(factory_seed, c, i, cfg.rooms);
             let (graph, width, height);
             {
                 let seed = rng.randint(0, 1_000_000) as u64;
@@ -63,7 +64,8 @@ impl FloorPlanSolver {
             contours,
             segment_makers,
             n_divide_trials: cfg.n_divide_trials,
-            iter_per_room: cfg.iters_mult,
+            best_of: if cfg.rooms == super::graph::RoomSet::Curated { 12 } else { 1 },
+            iter_per_room: if cfg.rooms == super::graph::RoomSet::Curated { cfg.iters_mult * 3 } else { cfg.iters_mult },
             score_scale: 5.0,
         }
     }
@@ -98,13 +100,23 @@ impl FloorPlanSolver {
             state.objs.clear();
             done = true;
             for j in 0..self.c.n_stories {
-                let mut got = None;
-                for _ in 0..self.n_divide_trials * (j + 1) * (j + 1) {
+                // rooms are assigned to the random boxes by adjacency alone, so the first division that fits put hallways (the most
+                // connected room) on big central boxes; keep the best-scoring of up to `best_of` divisions instead (1 = python)
+                let mut got: Option<(f64, RoomState)> = None;
+                let mut found = 0;
+                for _ in 0..self.n_divide_trials * (j + 1) * (j + 1) * self.best_of {
                     if let Some(st) = self.segment_makers[j].build_segments(rng, Some(&pholder)) {
-                        got = Some(st);
-                        break;
+                        let sc = if self.best_of > 1 { room_term(&st, &self.c) } else { 0.0 };
+                        if got.as_ref().map_or(true, |(b, _)| sc < *b) {
+                            got = Some((sc, st));
+                        }
+                        found += 1;
+                        if found >= self.best_of {
+                            break;
+                        }
                     }
                 }
+                let got = got.map(|(_, st)| st);
                 match got {
                     Some(st) => {
                         for (k, v) in st.objs {
@@ -381,10 +393,11 @@ impl FloorPlanSolver {
                         Ok(e) => e,
                         Err(_) => panic!("decorate: canonicalize exterior_"),
                     };
-                    let new = self
-                        .c
-                        .canonicalize(&buffer(&intersection(state.poly(&k), &ext_), 0.0))
-                        .unwrap_or_else(|_| panic!("decorate: canonicalize new"));
+                    // a small room (closet) the cut splits or empties: try a smaller corner
+                    let Ok(new) = self.c.canonicalize(&buffer(&intersection(state.poly(&k), &ext_), 0.0)) else {
+                        length -= self.c.unit;
+                        continue;
+                    };
                     let ok = [0.0, 0.25, 0.5, 0.75].iter().all(|m| {
                         let b = buffer(&new, -m + 1e-2);
                         matches!(gtype(&b), GeometryTypes::Polygon)

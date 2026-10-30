@@ -30,8 +30,41 @@ const fn rule(parent: &'static str, child: &'static str, low: usize, high: usize
     Rule { parent, child, low, high, mean }
 }
 
-pub fn rules(fewer_rooms: bool) -> Vec<Rule> {
-    if fewer_rooms {
+/// which room grammar a house samples
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomSet {
+    /// Infinigen `fewer_rooms`: living + dining + kitchen + bathroom + 1-2 bedrooms, all off the living room (no hallways)
+    Fewer,
+    /// Infinigen's full grammar (hallways, closets, utility rooms, garages, balconies; loose counts)
+    Full,
+    /// real-home program: a hallway serving the bedrooms and the bathroom in most houses, 1-3 bedrooms, bathrooms <= bedrooms + 1,
+    /// optional en-suite / walk-in closet / utility room, dining room optional (kitchen off the living room); no garage, balcony
+    Curated,
+}
+
+const CURATED_TYPES: [&str; 8] = ["bathroom", "bedroom", "closet", "dining-room", "hallway", "kitchen", "living-room", "utility"];
+
+pub fn rules(set: RoomSet) -> Vec<Rule> {
+    if set == RoomSet::Curated {
+        return vec![
+            rule("root", "living-room", 1, 1, 1.0),
+            rule("living-room", "entrance", 0, 1, 0.8),
+            rule("living-room", "hallway", 0, 1, 0.7),
+            rule("living-room", "bedroom", 0, 2, 0.5),
+            rule("living-room", "bathroom", 0, 1, 0.15),
+            rule("living-room", "dining-room", 0, 1, 0.6),
+            rule("living-room", "kitchen", 0, 1, 0.3),
+            rule("dining-room", "kitchen", 0, 1, 0.9),
+            rule("hallway", "entrance", 0, 1, 0.3),
+            rule("hallway", "bedroom", 1, 3, 1.8),
+            rule("hallway", "bathroom", 0, 1, 0.85),
+            rule("hallway", "closet", 0, 1, 0.2),
+            rule("bedroom", "bathroom", 0, 1, 0.25),
+            rule("bedroom", "closet", 0, 1, 0.25),
+            rule("kitchen", "utility", 0, 1, 0.2),
+        ];
+    }
+    if set == RoomSet::Fewer {
         vec![
             rule("root", "living-room", 1, 2, 1.1),
             rule("living-room", "bedroom", 1, 2, 1.2),
@@ -111,7 +144,7 @@ pub struct GraphMaker {
     pub typical_areas: HashMap<String, f64>,
     pub slackness: f64,
     rules: Vec<(Rule, Vec<f64>)>,
-    fewer_rooms: bool,
+    set: RoomSet,
     room_types: Vec<&'static str>,
 }
 
@@ -122,11 +155,11 @@ pub const ROOM_TYPES_SORTED: [&str; 11] = [
 
 impl GraphMaker {
     /// `factory_seed` stream: python draws `slackness` as the first value of FixedSeed(factory_seed).
-    pub fn new(factory_seed: u64, c: &RoomConstants, level: usize, fewer_rooms: bool) -> Self {
+    pub fn new(factory_seed: u64, c: &RoomConstants, level: usize, set: RoomSet) -> Self {
         let typical_areas = typical_areas(c, level);
         let mut rng = Rng::seeded(factory_seed);
         let slackness = rng.log_uniform(1.1, 1.3);
-        let rs = rules(fewer_rooms);
+        let rs = rules(set);
         let rules = rs
             .into_iter()
             .map(|r| {
@@ -140,8 +173,8 @@ impl GraphMaker {
             typical_areas,
             slackness,
             rules,
-            fewer_rooms,
-            room_types: ROOM_TYPES_SORTED.to_vec(),
+            set,
+            room_types: if set == RoomSet::Curated { CURATED_TYPES.to_vec() } else { ROOM_TYPES_SORTED.to_vec() },
         }
     }
 
@@ -177,7 +210,7 @@ impl GraphMaker {
     fn violations(&self, st: &GState) -> f64 {
         let cnt = |t: &str| st.keys().filter(|k| room_type(k) == t).count() as f64;
         let ge = |v: f64, lo: f64| (lo - v).max(0.0);
-        if self.fewer_rooms {
+        if self.set == RoomSet::Fewer {
             return ge(cnt("entrance"), 1.0)
                 + (cnt("staircase-room") - 0.0).abs()
                 + ge(cnt("living-room"), 1.0)
@@ -185,20 +218,27 @@ impl GraphMaker {
                 + ge(cnt("bedroom"), 1.0)
                 + ge(cnt("bathroom"), 1.0);
         }
-        let n_total = st.keys().filter(|k| !matches!(room_type(k), EXTERIOR | ENTRANCE)).count() as f64;
         let in_range = |v: f64, lo: f64, hi: f64| if v < lo { lo - v } else if v > hi { v - hi } else { 0.0 };
-        let rg_count = st.len() as f64;
-        let or0 = |a: f64| a.min(rg_count.abs());
         let mut viol = 0.0;
-        viol += in_range(n_total, 4.0, 15.0);
-        viol += or0(ge(cnt("living-room"), 1.0));
-        viol += or0(ge(cnt("entrance"), 1.0));
-        viol += ge(cnt("bedroom"), 1.0);
-        viol += or0(ge(cnt("dining-room"), 1.0));
-        viol += or0(ge(cnt("kitchen"), 1.0));
-        viol += in_range(cnt("garage"), 0.0, 1.0);
-        viol += in_range(cnt("hallway"), 0.0, 3.0);
-        viol += cnt("staircase-room").abs();
+        if self.set == RoomSet::Curated {
+            for (t, lo, hi) in [("living-room", 1.0, 1.0), ("kitchen", 1.0, 1.0), ("entrance", 1.0, 1.0), ("dining-room", 0.0, 1.0), ("hallway", 0.0, 1.0), ("utility", 0.0, 1.0), ("closet", 0.0, 2.0), ("bedroom", 1.0, 3.0), ("staircase-room", 0.0, 0.0)] {
+                viol += in_range(cnt(t), lo, hi);
+            }
+            viol += in_range(cnt("bathroom"), 1.0, cnt("bedroom") + 1.0);
+        } else {
+            let n_total = st.keys().filter(|k| !matches!(room_type(k), EXTERIOR | ENTRANCE)).count() as f64;
+            let rg_count = st.len() as f64;
+            let or0 = |a: f64| a.min(rg_count.abs());
+            viol += in_range(n_total, 4.0, 15.0);
+            viol += or0(ge(cnt("living-room"), 1.0));
+            viol += or0(ge(cnt("entrance"), 1.0));
+            viol += ge(cnt("bedroom"), 1.0);
+            viol += or0(ge(cnt("dining-room"), 1.0));
+            viol += or0(ge(cnt("kitchen"), 1.0));
+            viol += in_range(cnt("garage"), 0.0, 1.0);
+            viol += in_range(cnt("hallway"), 0.0, 3.0);
+            viol += cnt("staircase-room").abs();
+        }
         let related = |r: &str, t: &str| -> usize { count_related(st, r, t) };
         let related_via = |r: &str, mid: &str, t: &str| -> usize {
             st.iter()

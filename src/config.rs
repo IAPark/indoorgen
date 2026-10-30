@@ -54,9 +54,18 @@ pub struct House {
     pub room: Option<String>,
     /// Furnish only the first room of the target type (fast). Off: furnish every room of the house.
     pub only_target: bool,
+    /// Room program of the floor plan: "curated" (hallways, 1-3 bedrooms, optional en-suite / closet / utility room),
+    /// "fewer" (Infinigen fewer_rooms: five rooms off the living room, no hallways) or "full" (Infinigen's full grammar).
+    pub rooms: String,
 }
 impl Default for House {
-    fn default() -> Self { House { seed: 0, room: None, only_target: false } }
+    fn default() -> Self { House { seed: 0, room: None, only_target: false, rooms: "curated".into() } }
+}
+impl House {
+    pub fn room_set(&self) -> crate::rooms::graph::RoomSet {
+        use crate::rooms::graph::RoomSet;
+        match self.rooms.as_str() { "fewer" => RoomSet::Fewer, "full" => RoomSet::Full, "curated" | "" => RoomSet::Curated, x => panic!("house.rooms: unknown room program {x:?} (curated, fewer, full)") }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
