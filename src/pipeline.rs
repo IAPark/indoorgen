@@ -432,6 +432,7 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
         if std::env::var_os("GROUPDBG").is_some() { for l in &lg { eprintln!("GROUP {l}"); } }
         let mut rg = Rng::seeded(hs("groups"));
         for l in crate::furn::groups::bedroom_and_desk(&mut ctx, state, &mut rg) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
+        for l in crate::furn::groups::wardrobes(state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
     }
     let tm = t.elapsed().as_secs_f64();
     if std::env::var_os("RELDUMP").is_some() {

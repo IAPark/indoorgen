@@ -688,6 +688,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let tv_start = state.objs[&tv].pose;
         let mut pair: Option<(f64, super::geom::Pose, super::geom::Pose, f64)> = None;
         let segs = wall_segments(state, &room);
+        let ldoors = door_points(state, &room);
         // the floor's area centroid (a vertex mean leans toward the short leg of an L-shaped room)
         let fc = {
             let r = &rings[0];
@@ -733,7 +734,9 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 }
                 // the group in the room, not along its edge: midpoint of sofa and TV near the floor's centre
                 let mid = [(base[0] + hp[0]) / 2.0, (base[1] + hp[1]) / 2.0];
-                let score = -(view - 2.6).abs() - if view < 1.8 { 1.5 } else { 0.0 } - (tt - len / 2.0).abs() / len - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.6;
+                // a TV beside a door (the entrance, a room door) reads as misplaced
+                let tv_door = ldoors.iter().map(|d| ((d[0] - hp[0]).powi(2) + (d[1] - hp[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
+                let score = -(view - 2.6).abs() - if view < 1.8 { 1.5 } else { 0.0 } - (1.6 - tv_door).max(0.0) * 1.5 - (tt - len / 2.0).abs() / len - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.6;
                 if pair.as_ref().map_or(true, |p| score > p.0) { pair = Some((score, state.objs[&sofa].pose, state.objs[&tv].pose, view)); }
                 state.set_pose(&tv, tv_start); state.touch(&tv);
             }
@@ -1086,6 +1089,38 @@ pub fn toilets(state: &mut State, only_room: Option<&str>) -> Vec<String> {
     log
 }
 
+/// bedrooms: a wardrobe within 0.7 m of the bed (at its foot, against its side) moves to the wall spot farthest from the bed and
+/// clear of the doors; kept where it is when no spot does better
+pub fn wardrobes(state: &mut State) -> Vec<String> {
+    let mut log = vec![];
+    let ws: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| class_of(o) == "WardrobeFactory")
+        .filter_map(|(k, _)| layout2d::room_of(state, k).filter(|r| room_type_of(r) == "bedroom").map(|r| (k.clone(), r))).collect();
+    for (w, room) in ws {
+        let beds: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "BedFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        let Some(bed) = beds.first().cloned() else { continue };
+        let d0 = layout2d::dist(state, &w, &bed);
+        if d0 >= 0.7 { continue }
+        let doors = door_points(state, &room);
+        let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
+        let score = |st: &State, c: [f64; 2], w2: &str, bed: &str| layout2d::dist(st, w2, bed).min(2.0) + door_d(c).min(1.2) * 0.5;
+        let t = state.objs[&w].pose.t;
+        let s0 = score(state, [t[0], t[1]], &w, &bed);
+        let start = state.objs[&w].pose;
+        let (w2, b2) = (w.clone(), bed.clone());
+        let sc = &score;
+        if place_on_wall(state, &w, &room, &move |st, c, _t, _len, _n| sc(st, c, &w2, &b2)) {
+            let t1 = state.objs[&w].pose.t;
+            if score(state, [t1[0], t1[1]], &w, &bed) > s0 + 0.3 && layout2d::dist(state, &w, &bed) >= 0.6 {
+                log.push(format!("{room}: wardrobe {w} moved off the bed ({d0:.2} -> {:.2} m)", layout2d::dist(state, &w, &bed)));
+                continue;
+            }
+        }
+        state.set_pose(&w, start);
+        state.touch(&w);
+    }
+    log
+}
+
 /// a table in the open middle of `room` (long side along the room's long axis), tried at the floor's bbox centre then rings of
 /// offsets; true when placed
 fn center_table(state: &mut State, t: &str, room: &str) -> bool {
@@ -1276,9 +1311,20 @@ fn slot_free(state: &State, room: &str, owner: &str, corners: &[[f64; 2]]) -> bo
 pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<&str>) -> Vec<String> {
     let mut log = vec![];
     let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && only_room.map_or(true, |r| layout2d::room_of(state, k).as_deref() == Some(r))).map(|(k, _)| k.clone()).collect();
-    for run in runs {
+    for run in runs.clone() {
         if state.objs.iter().any(|(_, o)| class_of(o) == "SinkFactory" && o.relations.iter().any(|r| r.target == run)) { continue }
         let Some(room) = layout2d::room_of(state, &run) else { continue };
+        // one sink per kitchen, on the run the range stands at (else the longest): a sink on a separate counter read as disjoint
+        let in_room: Vec<&String> = runs.iter().filter(|r| layout2d::room_of(state, r).as_deref() == Some(room.as_str())).collect();
+        let ovens: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "OvenFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        let key = |r: &str| -> (f64, f64) {
+            let d = ovens.iter().map(|o| layout2d::dist(state, r, o)).fold(9.0f64, f64::min);
+            let w = state.objs[r].generator.as_ref().and_then(super::solver::cur_size).map_or(0.0, |c| c[0]);
+            (d, -w)
+        };
+        let main = in_room.iter().min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap()).map(|r| r.to_string());
+        if main.as_deref() != Some(run.as_str()) { continue }
+        if state.objs.iter().any(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())) { continue }
         // the solver's loose items on the run go first (the counter dresser removes and redresses them by zone anyway: dress::purge)
         let loose: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == run) && class_of(o) != "SinkFactory").map(|(k, _)| k.clone()).collect();
         for k in loose { if state.objs.contains_key(&k) { layout2d::remove_tree(state, &k); } }

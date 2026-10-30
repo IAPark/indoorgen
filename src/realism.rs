@@ -41,7 +41,8 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     // one full-size fridge (FridgeFactory, ours) per kitchen and none elsewhere
     ("Kitchen", "FridgeFactory", "against_wall", 1, 1, false),
     // a kitchen without a counter run (stove + fridge + cabinet only) read as a storeroom; the program allows zero
-    ("Kitchen", "KitchenSpaceFactory", "against_wall", 1, 2, true),
+    // up to four runs: the layout lines every free wall with counters (groups::kitchen); a cap of 2 deleted the main run
+    ("Kitchen", "KitchenSpaceFactory", "against_wall", 1, 4, true),
     // every counter run has its sink (the program left it optional: half the kitchens had none)
     ("Kitchen", "SinkFactory", "ontop:KitchenSpaceFactory", 1, 1, true),
     ("LivingRoom", "FridgeFactory", "against_wall", 0, 0, false),
