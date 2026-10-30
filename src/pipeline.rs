@@ -107,6 +107,14 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     }
     let sol = Solidifier { c: &c, graph: &solver.graphs[0], level: 0, enable_open: false, passage_prob: opt.passage_prob };
     let res = sol.solidify(&mut Rng::seeded(seed), &st);
+    if let Ok(path) = std::env::var("PLAN_DUMP") {
+        // floor plan only (room polygons + door / window / entrance cutters), then exit: no furniture
+        use geos::Geom;
+        let rooms: serde_json::Map<String, serde_json::Value> = st.objs.iter().filter_map(|(k, o)| Some((k.clone(), serde_json::json!(o.polygon.as_ref()?.to_wkt().ok()?)))).collect();
+        let cut: Vec<_> = res.cutters.iter().map(|ct| serde_json::json!({"kind": format!("{:?}", ct.kind), "loc": ct.loc, "rot": ct.rot_z, "dim": ct.dims, "rooms": ct.rooms})).collect();
+        std::fs::write(&path, serde_json::json!({"seed": seed, "wall_thickness": c.wall_thickness, "wall_height": c.wall_height, "rooms": rooms, "cutters": cut}).to_string()).unwrap();
+        std::process::exit(0);
+    }
     let shells = shell::build_shells(&c, &st, &res.cutters);
     timings.push(("rooms".into(), t.elapsed().as_secs_f64()));
 
