@@ -50,3 +50,42 @@ pub fn clear_uppers(state: &State, visuals: &mut HashMap<String, crate::assets::
     }
     log
 }
+
+/// Built-in dishwashers: infinigen's DishwasherFactory stands at its own height (8-9 cm proud of the counter in the gal22 review,
+/// "taller than and in front of the counter, not built in"). A dishwasher within 0.3 m of a counter run is scaled vertically (about its
+/// base) so its top sits 5 mm under that run's counter top.
+pub fn fit_dishwashers(state: &State, visuals: &mut HashMap<String, crate::assets::Asset>) -> Vec<String> {
+    let mut log = vec![];
+    let wbox = |o: &crate::furn::state::ObjState, a: &crate::assets::Asset| -> Box3 {
+        let (l, h) = a.bounds();
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let p = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(p[d]); hi[d] = hi[d].max(p[d]); }
+        }
+        (lo, hi)
+    };
+    let counters: Vec<(Box3, f64)> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")).filter_map(|(k, o)| {
+        let a = visuals.get(k)?;
+        let (lo, _) = a.bounds();
+        let top = crate::dress::plateau(a, lo[2] + 0.7, lo[2] + 1.2, 6)?;
+        Some((wbox(o, a), o.pose.t[2] + top))
+    }).collect();
+    let dws: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "DishwasherFactory")).map(|(k, _)| k.clone()).collect();
+    for k in dws {
+        let o = &state.objs[&k];
+        let Some(a) = visuals.get(&k) else { continue };
+        let b = wbox(o, a);
+        let near = counters.iter().filter(|(cb, _)| (0..2).all(|d| b.0[d] < cb.1[d] + 0.3 && cb.0[d] - 0.3 < b.1[d])).map(|(_, t)| *t).fold(f64::NAN, f64::min);
+        if !near.is_finite() { continue }
+        let (lo, hi) = a.bounds();
+        let (z0, top) = (o.pose.t[2] + lo[2], o.pose.t[2] + hi[2]);
+        let want = near - 0.005;
+        if (top - want).abs() < 0.005 || want - z0 < 0.5 { continue }
+        let s = (want - z0) / (top - z0);
+        let a = visuals.get_mut(&k).unwrap();
+        for p in a.parts.iter_mut() { for q in p.mesh.pos.iter_mut() { q[2] = lo[2] + (q[2] - lo[2]) * s; } }
+        log.push(format!("dishwasher {k}: top {top:.3} -> {want:.3} (x{s:.3})"));
+    }
+    log
+}

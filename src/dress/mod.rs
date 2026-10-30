@@ -135,6 +135,20 @@ pub fn level_spot(tris: &[[[f64; 3]; 3]], x: f64, y: f64, rad: f64, band: (f64, 
     Some(zt)
 }
 
+/// highest 1 cm height level of an asset's top surface between `zlo` and `zhi` (local z) shared by >= `min_count` cells of a 16 x 8
+/// grid over its footprint -- the working surface (counter top, ledge) rather than the bounds' top (taps, raised lids, upper cabinets)
+pub fn plateau(a: &Asset, zlo: f64, zhi: f64, min_count: usize) -> Option<f64> {
+    let tris = TriGrid::new(tris_of(a));
+    let (lo, hi) = a.bounds();
+    let mut levels: std::collections::BTreeMap<i64, usize> = Default::default();
+    for gx in 0..16 { for gy in 0..8 {
+        let (x, y) = (lo[0] + (hi[0] - lo[0]) * (gx as f64 + 0.5) / 16.0, lo[1] + (hi[1] - lo[1]) * (gy as f64 + 0.5) / 8.0);
+        let t = tris.heights(x, y).into_iter().filter(|z| *z > zlo && *z < zhi).fold(f64::NAN, f64::max);
+        if t.is_finite() { *levels.entry((t * 100.0).round() as i64).or_default() += 1 }
+    } }
+    levels.iter().rev().find(|(_, c)| **c >= min_count).map(|(z, _)| *z as f64 / 100.0)
+}
+
 /// Occupied space for one dressing run: world boxes of every node already in the scene that is not room shell / skirting, plus what
 /// the dressers place.
 pub struct Occ { pub boxes: Vec<Box3>, pub names: Vec<String> }

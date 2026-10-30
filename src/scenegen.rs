@@ -352,6 +352,7 @@ pub fn build_scene(p: &Params) -> Built {
     // after the door / drawer states (they address parts by index)
     if cfg.program.dense && cfg.program.counter_over_windows {
         for l in crate::kitchen_window::clear_uppers(&g.state, &mut visuals) { eprintln!("KITCHEN {l}"); }
+        for l in crate::kitchen_window::fit_dishwashers(&g.state, &mut visuals) { eprintln!("KITCHEN {l}"); }
     }
     // supported objects rest on the VISIBLE surface of their parent (the solver used the python placeholder, which differs by cm)
     {

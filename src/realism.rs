@@ -31,6 +31,8 @@ const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
     ("Kitchen", "BookStackFactory", "on:Storage", 0, 0, false),
     // one full-size fridge (FridgeFactory, ours) per kitchen and none elsewhere
     ("Kitchen", "FridgeFactory", "against_wall", 1, 1, false),
+    // a kitchen without a counter run (stove + fridge + cabinet only) read as a storeroom; the program allows zero
+    ("Kitchen", "KitchenSpaceFactory", "against_wall", 1, 2, true),
     ("LivingRoom", "FridgeFactory", "against_wall", 0, 0, false),
     ("Bedroom", "FridgeFactory", "against_wall", 0, 0, false),
     ("DiningRoom", "FridgeFactory", "against_wall", 0, 0, false),
@@ -119,7 +121,7 @@ pub fn with_realism_rules(mut spec: RuleSpec) -> RuleSpec {
             continue;
         }
         // bath fixtures: a strong preference (the solver adds a bathtub and / or shower wherever one fits)
-        let weight = if more && matches!(class, "BathtubFactory" | "ShowerFactory") { Some(4.0) } else { None };
+        let weight = if more && matches!(class, "BathtubFactory" | "ShowerFactory" | "KitchenSpaceFactory") { Some(4.0) } else { None };
         rr.rules.push(Rule { class: class.into(), relation: rel.into(), min: Some(min), max: Some(max), prefer: more.then_some(Prefer::More), weight });
     }
     spec
