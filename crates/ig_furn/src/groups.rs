@@ -254,6 +254,22 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
     let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").map(|(k, _)| k.clone()).collect();
     for room in rooms {
         let mut rng = Rng::seeded(ig_core::int_hash(&["kitchen_runs", &room]));
+        // an appliance standing alone mid-wall leaves no stretch long enough for a run: it slides into a corner of a wall first
+        // (the new run then grows up to it, in line)
+        let lone: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "FridgeFactory" | "OvenFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        for a in lone {
+            let runs_now: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            if runs_now.iter().any(|r| layout2d::dist(state, r, &a) < 0.1) { continue }
+            let start = state.objs[&a].pose;
+            let (lo, hi) = lohi(state, &a);
+            let hw = (hi[1] - lo[1]) / 2.0;
+            if place_on_wall(state, &a, &room, &move |_, _c, t, len, n| -(t - hw).min(len - t - hw) - if n[0].abs() > 0.99 || n[1].abs() > 0.99 { 0.0 } else { 10.0 }) {
+                log.push(format!("{room}: {a} slid into a corner"));
+            } else {
+                state.set_pose(&a, start);
+                state.touch(&a);
+            }
+        }
         for i in 0..3 {
             let others: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
             if others.is_empty() { break }
@@ -269,8 +285,11 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
             let os = others.clone();
             let aisle_ok = move |st: &State| os.iter().all(|r| { let d = layout2d::dist(st, r, &n2); d < 0.05 || d >= 1.0 });
             let ok2 = aisle_ok.clone();
-            let placed = place_on_wall(state, &name, &room, &move |st, _c, _t, len, _n| len - if ok2(st) { 0.0 } else { 100.0 });
-            if !placed || !aisle_ok(state) {
+            // straight walls only (a run on an angled wall reads as a diagonal counter in the middle of the room)
+            let placed = place_on_wall(state, &name, &room, &move |st, _c, _t, len, n| len - if ok2(st) && (n[0].abs() > 0.99 || n[1].abs() > 0.99) { 0.0 } else { 100.0 });
+            let ny = yaw(&state.objs[&name].pose);
+            let straight = (ny.sin() * ny.cos()).abs() < 0.02;
+            if !placed || !aisle_ok(state) || !straight {
                 state.objs.shift_remove(&name);
                 break;
             }
@@ -286,7 +305,9 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
         let fridges: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "FridgeFactory" | "OvenFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
         let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
         for f in fridges {
-            if runs.iter().any(|r| layout2d::dist(state, r, &f) < 0.1) { continue }
+            // in line with a run (same facing, touching) it stands at its end already; touching one only sideways it does not
+            let fy = yaw(&state.objs[&f].pose);
+            if runs.iter().any(|r| layout2d::dist(state, r, &f) < 0.1 && (yaw(&state.objs[r].pose) - fy).sin().abs() < 0.05 && (yaw(&state.objs[r].pose) - fy).cos() > 0.0) { continue }
             let (lo, hi) = lohi(state, &f);
             'r: for run in &runs {
                 let (clo, chi) = lohi(state, run);
@@ -514,6 +535,11 @@ pub fn caps(state: &mut State) -> Vec<String> {
             layout2d::prisms(state, k).iter().flat_map(|p| p.poly.iter().map(|v| layout2d::ring_dist(&rings, *v))).fold(f64::INFINITY, f64::min)
         };
         keys.sort_by(|a, b| wall_gap(a).partial_cmp(&wall_gap(b)).unwrap());
+        // a bathroom of 7 m2 or more keeps its tub over a shower (a bath without a tub read as under-equipped)
+        let area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
+        if grp == "tub / shower" && area >= 7.0 {
+            keys.sort_by_key(|k| class_of(&state.objs[k.as_str()]) != "BathtubFactory");
+        }
         for k in keys.split_off(max) {
             let cls = class_of(&state.objs[&k]).to_string();
             layout2d::remove_tree(state, &k);
@@ -1140,7 +1166,8 @@ pub fn eat_in(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option
         let kitchen_big = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").any(|(k, _)| area_of(state, k) >= 18.0);
         // a living room takes the table only when it is large enough for a separate dining corner
         // (a living room no longer takes one: a table among the sofa group reads as misplaced)
-        let host = rt == "kitchen" && kitchen_big;
+        // (a kitchen no longer takes one either: its counters line every free wall, and a table among them read as in the way)
+        let host = false && rt == "kitchen" && kitchen_big;
         if no_dining && host && !has(state, "TableDiningFactory") {
             let tname = format!("{room}_eatin").replace('/', "_");
             if new_piece(ctx, state, rng, "TableDiningFactory", &room, &tname) {

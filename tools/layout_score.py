@@ -50,7 +50,7 @@ def score(d):
         angled = sum(1 for a, b in zip(poly.exterior.coords, poly.exterior.coords[1:]) if abs(a[0] - b[0]) > 1e-3 and abs(a[1] - b[1]) > 1e-3)
         if angled:
             add(0.5 * angled, f"{k} {angled} angled wall(s)")
-        if t == "bathroom" and not 3.5 <= poly.area <= 14:
+        if t == "bathroom" and not 5.0 <= poly.area <= 14:
             add(1.0, f"{k} {poly.area:.0f} m2")
         if t == "hallway" and poly.area > 12:
             add(1.0, f"{k} {poly.area:.0f} m2 hallway")

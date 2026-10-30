@@ -233,7 +233,7 @@ def draw(d, ax, small=False):
             if is_sink and CLEAN: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc="#a9d8f2", ec="#2a6f93", lw=0.6, zorder=4))
             else: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#555", lw=0.5, ls="--", zorder=4))
         lab = ABBR.get(o["class"]) or re.sub(r"([a-z])([A-Z])", r"\1 \2", o["class"].replace("Factory", "")).split(" ")[-1].lower()
-        if CLEAN and f.area > 0.03:
+        if CLEAN and f.area > 0.03 and (is_sink or re.search("KitchenCabinet|Cabinet|Shelf", o["class"])):
             c = f.centroid; ax.text(c.x, c.y, lab, fontsize=6 if is_sink else 5, ha="center", va="center", zorder=6, color="#123" if is_sink else "#333", style="normal" if is_sink else "italic", weight="bold" if is_sink else "normal")
     flags = []
     for rk, r in res.items():
