@@ -2181,6 +2181,42 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 kept += 1;
             }
         }
+        // bathrooms: the mirror over the washbasin (on the wall behind it, centred, its bottom 0.2 m above the basin), unless a window is
+        // there; towel rails centred at 1.15 m, small fittings (paper holder, hooks) at 0.7 m
+        if rt == "bathroom" {
+            let sink = state.objs.iter().find(|(k, o)| matches!(class_of(o), "StandingSinkFactory" | "BathroomSinkFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone());
+            if let (Some(sink), Some(m)) = (sink, in_room(state, "MirrorFactory").first().cloned()) {
+                let (sp, (slo, shi)) = (state.objs[&sink].pose, lohi(state, &sink));
+                let (mlo, mhi) = lohi(state, &m);
+                let ys = yaw(&sp);
+                let back = sp.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
+                let sink_top = wbox(state, &sink).1[2];
+                let h = mhi[2] - mlo[2];
+                let zc = (floor_z + 1.55).max(sink_top + 0.2 + h / 2.0).min(floor_z + ceil - 0.2 - h / 2.0);
+                let (s_, c_) = ys.sin_cos();
+                let a = [mlo[0], (mlo[1] + mhi[1]) / 2.0, (mlo[2] + mhi[2]) / 2.0];
+                let ra = [c_ * a[0] - s_ * a[1], s_ * a[0] + c_ * a[1]];
+                let old = state.objs[&m].pose;
+                state.set_pose(&m, super::geom::Pose::from_euler([back[0] - ra[0], back[1] - ra[1], zc - a[2]], [0.0, 0.0, ys]));
+                state.touch(&m);
+                let (lo, hi) = wbox(state, &m);
+                let clash = openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..3).all(|d| lo[d] < wh[d] + 0.02 && wl[d] - 0.02 < hi[d]) });
+                if clash { state.set_pose(&m, old); state.touch(&m); } else { log.push(format!("{room}: mirror {m} over the washbasin")); }
+            }
+            for k in in_room(state, "HardwareFactory") {
+                let (lo, hi) = wbox(state, &k);
+                let long = (hi[0] - lo[0]).max(hi[1] - lo[1]) >= 0.3;
+                let zc = floor_z + if long { 1.15 } else { 0.7 };
+                let dz = zc - (lo[2] + hi[2]) / 2.0;
+                if dz.abs() > 0.02 {
+                    let mut p = state.objs[&k].pose;
+                    p.translate([0.0, 0.0, dz]);
+                    state.set_pose(&k, p);
+                    state.touch(&k);
+                    log.push(format!("{room}: {} {k} moved {dz:+.2} m", if long { "towel rail" } else { "fitting" }));
+                }
+            }
+        }
     }
     log
 }
