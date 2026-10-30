@@ -960,8 +960,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 let Some((dist, hp, m)) = hit else { continue };
                 let view = dist - sdep - (thi[0] - tlo[0]);
                 // narrow living rooms (2.6 m) seat the sofa across from the TV at 1.3 m
-                // (large rooms, 30 m2 and up: facing each other across the room beats a TV on a side wall)
-                if !(1.3..=if room_area >= 30.0 { 5.2 } else { 4.2 }).contains(&view) { continue }
+                // (raters read more than ~4 m between sofa and TV as "far"; past that the sofa faces the TV from mid-room)
+                if !(1.3..=4.0).contains(&view) { continue }
                 if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
                 if !try_place(state, &tv, m[1].atan2(m[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [hp[0] + m[0] * 0.003, hp[1] + m[1] * 0.003, 0.0]) {
                     state.set_pose(&tv, tv_start); state.touch(&tv);
@@ -998,7 +998,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     let fc2 = [base[0] + n[0] * sdep, base[1] + n[1] * sdep];
                     let v = [tc[0] - fc2[0], tc[1] - fc2[1]];
                     let dist = (v[0] * v[0] + v[1] * v[1]).sqrt();
-                    if !(1.5..=4.5).contains(&dist) { continue }
+                    if !(1.5..=3.6).contains(&dist) { continue }
                     let cos = (v[0] * n[0] + v[1] * n[1]) / dist;
                     if cos < 0.77 { continue }
                     if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
