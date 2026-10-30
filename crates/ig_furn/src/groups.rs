@@ -2017,14 +2017,21 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
                 let base = prs.iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min);
                 let top = prs.iter().map(|p| p.z[1]).filter(|z| *z > base + 0.7 && *z < base + 1.2).fold(f64::NAN, f64::max);
                 let top = if top.is_finite() { top } else { base + 0.91 };
+                let ry = yaw(&state.objs[&run].pose);
                 for sk in &on_run {
                     let bottom = layout2d::prisms(state, sk).iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min);
-                    if bottom.is_finite() && (bottom - top).abs() > 0.03 {
-                        let mut p = state.objs[sk].pose;
-                        p.translate([0.0, 0.0, top - bottom]);
+                    // turned like the run (tap at the back, as the sinks placed below): the solver's own could stand a quarter turn off
+                    let (slo, shi) = lohi(state, sk);
+                    let c = state.objs[sk].pose.apply([(slo[0] + shi[0]) / 2.0, (slo[1] + shi[1]) / 2.0, slo[2]]);
+                    let turned = (yaw(&state.objs[sk].pose) - ry).sin().abs() > 0.05 || (yaw(&state.objs[sk].pose) - ry).cos() < 0.0;
+                    if bottom.is_finite() && ((bottom - top).abs() > 0.03 || turned) {
+                        let anchor = [(slo[0] + shi[0]) / 2.0, (slo[1] + shi[1]) / 2.0, slo[2]];
+                        let (s_, c_) = ry.sin_cos();
+                        let ra = [c_ * anchor[0] - s_ * anchor[1], s_ * anchor[0] + c_ * anchor[1]];
+                        let p = super::geom::Pose::from_euler([c[0] - ra[0], c[1] - ra[1], top - slo[2]], [0.0, 0.0, ry]);
                         state.set_pose(sk, p);
                         state.touch(sk);
-                        log.push(format!("{run}: sink {sk} set on the counter ({:+.2} m)", top - bottom));
+                        log.push(format!("{run}: sink {sk} set on the counter ({:+.2} m{})", top - bottom, if turned { ", turned like the run" } else { "" }));
                     }
                 }
                 continue
@@ -2148,6 +2155,7 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
             ks.sort_by(|a, b| { let ar = |k: &str| { let (l, h) = wbox(state, k); ((h[0] - l[0]).max(h[1] - l[1])) * (h[2] - l[2]) }; ar(b).partial_cmp(&ar(a)).unwrap() });
             let mut kept = 0;
             for k in ks {
+                if ig_core::env_on!("HANGDBG") { let o = &state.objs[&k]; eprintln!("HANGDBG {k} local {:.2?}..{:.2?} yaw {:.2}", o.geom.lo, o.geom.hi, yaw(&o.pose)); }
                 let (lo, hi) = wbox(state, &k);
                 let h = hi[2] - lo[2];
                 let target_lo = if cls == "MirrorFactory" && h >= 1.2 { floor_z + 0.2 } else { floor_z + if cls == "MirrorFactory" { 1.55 } else { 1.5 } - h / 2.0 };
