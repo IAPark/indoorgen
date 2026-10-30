@@ -710,8 +710,15 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
                     let Some(t) = &template else { break };
                     let new = format!("{}_pair{}", t, if s > 0.0 { "a" } else { "b" });
                     if state.objs.contains_key(&new) { break }
+                    // (the template may have left the room: a nightstand that found no slot; copied from its lifted state)
+                    let back = !state.objs.contains_key(t);
+                    if back {
+                        let Some((_, o)) = lifted.iter().find(|(k, _)| k == t) else { break };
+                        state.objs.insert(t.clone(), o.clone());
+                    }
                     let old_parent = state.objs[t].relations.iter().map(|r| r.target.clone()).find(|x| state.objs.get(x).map_or(false, |o| class_of(o) == "BedFactory"));
                     clone_obj(state, t, &new, old_parent.as_deref(), &bed);
+                    if back { state.objs.shift_remove(t); }
                     new
                 }
             };
