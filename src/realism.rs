@@ -5,6 +5,15 @@ use crate::rules::{Prefer, Rule, RoomRules, RuleSpec};
 
 /// (room type, class, relation, min, max, prefer more?)
 const RULES: &[(&str, &str, &str, u32, u32, bool)] = &[
+    // hallways are corridors: one slim piece (the 2D solver also caps floor pieces at 0.45 m deep there), a plant, pictures; no
+    // cabinets, shelving units or desks (the generic storage rules lined 1.2 m halls with cabinets and blocked them)
+    ("Hallway", "Storage", "against_wall", 0, 1, false),
+    ("Hallway", "KitchenCabinetFactory", "against_wall", 0, 0, false),
+    ("Hallway", "LargeShelfFactory", "against_wall", 0, 0, false),
+    ("Hallway", "CellShelfFactory", "against_wall", 0, 0, false),
+    ("Hallway", "SimpleDeskFactory", "against_wall", 0, 0, false),
+    ("Hallway", "LargePlantContainerFactory", "against_wall", 0, 1, false),
+    ("Hallway", "WallArtFactory", "against_wall", 1, 3, true),
     // living room: a seating group around one TV, a few storage pieces (the dense default allowed 3..8, rooms looked like libraries)
     ("LivingRoom", "SofaFactory", "on_floor", 1, 2, false),
     ("LivingRoom", "TVFactory", "ontop:TVStandFactory", 1, 1, false),

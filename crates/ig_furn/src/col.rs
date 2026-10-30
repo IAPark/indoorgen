@@ -83,7 +83,7 @@ pub fn depth(state: &State, a: &str, b: &str) -> f64 {
                 if c.dist < 0.0 {
                     let d = -c.dist;
                     if d > 1e-9 && !(inside(x, y) || inside(y, x)) {
-                        if std::env::var("DEPTHDBG").is_ok() { eprintln!("DEPTH {a} vs {b}: {d:.7} xaabb {:?} yaabb {:?} class {} {}", x.aabb, y.aabb, x.class, y.class); }
+                        if ig_core::env_on!("DEPTHDBG") { eprintln!("DEPTH {a} vs {b}: {d:.7} xaabb {:?} yaabb {:?} class {} {}", x.aabb, y.aabb, x.class, y.class); }
                         best = best.max(d);
                     }
                 }
@@ -172,6 +172,10 @@ fn fcl_dist_objs(state: &State, a: &str, b: &str, b_tags: &TagSet) -> Option<f64
 }
 
 pub fn dist_objs(state: &State, a: &str, b: &str, b_tags: &TagSet) -> f64 {
+    let (pos, neg) = tag_masks(b_tags);
+    if pos == 0 && neg == 0 && !super::layout2d::is_room(&state.objs[a]) && !super::layout2d::is_room(&state.objs[b]) {
+        return super::layout2d::dist(state, a, b);
+    }
     if let Some(d) = fcl_dist_objs(state, a, b, b_tags) {
         return d;
     }
@@ -224,7 +228,7 @@ pub fn min_dist(state: &State, a: &[String], b: Option<&[String]>, b_tags: &TagS
                         continue;
                     }
                     let dd = dist_objs(state, x, y, b_tags);
-                    if std::env::var("DISTDBG").is_ok() && crate::rng::TRACE_ON.with(|t| t.get()) { { let (px, py) = (proxies(state, x), proxies(state, y)); eprintln!("RT   PAIR {x} {y} {dd:.5} shapes {:?} {:?} iso {:?} {:?}", px[0].shape.as_cuboid().map(|c| c.half_extents), py[0].shape.as_cuboid().map(|c| c.half_extents), px[0].iso, py[0].iso); } }
+                    if ig_core::env_on!("DISTDBG") && crate::rng::TRACE_ON.with(|t| t.get()) { { let (px, py) = (proxies(state, x), proxies(state, y)); eprintln!("RT   PAIR {x} {y} {dd:.5} shapes {:?} {:?} iso {:?} {:?}", px[0].shape.as_cuboid().map(|c| c.half_extents), py[0].shape.as_cuboid().map(|c| c.half_extents), px[0].iso, py[0].iso); } }
                     best = best.min(dd);
                 }
             }
@@ -346,6 +350,13 @@ pub fn fcl_max_depth(state: &State, a: &str, others: &[&String]) -> Option<f64> 
 /// convex free-space box (trimesh box, `bverts` local, pose = its world transform) against object `ob`
 pub fn free_box_depth(bverts: &[V3], fpose: &Pose, ob: &ObjState) -> Option<f64> {
     use super::mpr::*;
+    if !super::layout2d::is_room(ob) {
+        // 2D: the free box and the object as prisms
+        let w: Vec<V3> = bverts.iter().map(|v| fpose.apply(*v)).collect();
+        let fb = super::layout2d::prism_of(&w);
+        let d = super::layout2d::prisms_of_obj(ob).iter().map(|p| super::layout2d::prism_depth(&fb, p)).fold(0.0f64, f64::max);
+        return if d > 0.0 { Some(d) } else { None };
+    }
     let shape = ConvexShape::new(bverts, [0.0; 3], fpose.r, fpose.t);
     match &ob.geom.convex {
         Some(vb) => {

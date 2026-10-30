@@ -193,14 +193,14 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             ctx.singletons.insert(class.to_string(), s);
         }
         // factory constructors draw from the global stream before they enter FixedSeed(factory_seed)
-        if std::env::var("BRUTE").is_ok() && class == "CoffeeTableFactory" {
+        if ig_core::env_on!("BRUTE") && class == "CoffeeTableFactory" {
             for k in 0..12 {
                 let mut r2 = rng.clone();
                 for _ in 0..k { r2.next_u32(); }
                 eprintln!("BRUTE words={k} -> inst {}", r2.randint(0, 10_000_000));
             }
         }
-        if std::env::var("CTOREMU").is_ok() {
+        if ig_core::env_on!("CTOREMU") {
             // emulate the python constructors without the oracle; if CTORWORDS is loaded too, compare word counts
             let before = rng.clone();
             unseeded_init_draws(class, rng);
@@ -249,13 +249,34 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             }
             let _t = ProfGuard::new(3);
             let t0 = web_time::Instant::now();
-            let r = ctx.assets.placeholder(class, fac_seed, inst_seed, kind);
-            if std::env::var_os("PHTIME").is_some() { eprintln!("PHTIME {class} {kind:?} {:.3}", t0.elapsed().as_secs_f64()); }
+            let sized = matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) && super::sizes::model(class).is_some();
+            // sized classes: one reference build per class and kind (only its box position is used), cached here
+            let r = if sized {
+                thread_local! { static REF: std::cell::RefCell<crate::dhash::FxMap<(String, u8), Option<ObjGeom>>> = std::cell::RefCell::new(Default::default()); }
+                let k = (class.to_string(), kind as u8);
+                match REF.with(|c| c.borrow().get(&k).cloned()) {
+                    Some(g) => g,
+                    None => { let g = ctx.assets.placeholder(class, 1, 1, kind); REF.with(|c| c.borrow_mut().insert(k, g.clone())); g }
+                }
+            } else { ctx.assets.placeholder(class, fac_seed, inst_seed, kind) };
+            if ig_core::env_on!("PHTIME") { eprintln!("PHTIME {class} {kind:?} {:.3} sized {sized} seeds {fac_seed} {inst_seed}", t0.elapsed().as_secs_f64()); }
             r?
         }
     };
-    if std::env::var_os("PHDBG").is_some() { eprintln!("PHDBG {class} {fac_seed} {inst_seed} lo {:?} hi {:?}", geom.lo, geom.hi); }
-    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None } }))
+    if ig_core::env_on!("PHDBG") { eprintln!("PHDBG {class} {fac_seed} {inst_seed} lo {:?} hi {:?}", geom.lo, geom.hi); }
+    // real-world size: box placeholders (bbox kinds) of a sized class get a size sampled from the class density instead of the
+    // bounding box of a freshly built asset (furn::sizes); the reference build (fixed seeds, memoised) only places the box
+    let mut geom = geom;
+    let mut fit_box = None;
+    if matches!(kind, PlaceholderKind::BboxOfAsset | PlaceholderKind::BboxOfPlaceholder) {
+        if let Some(m) = super::sizes::model(class) {
+            let x = super::sizes::sample(m, rng);
+            let (lo, hi) = super::sizes::target_box(geom.lo, geom.hi, x);
+            geom = crate::api::box_from_corners_geom(lo, hi);
+            fit_box = Some((lo, hi));
+        }
+    }
+    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box }))
 }
 
 pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng) -> bool {
@@ -266,7 +287,7 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
                 return false;
             }
             let Some((geom, gen)) = sample_rand_placeholder(ctx, rng, class) else {
-                if std::env::var("ADDDBG").is_ok() {
+                if ig_core::env_on!("ADDDBG") {
                     eprintln!("ADD {class}: no placeholder");
                 }
                 return false;
@@ -279,7 +300,7 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             state.objs.insert(name.clone(), o);
             state.touch(name);
             let okk = { let _t = ProfGuard::new(4); try_apply_relation_constraints(state, name, rng) };
-            if std::env::var("ADDDBG").is_ok() {
+            if ig_core::env_on!("ADDDBG") {
                 eprintln!("ADD {class}: relation placement ok={okk} parents={:?}", assignments.iter().map(|r| r.target.as_str()).collect::<Vec<_>>());
             }
             okk
@@ -316,6 +337,18 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
             let o = state.objs[name.as_str()].clone();
             let class = o.generator.as_ref().unwrap().class.clone();
             let b = backup(&o);
+            if let (Some((lo, hi)), Some(m)) = (o.generator.as_ref().unwrap().fit_box, super::sizes::model(&class)) {
+                if rng.f64() < 0.6 {
+                    let x = super::sizes::perturb(m, [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]], rng);
+                    let (nlo, nhi) = super::sizes::target_box(lo, hi, x);
+                    *old = Some((o, b));
+                    let oo = state.objs.get_mut(name.as_str()).unwrap();
+                    oo.geom = Arc::new(crate::api::box_from_corners_geom(nlo, nhi));
+                    oo.generator.as_mut().unwrap().fit_box = Some((nlo, nhi));
+                    state.touch(name);
+                    return check_post_move_validity(state, name);
+                }
+            }
             let Some((geom, gen)) = sample_rand_placeholder_new(ctx, rng, &class) else { return false };
             *old = Some((o, b));
             let oo = state.objs.get_mut(name.as_str()).unwrap();
@@ -388,12 +421,42 @@ fn active_for_stage(prop: &Domain, filter: &Domain) -> bool {
     prop.intersects(filter, false, true)
 }
 
+thread_local! {
+    /// preproc_bounds memo, cleared at the start of every solve_objects (one stage, one room): the bounds active for the stage filter
+    /// (by filter address + bound count) and domain membership per (bound index, object, object version)
+    static BOUNDS_ACTIVE: std::cell::RefCell<crate::dhash::FxMap<(usize, usize), Vec<usize>>> = std::cell::RefCell::new(Default::default());
+    static BOUND_MEMBER: std::cell::RefCell<crate::dhash::FxMap<(usize, String, u64), bool>> = std::cell::RefCell::new(Default::default());
+}
+
+pub fn clear_bounds_memo() {
+    BOUNDS_ACTIVE.with(|c| c.borrow_mut().clear());
+    BOUND_MEMBER.with(|c| c.borrow_mut().clear());
+}
+
 pub fn preproc_bounds(bounds: &[Bound], state: &State, filter: &Domain, reverse: bool, shuffle: bool, rng: &mut Rng) -> Vec<Bound> {
-    let mut b: Vec<Bound> = bounds.iter().filter(|b| active_for_stage(&b.domain, filter)).cloned().collect();
+    let akey = (filter as *const Domain as usize, bounds.len());
+    let active = match BOUNDS_ACTIVE.with(|c| c.borrow().get(&akey).cloned()) {
+        Some(a) => a,
+        None => {
+            let a: Vec<usize> = (0..bounds.len()).filter(|&i| active_for_stage(&bounds[i].domain, filter)).collect();
+            BOUNDS_ACTIVE.with(|c| c.borrow_mut().insert(akey, a.clone()));
+            a
+        }
+    };
+    let mut idx = active;
     if shuffle {
-        rng.shuffle(&mut b);
+        rng.shuffle(&mut idx);
     }
-    let counts: Vec<usize> = b.iter().map(|x| state.objkeys_in_dom(&x.domain).len()).collect();
+    let counts: Vec<usize> = idx.iter().map(|&i| {
+        state.objs.iter().filter(|(k, o)| o.active && {
+            let mk = (i, (*k).clone(), o.version);
+            match BOUND_MEMBER.with(|c| c.borrow().get(&mk).cloned()) {
+                Some(v) => v,
+                None => { let v = state.domain_contains(&bounds[i].domain, o); BOUND_MEMBER.with(|c| c.borrow_mut().insert(mk, v)); v }
+            }
+        }).count()
+    }).collect();
+    let b: Vec<&Bound> = idx.iter().map(|&i| &bounds[i]).collect();
     let key = |i: usize| -> i32 {
         let bb = &b[i];
         let bc = counts[i] as f64;
@@ -412,6 +475,19 @@ pub fn preproc_bounds(bounds: &[Bound], state: &State, filter: &Domain, reverse:
 }
 
 fn lookup_generator(ctx: &Ctx, preds: &TagSet, rng: &mut Rng) -> Vec<String> {
+    thread_local! { static LOOKUP: std::cell::RefCell<crate::dhash::FxMap<TagSet, Vec<String>>> = std::cell::RefCell::new(Default::default()); }
+    if let Some(mut v) = LOOKUP.with(|c| c.borrow().get(preds).cloned()) {
+        rng.shuffle(&mut v);
+        return v;
+    }
+    let v = lookup_generator_raw(ctx, preds);
+    LOOKUP.with(|c| c.borrow_mut().insert(preds.clone(), v.clone()));
+    let mut v = v;
+    rng.shuffle(&mut v);
+    v
+}
+
+fn lookup_generator_raw(ctx: &Ctx, preds: &TagSet) -> Vec<String> {
     assert!(!contradiction(preds));
     let gen_tags: Vec<Tag> = preds.pos().filter(|t| t.kind() == Kind::Gen).collect();
     if gen_tags.len() == 1 {
@@ -428,10 +504,9 @@ fn lookup_generator(ctx: &Ctx, preds: &TagSet, rng: &mut Rng) -> Vec<String> {
     }
     let mut v: Vec<String> = options.into_iter().collect();
     v.sort();
-    if std::env::var("LOOKUP").is_ok() && preds.pos().any(|t| t.name().contains("OfficeShelf")) {
+    if ig_core::env_on!("LOOKUP") && preds.pos().any(|t| t.name().contains("OfficeShelf")) {
         eprintln!("LOOKUP pos={:?} neg={:?} -> {:?}", preds.pos().map(|t| t.name()).collect::<Vec<_>>(), preds.neg().map(|t| t.name()).collect::<Vec<_>>(), v);
     }
-    rng.shuffle(&mut v);
     v
 }
 
@@ -857,7 +932,7 @@ impl Annealer {
 
     fn evaluate(&mut self, ctx: &Ctx, state: &State) -> (f64, f64) {
         let _t = ProfGuard::new(0);
-        if std::env::var("NOMEMO").is_ok() {
+        if ig_core::env_on!("NOMEMO") {
             self.memo.clear();
         }
         let mut ev = Evaluator::new(ctx.prog, state, &mut self.memo);
@@ -865,7 +940,7 @@ impl Annealer {
         if crate::rng::TRACE_ON.with(|t| t.get()) {
             eprintln!("RT   EVAL {}", r.loss_vals.iter().map(|(k, v)| format!("{k}:{v:.5}")).collect::<Vec<_>>().join(" "));
         }
-        (r.loss(), r.viol_count())
+        (r.loss() + super::layout2d::extra_loss(state), r.viol_count())
     }
 
     pub fn step(&mut self, ctx: &mut Ctx, state: &mut State, kind: MoveKind, filter: &Domain, rng: &mut Rng) {
@@ -908,10 +983,10 @@ impl Annealer {
             } else {
                 rng.f64().ln() < log_prob
             };
-            if let Ok(t) = std::env::var("TRACE") {
+            if let Some(t) = ig_core::env_str!("TRACE") {
                 if mv_name(&mv).contains(&t) {
                     eprintln!("TRACE it={} {:?} accept={accept} loss={:.3} viol={:.1} diff={:.2} vdiff={:.1} temp={:.3} {}", self.iter, kind, prop.0, prop.1, diff, viol_diff, temp, mv_name(&mv));
-                    if std::env::var("TRACEV").is_ok() {
+                    if ig_core::env_on!("TRACEV") {
                         let mut ev = Evaluator::new(ctx.prog, state, &mut self.memo);
                         let r = ev.evaluate_problem(true, true);
                         eprintln!("   viol terms {:?} (curr loss {:.3} viol {:.1})", r.violations.iter().filter(|x| x.1 > 0.0).collect::<Vec<_>>(), self.curr.unwrap().0, self.curr.unwrap().1);
@@ -1056,6 +1131,7 @@ pub struct StageParams {
 /// Solver.solve_objects
 pub fn solve_objects(ctx: &mut Ctx, state: &mut State, stage: &Domain, assign: &IndexMap<String, String>, sp: &StageParams, cfg: AnnealCfg, rng: &mut Rng) -> usize {
     PH_CACHE.with(|m| m.borrow_mut().clear()); // cached placeholders never cross stages / rooms (rayon threads are reused)
+    clear_bounds_memo();
     let moves = move_weights(sp.restrict_moves.as_deref(), sp.addition_scalar);
     let subs: Vec<(Tag, Domain)> = assign.iter().map(|(k, objkey)| (Tag::var(k), Domain::new(state.objs[objkey].tags.clone()))).collect();
     let filter = substitute_all(stage, &subs);
@@ -1070,7 +1146,7 @@ pub fn solve_objects(ctx: &mut Ctx, state: &mut State, stage: &Domain, assign: &
     let n_start = state.objs.len();
     let stage_no = crate::rng::CUR.with(|c| c.get().0) + 1;
     crate::rng::set_cur(stage_no, -1);
-    let rt: Option<usize> = std::env::var("RNGTR").ok().and_then(|v| v.parse().ok());
+    let rt: Option<usize> = ig_core::env_str!("RNGTR").and_then(|v| v.parse().ok());
     if rt.is_some() { eprintln!("RT STAGE peek {}", rng.peek()); }
     let memo = Memo::new(ctx.prog, Some(&filter));
     let mut ann = Annealer::new(cfg, memo, sp.n_steps);
@@ -1092,7 +1168,7 @@ pub fn solve_objects(ctx: &mut Ctx, state: &mut State, stage: &Domain, assign: &
         if tr { eprintln!("RT   end peek {}", rng.peek()); }
         crate::rng::set_trace(false);
     }
-    if std::env::var("DBG").is_ok() {
+    if ig_core::env_on!("DBG") {
         eprintln!("stage assign={:?} bounds={} objs {}->{} loss/viol={:?} stats={:?} prof[eval,apply,gen,placeholder,addrel]={:?}", assign, bounds.len(), n_start, state.objs.len(), ann.curr, ann.stats, PROF.with(|p| p.get()));
     }
     for o in state.objs.values_mut() {

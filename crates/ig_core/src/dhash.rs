@@ -47,3 +47,6 @@ impl std::hash::Hasher for FxHasher {
 /// lookup-only maps on hot paths (see [`FxHasher`])
 pub type FxMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<FxHasher>>;
 pub type FxSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
+
+/// build-hasher of FxMap (for IndexMap and other containers)
+pub type FxBuild = BuildHasherDefault<FxHasher>;

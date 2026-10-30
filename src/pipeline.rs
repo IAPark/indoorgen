@@ -261,7 +261,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         tags.insert(Tag::sem(pf.class));
         let mut o = ObjState::new(Arc::new(pf.asset.solver_geom()), pf.pose(), tags);
         o.relations.push(crate::furn::state::RelState { relation: crate::furn::relations::Relation::Traverse, target: pf.room.clone(), child_plane: 0, parent_plane: 0 });
-        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None });
+        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None });
         o.active = true;
         state.objs.insert(pf.key.clone(), o);
         state.touch(&pf.key);
@@ -270,6 +270,26 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             let name = format!("{}.keepout{}", pf.key, i);
             let kt = TagSet::from([Tag::sem("FeatureKeepout"), Tag::obj(&name)]);
             let mut ko = ObjState::new(Arc::new(ObjGeom::cuboid(*lo, *hi, 0)), Pose::identity(), kt);
+            ko.active = true;
+            state.objs.insert(name.clone(), ko);
+            state.touch(&name);
+        }
+    }
+    // door clearance: a keep-out as wide as the opening, 0.8 m deep (0.5 m at open-plan passages) on each room side of every door and
+    // entrance; furniture must not stand in it, and its centre is the room's door point for the walkway rule (furn::layout2d)
+    for (i, ct) in res.cutters.iter().enumerate() {
+        let depth = match ct.kind { CutKind::Door | CutKind::Entrance => 0.8, CutKind::Passage => 0.5, _ => continue };
+        // cutter boxes: dims[0] = opening width along the wall (rot_z), dims[1] = depth through the wall
+        let (along, w) = (ct.rot_z, ct.dims[0]);
+        let n = [-along.sin(), along.cos()];
+        for room in &ct.rooms {
+            let Some((_, poly)) = room_polys.iter().find(|(k, _)| k == room) else { continue };
+            let Some(s) = [1.0, -1.0].into_iter().find(|s| crate::shp::contains_pt(poly, [ct.loc[0] + s * n[0] * 0.5, ct.loc[1] + s * n[1] * 0.5])) else { continue };
+            let off = c.wall_thickness / 2.0 + depth / 2.0 + 0.01;
+            let centre = [ct.loc[0] + s * n[0] * off, ct.loc[1] + s * n[1] * off, 1.0];
+            let name = format!("doorclear/{room}/{i}");
+            let kt = TagSet::from([Tag::sem("FeatureKeepout"), Tag::obj(&name)]);
+            let mut ko = ObjState::new(Arc::new(ObjGeom::cuboid([-w / 2.0, -depth / 2.0, -1.0], [w / 2.0, depth / 2.0, 1.0], 0)), Pose::from_euler(centre, [0.0, 0.0, along]), kt);
             ko.active = true;
             state.objs.insert(name.clone(), ko);
             state.touch(&name);
@@ -346,7 +366,9 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     // populate_intermediate_pholders: shelves etc. become real assets so children can use their support surfaces
     for (k, o) in state.objs.iter_mut() {
         let Some(g) = o.generator.clone() else { continue };
-        if usage.has_usage(&g.class, "AssetPlaceholderForChildren") {
+        // open shelving the dressers restock (shelffill) keeps its box: whatever the solver would put inside is purged (dress::purge)
+        let restocked = !std::env::var_os("POPULATE_ALL").is_some() && matches!(g.class.as_str(), "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory");
+        if usage.has_usage(&g.class, "AssetPlaceholderForChildren") && !restocked {
             // spawn_asset creates a brand new blender object: same location / euler, unit scale
             let mut ob = o.pose.o;
             ob.scale = [1.0, 1.0, 1.0];
@@ -356,7 +378,10 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
             o.pose = Pose::from_o32(ob);
             if let Some(geom) = ctx.populated.get(&(g.class.clone(), g.factory_seed, g.inst_seed)) {
                 o.geom = Arc::new(geom.clone());
-            } else if let Some(geom) = assets.solver_asset(&g.class, g.factory_seed, g.inst_seed) {
+            } else if let Some(geom) = assets.solver_asset(&g.class, g.factory_seed, g.inst_seed).map(|geom| match (g.fit_box, crate::furn::sizes::model(&g.class)) {
+                (Some((tlo, thi)), Some(m)) => { let (s, off) = crate::furn::sizes::fit_matrix(m.uniform, geom.lo, geom.hi, tlo, thi); crate::furn::sizes::fit_geom(&geom, s, off) }
+                _ => geom,
+            }) {
                 if std::env::var_os("PHDBG").is_some() { eprintln!("SOLVER_ASSET {} {} {} lo {:?} hi {:?}", g.class, g.factory_seed, g.inst_seed, geom.lo, geom.hi); }
                 o.geom = Arc::new(geom);
                 let _ = k;

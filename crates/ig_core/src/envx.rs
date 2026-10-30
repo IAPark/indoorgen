@@ -68,3 +68,22 @@ pub fn var_r(k: &str) -> Result<String, ()> {
 pub fn clear_vars() {
     OVERRIDES.lock().unwrap().clear();
 }
+
+/// an environment switch read once per process (std::env::var takes the process-wide environment lock: called per solver step it
+/// serialised the parallel room solves)
+#[macro_export]
+macro_rules! env_on {
+    ($n:literal) => {{
+        static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *F.get_or_init(|| std::env::var_os($n).is_some())
+    }};
+}
+
+/// an environment value read once per process
+#[macro_export]
+macro_rules! env_str {
+    ($n:literal) => {{
+        static F: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        F.get_or_init(|| std::env::var($n).ok()).as_deref()
+    }};
+}

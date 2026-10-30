@@ -113,6 +113,7 @@ pub fn build_scene(p: &Params) -> Built {
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
+        for l in indoorgen::furn::layout2d::repair(&mut g.state) { eprintln!("WALKWAY {l}"); }
     }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
@@ -321,6 +322,15 @@ pub fn build_scene(p: &Params) -> Built {
             .map(|(k, gen)| {
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+                // the size the solver chose (furn::sizes): fit the built asset to its box
+                if let (Some((tlo, thi)), Some(m)) = (gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
+                    let (lo, hi) = a.bounds();
+                    let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
+                    let mut mt = indoorgen::mesh::Mat4::scale(s);
+                    for k in 0..3 { mt.0[k][3] = off[k]; }
+                    a.transform(&mt);
+                    for c in a.cols.iter_mut() { let (p, q) = (mt.apply(c.0), mt.apply(c.1)); *c = (p, q); }
+                }
                 if ig_core::envx::var_os("BUDGETLOG").is_some() {
                     let tc = |a: &indoorgen::assets::Asset| a.parts.iter().map(|p| p.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
                     let t0 = web_time::Instant::now();

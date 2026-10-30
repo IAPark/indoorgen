@@ -4,7 +4,8 @@ uv run --with matplotlib --with shapely tools/layout_sheet.py DIR  -> DIR/png/lN
 
 Metrics (walk radius 0.3 m = a 0.6 m path):
   path     the room's doors are not all connected by walkable floor
-  reach    a floor piece (not rugs / chairs / lamps / plants) more than 0.45 m from the walkable floor connected to the doors
+  reach    a floor piece (not rugs / chairs / lamps / plants / side tables) more than 0.45 m from the walkable floor reaching a door
+           (chair-like pieces do not block reach: they are pulled out)
   door     the 0.8 m deep strip in front of a door (room side, from the wall face) is more than 25% covered by furniture
   window   furniture taller than the sill and 1 m within 0.25 m of a window (counter-run appliances exempt)
   floor pieces = unparented objects whose bottom is below 0.25 m, plus chairs / stools
@@ -57,7 +58,7 @@ def analyse(d):
         z0, z1 = zr(o)
         # floor pieces: unparented objects standing on the floor, plus chairs (dining chairs are parented to their table); items
         # inside low cabinets / shelves also start below 0.25 m but have a furniture parent
-        if z0 > 0.25 or re.search("Art|Mirror|Light|Window|Door", o["class"]): continue
+        if z0 > 0.25 or re.search("Art|Mirror|Light|Window|Door|Keepout", o["class"]): continue
         if o["parent"] is not None and not re.search("Chair|Stool", o["class"]): continue
         f = foot(o)
         if f is None: continue
@@ -90,13 +91,17 @@ def analyse(d):
             common = set.intersection(*hit) if all(hit) else set()
             if not common: fl["path"] = "doors not connected" if len(hit) > 1 else "door blocked in"
             conn = unary_union([comps[i] for i in (common or set().union(*hit))]) if any(hit) else None
-        # reach
-        if conn is not None and not conn.is_empty:
-            bad = [o["class"] for o, f, z0, z1, r in items if not NO_REACH.search(o["class"]) and f.distance(conn) > 0.45]
+        # reach: walkable floor without the chair-like pieces (pulled out to reach a table), components touching a door
+        rblock = unary_union([f for o, f, z0, z1, r in items if not NO_REACH.search(o["class"])] or [Polygon()])
+        walk2 = inner.difference(rblock).buffer(-0.3, join_style=2)
+        comps2 = [c for c in (getattr(walk2, "geoms", [walk2]) if not walk2.is_empty else []) if any(c.distance(p) < 0.35 for _, p, _ in doors)]
+        if comps2:
+            conn2 = unary_union(comps2)
+            bad = [o["class"] for o, f, z0, z1, r in items if not NO_REACH.search(o["class"]) and f.distance(conn2) > 0.45]
             if bad: fl["reach"] = bad
         # door strip
         for ct, p, (nx, ny) in doors:
-            w = max(ct["dim"][0], ct["dim"][1]) if ct["kind"] != "Passage" else 0
+            w = ct["dim"][0] if ct["kind"] != "Passage" else 0  # dim[0] = opening width along the wall, dim[1] = depth through it
             if w <= 0: continue
             strip = translate(rotate(box(-w / 2, t / 2, w / 2, t / 2 + 0.8), ct["rot"], origin=(0, 0), use_radians=True), ct["loc"][0], ct["loc"][1])
             if (strip.centroid.x - ct["loc"][0]) * nx + (strip.centroid.y - ct["loc"][1]) * ny < 0:
@@ -131,6 +136,11 @@ def analyse(d):
 def draw(d, ax, small=False):
     draw_plan(d, ax, small=small)
     res, floor = analyse(d)
+    for o in d["objects"]:  # door clearance / hearth keep-outs: hatched, not furniture
+        if o["class"] != "Keepout": continue
+        f = foot(o, zmax=9)
+        for g in getattr(f, "geoms", [f]) if f is not None else []:
+            ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fill=False, ec="#e07070", lw=0.4, hatch="////", zorder=2))
     for o, f, z0, z1, r in sorted(floor, key=lambda x: (cat(x[0]["class"])[0] != "rug", x[3])):
         n, col = cat(o["class"])
         for g in getattr(f, "geoms", [f]):

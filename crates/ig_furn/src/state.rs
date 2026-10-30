@@ -25,6 +25,8 @@ pub struct GenRef {
     pub inst_seed: u64,
     /// constructor draws some factories need for the final asset (BedFactory sheet type / fold / cover)
     pub unseeded: Option<Vec<f64>>,
+    /// size chosen by the solver (furn::sizes): the local box the final asset is fitted to; None = the asset's own size
+    pub fit_box: Option<(V3, V3)>,
 }
 
 #[derive(Clone)]
@@ -56,7 +58,8 @@ pub struct Caches {
 }
 
 pub struct State {
-    pub objs: IndexMap<String, ObjState>,
+    /// insertion-ordered like the python dict; Fx-hashed (name lookups are on every solver step)
+    pub objs: IndexMap<String, ObjState, crate::dhash::FxBuild>,
     pub caches: RefCell<Caches>,
     pub next_version: u64,
 }
@@ -69,7 +72,7 @@ impl ObjState {
 
 impl State {
     pub fn new() -> State {
-        State { objs: IndexMap::new(), caches: RefCell::new(Caches::default()), next_version: 1 }
+        State { objs: IndexMap::default(), caches: RefCell::new(Caches::default()), next_version: 1 }
     }
 
     pub fn touch(&mut self, name: &str) {
@@ -170,11 +173,11 @@ impl State {
             }
         }
         let p = Arc::new(unique_planes(&o.geom, &o.pose, pos, neg));
-        if std::env::var("PLANEDUMP").map_or(false, |v| name.contains(&v)) && o.geom.tris.len() > 100 {
+        if ig_core::env_str!("PLANEDUMP").map_or(false, |v| name.contains(v)) && o.geom.tris.len() > 100 {
             let mask: Vec<usize> = o.geom.tris.iter().enumerate().filter(|(_, t)| t.tags & pos == pos && t.tags & neg == 0).map(|(i, _)| i).collect();
             eprintln!("PLANEJSON {}", serde_json::json!({"name": name, "mask": mask, "planes": *p, "desc": super::eval::obj_desc(o)}));
         }
-        if std::env::var("PLANEDBG").is_ok() && name.contains("living") { eprintln!("PLANES {name} pos={pos} neg={neg} -> {:?}", p); }
+        if ig_core::env_on!("PLANEDBG") && name.contains("living") { eprintln!("PLANES {name} pos={pos} neg={neg} -> {:?}", p); }
         self.caches.borrow_mut().planes.insert(key, (o.version, p.clone()));
         p
     }

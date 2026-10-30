@@ -47,7 +47,7 @@ def draw(d, ax, small=False):
                 if g.geom_type == "Polygon" and not g.is_empty: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc="#9fd4ff", ec="#2a6fb0", lw=0.4))
         elif c["kind"] in ("Door", "Entrance"):
             # swing arc: radius = opening width, hinged at one end of the opening
-            w = max(dx, dy); along = c["rot"] + (0 if dx >= dy else math.pi / 2)
+            w = dx; along = c["rot"]  # dim[0] = opening width along the wall (dim[1] is the cutter depth through it)
             cx, cy = c["loc"][0], c["loc"][1]
             hx, hy = cx - math.cos(along) * w / 2, cy - math.sin(along) * w / 2
             ax.add_patch(Arc((hx, hy), 2 * w, 2 * w, angle=math.degrees(along), theta1=0, theta2=90, lw=0.6, color="#c0392b" if c["kind"] == "Entrance" else "#555"))

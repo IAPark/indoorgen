@@ -62,11 +62,26 @@ pub fn snap_against(state: &mut State, a: &str, b: &str, a_plane: usize, b_plane
     state.set_pose(a, pose);
 }
 
+thread_local! {
+    static MASKS: std::cell::RefCell<crate::dhash::FxMap<(String, u64, u32, u32, usize), std::sync::Arc<Vec<usize>>>> = std::cell::RefCell::new(Default::default());
+}
+/// plane_mask of object `name`, cached per object version (parents of stability tests and surface samples are static)
+fn plane_mask_c(state: &State, name: &str, pos: u32, neg: u32, plane: usize) -> std::sync::Arc<Vec<usize>> {
+    let o = &state.objs[name];
+    let k = (name.to_string(), o.version, pos, neg, plane);
+    if let Some(m) = MASKS.with(|c| c.borrow().get(&k).cloned()) {
+        return m;
+    }
+    let m = std::sync::Arc::new(plane_mask(&o.geom, &o.pose, pos, neg, plane));
+    MASKS.with(|c| { let mut c = c.borrow_mut(); if c.len() > 20000 { c.clear(); } c.insert(k, m.clone()); });
+    m
+}
+
 /// random point on the (coplanar tagged) faces of plane `plane` of object b (move_obj_random_pt / random_sample_point)
 pub fn random_point_on(state: &State, b: &str, tags: &TagSet, plane: usize, rng: &mut Rng) -> V3 {
     let o = &state.objs[b];
     let (pos, neg) = tag_masks(tags);
-    let idxs = plane_mask(&o.geom, &o.pose, pos, neg, plane);
+    let idxs = plane_mask_c(state, b, pos, neg, plane);
     let areas: Vec<f64> = idxs.iter().map(|&i| {
         let t = &o.geom.tris[i];
         // BM_face_calc_area: Newell cross in float32 on local coordinates
@@ -90,7 +105,7 @@ pub fn random_point_on(state: &State, b: &str, tags: &TagSet, plane: usize, rng:
     let r = rng.f64() * s;
     let fi = cum.partition_point(|&c| c < r).min(idxs.len().saturating_sub(1));
     if crate::rng::TRACE_ON.with(|t| t.get()) { eprintln!("RT   RPO n={} fi={} r={:.12} lo={:.12} hi={:.12} tot={:.12}", idxs.len(), fi, r, if fi > 0 { cum[fi-1] } else { 0.0 }, cum[fi], s); }
-    if std::env::var("RPODUMP").is_ok() && idxs.len() == 64 {
+    if ig_core::env_on!("RPODUMP") && idxs.len() == 64 {
         for (k, &i) in idxs.iter().enumerate() { let t = &o.geom.tris[i]; eprintln!("RPOF {k} {i} area={:.9} {:?} {:?} {:?}", areas[k], t.v[0], t.v[1], t.v[2]); }
     }
     let t = &o.geom.tris[idxs[fi]];
@@ -103,7 +118,7 @@ pub fn random_point_on(state: &State, b: &str, tags: &TagSet, plane: usize, rng:
         a * t.v[0][2] + b2 * t.v[1][2] + c * t.v[2][2],
     ];
     let g = up(crate::bl32::mat4_mul_point(&o.pose.o.matrix_world(), f32v(local)));
-    if std::env::var("RPODUMP").is_ok() { eprintln!("RPOP w={:?} local={:?} global={:?}", [a, b2, c], local, g); }
+    if ig_core::env_on!("RPODUMP") { eprintln!("RPOP w={:?} local={:?} global={:?}", [a, b2, c], local, g); }
     g
 }
 
@@ -126,21 +141,21 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     let pa_list = state.planes(name, &g.child);
     let pb_list = state.planes(&rs.target, &g.parent);
     if rs.child_plane >= pa_list.len() || rs.parent_plane >= pb_list.len() {
-        stab_fail(1); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #1"); } return false;
+        stab_fail(1); if ig_core::env_on!("STAB") { eprintln!("STAB {name} fail #1"); } return false;
     }
     let (pa, pb) = (pa_list[rs.child_plane], pb_list[rs.parent_plane]);
     let (na, _) = plane_normal(state, name, pa, false);
     let (nb, origin_b) = plane_normal(state, &rs.target, pb, g.rev_normal);
     let d = dot(na, nb);
     if !((d.abs() - 1.0).abs() <= 1e-2 + 1e-5 || (d + 1.0).abs() <= 1e-2) {
-        stab_fail(2); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #2"); } return false;
+        stab_fail(2); if ig_core::env_on!("STAB") { eprintln!("STAB {name} fail #2"); } return false;
     }
     let sa = state.world(name);
     let so = &state.objs[&rs.target];
     let (pos, neg) = tag_masks(&g.parent);
-    let mask = plane_mask(&so.geom, &so.pose, pos, neg, pb);
+    let mask = plane_mask_c(state, &rs.target, pos, neg, pb);
     if mask.is_empty() {
-        stab_fail(3); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #3"); } return false;
+        stab_fail(3); if ig_core::env_on!("STAB") { eprintln!("STAB {name} fail #3"); } return false;
     }
     // the child plane's vertices must sit at the margin from the parent plane (cheap, so tested before the polygon projections;
     // a pure conjunction, the result is unchanged)
@@ -149,9 +164,12 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
         for v in wa {
             let dist = dist_to_plane(*v, origin_b, nb);
             if (dist - g.margin).abs() > 1e-2 + 1e-5 * g.margin.abs() {
-                stab_fail(5); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #5"); } return false;
+                stab_fail(5); if ig_core::env_on!("STAB") { eprintln!("STAB {name} fail #5"); } return false;
             }
         }
+    }
+    if !ig_core::env_on!("NO_FAST2D") {
+        return stable_2d(state, name, rs, g, &sa, &mask, pb, nb, origin_b);
     }
     let sbw = state.world(&rs.target);
     let b_tris: Vec<[V3; 3]> = mask.iter().map(|&i| sbw.tris[i]).collect();
@@ -169,7 +187,7 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
     }
     let proj_b_buf = if g.check_z { crate::geom::projected_buffer(&b_tris, nb, origin_b, 1e-2) } else { None };
     let res = if g.check_z {
-        if std::env::var("STAB").is_ok() && (name.contains("WallArt") || name.contains("KitchenSpace")) { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
+        if ig_core::env_on!("STAB") && (name.contains("WallArt") || name.contains("KitchenSpace")) { eprintln!("STABZ {name} nb={:?} a={:?} b={:?} nA={} nB={} areaA={:.3} areaB={:.3} outside={:.4}", nb, shp::bounds(&proj_a), shp::bounds(&proj_b), sa.tris.len(), mask.len(), shp::area(&proj_a), shp::area(&proj_b), shp::area(&shp::difference(&proj_a, &shp::buffer(&proj_b, 1e-2)))); }
         match &proj_b_buf {
             Some(b) => shp::within(&proj_a, b),
             None => shp::within(&proj_a, &shp::buffer(&proj_b, 1e-2)),
@@ -185,15 +203,89 @@ pub fn stable_against(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool
         let rb = shp::rotate_origin(&proj_b, ang);
         let (_, ay0, _, ay1) = shp::bounds(&ra);
         let (_, by0, _, by1) = shp::bounds(&rb);
-        if std::env::var("STAB").is_ok() && name.contains("WallArt") {
+        if ig_core::env_on!("STAB") && name.contains("WallArt") {
             eprintln!("STABX {name} nb={:?} ang={ang:.1} a_y=({ay0:.2},{ay1:.2}) b_y=({by0:.2},{by1:.2}) a_x={:?} b_x={:?}", nb.map(|v| (v * 100.0).round() / 100.0), (shp::bounds(&ra).0, shp::bounds(&ra).2), (shp::bounds(&rb).0, shp::bounds(&rb).2));
         }
         by0 <= ay0 && ay1 <= by1
     };
     if !res {
-        stab_fail(4); if std::env::var("STAB").is_ok() { eprintln!("STAB {name} fail #4"); } return false;
+        stab_fail(4); if ig_core::env_on!("STAB") { eprintln!("STAB {name} fail #4"); } return false;
     }
     true
+}
+
+thread_local! {
+    static UVERTS: std::cell::RefCell<crate::dhash::FxMap<usize, (std::sync::Arc<ObjGeom>, std::sync::Arc<Vec<V3>>)>> = std::cell::RefCell::new(Default::default());
+}
+/// distinct local vertices of a geometry (cached by Arc identity; the cache holds the Arc so the address cannot be reused)
+fn unique_verts(g: &std::sync::Arc<ObjGeom>) -> std::sync::Arc<Vec<V3>> {
+    let k = std::sync::Arc::as_ptr(g) as usize;
+    if let Some(v) = UVERTS.with(|c| c.borrow().get(&k).filter(|(a, _)| std::sync::Arc::ptr_eq(a, g)).map(|(_, v)| v.clone())) {
+        return v;
+    }
+    let mut pts: Vec<V3> = g.tris.iter().flat_map(|t| t.v.iter().copied()).collect();
+    pts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    pts.dedup();
+    let v = std::sync::Arc::new(pts);
+    UVERTS.with(|c| { let mut c = c.borrow_mut(); if c.len() > 4000 { c.clear(); } c.insert(k, (g.clone(), v.clone())); });
+    v
+}
+
+thread_local! {
+    /// apply_relations_surfacesample (dof 1): are parent 2's plane points inside parent 1's padded plane polygon
+    static ALLIN: std::cell::RefCell<crate::dhash::FxMap<(String, u64, usize, u32, u32, String, u64, usize, u32, u32), bool>> = std::cell::RefCell::new(Default::default());
+    /// projected parent support surfaces (rings in the plane frame), keyed by target / version / plane / frame
+    static SUPPORT2D: std::cell::RefCell<crate::dhash::FxMap<(String, u64, usize, [u64; 6]), std::sync::Arc<Vec<Vec<[f64; 2]>>>>> = std::cell::RefCell::new(Default::default());
+}
+
+/// the 2D tail of `stable_against`: the child's projected vertex hull inside the (cached) projected parent surface, 1 cm tolerance
+/// (check_z), or the child's extent along the projected +z inside the parent's (walls)
+#[allow(clippy::too_many_arguments)]
+fn stable_2d(state: &State, name: &str, rs: &RelState, g: &Geo, sa: &World, mask: &[usize], pb: usize, nb: V3, origin_b: V3) -> bool {
+    use super::layout2d::{hull, in_rings, point_in_convex, ring_dist, rings};
+    let n = unit(nb);
+    let (u, v) = plane_frame(n);
+    let pr = |p: &V3| { let r = sub(*p, origin_b); [dot(r, u), dot(r, v)] };
+    let so = &state.objs[&rs.target];
+    let key = (rs.target.clone(), so.version, pb, [n[0].to_bits(), n[1].to_bits(), n[2].to_bits(), origin_b[0].to_bits(), origin_b[1].to_bits(), origin_b[2].to_bits()]);
+    let b = match SUPPORT2D.with(|c| c.borrow().get(&key).cloned()) {
+        Some(b) => b,
+        None => {
+            let sbw = state.world(&rs.target);
+            let b_tris: Vec<[V3; 3]> = mask.iter().map(|&i| sbw.tris[i]).collect();
+            let r = std::sync::Arc::new(projected(&b_tris, nb, origin_b).map(|p| rings(&p)).unwrap_or_default());
+            SUPPORT2D.with(|c| { let mut c = c.borrow_mut(); if c.len() > 4000 { c.clear(); } c.insert(key, r.clone()); });
+            r
+        }
+    };
+    if b.is_empty() {
+        return false;
+    }
+    // the child's distinct local vertices (cached per geometry), posed: a box placeholder has 8, its triangle soup 36 points
+    let co = &state.objs[name];
+    let local = unique_verts(&co.geom);
+    let a = hull(local.iter().map(|p| pr(&co.pose.apply(*p))).collect());
+    let _ = sa;
+    if a.len() < 3 && g.check_z {
+        return false;
+    }
+    let ok = if g.check_z {
+        a.iter().all(|p| in_rings(&b, *p) || ring_dist(&b, *p) <= 1e-2)
+            && (a.len() < 3 || b.iter().flatten().all(|q| point_in_convex(&a, *q) <= 1e-2))
+    } else {
+        let z2 = [dot([0., 0., 1.], u), dot([0., 0., 1.], v)];
+        let ang = z2[1].atan2(z2[0]);
+        let (sn, cs) = ang.sin_cos();
+        let y = |p: &[f64; 2]| p[0] * sn + p[1] * cs;
+        let (ay0, ay1) = a.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(y(p)), hi.max(y(p))));
+        let (by0, by1) = b.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(y(p)), hi.max(y(p))));
+        by0 <= ay0 && ay1 <= by1
+    };
+    if !ok {
+        stab_fail(4);
+        if ig_core::env_on!("STAB") { eprintln!("STAB {name} fail #4 (2d)"); }
+    }
+    ok
 }
 
 pub fn coplanar(state: &State, name: &str, rs: &RelState, g: &Geo) -> bool {
@@ -283,7 +375,19 @@ fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     if state.objs[name].tags.contains(nc) {
         return true;
     }
-    col::fcl_max_depth(state, name, &others).map_or(true, |d| d <= 1e-4)
+    // 2D: prisms against every other object, the house floor instead of the room meshes, then the layout rules (walkways, hallways)
+    for b in &others {
+        if super::layout2d::is_room(&state.objs[b.as_str()]) {
+            continue;
+        }
+        if super::layout2d::depth(state, name, b) > 1e-4 {
+            return false;
+        }
+    }
+    if super::layout2d::outside_depth(state, name) > 1e-4 {
+        return false;
+    }
+    super::layout2d::layout_ok(state, name)
 }
 
 fn lstsq_3(a: &[V3], c: &[f64]) -> (V3, usize, f64) {
@@ -443,7 +547,7 @@ impl PlaneSampler {
     fn new(state: &State, b: &str, tags: &TagSet, plane: usize) -> Option<PlaneSampler> {
         let o = &state.objs[b];
         let (pos, neg) = tag_masks(tags);
-        let idxs = plane_mask(&o.geom, &o.pose, pos, neg, plane);
+        let idxs = plane_mask_c(state, b, pos, neg, plane);
         if idxs.is_empty() {
             return None;
         }
@@ -493,7 +597,7 @@ fn build_pre(state: &State, name: &str, p: &PlanePick) -> Option<(PreRel, V3)> {
     let (nb, origin_b) = plane_normal(state, &p.parent, p.parent_plane, g.rev_normal);
     let so = &state.objs[&p.parent];
     let (pos, neg) = tag_masks(&g.parent);
-    let mask = plane_mask(&so.geom, &so.pose, pos, neg, p.parent_plane);
+    let mask = plane_mask_c(state, &p.parent, pos, neg, p.parent_plane);
     if mask.is_empty() {
         return None;
     }
@@ -555,7 +659,7 @@ fn outcome_dbg(state: &State, name: &str, tag: &str) {
 
 fn verify_dbg(state: &State, name: &str, tag: &str) {
     outcome_dbg(state, name, tag);
-    if std::env::var_os("PREVERIFY").is_none() {
+    if !ig_core::env_on!("PREVERIFY") {
         return;
     }
     LAST_FAIL.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -706,7 +810,7 @@ pub fn apply_relations_surfacesample(state: &mut State, name: &str, rng: &mut Rn
         let parent_planes = state.planes(&rs.target, &g.parent);
         let obj_planes = state.planes(name, &g.child);
         if rs.parent_plane >= parent_planes.len() || rs.child_plane >= obj_planes.len() {
-            if std::env::var("DBG2").is_ok() {
+            if ig_core::env_on!("DBG2") {
                 eprintln!("  [{name}] plane idx oob: parent {}/{} (target {}) child {}/{}", rs.parent_plane, parent_planes.len(), rs.target, rs.child_plane, obj_planes.len());
             }
             continue;
@@ -731,7 +835,7 @@ pub fn apply_relations_surfacesample(state: &mut State, name: &str, rng: &mut Rn
     }
     let (valid, dof, t) = check_init_valid(state, name, &picks);
     if !valid {
-        if std::env::var("DBG2").is_ok() {
+        if ig_core::env_on!("DBG2") {
             eprintln!("  [{name}] check_init_valid false (picks {})", picks.len());
         }
         return None;
@@ -753,24 +857,30 @@ pub fn apply_relations_surfacesample(state: &mut State, name: &str, rng: &mut Rn
         assert!(picks.len() == 2);
         let (p1, p2) = (&picks[0], &picks[1]);
         // parent1 plane polygon vs parent2 plane points, projected along parent1's normal (origin (0,0,0))
+        // depends only on the two (static) parent surfaces: cached per parent pair / version / plane / tag masks
+        let (pos1, neg1) = tag_masks(&p1.parent_tags);
+        let (pos2, neg2) = tag_masks(&p2.parent_tags);
+        let key = (p1.parent.clone(), state.objs[&p1.parent].version, p1.parent_plane, pos1, neg1, p2.parent.clone(), state.objs[&p2.parent].version, p2.parent_plane, pos2, neg2);
+        let cached = ALLIN.with(|c| c.borrow().get(&key).cloned());
+        let all_in = match cached { Some(v) => v, None => {
         let (n1, _) = plane_normal(state, &p1.parent, p1.parent_plane, false);
         let po1 = &state.objs[&p1.parent];
-        let (pos1, neg1) = tag_masks(&p1.parent_tags);
         let m1 = plane_mask(&po1.geom, &po1.pose, pos1, neg1, p1.parent_plane);
         let w1 = state.world(&p1.parent);
         let t1: Vec<[V3; 3]> = m1.iter().map(|&i| w1.tris[i]).collect();
         let proj1 = projected(&t1, n1, [0., 0., 0.]).expect("parent1 projection");
         let po2 = &state.objs[&p2.parent];
-        let (pos2, neg2) = tag_masks(&p2.parent_tags);
         let m2 = plane_mask(&po2.geom, &po2.pose, pos2, neg2, p2.parent_plane);
         let w2 = state.world(&p2.parent);
-        let all_in = if ig_core::envx::fast_stable() {
+        let v = if ig_core::envx::fast_stable() {
             m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::within_distance_pt(&proj1, project_frame_origin(n1, *p), 1e-1)))
         } else {
             let padded = shp::buffer(&proj1, 1e-1);
             m2.iter().all(|&i| w2.tris[i].iter().all(|p| shp::contains_pt(&padded, project_frame_origin(n1, *p))))
         };
-        if crate::rng::TRACE_ON.with(|t| t.get()) { eprintln!("RT   DOF1 all_in={all_in} p1plane={} p2plane={} n_m2={}", p1.parent_plane, p2.parent_plane, m2.len()); }
+        ALLIN.with(|c| { let mut c = c.borrow_mut(); if c.len() > 20000 { c.clear(); } c.insert(key, v); });
+        v } };
+        if crate::rng::TRACE_ON.with(|t| t.get()) { eprintln!("RT   DOF1 all_in={all_in} p1plane={} p2plane={}", p1.parent_plane, p2.parent_plane); }
         let (first, second) = if all_in && !is_coplanar_rel(&p2.relation) { (p2, p1) } else { (p1, p2) };
         let rf = random_point_on(state, &first.parent, &first.parent_tags, first.parent_plane, rng);
         let mut pose = state.objs[name].pose;
@@ -871,7 +981,7 @@ fn place_stat(class: &str, tries: u64, ok: bool) {
 }
 pub fn try_apply_relation_constraints(state: &mut State, name: &str, rng: &mut Rng) -> bool {
     static STAT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let stat = *STAT.get_or_init(|| { let on = std::env::var_os("PLACESTAT").is_some(); if std::env::var_os("FAILSTAT").is_some() { FAILSTAT.store(true, std::sync::atomic::Ordering::Relaxed); } on });
+    let stat = *STAT.get_or_init(|| { let on = ig_core::env_on!("PLACESTAT"); if ig_core::env_on!("FAILSTAT") { FAILSTAT.store(true, std::sync::atomic::Ordering::Relaxed); } on });
     if !stat {
         return try_apply_relation_constraints_inner(state, name, rng, &mut 0);
     }
@@ -888,7 +998,7 @@ fn try_apply_relation_constraints_inner(state: &mut State, name: &str, rng: &mut
     for _ in 0..tries {
         *ntries += 1;
         let Some(parents) = apply_relations_surfacesample(state, name, rng) else {
-            if std::env::var("DBG2").is_ok() { eprintln!("  [{name}] apply failed (init invalid)"); }
+            if ig_core::env_on!("DBG2") { eprintln!("  [{name}] apply failed (init invalid)"); }
             return false;
         };
         let valid = if *ntries > 0 && FAILSTAT.load(std::sync::atomic::Ordering::Relaxed) {
@@ -904,7 +1014,7 @@ fn try_apply_relation_constraints_inner(state: &mut State, name: &str, rng: &mut
         } else {
             check_post_move_validity(state, name)
         };
-        if std::env::var("DBG2").is_ok() && !valid {
+        if ig_core::env_on!("DBG2") && !valid {
             let rel_ok = all_relations_valid(state, name);
             eprintln!("  [{name}] post-move invalid: relations_ok={rel_ok} pos={:?}", state.objs[name].pose.t);
             if rel_ok {

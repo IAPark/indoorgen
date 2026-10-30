@@ -205,7 +205,7 @@ pub fn decompose(w: &M4) -> (V3, [f32; 4], V3) {
 
 /// mat3_normalized_to_eulO (XYZ), picking the solution with the smaller component sum
 pub fn mat3_normalized_to_eul(m: &M3) -> V3 {
-    let var = std::env::var("EULVAR").unwrap_or_default();
+    let var = crate::env_str!("EULVAR").unwrap_or_default();
     let cy = if var.contains('d') { (m[0][0] as f64).hypot(m[0][1] as f64) as f32 } else { m[0][0].hypot(m[0][1]) };
     let (mut e1, mut e2);
     if cy > 3.756e-5f32 {
@@ -251,7 +251,7 @@ impl Obj32 {
         let (loc, rot, size) = mat4_to_loc_rot_size(w);
         self.loc = loc;
         self.scale = size;
-        let var = std::env::var("EULVAR").unwrap_or_default();
+        let var = crate::env_str!("EULVAR").unwrap_or_default();
         if var.contains('m') {
             self.eul = mat3_normalized_to_eul(&rot);
         } else {

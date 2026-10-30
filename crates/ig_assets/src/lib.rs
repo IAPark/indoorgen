@@ -140,7 +140,7 @@ static SOLVER_MEMO: Memo<Option<ObjGeom>> = std::sync::Mutex::new(None);
 static VISUAL_MEMO: Memo<Asset> = std::sync::Mutex::new(None);
 fn memo_off() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OFF.get_or_init(|| std::env::var_os("NOMEMO").is_some())
+    *OFF.get_or_init(|| ig_core::env_on!("NOMEMO"))
 }
 impl RealAssets {
     pub fn placeholder_raw(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
@@ -183,7 +183,7 @@ impl RealAssets {
         memo_put(&VISUAL_MEMO, key, &r);
         if prof_on() {
             prof_add(format!("visual {class}"), thread_cpu() - t);
-            if std::env::var_os("VISDBG").is_some() { eprintln!("VISDBG {class} {factory_seed} {inst_seed} {:.3}s faces {}", thread_cpu() - t, r.parts.iter().map(|p| p.mesh.faces.len()).sum::<usize>()); }
+            if ig_core::env_on!("VISDBG") { eprintln!("VISDBG {class} {factory_seed} {inst_seed} {:.3}s faces {}", thread_cpu() - t, r.parts.iter().map(|p| p.mesh.faces.len()).sum::<usize>()); }
         }
         r
     }

@@ -49,13 +49,34 @@ struct Entry {
 pub struct Memo {
     entries: Vec<Option<Entry>>,
     var_ver: Vec<u64>,
-    var_idx: HashMap<String, usize>,
-    deps: Vec<Vec<usize>>,
-    pub relevant: Vec<bool>,
+    var_idx: std::rc::Rc<HashMap<String, usize>>,
+    deps: std::rc::Rc<Vec<Vec<usize>>>,
+    pub relevant: std::rc::Rc<Vec<bool>>,
+}
+
+thread_local! {
+    /// Memo::new's dependency sets (per program) and relevance (per program + stage filter): rebuilt for every stage of every room
+    static MEMO_SHAPE: std::cell::RefCell<crate::dhash::FxMap<(usize, usize, String), (std::rc::Rc<HashMap<String, usize>>, std::rc::Rc<Vec<Vec<usize>>>, std::rc::Rc<Vec<bool>>)>> = std::cell::RefCell::new(Default::default());
 }
 
 impl Memo {
     pub fn new(prog: &Program, filter: Option<&Domain>) -> Memo {
+        let key = (prog as *const Program as usize, prog.nodes.len(), format!("{filter:?}"));
+        let (var_idx, deps, relevant) = match MEMO_SHAPE.with(|c| c.borrow().get(&key).cloned()) {
+            Some(x) => x,
+            None => {
+                let (v, d, r) = Self::shape(prog, filter);
+                let x = (std::rc::Rc::new(v), std::rc::Rc::new(d), std::rc::Rc::new(r));
+                MEMO_SHAPE.with(|c| c.borrow_mut().insert(key, x.clone()));
+                x
+            }
+        };
+        let n = prog.nodes.len();
+        let nv = var_idx.len();
+        Memo { entries: (0..n).map(|_| None).collect(), var_ver: vec![0; nv], var_idx, deps, relevant }
+    }
+
+    fn shape(prog: &Program, filter: Option<&Domain>) -> (HashMap<String, usize>, Vec<Vec<usize>>, Vec<bool>) {
         let n = prog.nodes.len();
         let mut var_idx = HashMap::default();
         for node in &prog.nodes {
@@ -117,8 +138,7 @@ impl Memo {
                 relevant[id] = rel(prog, id, f, &mut cache);
             }
         }
-        let nv = var_idx.len();
-        Memo { entries: (0..n).map(|_| None).collect(), var_ver: vec![0; nv], var_idx, deps, relevant }
+        (var_idx, deps, relevant)
     }
 
     pub fn clear(&mut self) {
@@ -129,6 +149,23 @@ impl Memo {
 
     /// evict_memo_for_obj
     pub fn evict_for_obj(&mut self, prog: &Program, obj_tags: &TagSet) {
+        // the evicted node set depends only on the program and the object's tags
+        thread_local! { static EVICT: std::cell::RefCell<crate::dhash::FxMap<(usize, usize, TagSet), std::rc::Rc<Vec<usize>>>> = std::cell::RefCell::new(Default::default()); }
+        let key = (prog as *const Program as usize, prog.nodes.len(), obj_tags.clone());
+        if let Some(ids) = EVICT.with(|c| c.borrow().get(&key).cloned()) {
+            for &id in ids.iter() {
+                self.entries[id] = None;
+            }
+            return;
+        }
+        let ids = std::rc::Rc::new(self.evict_ids(prog, obj_tags));
+        for &id in ids.iter() {
+            self.entries[id] = None;
+        }
+        EVICT.with(|c| c.borrow_mut().insert(key, ids));
+    }
+
+    fn evict_ids(&self, prog: &Program, obj_tags: &TagSet) -> Vec<usize> {
         let n = prog.nodes.len();
         let mut res: Vec<Option<bool>> = vec![None; n];
         fn go(prog: &Program, id: usize, tags: &TagSet, res: &mut Vec<Option<bool>>) -> bool {
@@ -152,11 +189,7 @@ impl Memo {
             res[id] = Some(r);
             r
         }
-        for id in 0..n {
-            if go(prog, id, obj_tags, &mut res) {
-                self.entries[id] = None;
-            }
-        }
+        (0..n).filter(|&id| go(prog, id, obj_tags, &mut res)).collect()
     }
 }
 
@@ -539,12 +572,12 @@ impl<'a> Evaluator<'a> {
             for bn in b {
                 let ob = &self.state.objs[bn];
                 let d = col::free_box_depth(&bverts, &fpose, ob);
-                if std::env::var("ACCPAIR").map_or(false, |p| p == "ALL" || p == format!("{name}|{bn}")) && crate::rng::TRACE_ON.with(|t| t.get()) && std::env::var("ACCAT").map_or(true, |a| { let c = crate::rng::CUR.with(|c| c.get()); a == format!("{}:{}", c.0, c.1) }) {
+                if ig_core::env_str!("ACCPAIR").map_or(false, |p| p == "ALL" || p == format!("{name}|{bn}")) && crate::rng::TRACE_ON.with(|t| t.get()) && std::env::var("ACCAT").map_or(true, |a| { let c = crate::rng::CUR.with(|c| c.get()); a == format!("{}:{}", c.0, c.1) }) {
                     let tris: Vec<[[f64; 3]; 3]> = ob.geom.tris.iter().map(|t| t.v).collect();
                     eprintln!("RT   ACCJSON {}", serde_json::json!({"a": name, "b": bn, "fverts": bverts, "fr": fpose.r, "ft": fpose.t, "bconvex": ob.geom.convex.as_ref().map(|v| (**v).clone()), "btris": tris, "br": ob.pose.r, "bt": ob.pose.t, "depth": d, "objA": obj_desc(o), "objB": obj_desc(ob), "normal": normal, "dist": dist}));
                 }
                 if let Some(d) = d {
-                    if std::env::var("ACCDBG").is_ok() && crate::rng::TRACE_ON.with(|t| t.get()) { eprintln!("RT   ACC {name} vs {bn} depth {d:.5} ext={ext:?} axis={axis} sign={sign}"); }
+                    if ig_core::env_on!("ACCDBG") && crate::rng::TRACE_ON.with(|t| t.get()) { eprintln!("RT   ACC {name} vs {bn} depth {d:.5} ext={ext:?} axis={axis} sign={sign}"); }
                     best = best.max(d);
                 }
             }
@@ -651,7 +684,7 @@ impl<'a> Evaluator<'a> {
                 }
             }
             let Some((_, p, q)) = best else { continue };
-            if crate::rng::TRACE_ON.with(|t| t.get()) && std::env::var("ANGDBG").is_ok() { eprintln!("RT   ANG {an} axis={axis:?} centroid={centroid:?} edge={p:?}->{q:?} nedges={}", b_edges.len()); }
+            if crate::rng::TRACE_ON.with(|t| t.get()) && ig_core::env_on!("ANGDBG") { eprintln!("RT   ANG {an} axis={axis:?} centroid={centroid:?} edge={p:?}->{q:?} nedges={}", b_edges.len()); }
             let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
             let n1 = [dy, -dx];
             let l = (n1[0] * n1[0] + n1[1] * n1[1]).sqrt();
