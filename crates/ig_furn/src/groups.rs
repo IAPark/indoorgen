@@ -293,7 +293,12 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
             let aisle_ok = move |st: &State| os.iter().all(|r| { let d = layout2d::dist(st, r, &n2); d < 0.05 || d >= 1.0 });
             let ok2 = aisle_ok.clone();
             // straight walls only (a run on an angled wall reads as a diagonal counter in the middle of the room)
-            let placed = place_on_wall(state, &name, &room, &move |st, _c, _t, len, n| len - if ok2(st) && (n[0].abs() > 0.99 || n[1].abs() > 0.99) { 0.0 } else { 100.0 });
+            // (a run meeting another at a corner, an L or U, reads as one counter; parallel runs read as split: corners first)
+            let (n3, os3) = (name.clone(), others.clone());
+            let placed = place_on_wall(state, &name, &room, &move |st, _c, _t, len, n| {
+                let joined = os3.iter().any(|r| layout2d::dist(st, r, &n3) < 0.05);
+                len + if joined { 5.0 } else { 0.0 } - if ok2(st) && (n[0].abs() > 0.99 || n[1].abs() > 0.99) { 0.0 } else { 100.0 }
+            });
             let ny = yaw(&state.objs[&name].pose);
             let straight = (ny.sin() * ny.cos()).abs() < 0.02;
             if !placed || !aisle_ok(state) || !straight {
@@ -1335,7 +1340,10 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         };
         let main = in_room.iter().min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap()).map(|r| r.to_string());
         if main.as_deref() != Some(run.as_str()) { continue }
-        if state.objs.iter().any(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())) { continue }
+        // a sink the solver put on another run moves here (removed; the one below takes its place)
+        let elsewhere: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())
+            && !o.relations.iter().any(|r| r.target == run)).map(|(k, _)| k.clone()).collect();
+        for k in elsewhere { layout2d::remove_tree(state, &k); log.push(format!("{room}: sink {k} on a run away from the range, moved")); }
         // the solver's loose items on the run go first (the counter dresser removes and redresses them by zone anyway: dress::purge)
         let loose: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == run) && class_of(o) != "SinkFactory").map(|(k, _)| k.clone()).collect();
         for k in loose { if state.objs.contains_key(&k) { layout2d::remove_tree(state, &k); } }
