@@ -61,7 +61,8 @@ def analyse(d):
         z0, z1 = zr(o)
         # floor pieces: unparented objects standing on the floor, plus chairs (dining chairs are parented to their table); items
         # inside low cabinets / shelves also start below 0.25 m but have a furniture parent
-        if z0 > 0.25 or re.search("Art|Mirror|Light|Window|Door|Keepout|Hardware", o["class"]): continue
+        # (window seats are built-in furniture: "Window" alone hid them, so the floor they take looked free)
+        if z0 > 0.25 or (re.search("Art|Mirror|Light|Window|Door|Keepout|Hardware", o["class"]) and not o["class"].endswith("Feature")): continue
         if o["parent"] is not None and not re.search("Chair|Stool|SideTable", o["class"]): continue
         f = foot(o)
         if f is None: continue

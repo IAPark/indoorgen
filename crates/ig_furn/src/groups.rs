@@ -718,7 +718,8 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
             // the usual gap, then tighter, then a narrow nightstand (0.35 m): one side of the bed hard against a wall or wardrobe
             // left beds with a single nightstand
             let mut placed_here = false;
-            for (shrink, gap) in [(false, 0.04), (false, 0.02), (true, 0.02)] {
+            // (and looser: a bed whose frame flares past its box blocked the tight slot on one side)
+            for (shrink, gap) in [(false, 0.04), (false, 0.02), (false, 0.08), (false, 0.12), (true, 0.02), (true, 0.08)] {
                 if shrink {
                     let base = state.objs[&name].clone();
                     let _ = super::solver::set_width(ctx, state, &name, &base, 0.35, 1.0);
