@@ -45,6 +45,13 @@ def draw(d, ax, small=False):
         if c["kind"] == "Window":
             for g in getattr(f.intersection(solid), "geoms", [f.intersection(solid)]):
                 if g.geom_type == "Polygon" and not g.is_empty: ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc="#9fd4ff", ec="#2a6fb0", lw=0.4))
+        elif c["kind"] == "Passage" and c.get("style") == "half_wall":
+            # a low wall across the opening (open above counter height): a lighter band in the wall line
+            w = dx; along = c["rot"]; cx, cy = c["loc"][0], c["loc"][1]
+            ux, uy = math.cos(along), math.sin(along); th = d.get("wall_thickness", 0.2) * 0.35
+            pts = [(cx - ux * w / 2 - uy * th, cy - uy * w / 2 + ux * th), (cx + ux * w / 2 - uy * th, cy + uy * w / 2 + ux * th),
+                   (cx + ux * w / 2 + uy * th, cy + uy * w / 2 - ux * th), (cx - ux * w / 2 + uy * th, cy - uy * w / 2 - ux * th)]
+            ax.add_patch(MPoly(pts, closed=True, fc="#8a8580", ec="#555", lw=0.5, zorder=3))
         elif c["kind"] in ("Door", "Entrance"):
             w = dx; along = c["rot"]  # dim[0] = opening width along the wall (dim[1] is the cutter depth through it)
             cx, cy = c["loc"][0], c["loc"][1]

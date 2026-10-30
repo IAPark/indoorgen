@@ -77,7 +77,7 @@ impl Default for LayoutRules {
             armchair_one_m2: 20.0, armchair_two_m2: 30.0, coffee_ratio: 0.75,
             chair_spacing: 0.6, end_chairs: true, small_table: 1.2, table_wall_clear: 0.75, table_door_clear: 1.0, small_dining_m2: 15.0,
             dining_sideboard: true, dining_cabinet_m2: 18.0, dining_rug: true, dining_plant: true,
-            living_plants: 2, bedroom_plants: 1, hallway_plants: 0, living_bookcase: true,
+            living_plants: 1, bedroom_plants: 1, hallway_plants: 0, living_bookcase: true,
             kitchen_template: true, extra_runs: 3, kitchen_aisle: 1.0, sink_range_gap: 0.4,
             bathroom_template: true, fixture_gap: 0.35, tub_and_shower_m2: 14.0, toilet_door_min: 1.0,
             desks: false, desk_min_m2: 18.0, wardrobe_bed_min: 0.7,

@@ -937,7 +937,10 @@ fn place_bed(state: &mut State, bed: &str) -> Option<String> {
 /// opposite the TV), centred on the TV
 pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
     let mut log = vec![];
-    let tvs: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "TVStandFactory").map(|(k, _)| k.clone()).collect();
+    // the focal point of each living room: its TV stand, or a fireplace where there is none
+    let mut tvs: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "TVStandFactory").map(|(k, _)| k.clone()).collect();
+    let with_tv: Vec<String> = tvs.iter().filter_map(|t| layout2d::room_of(state, t)).collect();
+    tvs.extend(state.objs.iter().filter(|(k, o)| class_of(o) == "FireplaceFeature" && layout2d::room_of(state, k).map_or(false, |r| room_type_of(&r) == "living-room" && !with_tv.contains(&r))).map(|(k, _)| k.clone()));
     for tv in tvs {
         let Some(room) = layout2d::room_of(state, &tv) else { continue };
         let Some(sofa) = state.objs.iter().find(|(k, o)| class_of(o) == "SofaFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()) else { continue };
@@ -946,7 +949,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let fire = state.objs.iter().find(|(k, o)| class_of(o) == "FireplaceFeature" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone());
         let fixed = fire.is_some();
         let tv = match fire {
-            Some(f) => { layout2d::remove_tree(state, &tv); log.push(format!("{room}: seating faces the fireplace {f} (TV over the mantel)")); f }
+            Some(f) => { if tv != f { layout2d::remove_tree(state, &tv); } log.push(format!("{room}: seating faces the fireplace {f} (TV over the mantel)")); f }
             None => tv,
         };
         let tp = state.objs[&tv].pose;
@@ -1559,7 +1562,7 @@ pub fn room_extras(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: O
         }
         let want = match rt.as_str() {
             "living-room" => if area >= 20.0 { lr.living_plants } else { lr.living_plants.min(1) },
-            "bedroom" if area >= 14.0 => lr.bedroom_plants,
+            "bedroom" if area >= 16.0 => lr.bedroom_plants,
             "hallway" if area >= 6.0 => lr.hallway_plants,
             _ => 0,
         };

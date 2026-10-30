@@ -25,10 +25,12 @@ pub enum DoorStyle {
     Double,
     Sliding,
     SlidingGlass,
+    /// (kind Passage) a wide opening above counter height: a low wall between the rooms, not a way through
+    HalfWall,
 }
 
 impl DoorStyle {
-    pub fn name(self) -> &'static str { match self { DoorStyle::Swing => "swing", DoorStyle::Double => "double", DoorStyle::Sliding => "sliding", DoorStyle::SlidingGlass => "sliding_glass" } }
+    pub fn name(self) -> &'static str { match self { DoorStyle::Swing => "swing", DoorStyle::Double => "double", DoorStyle::Sliding => "sliding", DoorStyle::SlidingGlass => "sliding_glass", DoorStyle::HalfWall => "half_wall" } }
 }
 
 /// An oriented box cutter, centred at `loc`, rotated by `rot_z` about +z. `dims` are full local extents.
@@ -265,6 +267,29 @@ impl<'a> Solidifier<'a> {
                     door_map.entry(l.clone()).or_default().insert(k.clone(), cut);
                 }
             }
+        }
+        // half walls between kitchens and dining rooms (plan_rules.half_wall_p, own stream per pair): the opening on their shared
+        // wall stops at counter height, so it is no longer a way through; only when both rooms keep another door
+        let pr = crate::plan_rules::get();
+        let pairs: Vec<(String, String)> = door_map.iter().flat_map(|(k, cs)| cs.keys().filter(move |l| k < *l).map(move |l| (k.clone(), l.clone()))).collect();
+        for (k, l) in pairs {
+            let is_pair = matches!((room_type(&k), room_type(&l)), ("kitchen", "dining-room") | ("dining-room", "kitchen"));
+            if !is_pair { continue }
+            if door_map[&k].len() < 2 || door_map[&l].len() < 2 { continue }
+            if Rng::seeded(crate::int_hash(&["half_wall", &k, &l])).f64() >= pr.half_wall_p { continue }
+            let Some(se) = shared_edges.get(&k).and_then(|m| m.get(&l)).or_else(|| shared_edges.get(&l).and_then(|m| m.get(&k))) else { continue };
+            if length(se) < 2.2 { continue }
+            let mut pr2 = Rng::seeded(crate::int_hash(&["half_wall_cut", &k, &l]));
+            let mut cut = self.make_passage_cutter(&mut pr2, se);
+            let wt = self.c.wall_thickness;
+            let (z0, z1) = (1.05, cut.loc[2] + cut.dims[2] / 2.0);
+            cut.dims[2] = z1 - z0;
+            cut.loc[2] = (z0 + z1) / 2.0;
+            let _ = wt;
+            cut.style = DoorStyle::HalfWall;
+            cut.rooms = vec![k.clone(), l.clone()];
+            door_map.get_mut(&k).unwrap().insert(l.clone(), cut.clone());
+            door_map.get_mut(&l).unwrap().insert(k.clone(), cut);
         }
         let mut out = vec![];
         for (k, cs) in &door_map {

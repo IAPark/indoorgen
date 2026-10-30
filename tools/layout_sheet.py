@@ -236,6 +236,9 @@ def draw(d, ax, small=False):
         lab = ABBR.get(o["class"]) or (re.sub(r"([a-z])([A-Z])", r"\1 \2", o["class"].replace("Factory", "")).split(" ")[-1].lower() if CLEAN else None)
         # what a piece is for in its room: a dining room's low cabinet is a sideboard, its bookcase a display cabinet
         lab = {"FireplaceFeature": "fireplace", "BookshelfWallFeature": "built-in shelves", "WindowSeatFeature": "window seat"}.get(o["class"], lab)
+        # a living room's fireplace with no TV stand in the room carries the TV over its mantel
+        if o["class"] == "FireplaceFeature" and (o.get("room") or "").startswith("living") and not any(q["class"] == "TVStandFactory" and q.get("room") == o.get("room") for q in d["objects"]):
+            lab = "fireplace + TV"
         if (o.get("room") or "").startswith("dining") and o["class"] in ("SingleCabinetFactory", "SimpleBookcaseFactory"):
             lab = "sideboard" if o["class"] == "SingleCabinetFactory" or o["key"].endswith("_sideboard") else "cabinet"
         if re.search("Plant", o["class"]): lab = "plant"

@@ -298,6 +298,8 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             (CutKind::Door, DoorStyle::Double) => (ct.dims[0] / 2.0 + 0.05).max(0.8),
             (CutKind::Door, DoorStyle::Sliding | DoorStyle::SlidingGlass) => 0.6,
             (CutKind::Door | CutKind::Entrance, _) => (ct.dims[0] + 0.05).max(0.8),
+            // a half wall is not a way through: no clearance, no door point
+            (CutKind::Passage, DoorStyle::HalfWall) => continue,
             (CutKind::Passage, _) => 0.5,
             _ => continue,
         };
