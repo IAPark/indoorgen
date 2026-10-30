@@ -365,15 +365,17 @@ pub fn build_scene(p: &Params) -> Built {
     // the original order below)
     let mut visuals: std::collections::HashMap<String, indoorgen::assets::Asset> = {
         use rayon::prelude::*;
-        let items: Vec<(&String, &indoorgen::furn::state::GenRef)> = g.state.objs.iter().filter(|(k, _)| !g.features.iter().any(|f| &f.key == *k)).filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen))).collect();
+        let items: Vec<(&String, &indoorgen::furn::state::GenRef, bool)> = g.state.objs.iter().filter(|(k, _)| !g.features.iter().any(|f| &f.key == *k)).filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen, o.tags.contains(indoorgen::furn::tags::Tag::sem("RoundTable"))))).collect();
         items
             .par_iter()
-            .map(|(k, gen)| {
+            .map(|(k, gen, round)| {
+                ig_kit::api::set_round_hint(*round);
                 indoorgen::assets::set_unseeded(gen.unseeded.clone());
                 // the size the solver chose (furn::sizes): 'exact' classes build to it, the others are fitted to the box
                 let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact);
                 if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+                ig_kit::api::set_round_hint(false);
                 if exact { ig_kit::api::set_size_hint(None); }
                 // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
                 if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {

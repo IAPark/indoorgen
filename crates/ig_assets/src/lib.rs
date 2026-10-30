@@ -127,6 +127,7 @@ impl Assets for RealAssets {
 type CacheKey = (String, u64, u64, String, Option<Vec<u64>>);
 fn cache_key(class: &str, fs: u64, inst: u64, what: &str) -> CacheKey {
     let what = match ig_kit::api::size_hint() { Some(h) => format!("{what}|size {:?}", h.map(|x| x.to_bits())), None => what.to_string() };
+    let what = if ig_kit::api::round_hint() { format!("{what}|round") } else { what };
     (class.to_string(), fs, inst, what, unseeded().map(|v| v.iter().map(|x| x.to_bits()).collect()))
 }
 type Memo<T> = std::sync::Mutex<Option<std::collections::HashMap<CacheKey, T>>>;

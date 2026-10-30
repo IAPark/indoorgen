@@ -558,3 +558,13 @@ pub fn set_size_hint(h: Option<[f64; 3]>) {
 pub fn size_hint() -> Option<[f64; 3]> {
     SIZE_HINT.with(|c| c.get())
 }
+thread_local! {
+    static ROUND_HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// the next factory construction builds a round variant (dining tables the layout made round: furn::groups, tag RoundTable)
+pub fn set_round_hint(on: bool) {
+    ROUND_HINT.with(|c| c.set(on));
+}
+pub fn round_hint() -> bool {
+    ROUND_HINT.with(|c| c.get())
+}

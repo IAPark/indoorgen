@@ -128,7 +128,12 @@ impl Table {
         let vfillet = r.uniform(0.1, 0.3);
         let stretch_pos = r.uniform(0.2, 0.6);
         let incr = r.choice_idx(3);
-        Table { x, y, z, style, legs, leg_d, top_scale, bottom_scale, curve, top_t, top_n: 4, top_w: 1.414 * x, top_aspect: y / x, fillet, vfillet, leg_ngon: 4, stretch_pos, incr, seed: r.randint(0, 1_000_000) as u64, cocktail: false }
+        let seed = r.randint(0, 1_000_000) as u64;
+        // a dining table the layout made round (ig_kit round hint): a circular top as wide as the table is deep, the same draws
+        if cls == "TableDiningFactory" && ig_kit::api::round_hint() {
+            return Table { x: y, y, z, style, legs, leg_d, top_scale, bottom_scale, curve, top_t, top_n: 32, top_w: y, top_aspect: 1.0, fillet: 0.499, vfillet, leg_ngon: 4, stretch_pos, incr, seed, cocktail: false };
+        }
+        Table { x, y, z, style, legs, leg_d, top_scale, bottom_scale, curve, top_t, top_n: 4, top_w: 1.414 * x, top_aspect: y / x, fillet, vfillet, leg_ngon: 4, stretch_pos, incr, seed, cocktail: false }
     }
 
     fn build(&self) -> Asset {
