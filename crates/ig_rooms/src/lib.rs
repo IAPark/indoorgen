@@ -13,6 +13,7 @@ pub mod consts;
 pub mod graph;
 pub mod plan;
 pub mod plan_rules;
+pub mod nudge;
 pub mod score;
 pub mod segment;
 pub mod state;

@@ -100,7 +100,19 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: opt.rooms };
     let solver = FloorPlanSolver::new(seed, &c, cfg);
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
-    let st = solver.solve(&mut a);
+    #[allow(unused_mut)]
+    let mut st = solver.solve(&mut a);
+    // plan refinement (tools/plan_refine.py): PLAN_NUDGE="room_a,room_b,d;..." moves shared walls before the house is built
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(spec) = std::env::var("PLAN_NUDGE") {
+        for item in spec.split(';').filter(|s| !s.trim().is_empty()) {
+            let f: Vec<&str> = item.split(',').collect();
+            if f.len() != 3 { continue }
+            let d: f64 = f[2].trim().parse().unwrap_or(0.0);
+            let ok = crate::rooms::nudge::nudge(&mut st, f[0].trim(), f[1].trim(), d);
+            if std::env::var_os("GROUPDBG").is_some() { eprintln!("NUDGE {} {} {d}: {}", f[0], f[1], if ok { "moved" } else { "does not fit" }); }
+        }
+    }
     if std::env::var_os("PLAN_STATS").is_some() {
         for (k, ar, cv, asp) in crate::rooms::score::room_stats(&st) {
             println!("PLAN {seed} {k} area {ar:.1} convexity {cv:.2} aspect {asp:.2}");

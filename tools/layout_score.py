@@ -22,12 +22,12 @@ def foot(o):
 
 def usable_rect(poly, cell=0.25):
     """largest axis-aligned rectangle inside `poly` on a raster: (area, short side)"""
-    from matplotlib.path import Path
+    import shapely
     x0, y0, x1, y1 = poly.bounds
     nx, ny = max(1, int(math.ceil((x1 - x0) / cell))), max(1, int(math.ceil((y1 - y0) / cell)))
-    path = Path(list(poly.exterior.coords))
-    pts = [(x0 + (i + 0.5) * cell, y0 + (j + 0.5) * cell) for j in range(ny) for i in range(nx)]
-    ins = path.contains_points(pts)
+    xs = [x0 + (i + 0.5) * cell for j in range(ny) for i in range(nx)]
+    ys = [y0 + (j + 0.5) * cell for j in range(ny) for i in range(nx)]
+    ins = shapely.contains_xy(poly, xs, ys)
     h = [0] * nx
     best = (0.0, 0.0)
     for j in range(ny):
