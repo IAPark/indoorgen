@@ -396,3 +396,9 @@ pub fn free_box_depth(bverts: &[V3], fpose: &Pose, ob: &ObjState) -> Option<f64>
         }
     }
 }
+
+/// per-house state: proxies are keyed by object name and version, which repeat between houses
+pub fn reset_caches() {
+    CACHE.with(|c| c.borrow_mut().clear());
+    SHAPES.with(|c| c.borrow_mut().clear());
+}

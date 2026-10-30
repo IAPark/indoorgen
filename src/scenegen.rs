@@ -49,6 +49,13 @@ pub fn layout_only(p: &Params) -> serde_json::Value {
 }
 
 pub fn build_scene(p: &Params) -> Built {
+    // caches keyed by names / versions / addresses that repeat from house to house (a second generation in one process -- the
+    // wasm page -- read the first house's entries)
+    crate::furn::dof::reset_caches();
+    crate::furn::col::reset_caches();
+    crate::furn::layout2d::reset_caches();
+    crate::furn::eval::reset_caches();
+    crate::furn::solver::reset_caches();
     #[cfg(not(target_arch = "wasm32"))]
     if !LAYOUT_ONLY.with(|c| c.get()) {
         indoorgen::furn::layout2d::knobs::set(&indoorgen::furn::layout2d::knobs::from_env());

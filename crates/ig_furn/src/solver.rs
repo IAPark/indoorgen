@@ -158,6 +158,8 @@ static PH_REUSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 thread_local! {
     static PH_CACHE: std::cell::RefCell<HashMap<String, (ObjGeom, super::state::GenRef, u32)>> = std::cell::RefCell::new(HashMap::default());
 }
+/// per-house state: the shared placeholder of the last annealing step (see dof::reset_caches)
+pub fn reset_caches() { PH_CACHE.with(|c| c.borrow_mut().clear()); }
 /// Dense mode (not python-lockstep): the proposals of ONE annealing step (same class, different parent/plane assignments) share one
 /// sampled placeholder instead of building a new asset (up to 1 s for sofas / armchairs) per rejected candidate.
 pub fn set_placeholder_reuse(on: bool) { PH_REUSE.store(on, std::sync::atomic::Ordering::Relaxed); }

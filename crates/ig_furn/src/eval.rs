@@ -55,6 +55,8 @@ pub struct Memo {
 }
 
 thread_local! {
+    /// evict_for_obj's node sets, keyed by program address and object tags
+    static EVICT: std::cell::RefCell<crate::dhash::FxMap<(usize, usize, TagSet), std::rc::Rc<Vec<usize>>>> = std::cell::RefCell::new(Default::default());
     /// Memo::new's dependency sets (per program) and relevance (per program + stage filter): rebuilt for every stage of every room
     static MEMO_SHAPE: std::cell::RefCell<crate::dhash::FxMap<(usize, usize, String), (std::rc::Rc<HashMap<String, usize>>, std::rc::Rc<Vec<Vec<usize>>>, std::rc::Rc<Vec<bool>>)>> = std::cell::RefCell::new(Default::default());
 }
@@ -150,7 +152,6 @@ impl Memo {
     /// evict_memo_for_obj
     pub fn evict_for_obj(&mut self, prog: &Program, obj_tags: &TagSet) {
         // the evicted node set depends only on the program and the object's tags
-        thread_local! { static EVICT: std::cell::RefCell<crate::dhash::FxMap<(usize, usize, TagSet), std::rc::Rc<Vec<usize>>>> = std::cell::RefCell::new(Default::default()); }
         let key = (prog as *const Program as usize, prog.nodes.len(), obj_tags.clone());
         if let Some(ids) = EVICT.with(|c| c.borrow().get(&key).cloned()) {
             for &id in ids.iter() {
@@ -767,4 +768,10 @@ pub fn obj_desc(o: &ObjState) -> serde_json::Value {
         faces.push(f);
     }
     serde_json::json!({"verts": verts, "faces": faces, "loc": o.pose.o.loc, "euler": o.pose.o.eul, "scale": o.pose.o.scale})
+}
+
+/// per-house state: memo shapes and evicted node sets are keyed by the program's address, which a later house can reuse
+pub fn reset_caches() {
+    MEMO_SHAPE.with(|c| c.borrow_mut().clear());
+    EVICT.with(|c| c.borrow_mut().clear());
 }

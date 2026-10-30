@@ -738,3 +738,10 @@ pub fn repair(state: &mut State) -> Vec<String> {
     }
     log
 }
+
+/// per-house state: prisms, floors and the house outline are keyed by object name and version, which repeat between houses
+pub fn reset_caches() {
+    PRISMS.with(|c| c.borrow_mut().clear());
+    FLOORS.with(|c| c.borrow_mut().clear());
+    HOUSE.with(|c| *c.borrow_mut() = None);
+}

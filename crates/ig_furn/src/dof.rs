@@ -238,6 +238,14 @@ thread_local! {
     static SUPPORT2D: std::cell::RefCell<crate::dhash::FxMap<(String, u64, usize, [u64; 6]), std::sync::Arc<Vec<Vec<[f64; 2]>>>>> = std::cell::RefCell::new(Default::default());
 }
 
+/// empty the caches keyed by object name and version: names (rooms, doors) and version counters repeat from one house to the next, so a
+/// second generation in the same process (the wasm page) read the first house's masks and indexed past its triangles
+pub fn reset_caches() {
+    MASKS.with(|c| c.borrow_mut().clear());
+    ALLIN.with(|c| c.borrow_mut().clear());
+    SUPPORT2D.with(|c| c.borrow_mut().clear());
+}
+
 /// the 2D tail of `stable_against`: the child's projected vertex hull inside the (cached) projected parent surface, 1 cm tolerance
 /// (check_z), or the child's extent along the projected +z inside the parent's (walls)
 #[allow(clippy::too_many_arguments)]
