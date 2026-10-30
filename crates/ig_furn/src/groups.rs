@@ -898,6 +898,14 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
     for tv in tvs {
         let Some(room) = layout2d::room_of(state, &tv) else { continue };
         let Some(sofa) = state.objs.iter().find(|(k, o)| class_of(o) == "SofaFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()) else { continue };
+        // a fireplace is the room's focal point: the sofa faces it (the TV hangs over the mantel, so the stand goes); it is built
+        // into its wall, so the searches that move the TV are skipped
+        let fire = state.objs.iter().find(|(k, o)| class_of(o) == "FireplaceFeature" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone());
+        let fixed = fire.is_some();
+        let tv = match fire {
+            Some(f) => { layout2d::remove_tree(state, &tv); log.push(format!("{room}: seating faces the fireplace {f} (TV over the mantel)")); f }
+            None => tv,
+        };
         let tp = state.objs[&tv].pose;
         let (tlo, thi) = lohi(state, &tv);
         let ty = yaw(&tp);
@@ -945,7 +953,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         };
         let sw = shi[1] - slo[1];
         let sdep = shi[0] - slo[0];
-        for (a, b, n) in segs.clone() {
+        for (a, b, n) in if fixed { vec![] } else { segs.clone() } {
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             let len = (dx * dx + dy * dy).sqrt();
             if len < sw + 0.1 { continue }
@@ -995,7 +1003,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let mut walled = false;
         if pair.is_none() {
             let mut tvbest: Option<(f64, super::geom::Pose, super::geom::Pose, f64)> = None;
-            for (a, b, n) in segs.clone() {
+            for (a, b, n) in if fixed { vec![] } else { segs.clone() } {
                 let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
                 let len = (dx * dx + dy * dy).sqrt();
                 let tw = thi[1] - tlo[1];
@@ -1022,7 +1030,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                         let back = state.objs[&sofa].pose.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
                         let on_wall = layout2d::ring_dist(&rings, [back[0], back[1]]) < 0.15;
                         let mid = [(base[0] + back[0]) / 2.0, (base[1] + back[1]) / 2.0];
-                        let score = if on_wall { 2.0 } else { 0.0 } - (d - 2.6).abs() - (1.6 - tv_door).max(0.0) * 1.5
+                        // (a floating sofa reads as unanchored: its back on a wall is worth a longer view)
+                        let score = if on_wall { 3.0 } else { 0.0 } - (d - 2.6).abs() - (1.6 - tv_door).max(0.0) * 1.5
                             - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.3 - (tt - len / 2.0).abs() / len;
                         if tvbest.as_ref().map_or(true, |b| score > b.0) { tvbest = Some((score, state.objs[&tv].pose, state.objs[&sofa].pose, d)); }
                     }
@@ -1056,7 +1065,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     let cos = (v[0] * n[0] + v[1] * n[1]) / dist;
                     if cos < 0.77 { continue }
                     if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
-                    let score = 100.0 + cos * 3.0 - (dist - 2.6).abs();
+                    // (centred on a fireplace: it cannot move, so the sofa lines up with it)
+                    let score = 100.0 + cos * if fixed { 10.0 } else { 3.0 } - (dist - 2.6).abs();
                     if best.as_ref().map_or(true, |(s, _, _)| score > *s) { best = Some((score, state.objs[&sofa].pose, dist)); walled = true; }
                 }
             }

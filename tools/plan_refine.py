@@ -56,7 +56,7 @@ def main():
     os.makedirs(os.path.join(a.out, "cand"), exist_ok=True)
     cfg = os.path.join(a.out, "cfg.json")
     if not os.path.exists(cfg):
-        json.dump({"cloth": {"on": False}, "people": {"count": 0}}, open(cfg, "w"))
+        json.dump({"cloth": {"on": False}, "people": {"count": 0}, "features": {"on": True}}, open(cfg, "w"))
     rec = open(os.path.join(a.out, "refine.jsonl"), "w")
     for seed in a.seeds:
         rnd = random.Random(seed)

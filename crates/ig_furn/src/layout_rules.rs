@@ -66,7 +66,7 @@ pub struct LayoutRules {
 impl Default for LayoutRules {
     fn default() -> Self {
         LayoutRules {
-            tv_view_min: 1.3, tv_view_max: 4.0, side_wall_max: 3.6, float_min: 2.2, float_max: 3.2,
+            tv_view_min: 1.3, tv_view_max: 4.0, side_wall_max: 3.6, float_min: 2.2, float_max: 3.8,
             armchair_one_m2: 20.0, armchair_two_m2: 30.0, coffee_ratio: 0.75,
             chair_spacing: 0.6, end_chairs: true, small_table: 1.2, table_wall_clear: 0.75, table_door_clear: 1.0, small_dining_m2: 15.0,
             dining_sideboard: true, dining_cabinet_m2: 18.0, dining_rug: true, dining_plant: true,

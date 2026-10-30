@@ -30,6 +30,7 @@ CAT = [("bed", r"^Bed", "#7a9cc6"), ("seat", r"Sofa|ArmChair|^Chair|OfficeChair|
        ("table", r"Table|Desk", "#b5895a"), ("storage", r"Cabinet|Wardrobe|Shelf|Bookcase|TVStand|Dresser|Drawer", "#8f7f6f"),
        ("kitchen", r"KitchenSpace|KitchenIsland|Fridge|Oven|Dishwasher|Microwave|BeverageFridge", "#6f9f6f"),
        ("bath", r"Toilet|Bathtub|Shower|StandingSink|BathroomSink", "#5fb0b0"), ("screen", r"^TV|Monitor", "#444444"),
+       ("feature", r"FireplaceFeature|BookshelfWallFeature|WindowSeatFeature", "#b8a48e"),
        ("lamp", r"FloorLamp|LargePlant|Plant", "#9cbf6a"), ("rug", r"Rug", "#e9d7c0"), ("keepout", r"Keepout", "#ff8080")]
 ANCHOR = {"bedroom": [r"^Bed"], "living-room": [r"Sofa"], "dining-room": [r"TableDining|DiningTable"], "kitchen": [r"KitchenSpace"], "bathroom": [r"Toilet", r"StandingSink|BathroomSink"]}
 NO_REACH = re.compile(r"Rug|^Chair|OfficeChair|BarChair|Stool|FloorLamp|Plant|Keepout|SideTable|TV$|Monitor|Hardware")
@@ -173,6 +174,16 @@ def symbol(ax, o, f, fx, fy):
         ax.add_patch(Ellipse(P(D / 2, W / 2), D * 0.8, W * 0.86, angle=ang, fc="#d6eff2", ec="#333", lw=0.4, zorder=4.5))
     elif cl == "StandingSinkFactory":
         ax.add_patch(Ellipse(P(D * 0.55, W / 2), D * 0.6, W * 0.7, angle=ang, fc="#e8f4f4", ec="#333", lw=0.4, zorder=4.5))
+    elif cl == "FireplaceFeature":
+        # chimney breast with the firebox opening at the front and a stone hearth before it
+        box_(D * 0.45, D * 0.95, W * 0.25, W * 0.75, fc="#3b3330", ec="#222", lw=0.5)
+        box_(D * 0.95, D * 1.0, W * 0.15, W * 0.85, fc="#d8cfc3", ec="#555", lw=0.4)
+    elif cl == "BookshelfWallFeature":
+        n = max(2, int(W / 0.8))
+        for i in range(1, n):
+            ax.plot(*zip(P(0, W * i / n), P(D, W * i / n)), color="#5a4a3a", lw=0.5, zorder=4.5)
+    elif cl == "WindowSeatFeature":
+        box_(D * 0.15, D * 0.9, W * 0.05, W * 0.95, fc="#e6d7c3", ec="#555", lw=0.4)
     elif "Plant" in cl:
         # a pot seen from above: a round planter with leaves
         r = min(D, W) * 0.48
@@ -197,7 +208,7 @@ def draw(d, ax, small=False):
         for g in getattr(f, "geoms", [f]):
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc=col, ec="#222", lw=0.4, alpha=0.55 if n == "rug" else 0.9, zorder=3 if n != "rug" else 2))
         if CLEAN and re.search("Plant", o["class"]) and f.area > 0.02: symbol(ax, o, f, 1.0, 0.0)
-        if o.get("front") and (n in ("bed", "seat", "storage", "kitchen", "bath", "screen") or re.search("Desk|TVStand", o["class"])) and f.area > 0.04:
+        if o.get("front") and (n in ("bed", "seat", "storage", "kitchen", "bath", "screen", "feature") or re.search("Desk|TVStand", o["class"])) and f.area > 0.04:
             fx, fy = o["front"]
             if CLEAN:
                 # the back edge (a sofa's backrest, a bed's headboard, the side against the wall) as a thick dark band
@@ -224,6 +235,7 @@ def draw(d, ax, small=False):
                 ax.annotate("", xy=(c.x + fx * 0.35, c.y + fy * 0.35), xytext=(c.x, c.y), arrowprops=dict(arrowstyle="-|>", lw=0.5, color="#111"), zorder=5)
         lab = ABBR.get(o["class"]) or (re.sub(r"([a-z])([A-Z])", r"\1 \2", o["class"].replace("Factory", "")).split(" ")[-1].lower() if CLEAN else None)
         # what a piece is for in its room: a dining room's low cabinet is a sideboard, its bookcase a display cabinet
+        lab = {"FireplaceFeature": "fireplace", "BookshelfWallFeature": "built-in shelves", "WindowSeatFeature": "window seat"}.get(o["class"], lab)
         if (o.get("room") or "").startswith("dining") and o["class"] in ("SingleCabinetFactory", "SimpleBookcaseFactory"):
             lab = "sideboard" if o["class"] == "SingleCabinetFactory" or o["key"].endswith("_sideboard") else "cabinet"
         if re.search("Plant", o["class"]): lab = "plant"

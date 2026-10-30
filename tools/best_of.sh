@@ -6,7 +6,7 @@ OUT=$1; N=$2; K=${3:-3}
 BIN=${BIN:-$HOME/work/infinigen-rs/target/fast/gen2}
 TOOLS=${0:A:h}
 mkdir -p $OUT/cand && cd $OUT
-[ -f cfg.json ] || echo '{"cloth":{"on":false},"people":{"count":0}}' > cfg.json
+[ -f cfg.json ] || echo '{"cloth":{"on":false},"people":{"count":0},"features":{"on":true}}' > cfg.json
 : > best_of.jsonl
 S0=${START:-1}
 for i in $(seq $S0 $((S0 + N - 1))); do
