@@ -152,6 +152,16 @@ impl Appliance {
                         let _middle = r.uniform(0.5, 0.7);
                     }
                 }
+                // a range is a standard size that lines up with the counter it stands in (30 in wide, 64 cm deep, its body at counter
+                // height, a low back guard): sampled proportions stood taller and deeper than the run and read as a washing machine.
+                // Set after every draw, so the random stream is unchanged.
+                if k == K::Oven {
+                    let (d0, w0, h0) = (a.depth, a.width, a.height);
+                    a.depth = 0.64; a.width = 0.76; a.height = 0.92;
+                    a.door_t *= a.depth / d0; a.rack_r *= a.depth / d0; a.panel_t *= a.depth / d0; a.button_t *= a.depth / d0;
+                    a.button_r *= a.width / w0;
+                    a.panel_h = (a.panel_h * a.height / h0).clamp(0.1, 0.18);
+                }
             }
             K::Micro => {
                 a.depth = r.uniform(0.5, 0.7);

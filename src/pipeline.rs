@@ -461,6 +461,8 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
         lg.extend(crate::furn::groups::room_extras(&mut ctx, state, &mut rd, only_room));
         lg.extend(crate::furn::groups::square_up(state));
         lg.extend(crate::furn::groups::rugs(state));
+        lg.extend(crate::furn::groups::wall_hangings(state));
+        lg.extend(crate::furn::groups::kitchen_style(state));
         if std::env::var_os("GROUPDBG").is_some() { for l in &lg { eprintln!("GROUP {l}"); } }
         let mut rg = Rng::seeded(hs("groups"));
         for l in crate::furn::groups::bedroom_and_desk(&mut ctx, state, &mut rg) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }

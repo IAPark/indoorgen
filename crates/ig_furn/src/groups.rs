@@ -2062,3 +2062,90 @@ fn move_with_children(state: &mut State, name: &str, p: super::geom::Pose) {
     state.set_pose(name, p);
     state.touch(name);
 }
+
+/// pictures and mirrors after the wall stage: the solver hangs them at any height (frames standing on the floor against the wall, a
+/// mirror under the ceiling) and in any number. Per room: up to a few pictures (living / bedroom / hallway 2, dining 1, kitchen /
+/// bathroom 0; largest kept), one mirror (bedrooms, bathrooms, hallways only); pictures centred at eye height (1.5 m), small mirrors
+/// at 1.55 m, full-length ones (1.2 m and taller) 0.2 m off the floor; nothing within 0.2 m of the ceiling or over a window / door.
+pub fn wall_hangings(state: &mut State) -> Vec<String> {
+    let mut log = vec![];
+    let wbox = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
+        let o = &st.objs[k];
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+        }
+        (lo, hi)
+    };
+    // floor level: the bottom of the door openings (doors stand on the floor); the ceiling: the room's wall height above it
+    let openings: Vec<String> = state.objs.keys().filter(|k| k.starts_with("door") || k.starts_with("entrance") || k.starts_with("window")).cloned().collect();
+    let floor_z = openings.iter().filter(|k| !k.starts_with("window")).map(|k| wbox(state, k).0[2]).fold(f64::INFINITY, f64::min);
+    let floor_z = if floor_z.is_finite() { floor_z.max(0.0) } else { 0.14 };
+    let rooms: Vec<String> = state.objs.iter().filter(|(_, o)| layout2d::is_room(o)).map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let rt = room_type_of(&room).to_string();
+        let ceil = state.objs[&room].geom.hi[2] - floor_z;
+        let in_room = |st: &State, c: &str| -> Vec<String> { st.objs.iter().filter(|(k, o)| class_of(o) == c && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect() };
+        for (cls, max) in [("WallArtFactory", match rt.as_str() { "living-room" | "bedroom" | "hallway" => 2usize, "dining-room" => 1, _ => 0 }),
+                           ("MirrorFactory", if matches!(rt.as_str(), "bedroom" | "bathroom" | "hallway") { 1 } else { 0 })] {
+            let mut ks = in_room(state, cls);
+            // the largest first (one good picture over a sofa reads better than several small ones)
+            ks.sort_by(|a, b| { let ar = |k: &str| { let (l, h) = wbox(state, k); ((h[0] - l[0]).max(h[1] - l[1])) * (h[2] - l[2]) }; ar(b).partial_cmp(&ar(a)).unwrap() });
+            let mut kept = 0;
+            for k in ks {
+                let (lo, hi) = wbox(state, &k);
+                let h = hi[2] - lo[2];
+                let target_lo = if cls == "MirrorFactory" && h >= 1.2 { floor_z + 0.2 } else { floor_z + if cls == "MirrorFactory" { 1.55 } else { 1.5 } - h / 2.0 };
+                let target_lo = target_lo.min(floor_z + ceil - 0.2 - h).max(floor_z + 0.2);
+                // (a canvas taller than 1.1 m or wider than 1.6 m read as a stray panel: dropped, not rescaled)
+                let big = cls == "WallArtFactory" && (h > 1.1 || (hi[0] - lo[0]).max(hi[1] - lo[1]) > 1.6);
+                let fits = kept < max && !big && target_lo + h <= floor_z + ceil - 0.2 + 1e-6;
+                let dz = target_lo - lo[2];
+                // over a window or a door at the new height: dropped
+                let clash = fits && openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..2).all(|d| lo[d] < wh[d] + 0.05 && wl[d] - 0.05 < hi[d]) && lo[2] + dz < wh[2] && wl[2] < hi[2] + dz });
+                if !fits || clash {
+                    layout2d::remove_tree(state, &k);
+                    log.push(format!("{room}: removed {cls} {k} ({})", if clash { "over an opening" } else if big { "too large" } else { "over the count" }));
+                    continue;
+                }
+                if dz.abs() > 0.01 {
+                    let mut p = state.objs[&k].pose;
+                    p.translate([0.0, 0.0, dz]);
+                    state.set_pose(&k, p);
+                    state.touch(&k);
+                    log.push(format!("{room}: {cls} {k} moved {dz:+.2} m to {:.2}-{:.2} m", target_lo - floor_z, target_lo + h - floor_z));
+                }
+                kept += 1;
+            }
+        }
+    }
+    log
+}
+
+/// one cabinet style per kitchen: every counter run (and wall cabinet) of a room built with the factory seed of its longest run --
+/// each run drew its own, so a short run beside the sink came out white next to dark cabinets and read as a separate unit
+pub fn kitchen_style(state: &mut State) -> Vec<String> {
+    let mut log = vec![];
+    let mut by_room: std::collections::BTreeMap<(String, String), Vec<(String, f64)>> = Default::default();
+    for (k, o) in &state.objs {
+        let Some(g) = &o.generator else { continue };
+        if !matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenCabinetFactory") { continue }
+        let Some(room) = layout2d::room_of(state, k) else { continue };
+        let w = super::solver::cur_size(g).map_or(0.0, |c| c[0]);
+        by_room.entry((room, g.class.clone())).or_default().push((k.clone(), w));
+    }
+    for ((room, cls), runs) in by_room {
+        if runs.len() < 2 { continue }
+        let (lead, _) = runs.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).unwrap().clone();
+        let fs = state.objs[&lead].generator.as_ref().unwrap().factory_seed;
+        let mut n = 0;
+        for (k, _) in &runs {
+            let g = state.objs.get_mut(k).unwrap().generator.as_mut().unwrap();
+            if g.factory_seed != fs { g.factory_seed = fs; n += 1; }
+        }
+        if n > 0 { log.push(format!("{room}: {n} {cls} restyled like {lead}")); }
+    }
+    log
+}
