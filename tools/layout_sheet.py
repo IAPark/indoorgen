@@ -35,7 +35,7 @@ CAT = [("bed", r"^Bed", "#7a9cc6"), ("seat", r"Sofa|ArmChair|^Chair|OfficeChair|
 ANCHOR = {"bedroom": [r"^Bed"], "living-room": [r"Sofa"], "dining-room": [r"TableDining|DiningTable"], "kitchen": [r"KitchenSpace"], "bathroom": [r"Toilet", r"StandingSink|BathroomSink"]}
 NO_REACH = re.compile(r"Rug|^Chair|OfficeChair|BarChair|Stool|FloorLamp|Plant|Keepout|SideTable|TV$|Monitor|Hardware")
 ABBR = {"BedFactory": "bed", "SofaFactory": "sofa", "ArmChairFactory": "arm", "ChairFactory": "ch", "TableDiningFactory": "dining", "CoffeeTableFactory": "coffee",
-        "SideTableFactory": "side", "SimpleDeskFactory": "desk", "WardrobeFactory": "wardrobe", "TVStandFactory": "tv", "KitchenSpaceFactory": "counter",
+        "SideTableFactory": "side", "SimpleDeskFactory": "desk", "WardrobeFactory": "wardrobe", "TVStandFactory": "TV", "KitchenSpaceFactory": "counter",
         "FridgeFactory": "fridge", "ToiletFactory": "wc", "BathtubFactory": "tub", "ShowerFactory": "shower", "StandingSinkFactory": "sink",
         "SingleCabinetFactory": "cab", "LargeShelfFactory": "shelf", "SimpleBookcaseFactory": "books", "CellShelfFactory": "cells", "KitchenCabinetFactory": "kcab",
         "DishwasherFactory": "dw", "OvenFactory": "oven", "SinkFactory": "sink"}
@@ -174,10 +174,17 @@ def symbol(ax, o, f, fx, fy):
         ax.add_patch(Ellipse(P(D / 2, W / 2), D * 0.8, W * 0.86, angle=ang, fc="#d6eff2", ec="#333", lw=0.4, zorder=4.5))
     elif cl == "StandingSinkFactory":
         ax.add_patch(Ellipse(P(D * 0.55, W / 2), D * 0.6, W * 0.7, angle=ang, fc="#e8f4f4", ec="#333", lw=0.4, zorder=4.5))
+    elif cl == "TVStandFactory":
+        # the screen: a dark bar along the back with a lighter glass face, wide as most of the stand
+        box_(0.02, min(0.09, D * 0.35), W * 0.1, W * 0.9, fc="#1d2226", ec="#000", lw=0.4)
+        box_(min(0.09, D * 0.35), min(0.12, D * 0.45), W * 0.12, W * 0.88, fc="#6c8aa0", ec="none")
     elif cl == "FireplaceFeature":
         # chimney breast with the firebox opening at the front and a stone hearth before it
         box_(D * 0.45, D * 0.95, W * 0.25, W * 0.75, fc="#3b3330", ec="#222", lw=0.5)
         box_(D * 0.95, D * 1.0, W * 0.15, W * 0.85, fc="#d8cfc3", ec="#555", lw=0.4)
+        if (o.get("room") or "").startswith("living"):
+            # the TV over the mantel: a screen bar on the breast
+            box_(D * 0.05, D * 0.2, W * 0.15, W * 0.85, fc="#1d2226", ec="#000", lw=0.4)
     elif cl == "BookshelfWallFeature":
         n = max(2, int(W / 0.8))
         for i in range(1, n):
@@ -227,7 +234,7 @@ def draw(d, ax, small=False):
                     hx = [(x, y) for x, y in hull]
                     fe = max(((x1 + x2) / 2 * fx + (y1 + y2) / 2 * fy, (x1, y1, x2, y2)) for (x1, y1), (x2, y2) in zip(hx[:-1], hx[1:]))[1]
                     mx, my = (fe[0] + fe[2]) / 2, (fe[1] + fe[3]) / 2
-                    L = 0.22 if f.area > 0.3 else 0.14
+                    L = 0.3 if f.area > 0.3 else 0.18
                     tri = [(mx - fy * L * 0.6, my + fx * L * 0.6), (mx + fy * L * 0.6, my - fx * L * 0.6), (mx + fx * L, my + fy * L)]
                     ax.add_patch(MPoly(tri, closed=True, fc="#111", ec="none", zorder=6))
             else:
