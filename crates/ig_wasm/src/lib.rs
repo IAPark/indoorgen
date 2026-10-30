@@ -143,6 +143,8 @@ pub fn layout(seed: u32, opts_json: &str) -> Result<String, JsValue> {
     cfg.house.seed = seed as u64;
     cfg.house.room = Some("LivingRoom".into());
     cfg.house.only_target = false;
+    // the same annealing steps as native runs (web_default uses 0.6) unless the caller asks for fewer
+    cfg.solver.steps_scale = j.get("steps_scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
     if let Some(r) = rooms { cfg.house.rooms = r; }
     cfg.people.count = 0;
     cfg.mess.level = 0.0;
