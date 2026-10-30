@@ -369,7 +369,7 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
         for l in crate::furn::groups::caps(state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
         let mut rg = Rng::seeded(hs("groups_add"));
         for l in crate::furn::groups::missing_pieces(&mut ctx, state, &mut rg, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
-        for l in crate::furn::groups::bathroom_template(state, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
+        if crate::furn::layout_rules::get().bathroom_template { for l in crate::furn::groups::bathroom_template(state, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
         for l in crate::furn::groups::toilets(state, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } }
         let liv = crate::furn::groups::living(&mut ctx, state, &mut rg);
         let eat = crate::furn::groups::eat_in(&mut ctx, state, &mut rg, only_room);

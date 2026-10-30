@@ -10,6 +10,7 @@ pub mod program;
 pub mod state;
 pub mod col;
 pub mod layout2d;
+pub mod layout_rules;
 pub mod sizes;
 pub mod groups;
 pub mod fcl;

@@ -50,7 +50,15 @@ pub fn layout_only(p: &Params) -> serde_json::Value {
 
 pub fn build_scene(p: &Params) -> Built {
     #[cfg(not(target_arch = "wasm32"))]
-    if !LAYOUT_ONLY.with(|c| c.get()) { indoorgen::furn::layout2d::knobs::set(&indoorgen::furn::layout2d::knobs::from_env()); }
+    if !LAYOUT_ONLY.with(|c| c.get()) {
+        indoorgen::furn::layout2d::knobs::set(&indoorgen::furn::layout2d::knobs::from_env());
+        // tunable rules (LAYOUT_RULES_JSON: a file with {"layout": {...}, "plan": {...}}, any subset of fields)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(j) = std::env::var("LAYOUT_RULES_JSON").ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+            if let Ok(r) = serde_json::from_value(j.get("layout").cloned().unwrap_or(serde_json::json!({}))) { indoorgen::furn::layout_rules::set(&r); }
+            if let Ok(r) = serde_json::from_value(j.get("plan").cloned().unwrap_or(serde_json::json!({}))) { indoorgen::rooms::plan_rules::set(&r); }
+        }
+    }
     indoorgen::assets::bed::set_clean_geometry(true);
     let cfg = &p.cfg;
     cfg.install();

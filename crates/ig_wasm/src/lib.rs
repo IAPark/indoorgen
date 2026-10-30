@@ -126,6 +126,7 @@ pub fn generate(seed: u32, room: &str, opts_json: &str) -> Result<Vec<u8>, JsVal
 /// Furniture layout of house `seed` as JSON (furn layout dump: rooms with outlines, inner floors and walkway status, door / window
 /// cutters, objects with footprints, front, parent, room, size, seeds). `opts_json` (all optional):
 /// `{"knobs": {"rules":true,"sizes":true,"builtin_fit":true,"groups":true,"furniture_only":true,"group_w":3,"size_w":0.5},
+///   "rules": {"layout": {..furn::layout_rules..}, "plan": {..rooms::plan_rules..}},
 ///   "rooms": "curated" | "fewer" | "full", ...any partial GenConfig}`
 #[wasm_bindgen]
 pub fn layout(seed: u32, opts_json: &str) -> Result<String, JsValue> {
@@ -139,6 +140,12 @@ pub fn layout(seed: u32, opts_json: &str) -> Result<String, JsValue> {
     if !fo_given { k.furniture_only = true; }
     let rooms = o.remove("rooms").and_then(|v| v.as_str().map(|s| s.to_string()));
     knobs::set(&k);
+    // tunable rules ({"layout": {...}, "plan": {...}}, any subset): defaults for whatever is missing, every call
+    let rj = o.remove("rules").unwrap_or(serde_json::json!({}));
+    let lr: indoorgen::furn::layout_rules::LayoutRules = serde_json::from_value(rj.get("layout").cloned().unwrap_or(serde_json::json!({}))).map_err(|e| JsValue::from_str(&format!("bad layout rules: {e}")))?;
+    let pr: indoorgen::rooms::plan_rules::PlanRules = serde_json::from_value(rj.get("plan").cloned().unwrap_or(serde_json::json!({}))).map_err(|e| JsValue::from_str(&format!("bad plan rules: {e}")))?;
+    indoorgen::furn::layout_rules::set(&lr);
+    indoorgen::rooms::plan_rules::set(&pr);
     let mut cfg = config_from_opts(&j.to_string()).map_err(|e| JsValue::from_str(&format!("bad options: {e}")))?;
     cfg.house.seed = seed as u64;
     cfg.house.room = Some("LivingRoom".into());

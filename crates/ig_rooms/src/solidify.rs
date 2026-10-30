@@ -214,7 +214,7 @@ impl<'a> Solidifier<'a> {
                 let public = |t: &str| matches!(t, "kitchen" | "dining-room" | "living-room" | "hallway");
                 let mut extra_rng = None;
                 if !adjacent && public(room_type(k)) && public(room_type(l)) && !(room_type(k) == "hallway" && room_type(l) == "hallway") && length(se) >= 1.5 {
-                    let p = std::env::var("EXTRA_DOOR_P").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
+                    let p = std::env::var("EXTRA_DOOR_P").ok().and_then(|v| v.parse().ok()).unwrap_or(crate::plan_rules::get().extra_door_p);
                     let mut er = Rng::seeded(crate::int_hash(&["extra_door", k, l]));
                     if er.f64() < p { fn_ = "door"; extra_rng = Some(er); }
                 }
@@ -316,7 +316,8 @@ impl<'a> Solidifier<'a> {
         // fewer windows where privacy or wall space matters: closets none, bathrooms their widest one, bedrooms their widest two
         // (filtered after generation, so the random stream and every other room's windows stay as they were)
         for (k, cs) in window_cutters.iter_mut() {
-            let keep = if k.starts_with("closet") { 0 } else if k.starts_with("bathroom") { 1 } else if k.starts_with("bedroom") { 2 } else { usize::MAX };
+            let pr = crate::plan_rules::get();
+            let keep = if k.starts_with("closet") { pr.closet_windows } else if k.starts_with("bathroom") { pr.bathroom_windows } else if k.starts_with("bedroom") { pr.bedroom_windows } else { usize::MAX };
             if cs.len() > keep {
                 cs.sort_by(|a, b| b.dims[0].partial_cmp(&a.dims[0]).unwrap());
                 cs.truncate(keep);

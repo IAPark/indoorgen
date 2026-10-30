@@ -94,7 +94,7 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
     let mut log = vec![];
     // designed kitchens first (an L from a corner: counter + fridge on one leg, counter + range on the other); the rooms it lays out
     // skip the per-run appliance placement below
-    let done = kitchen_template(ctx, state, &mut log);
+    let done = if super::layout_rules::get().kitchen_template { kitchen_template(ctx, state, &mut log) } else { vec![] };
     let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && !layout2d::room_of(state, k).map_or(false, |r| done.contains(&r))).map(|(k, _)| k.clone()).collect();
     // floor-standing kitchen cabinets box the counter run in and read as stray units: removed (wall cabinets stay)
     let _runs: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "KitchenSpaceFactory").map(|(k, _)| k.clone()).collect();
@@ -280,7 +280,7 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
                 state.touch(&a);
             }
         }
-        for i in 0..3 {
+        for i in 0..super::layout_rules::get().extra_runs {
             let others: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
             if others.is_empty() { break }
             let name = format!("{room}_run{i}").replace('/', "_");
@@ -293,7 +293,8 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
             let _ = super::solver::set_width(ctx, state, &name, &base, 1.2, 1.0);
             let n2 = name.clone();
             let os = others.clone();
-            let aisle_ok = move |st: &State| os.iter().all(|r| { let d = layout2d::dist(st, r, &n2); d < 0.05 || d >= 1.0 });
+            let aisle = super::layout_rules::get().kitchen_aisle;
+            let aisle_ok = move |st: &State| os.iter().all(|r| { let d = layout2d::dist(st, r, &n2); d < 0.05 || d >= aisle });
             let ok2 = aisle_ok.clone();
             // straight walls only (a run on an angled wall reads as a diagonal counter in the middle of the room)
             // (a run meeting another at a corner, an L or U, reads as one counter; parallel runs read as split: corners first)
@@ -494,6 +495,7 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
         let door_d = |st: &State, k: &str| { let t = st.objs[k].pose.t; doors.iter().map(|d| ((d[0] - t[0]).powi(2) + (d[1] - t[1]).powi(2)).sqrt()).fold(9.0f64, f64::min) };
         let w_of = |st: &State, k: &str| { let (l, h) = lohi(st, k); (h[1] - l[1], h[0] - l[0]) };
         let (tw, td) = w_of(state, &tub);
+        let gap = super::layout_rules::get().fixture_gap;
         let (sw, _) = w_of(state, &sink);
         let (ww, _) = w_of(state, &wc);
         let segs: Vec<_> = wall_segments(state, &room).into_iter().filter(|(_, _, n)| n[0].abs() > 0.99 || n[1].abs() > 0.99).collect();
@@ -526,14 +528,14 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
                                 let mut placed = false;
                                 for k in 0..10 {
                                     let s0 = td + 0.15 + k as f64 * 0.15;
-                                    if s0 + sw + 0.35 + ww > lb { break }
-                                    if place_along(state, &sink, c, ub, nb, s0) && place_along(state, &wc, c, ub, nb, s0 + sw + 0.35) { placed = true; break }
+                                    if s0 + sw + gap + ww > lb { break }
+                                    if place_along(state, &sink, c, ub, nb, s0) && place_along(state, &wc, c, ub, nb, s0 + sw + gap) { placed = true; break }
                                 }
                                 ok &= placed;
                             } else {
                                 let mut placed = false;
                                 for k in 0..10 {
-                                    let s0 = tw + 0.35 + k as f64 * 0.15;
+                                    let s0 = tw + gap + k as f64 * 0.15;
                                     if s0 + ww > la { break }
                                     if place_along(state, &wc, c, ua, na, s0) { placed = true; break }
                                 }
@@ -738,7 +740,7 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         "OvenFactory" => ("ovens", if room_type == "kitchen" { 1 } else { 0 }),
         "DishwasherFactory" => ("dishwashers", if room_type == "kitchen" { 1 } else { 0 }),
         // (desks read as crammed beside the bed even in large bedrooms: none)
-        "SimpleDeskFactory" => ("desks", 0),
+        "SimpleDeskFactory" => ("desks", if room_type == "bedroom" && super::layout_rules::get().desks { 1 } else { 0 }),
         "KitchenCabinetFactory" if room_type == "kitchen" => return None,
         // (a lone cabinet on a living-room wall reads as stray: the TV stand is the room's storage)
         _ if storage => ("storage", match room_type { "utility" => 2, _ => 0 }),
@@ -764,8 +766,9 @@ pub fn caps(state: &mut State) -> Vec<String> {
         let Some((grp, mut max)) = cap(room_type_of(&room), class_of(o)) else { continue };
         let area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
         // a desk only in a bedroom of 18 m2 or more; a tub and a shower together only in a bathroom of 14 m2 or more
-        if grp == "desks" && area < 18.0 { max = 0; }
-        if grp == "tub / shower" && area < 14.0 { max = 1; }
+        let lr = super::layout_rules::get();
+        if grp == "desks" && area < lr.desk_min_m2 { max = 0; }
+        if grp == "tub / shower" && area < lr.tub_and_shower_m2 { max = 1; }
         let e = groups.entry((room, grp)).or_insert((max, vec![]));
         e.1.push(k.clone());
     }
@@ -907,7 +910,8 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         // a living room of 20 m2 or more without an armchair gets one (placed with the others beside the coffee table, or left out)
         let room_area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
         // (30 m2 or more: a pair, one each side of the coffee table, so a large room does not read as half empty)
-        let want = if room_area >= 30.0 { 2 } else if room_area >= 20.0 { 1 } else { 0 };
+        let lr = super::layout_rules::get();
+        let want = if room_area >= lr.armchair_two_m2 { 2 } else if room_area >= lr.armchair_one_m2 { 1 } else { 0 };
         for i in lifted.iter().filter(|(_, o)| class_of(o) == "ArmChairFactory").count()..want {
             let an = format!("{room}_armchair{i}").replace('/', "_");
             if new_piece(ctx, state, rng, "ArmChairFactory", &room, &an) {
@@ -963,7 +967,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                 let view = dist - sdep - (thi[0] - tlo[0]);
                 // narrow living rooms (2.6 m) seat the sofa across from the TV at 1.3 m
                 // (raters read more than ~4 m between sofa and TV as "far"; past that the sofa faces the TV from mid-room)
-                if !(1.3..=4.0).contains(&view) { continue }
+                if !(lr.tv_view_min..=lr.tv_view_max).contains(&view) { continue }
                 if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
                 if !try_place(state, &tv, m[1].atan2(m[0]), [tlo[0], (tlo[1] + thi[1]) / 2.0, tlo[2]], [hp[0] + m[0] * 0.003, hp[1] + m[1] * 0.003, 0.0]) {
                     state.set_pose(&tv, tv_start); state.touch(&tv);
@@ -1007,8 +1011,9 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     if !ok { continue }
                     let tv_door = ldoors.iter().map(|d| ((d[0] - base[0]).powi(2) + (d[1] - base[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
                     let tfront = [base[0] + n[0] * (thi[0] - tlo[0]), base[1] + n[1] * (thi[0] - tlo[0])];
-                    for k in 0..6 {
-                        let d = 2.2 + k as f64 * 0.2;
+                    let nd = (((lr.float_max - lr.float_min) / 0.2).round() as usize).min(20);
+                    for k in 0..=nd {
+                        let d = lr.float_min + k as f64 * 0.2;
                         let at = [tfront[0] + n[0] * d, tfront[1] + n[1] * d, 0.0];
                         // sofa front (local +x) toward the TV
                         if !try_place(state, &sofa, (-n[1]).atan2(-n[0]), [shi[0], (slo[1] + shi[1]) / 2.0, slo[2]], at) { continue }
@@ -1045,7 +1050,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
                     let fc2 = [base[0] + n[0] * sdep, base[1] + n[1] * sdep];
                     let v = [tc[0] - fc2[0], tc[1] - fc2[1]];
                     let dist = (v[0] * v[0] + v[1] * v[1]).sqrt();
-                    if !(1.5..=3.6).contains(&dist) { continue }
+                    if !(1.5..=lr.side_wall_max).contains(&dist) { continue }
                     let cos = (v[0] * n[0] + v[1] * n[1]) / dist;
                     if cos < 0.77 { continue }
                     if !try_place(state, &sofa, n[1].atan2(n[0]), [slo[0], (slo[1] + shi[1]) / 2.0, slo[2]], [base[0] + n[0] * 0.003, base[1] + n[1] * 0.003, 0.0]) { continue }
@@ -1100,7 +1105,7 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             let mut ok = false;
             if class_of(o) == "CoffeeTableFactory" {
                 // about the sofa's seat width, three quarters of it (a 0.8 m table before a 2.6 m sofa reads as too small)
-                let target = ((shi[1] - slo[1]) * 0.75).clamp(0.6, 1.6);
+                let target = ((shi[1] - slo[1]) * lr.coffee_ratio).clamp(0.6, 1.6);
                 if (target - (chi[1] - clo[1])).abs() > 0.1 {
                     let base = state.objs[k].clone();
                     let _ = super::solver::set_width(ctx, state, k, &base, target, 1.0);
@@ -1181,7 +1186,7 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let _ = (c, yaw_, anchor);
         // a small dining room gets a small table (a centred 1.6 m table with its chairs closed the path between the doors)
         let room_area = state.objs[&room].polygon.as_ref().map_or(0.0, |p| crate::shp::area(p));
-        if room_area < 15.0 {
+        if room_area < super::layout_rules::get().small_dining_m2 {
             let base = state.objs[&t].clone();
             if let Some(cs) = base.generator.as_ref().and_then(super::solver::cur_size) {
                 if cs[0] > 1.05 && !super::solver::set_width(ctx, state, &t, &base, 1.0, 1.0) && !free_ok(state, &t) {
@@ -1197,7 +1202,8 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         let tw = { let (l2, h2) = lohi(state, &t); let _ = (lo, hi); h2[1] - l2[1] };
         // one chair per 0.6 m on each long side and one at each end: 1.4 m -> 6, 2.1 m -> 8
         // (a small table, under 1.2 m: one chair each side, four; two on adjacent sides read as lopsided)
-        let want = if tw < 1.2 { 4 } else { (2 * ((tw / 0.6).floor() as usize).max(1)).clamp(2, 6) + 2 };
+        let lr = super::layout_rules::get();
+        let want = if tw < lr.small_table { 4 } else { (2 * ((tw / lr.chair_spacing.max(0.4)).floor() as usize).max(1)).clamp(2, 6) + if lr.end_chairs { 2 } else { 0 } };
         let mut chairs = chairs;
         if chairs.is_empty() {
             // a table without chairs: a first chair from scratch, the copies below make the set
@@ -1352,7 +1358,7 @@ pub fn toilets(state: &mut State, only_room: Option<&str>) -> Vec<String> {
         let t = state.objs[&wc].pose.t;
         let d0 = door_d([t[0], t[1]]);
         let c0 = clr(state);
-        if d0 >= 1.0 && c0 >= 0.15 { continue }
+        if d0 >= super::layout_rules::get().toilet_door_min && c0 >= 0.15 { continue }
         let s0 = d0.min(2.5) + 2.0 * c0.min(0.3);
         let start = state.objs[&wc].pose;
         let dd = door_d.clone();
@@ -1381,7 +1387,7 @@ pub fn wardrobes(state: &mut State) -> Vec<String> {
         let beds: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "BedFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
         let Some(bed) = beds.first().cloned() else { continue };
         let d0 = layout2d::dist(state, &w, &bed);
-        if d0 >= 0.7 { continue }
+        if d0 >= super::layout_rules::get().wardrobe_bed_min { continue }
         let doors = door_points(state, &room);
         let door_d = move |c: [f64; 2]| doors.iter().map(|d| ((d[0] - c[0]).powi(2) + (d[1] - c[1]).powi(2)).sqrt()).fold(4.0f64, f64::min);
         let score = |st: &State, c: [f64; 2], w2: &str, bed: &str| layout2d::dist(st, w2, bed).min(2.0) + door_d(c).min(1.2) * 0.5;
@@ -1417,8 +1423,9 @@ fn center_table(state: &mut State, t: &str, room: &str) -> bool {
     // room for the chairs: 0.75 m from the walls and 1 m from the doors all round (the first free spot without it lost chairs to
     // blocked slots); else the first free spot
     let doors = door_points(state, room);
+    let lr = super::layout_rules::get();
     let roomy = |st: &State| layout2d::prisms(st, t).iter().flat_map(|p| p.poly.iter().copied().collect::<Vec<_>>()).all(|v| {
-        layout2d::ring_dist(&rings, v) >= 0.75 && doors.iter().all(|d| ((d[0] - v[0]).powi(2) + (d[1] - v[1]).powi(2)).sqrt() >= 1.0)
+        layout2d::ring_dist(&rings, v) >= lr.table_wall_clear && doors.iter().all(|d| ((d[0] - v[0]).powi(2) + (d[1] - v[1]).powi(2)).sqrt() >= lr.table_door_clear)
     });
     let mut first: Option<super::geom::Pose> = None;
     for r in [0.0f64, 0.3, 0.6, 0.9, 1.2] {
@@ -1610,7 +1617,7 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         let on_run: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "SinkFactory" && o.relations.iter().any(|r| r.target == run)).map(|(k, _)| k.clone()).collect();
         if !on_run.is_empty() {
             let ovens0: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "OvenFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
-            let tight = on_run.iter().any(|sk| ovens0.iter().any(|o| layout2d::dist(state, o, sk) < 0.4));
+            let tight = on_run.iter().any(|sk| ovens0.iter().any(|o| layout2d::dist(state, o, sk) < super::layout_rules::get().sink_range_gap));
             if !tight { continue }
             for k in on_run { layout2d::remove_tree(state, &k); log.push(format!("{run}: sink against the range, placed again")); }
         }
@@ -1662,7 +1669,7 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
             for &y in &ys {
                 if y - (shi[1] - slo[1]) / 2.0 < rlo[1] + 0.05 || y + (shi[1] - slo[1]) / 2.0 > rhi[1] - 0.05 { continue }
                 let at = rp.apply([rlo[0] + 0.06 + sd / 2.0, y, 0.0]);
-                if try_place(state, &name, yaw(&rp), [(slo[0] + shi[0]) / 2.0, (slo[1] + shi[1]) / 2.0, slo[2]], [at[0], at[1], top]) && (!strict || range_gap(state) >= 0.4) { ok = true; break 'pass; }
+                if try_place(state, &name, yaw(&rp), [(slo[0] + shi[0]) / 2.0, (slo[1] + shi[1]) / 2.0, slo[2]], [at[0], at[1], top]) && (!strict || range_gap(state) >= super::layout_rules::get().sink_range_gap) { ok = true; break 'pass; }
             }
         }
         if ok { log.push(format!("{run}: sink added")); } else { state.objs.shift_remove(&name); log.push(format!("{run}: no room for a sink")); }

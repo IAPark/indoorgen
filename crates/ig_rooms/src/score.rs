@@ -113,14 +113,15 @@ pub fn room_term(state: &RoomState, c: &RoomConstants) -> f64 {
     // room size targets (no penalty between norm and 1.49 x norm). Infinigen's home.py norms (kitchen 20, bedroom 40, living 40,
     // dining 20, closet 5, bathroom 8, utility 5, garage 25, balcony 8) gave 46 m2 bedrooms and 65 m2 living rooms; these follow
     // real homes / 3D-FRONT (bedroom ~12-20 m2, living room ~25-35 m2). The typical areas (graph.rs) and so the house size follow.
+    // (bedrooms past ~21 m2 and living rooms past ~33 m2 read as half empty in review: 14 / 22; plan_rules)
+    let pr = crate::plan_rules::get();
     let area_terms: [(&str, f64); 10] = [
-        ("kitchen", 15.0),
-        // (bedrooms past ~21 m2 and living rooms past ~33 m2 read as half empty in review: 14 / 22)
-        ("bedroom", 14.0),
-        ("living-room", 22.0),
-        ("dining-room", 13.0),
+        ("kitchen", pr.kitchen_m2),
+        ("bedroom", pr.bedroom_m2),
+        ("living-room", pr.living_m2),
+        ("dining-room", pr.dining_m2),
         ("closet", 3.0),
-        ("bathroom", 7.5),
+        ("bathroom", pr.bathroom_m2),
         ("utility", 4.0),
         ("garage", 20.0),
         ("balcony", 6.0),

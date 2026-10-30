@@ -1,0 +1,34 @@
+//! Tunable floor-plan rules: room size targets, windows per room type, second doors, angled corners. Defaults are the reviewed
+//! values; native runs read LAYOUT_RULES_JSON ({"plan": {...}}), the browser build takes them per call (ig_wasm `layout()` "rules").
+
+use std::sync::RwLock;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PlanRules {
+    /// area targets (the room solver leaves rooms up to ~1.5x alone), m2
+    pub bedroom_m2: f64,
+    pub living_m2: f64,
+    pub kitchen_m2: f64,
+    pub dining_m2: f64,
+    pub bathroom_m2: f64,
+    /// most windows per room
+    pub closet_windows: usize,
+    pub bathroom_windows: usize,
+    pub bedroom_windows: usize,
+    /// chance of a second door between public rooms that share a wall
+    pub extra_door_p: f64,
+    /// chance a corner of the outline is cut or rounded
+    pub angled_corner_p: f64,
+}
+
+impl Default for PlanRules {
+    fn default() -> Self {
+        PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 2, extra_door_p: 0.7, angled_corner_p: 0.08 }
+    }
+}
+
+static RULES: RwLock<Option<PlanRules>> = RwLock::new(None);
+
+pub fn set(r: &PlanRules) { *RULES.write().unwrap() = Some(r.clone()); }
+pub fn get() -> PlanRules { RULES.read().unwrap().clone().unwrap_or_default() }
