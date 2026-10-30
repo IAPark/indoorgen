@@ -258,7 +258,10 @@ def draw(d, ax, small=False):
         if re.search("Plant", o["class"]): lab = "plant"
         if CLEAN and n == "rug": lab = None
         if lab and (not small or CLEAN):
-            c = f.centroid; ax.text(c.x, c.y - 0.12, lab, fontsize=5, ha="center", va="top", zorder=6, color="#111")
+            c = f.centroid
+            # (a TV stand is shallow: a label hung below its centre fell on the wall it stands against)
+            if o["class"] == "TVStandFactory": ax.text(c.x, c.y, lab, fontsize=7, ha="center", va="center", zorder=6.5, color="#fff", weight="bold", bbox=dict(boxstyle="round,pad=0.15", fc="#1d2226", ec="none"))
+            else: ax.text(c.x, c.y - 0.12, lab, fontsize=5, ha="center", va="top", zorder=6, color="#111")
     # kitchen counters: runs and the appliances standing in line with them are one continuous counter -- one outline around the
     # pieces that touch, so an L of a run, a range and a fridge reads as joined
     if CLEAN:
