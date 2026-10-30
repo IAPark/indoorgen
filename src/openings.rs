@@ -168,7 +168,9 @@ fn doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::shp::G)
                 r.uniform(0.0, 1.0)
             } * std::f64::consts::FRAC_PI_2;
             if std::env::var("OPDBG").is_ok() { eprintln!("door j={j} ci={ci} fac={i} rot_z={rot_z}"); }
-            let pieces = fac.build_door_leaf(j as u64);
+            // (a domed frame style tops the leaf with a half disc: the wall cut and the frame are rectangular, so the leaf is built
+            // square-topped)
+            let pieces = if fac.frame_style == 2 { let mut f2 = fac.clone(); f2.frame_style = 1; f2.build_door_leaf(j as u64) } else { fac.build_door_leaf(j as u64) };
             r.f64(); // casing_chance
             // ---- refit (own deterministic stream; python draws above are untouched)
             let mut fr = Rng::seeded(crate::int_hash(&[&seed.to_string(), "door_fit", &ci.to_string()]));
