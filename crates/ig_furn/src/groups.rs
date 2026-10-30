@@ -324,8 +324,12 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
             }
             let _ = super::solver::fit_builtins(ctx, state, Some(room.as_str()));
             let w = state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(0.0, |c| c[0]);
-            if w < 1.0 {
+            // a short run on its own (not meeting another run or an appliance at a corner) read as a stray counter block
+            let joined = state.objs.iter().any(|(k, o)| k != &name && matches!(class_of(o), "KitchenSpaceFactory" | "FridgeFactory" | "OvenFactory" | "DishwasherFactory")
+                && layout2d::room_of(state, k).as_deref() == Some(room.as_str()) && layout2d::dist(state, k, &name) < 0.05);
+            if w < 1.0 || (!joined && w < 2.0) {
                 state.objs.shift_remove(&name);
+                log.push(format!("{room}: extra run dropped ({w:.2} m, joined {joined})"));
                 break;
             }
             log.push(format!("{room}: another counter run {name} ({w:.2} m)"));

@@ -193,9 +193,10 @@ def symbol(ax, o, f, fx, fy):
         box_(D * 0.15, D * 0.9, W * 0.05, W * 0.95, fc="#e6d7c3", ec="#555", lw=0.4)
     elif "Plant" in cl:
         # a pot seen from above: a round planter with leaves
+        # (only the pot stands on the floor: the leaves overhang it, drawn as a light dashed canopy)
         r = min(D, W) * 0.48
-        ax.add_patch(Circle(P(D / 2, W / 2), r, fc="#cfe3b0", ec="#3c6b2a", lw=0.6, zorder=4.6))
-        ax.add_patch(Circle(P(D / 2, W / 2), r * 0.45, fc="#8fb85a", ec="none", zorder=4.7))
+        ax.add_patch(Circle(P(D / 2, W / 2), r, fc="#eef5e4", ec="#6f9a55", lw=0.5, ls="--", zorder=4.6))
+        ax.add_patch(Circle(P(D / 2, W / 2), min(r * 0.5, 0.22), fc="#a0714f", ec="#5a3d28", lw=0.5, zorder=4.7))
     elif cl == "OvenFactory":
         for a in (0.3, 0.7):
             for b in (0.3, 0.7):
@@ -218,7 +219,7 @@ def draw(d, ax, small=False):
             c = f.centroid; x0, y0, x1, y1 = f.bounds
             r = (min(o["size"][0], o["size"][1]) if o.get("size") else min(x1 - x0, y1 - y0)) / 2
             ax.add_patch(Circle((c.x, c.y), r, fc=col, ec="#222", lw=0.4, alpha=0.9, zorder=3))
-        else:
+        elif not (CLEAN and re.search("Plant", o["class"])):
           for g in getattr(f, "geoms", [f]):
             ax.add_patch(MPoly(list(g.exterior.coords), closed=True, fc=col, ec="#222", lw=0.4, alpha=0.55 if n == "rug" else 0.9, zorder=3 if n != "rug" else 2))
         if CLEAN and re.search("Plant", o["class"]) and f.area > 0.02: symbol(ax, o, f, 1.0, 0.0)
