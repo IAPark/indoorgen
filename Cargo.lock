@@ -1054,6 +1054,7 @@ dependencies = [
  "parry3d-f64 0.18.0",
  "rayon",
  "robust",
+ "schemars",
  "serde",
  "serde_json",
  "web-time",

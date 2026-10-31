@@ -131,3 +131,72 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     }
     log
 }
+
+/// Ceiling fans (program.ceiling_fan): in rooms of the listed types, with the configured chance, the ceiling light nearest the room's
+/// centre becomes a fan (its light kit takes over the light's on / off state). The span shrinks to keep `wall_clearance` from the walls
+/// and to clear tall furniture under the blades; the downrod shortens (then the mount goes flush) to keep `min_blade_height` above the
+/// floor, else the room keeps its light. Rooms with exposed beams are skipped (a flush fan would turn into them).
+/// Stream: int_hash(seed, "ceiling_fan", room).
+pub fn fans(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::G)], seed: u64, ceiling_z: f64, floor_z: f64, wall_t: f64, cfg: &crate::assets::ceiling_fan::FanConfig) -> Vec<String> {
+    use crate::assets::ceiling_fan::CeilingFan;
+    let mut log = vec![];
+    for (room, poly) in room_polys {
+        let rt = crate::rooms::state::room_type(room);
+        if !cfg.rooms.iter().any(|t| t == rt) { continue }
+        let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "ceiling_fan", room]));
+        if r.f64() >= cfg.probability { continue }
+        let beams = format!("beam_{room}_").replace('/', "_");
+        if scene.nodes.iter().any(|n| n.name.starts_with(&beams)) { log.push(format!("{room}: no fan (beams)")); continue }
+        // the room's ceiling light nearest its centre
+        let cen = crate::shp::centroid(poly);
+        let light = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "CeilingLightFactory") && crate::shp::contains_pt(poly, [o.pose.t[0], o.pose.t[1]]))
+            .min_by(|a, b| { let d = |o: &crate::furn::state::ObjState| (o.pose.t[0] - cen[0]).hypot(o.pose.t[1] - cen[1]); d(a.1).partial_cmp(&d(b.1)).unwrap() })
+            .map(|(k, o)| (k.clone(), [o.pose.t[0], o.pose.t[1]]));
+        let Some((lk, c)) = light else { continue };
+        let mut fan = CeilingFan::sample(r.next_u64(), &cfg.params);
+        // span: clear of the walls and of tall pieces under the blade disc
+        let inner = crate::shp::buffer_mitre(poly, -wall_t / 2.0);
+        let wall_d = crate::shp::distance(&crate::shp::boundary(&inner), &crate::shp::point(c[0], c[1]));
+        let mut span = fan.spec.span.min(wall_d - cfg.wall_clearance);
+        let blade_floor = |f: &CeilingFan| ceiling_z + f.build().2.blade_z - floor_z;
+        // downrod: shorten (then flush) to keep the blades high enough
+        let deficit = cfg.min_blade_height - blade_floor(&fan);
+        if deficit > 0.0 { fan = fan.clone_with_downrod(fan.spec.downrod_length - deficit - 0.01); }
+        if blade_floor(&fan) < cfg.min_blade_height - 1e-6 { log.push(format!("{room}: no fan (ceiling {:.2} m too low)", ceiling_z - floor_z)); continue }
+        let blade_abs = ceiling_z + fan.build().2.blade_z;
+        for (k, o) in &state.objs {
+            if o.generator.is_none() || crate::furn::layout2d::is_room(o) || k == &lk { continue }
+            let Some((lo, hi, top)) = footprint(state, k) else { continue };
+            if top < blade_abs - 0.15 { continue }
+            let dx = (lo[0] - c[0]).max(0.0).max(c[0] - hi[0]);
+            let dy = (lo[1] - c[1]).max(0.0).max(c[1] - hi[1]);
+            span = span.min(dx.hypot(dy) - 0.15);
+        }
+        if span < 0.4 { log.push(format!("{room}: no fan (no room for the blades: {span:.2} m)")); continue }
+        fan = fan.clone_with_span(span);
+        let (asset, bulbs, dims) = fan.build();
+        // the light it replaces: its meshes and its point light (on / off carried over)
+        let pre = format!("{lk}#");
+        scene.nodes.retain(|n| !n.name.starts_with(&pre));
+        let was_on = scene.lights.iter().any(|l| l.name == lk);
+        scene.lights.retain(|l| l.name != lk);
+        scene.lights_off.retain(|l| l.name != lk);
+        let place = ig_core::mesh::Mat4::translation([c[0], c[1], ceiling_z]);
+        let name = format!("ceilingfan_{}", room.replace('/', "_"));
+        for (i, p) in asset.parts.iter().enumerate() {
+            let mut m = p.mesh.clone();
+            m.transform(&place);
+            let mi = scene.material(p.mat.clone());
+            scene.add(&format!("{name}#{i}"), "CeilingFanFactory", m, mi);
+        }
+        for (i, b) in bulbs.iter().enumerate() {
+            let light = Light { loc: place.apply(b.loc), watt: b.watt, radius: 0.02, temperature: b.temperature, name: format!("{name}_light{i}") };
+            // (a burnt-out bulb stays dark when the fan's light is on)
+            if was_on && b.on { scene.lights.push(light) } else { scene.lights_off.push(light) }
+        }
+        let s = &fan.spec;
+        log.push(format!("{room}: fan replaces {lk} ({:?}, variety {:.2}, wear {:.2}: {} {:?}/{:?} blades, span {:.2} m, downrod {:.2} m, {:?} light {}, {} cords, blades {:.2} m above the floor)",
+            s.style, s.variety, s.imperfection, s.blades, s.blade_shape, s.tip, s.span, s.downrod_length, s.light_kit, if was_on { "on" } else { "off" }, s.pull_cords, ceiling_z + dims.blade_z - floor_z));
+    }
+    log
+}

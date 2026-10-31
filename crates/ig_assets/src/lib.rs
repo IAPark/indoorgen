@@ -73,6 +73,7 @@ pub fn make_factory(class: &str, factory_seed: u64) -> Option<Box<dyn Factory>> 
         c if wineglass::handles(c) => wineglass::make(c, &mut rng, factory_seed),
         c if can::handles(c) => can::make(c, &mut rng, factory_seed),
         c if tableware::handles(c) => tableware::make(c, &mut rng, factory_seed),
+        c if ceiling_fan::handles(c) => ceiling_fan::make(c, factory_seed),
         c if lamps::handles(c) => lamps::make(c, &mut rng, factory_seed),
         c if tables::handles(c) => tables::make(c, &mut rng),
         c if seating::handles(c) => seating::make(c, &mut rng, factory_seed),

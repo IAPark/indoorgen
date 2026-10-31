@@ -100,9 +100,12 @@ pub struct Program {
     pub open_plan: f64,
     /// Dense program: bench at the bed foot, slippers, laundry basket by a nightstand (src/bed_decor.rs).
     pub bed_decor: bool,
+    /// Ceiling fans (with light kit and pull cords) in place of some rooms' central ceiling light: rooms, chance, clearances, and any
+    /// fixed fan parameters (crates/ig_decor/src/ceiling_fan.rs; placement in src/ceiling_decor.rs). Needs ceiling_decor.
+    pub ceiling_fan: crate::assets::ceiling_fan::FanConfig,
 }
 impl Default for Program {
-    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true, gallery_wall: true, bath_decor: true, top_dress: true, open_plan: 0.0, bed_decor: true } }
+    fn default() -> Self { Program { dense: true, trinkets_per_shelf: 3, trinkets_max: 40, counter_over_windows: true, realism: true, ceiling_decor: true, soft_decor: true, gallery_wall: true, bath_decor: true, top_dress: true, open_plan: 0.0, bed_decor: true, ceiling_fan: Default::default() } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

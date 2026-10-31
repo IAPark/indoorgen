@@ -770,6 +770,7 @@ pub fn build_scene(p: &Params) -> Built {
     if cfg.program.ceiling_decor && !orig_prog {
         let ceiling_z = g.c.wall_height - g.c.wall_thickness / 2.0;
         for l in crate::ceiling_decor::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness, night) { eprintln!("CEILING {l}"); } lap("ceiling decor");
+        for l in crate::ceiling_decor::fans(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.ceiling_fan) { eprintln!("FAN {l}"); } lap("ceiling fans");
     }
     if cfg.program.soft_decor && !orig_prog {
         for l in crate::soft_decor::add(&mut scene, &g.state, &visuals, seed) { eprintln!("SOFT {l}"); } lap("soft decor");

@@ -23,6 +23,7 @@ pub mod books;
 pub mod bottle;
 pub mod bowl;
 pub mod can;
+pub mod ceiling_fan;
 pub mod chopsticks;
 pub mod cup;
 pub mod cutlery;
