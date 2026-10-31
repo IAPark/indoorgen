@@ -45,6 +45,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
         let back = if back == f64::MIN { lo[0] + 0.25 * d } else { back };
         let n = if sofa { ((w / 0.65).floor() as usize).clamp(2, 4) } else { 1 };
         let (cw, ct) = (r.uniform(0.36, 0.48), r.uniform(0.11, 0.15));
+        // (narrower than their spacing, twist included: neighbours overlapped, one resting on the next)
+        let cw = if n > 1 { cw.min(0.6 * w / n as f64 - 0.06) } else { cw };
         let palette = [("fabric.SofaFabric", 2.0), ("fabric.Velvet", 1.0), ("fabric.CoarseKnitFabric", 1.5), ("fabric.FineKnitFabric", 1.0)];
         let tot: f64 = palette.iter().map(|x| x.1).sum();
         let mut u = r.f64() * tot;
@@ -57,6 +59,9 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             let f = (i as f64 + 0.5) / n as f64;
             let y = if n == 1 { (lo[1] + hi[1]) / 2.0 } else { lo[1] + w * (0.2 + 0.6 * f) };
             let yaw = r.uniform(-0.12, 0.12);
+            // the seat under this cushion (it rises toward the backrest: measured mid-seat, cushions sank 1-2 cm into it)
+            let (fx0, fx1) = (back, back + ct + 0.06 + cw * tilt.sin());
+            let seat = a.parts.iter().flat_map(|p| p.mesh.pos.iter()).filter(|q| q[0] > fx0 && q[0] < fx1 && (q[1] - y).abs() < cw / 2.0 && q[2] < seat + 0.12).map(|q| q[2]).fold(seat, f64::max);
             let mut c = cushion(ct, cw, cw);
             for q in c.pos.iter_mut() {
                 // lean back (top toward -x), small twist, then into the sofa frame, then world

@@ -40,11 +40,11 @@ pub fn clear_uppers(state: &State, visuals: &mut HashMap<String, crate::assets::
         let n0 = a.parts.len();
         let bb: Vec<Box3> = a.parts.iter().map(|p| p.mesh.bounds()).collect();
         let upper: Vec<usize> = (0..bb.len()).filter(|&i| bb[i].0[2] >= z_upper).collect();
-        // over the glass by more than 5 cm along the wall, within reach of it (a cabinet beside the window stays; one over its edge
+        // over the glass by more than 1 cm along the wall, within reach of it (a cabinet beside the window stays; one over its edge
         // covered part of the glass)
         let in_front = |(pl, ph): &Box3| boxes.iter().any(|(bl, bh)| {
             let ov = |d: usize| (ph[d].min(bh[d]) - pl[d].max(bl[d])).max(0.0);
-            ov(0) > 0.05 && ov(1) > 0.05 && pl[2] < bh[2] && bl[2] < ph[2]
+            ov(0) > 0.01 && ov(1) > 0.01 && pl[2] < bh[2] && bl[2] < ph[2]
         });
         // the upper parts grouped into cabinets (parts whose boxes intersect: frame, doors, handles of one unit); a cabinet goes whole
         // when any of its parts is in front of the glass (part by part left a frame or a door hanging)

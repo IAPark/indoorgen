@@ -154,7 +154,9 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 let m = fabric(scene, &format!("bathmat:{k}"), &mut r);
                 let (mw, md) = (r.uniform(0.5, 0.8).min(hi[1] - lo[1]), r.uniform(0.4, 0.55));
                 let yc = (lo[1] + hi[1]) / 2.0;
-                let mesh = bx([hi[0] + 0.03, yc - mw / 2.0, lo[2]], [hi[0] + 0.03 + md, yc + mw / 2.0, lo[2] + 0.012], &o.pose);
+                // (on the floor itself, not the fixture's box bottom: a mat floated 2 cm)
+                let zf = crate::bed_decor::wall_half() - o.pose.t[2];
+                let mesh = bx([hi[0] + 0.03, yc - mw / 2.0, zf], [hi[0] + 0.03 + md, yc + mw / 2.0, zf + 0.012], &o.pose);
                 // (clear of the other fixtures' footprints: a toilet's mat ran under the shower tray)
                 let (ml, mh) = mesh.bounds();
                 let hit = state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "BathtubFactory" | "ShowerFactory" | "ToiletFactory" | "StandingSinkFactory")) && {

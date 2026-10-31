@@ -183,7 +183,20 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             // a burner holds about a 24 cm vessel (the pan's handle overhangs: its body is what counts)
             let sc = (0.24 / dx.min(dy).max(0.05)).min(1.0);
             let (x, y) = (lo[0] + (hi[0] - lo[0]) * fx, lo[1] + (hi[1] - lo[1]) * fy);
-            let Some(zt) = level_spot(&tris, x, y, 0.06, band, 0.15, None) else { continue };
+            // (level under the vessel's whole base: probed at 6 cm, a pan's rim sat on the grate's sloping edge)
+            let rad = 0.5 * dx.min(dy) * sc * 0.85;
+            let Some(zt) = level_spot(&tris, x, y, rad, band, 0.15, None) else { continue };
+            // (and flat there: the top triangle under each probe within 25 deg of level -- a rim on a rounded grate bar tilted)
+            let flat = [[x, y], [x - rad, y], [x + rad, y], [x, y - rad], [x, y + rad]].iter().all(|q| {
+                tris.iter().filter(|t| { let (a, b, c) = (t[0], t[1], t[2]);
+                    let s = |p: [f64; 3], q2: [f64; 3], r2: [f64; 2]| (q2[0] - p[0]) * (r2[1] - p[1]) - (q2[1] - p[1]) * (r2[0] - p[0]);
+                    let (d1, d2, d3) = (s(a, b, *q), s(b, c, *q), s(c, a, *q)); (d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0) || (d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0) })
+                    .map(|t| { let (u, v) = ([t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]], [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]]);
+                        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]; let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-12);
+                        let zc = (t[0][2] + t[1][2] + t[2][2]) / 3.0; (zc, (n[2] / l).abs()) })
+                    .filter(|(z, _)| *z < zt + 0.02).max_by(|a, b| a.0.partial_cmp(&b.0).unwrap()).map_or(false, |(_, nz)| nz > 0.9)
+            });
+            if !flat { continue }
             let at = o.pose.apply([x, y, zt]);
             let yaw = r.uniform(0.0, std::f64::consts::TAU);
             let b = box_at(&item, at, yaw, sc);

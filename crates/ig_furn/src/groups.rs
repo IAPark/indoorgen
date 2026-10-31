@@ -1898,22 +1898,39 @@ fn center_table(state: &mut State, t: &str, room: &str) -> bool {
     // blocked slots); else the first free spot
     let doors = door_points(state, room);
     let lr = super::layout_rules::get();
+    // (and the chair ring -- the table's box 0.6 m out all round -- clear of the door swings: chairs there were left out, the rest sat
+    // on one side)
+    let swings: Vec<std::sync::Arc<Vec<layout2d::Prism>>> = state.objs.keys().filter(|k| k.starts_with(&format!("doorclear/{room}/"))).map(|k| layout2d::prisms(state, k)).collect();
     let roomy = |st: &State| layout2d::prisms(st, t).iter().flat_map(|p| p.poly.iter().copied().collect::<Vec<_>>()).all(|v| {
         layout2d::ring_dist(&rings, v) >= lr.table_wall_clear && doors.iter().all(|d| ((d[0] - v[0]).powi(2) + (d[1] - v[1]).powi(2)).sqrt() >= lr.table_door_clear)
-    });
-    let mut first: Option<super::geom::Pose> = None;
-    for r in [0.0f64, 0.3, 0.6, 0.9, 1.2] {
+    }) && {
+        let (l, h) = layout2d::lohi_world(st, t);
+        let ring = vec![[l[0] - 0.6, l[1] - 0.6], [h[0] + 0.6, l[1] - 0.6], [h[0] + 0.6, h[1] + 0.6], [l[0] - 0.6, h[1] + 0.6]];
+        !swings.iter().any(|ps| ps.iter().any(|p| layout2d::poly_dist(&ring, &p.poly) <= 0.0))
+    };
+    // the fallback: the spot with the most table sides whose chair strip (0.6 m) is clear of the walls and the door swings
+    let sides_free = |st: &State| -> usize {
+        let (l, h) = layout2d::lohi_world(st, t);
+        let strips = [[l[0] - 0.6, l[1], l[0], h[1]], [h[0], l[1], h[0] + 0.6, h[1]], [l[0], l[1] - 0.6, h[0], l[1]], [l[0], h[1], h[0], h[1] + 0.6]];
+        strips.iter().filter(|b| {
+            let q = vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]];
+            q.iter().all(|v| layout2d::in_rings(&rings, *v)) && !swings.iter().any(|ps| ps.iter().any(|p| layout2d::poly_dist(&q, &p.poly) <= 0.0))
+        }).count()
+    };
+    let mut first: Option<(usize, super::geom::Pose)> = None;
+    for r in [0.0f64, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2] {
         for (ox, oy) in [(0.0, 0.0), (r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r), (r, r), (-r, -r), (r, -r), (-r, r)] {
             if r == 0.0 && (ox != 0.0 || oy != 0.0) { continue }
             for yy in [yaw_, yaw_ + std::f64::consts::FRAC_PI_2] {
                 if try_place(state, t, yy, anchor, [c[0] + ox, c[1] + oy, 0.0]) {
                     if roomy(state) { return true; }
-                    if first.is_none() { first = Some(state.objs[t].pose); }
+                    let sc = sides_free(state);
+                    if first.as_ref().map_or(true, |(b, _)| sc > *b) { first = Some((sc, state.objs[t].pose)); }
                 }
             }
         }
     }
-    if let Some(p) = first { state.set_pose(t, p); state.touch(t); return true; }
+    if let Some((_, p)) = first { state.set_pose(t, p); state.touch(t); return true; }
     false
 }
 
@@ -2393,8 +2410,9 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let long = (hi[0] - lo[0]).max(hi[1] - lo[1]) >= 0.3;
                 let zc = floor_z + if long { 1.15 } else { 0.7 };
                 let dz = zc - (lo[2] + hi[2]) / 2.0;
-                // over a fixture or in a doorway at its height: removed
-                if let Some(b) = blocked(state, &k, dz) {
+                // over a fixture or in a doorway at its height, or into another fitting: removed
+                let fit_hit = { let (l, h) = wbox(state, &k); state.objs.iter().find(|(o, b)| o.as_str() != k && class_of(b) == "HardwareFactory" && { let (bl, bh) = wbox(state, o); (0..2).all(|d| l[d] < bh[d] + 0.03 && bl[d] - 0.03 < h[d]) && l[2] + dz < bh[2] + 0.05 && bl[2] - 0.05 < h[2] + dz }).map(|(o, _)| o.clone()) };
+                if let Some(b) = blocked(state, &k, dz).or(fit_hit) {
                     layout2d::remove_tree(state, &k);
                     log.push(format!("{room}: removed fitting {k} (into {b})"));
                     continue;
@@ -2442,6 +2460,14 @@ pub fn kitchen_style(state: &mut State) -> Vec<String> {
 /// group passes move beds, nightstands and tables without what stood on them, and desk lamps floated at the old headboard height
 pub fn orphans(state: &mut State) -> Vec<String> {
     let mut log = vec![];
+    // a TV centred on its stand (the solver left one at the stand's back edge, its foot 2 cm into the wall)
+    let tvs: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| class_of(o) == "TVFactory").filter_map(|(k, o)| o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.get(t).map_or(false, |p| class_of(p) == "TVStandFactory")).map(|t| (k.clone(), t))).collect();
+    for (tv, st) in tvs {
+        let (sl, sh) = layout2d::lohi_world(state, &st);
+        let (tl, th) = layout2d::lohi_world(state, &tv);
+        let d = [(sl[0] + sh[0] - tl[0] - th[0]) / 2.0, (sl[1] + sh[1] - tl[1] - th[1]) / 2.0];
+        if d[0].abs() + d[1].abs() > 0.005 { let mut p = state.objs[&tv].pose; p.translate([d[0], d[1], 0.0]); state.set_pose(&tv, p); state.touch(&tv); }
+    }
     // pictures and mirrors a piece moved in front of after they were hung (wardrobes grow to their alcove afterwards)
     let hung: Vec<String> = state.objs.iter().filter(|(_, o)| matches!(class_of(o), "WallArtFactory" | "MirrorFactory")).map(|(k, _)| k.clone()).collect();
     for k in hung {
@@ -2613,6 +2639,8 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
         }
         Some((ny, [nf[0], nf[1], 0.0]))
     };
+    let intents: Vec<([f64; 3], [f64; 3])> = state.objs.iter().filter(|(_, o)| o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| layout2d::lohi_world(state, k))
+        .filter(|(l, h)| layout2d::ring_dist(&rings, [(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0]) < 0.4).collect();
     #[derive(Clone, Copy, Debug)]
     struct P { wall: usize, t: f64, d: f64, lat: f64, back: bool, arms: u8 }
     let tv_walls: Vec<usize> = (0..segs.len()).filter(|&i| { let (a, b, _) = segs[i]; ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt() > (thi[1] - tlo[1]) + 0.2 }).collect();
@@ -2661,7 +2689,9 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
         let on_wall = layout2d::ring_dist(&rings, [back[0], back[1]]) < 0.15;
         let tv_door = doors.iter().map(|q| ((q[0] - tfront[0]).powi(2) + (q[1] - tfront[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
         let mid = [(tfront[0] + at[0]) / 2.0, (tfront[1] + at[1]) / 2.0];
-        let mut score = if on_wall { 5.0 } else { 0.0 } - (d - 2.6).abs() * 1.5 - (2.6 - tv_door).max(0.0) * 3.0 - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.3 - p.lat.abs() * 0.5;
+        // the TV / fireplace off a window still to come (the room's windows went behind a fireplace moved onto its one outside wall)
+        let over_window = { let (l, h) = layout2d::lohi_world(state, tv); intents.iter().any(|(il, ih)| (0..2).all(|dd| l[dd] < ih[dd] + 0.3 && il[dd] - 0.3 < h[dd])) };
+        let mut score = if on_wall { 5.0 } else { 0.0 } - if over_window { 6.0 } else { 0.0 } - (d - 2.6).abs() * 1.5 - (2.6 - tv_door).max(0.0) * 3.0 - ((mid[0] - fc[0]).powi(2) + (mid[1] - fc[1]).powi(2)).sqrt() * 0.3 - p.lat.abs() * 0.5;
         if d < 1.8 { score -= 3.0; }
         // the coffee table before the sofa, 0.45 m off its front
         let sy = ty + std::f64::consts::PI;
@@ -2712,7 +2742,7 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
             let p = rnd_p(rng);
             match build(state, &p, false) { Some(_) => why[2] += 1, None => { if state.objs.contains_key(tv) && !fire_move && !fixed && !free_ok(state, tv) { why[0] += 1 } else { why[1] += 1 } } }
         }
-        eprintln!("SADBG {room}: fire fails {} ", FIRE_FAILS.with(|c| c.get()));
+        eprintln!("SADBG {room}: fire fails {} intents {:?}", FIRE_FAILS.with(|c| c.get()), intents);
         eprintln!("SADBG {room}: tv_walls {} fire_move {fire_move} fire_w {fire_w:.2} members {} -> tv-fail {} sofa-fail {} ok {}", tv_walls.len(), members.len(), why[0], why[1], why[2]);
     }
     let Some(mut cur) = cur else {

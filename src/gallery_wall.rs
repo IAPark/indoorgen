@@ -85,6 +85,9 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 let pad = 0.03; // keep a small gap to neighbours
                 ([c0[0].min(c1[0]) - 0.05 - pad, c0[1].min(c1[1]) - 0.05 - pad, zc - fh / 2.0 - pad], [c0[0].max(c1[0]) + 0.05 + pad, c0[1].max(c1[1]) + 0.05 + pad, zc + fh / 2.0 + pad])
             };
+            // (inside the room: a gallery as wide as a sofa by a corner ran its end frame into the side wall)
+            let ends = [[centre[0] - along[0] * (fw / 2.0 + 0.03) - dir[0] * 0.03, centre[1] - along[1] * (fw / 2.0 + 0.03) - dir[1] * 0.03], [centre[0] + along[0] * (fw / 2.0 + 0.03) - dir[0] * 0.03, centre[1] + along[1] * (fw / 2.0 + 0.03) - dir[1] * 0.03]];
+            if !ends.iter().all(|q| crate::shp::contains_pt(&inner[ri], *q)) { continue }
             let me = world_box(o);
             if occupied.iter().any(|b| !(b.0 == me.0 && b.1 == me.1) && (0..3).all(|d| fbox.0[d] < b.1[d] && b.0[d] < fbox.1[d])) { continue }
             occupied.push(fbox);

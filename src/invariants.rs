@@ -80,18 +80,31 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let Some(g) = &o.generator else { continue };
         if !matches!(g.class.as_str(), "OvenFactory" | "DishwasherFactory" | "FridgeFactory") { continue }
         let Some((al, ah, _)) = ob.get(k) else { continue };
+        // the touching, same-facing run whose front lines up best (a wall that steps puts the next run on another line)
+        let mut cand: Vec<(f64, &String)> = vec![];
         for r in &runs {
             let Some((rl, rh, _)) = ob.get(*r) else { continue };
-            // touching: footprints within 5 cm of each other
             let gap = (0..2).map(|d| (al[d] - rh[d]).max(rl[d] - ah[d]).max(0.0)).fold(0.0, f64::max);
             if gap > 0.05 { continue }
             let rp = &inp.state.objs[*r].pose;
             let f = [rp.r[0][0], rp.r[1][0]];
+            let fa = [o.pose.r[0][0], o.pose.r[1][0]];
+            if f[0] * fa[0] + f[1] * fa[1] < 0.9 { continue }
+            let ax = if f[0].abs() > f[1].abs() { 0 } else { 1 };
+            let s = if f[ax] > 0.0 { 1.0 } else { -1.0 };
+            let df = if s > 0.0 { ah[ax] - rh[ax] } else { rl[ax] - al[ax] };
+            cand.push((df.abs(), r));
+        }
+        cand.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        for (_, r) in cand.into_iter().take(1) {
+            let Some((rl, rh, _)) = ob.get(r) else { continue };
+            let rp = &inp.state.objs[r].pose;
+            let f = [rp.r[0][0], rp.r[1][0]];
             let ax = if f[0].abs() > f[1].abs() { 0 } else { 1 };
             let s = if f[ax] > 0.0 { 1.0 } else { -1.0 };
             // the counter top: the highest part of the run ending below 1.2 m above the floor (the counter, not the wall cabinets)
-            let top = inp.scene.nodes.iter().filter(|n| n.name.split_once('#').map_or(false, |(kk, _)| kk == r.as_str()) && !n.mesh.is_empty())
-                .map(|n| n.mesh.bounds()).filter(|(_, h)| h[2] < inp.floor_z + 1.2).map(|(_, h)| h[2]).fold(f64::NAN, f64::max);
+            // (its dominant flat level, as kitchen_window::fit_dishwashers measures it: a part's bounds caught a stray vertex 10 cm up)
+            let top = inp.visuals.get(r.as_str()).and_then(|a| { let (lo, _) = a.bounds(); crate::dress::plateau(a, lo[2] + 0.7, lo[2] + 1.2, 6) }).map_or(f64::NAN, |z| z + rp.t[2]);
             let front_run = if s > 0.0 { rh[ax] } else { -rl[ax] };
             // the run's front includes its counter overhang; the appliance front (door handle) may sit a few cm past it
             let front_app = if s > 0.0 { ah[ax] } else { -al[ax] };

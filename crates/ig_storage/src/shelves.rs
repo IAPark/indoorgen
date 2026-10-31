@@ -806,7 +806,9 @@ impl KitchenSpace {
             // the solver's chosen size (furn::sizes): run length = width, depth, height incl. the top cabinets
             dims = [f(h[1]), f(h[0]), f(h[2])];
         }
-        let bottom_h = r.uniform(0.8, 1.0);
+        // (a worktop near the standard 0.9 m: 0.8-1.0 m base cabinets plus plinth and top made 1.0-1.2 m counters, ranges stretched to
+        // match and window sills clipped)
+        let bottom_h = r.uniform(0.74, 0.8);
         let top_h = r.uniform(0.8, 1.0);
         let join = if island { None } else { crate::api::kitchen_join() };
         KitchenSpace { dims, island, bottom_h, top_h, factory_seed, join }
@@ -924,7 +926,9 @@ impl KitchenSpace {
             // (a filler box in the cabinet's finish, not the cabinet stretched: stretching widened its doors and slanted the handle)
             let r = reach as f32;
             let (xz_lo, xz_hi) = parts[i].v.iter().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[2])], [h[0].max(v[0]), h[1].max(v[2])]));
-            let (y0, y1) = if js < 0.0 { (u0 - r, u0) } else { (u1, u1 + r) };
+            // (to the base's end plus the reach: from the cabinet's end it fell short by the cabinets' inset)
+            let (b0, b1) = yr(&parts[0]);
+            let (y0, y1) = if js < 0.0 { (b0 - r, u0) } else { (u1, b1 + r) };
             let tag = parts[i].tag.first().copied().unwrap_or(0);
             let base = parts[i].v.len() as u32;
             let (x0, x1, z0, z1) = (xz_lo[0], xz_hi[0], xz_lo[1], xz_hi[1]);

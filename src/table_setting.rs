@@ -4,7 +4,8 @@
 //! on a table with no plate, beyond one of each kind per plate, or that would leave the top are removed.
 use crate::furn::state::State;
 
-const UTENSILS: [(&str, f64); 4] = [("ForkFactory", -1.0), ("KnifeFactory", 1.0), ("SpoonFactory", 1.6), ("ChopsticksFactory", 1.2)];
+// (chopsticks left of the fork: at 1.2 they lay on the knife and the plate's rim)
+const UTENSILS: [(&str, f64); 4] = [("ForkFactory", -1.0), ("KnifeFactory", 1.0), ("SpoonFactory", 1.6), ("ChopsticksFactory", -1.8)];
 
 pub fn arrange(state: &mut State) -> Vec<String> {
     let mut log = vec![];
@@ -71,7 +72,8 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let u = &state.objs[uk];
             let (ul, uh) = (u.geom.lo, u.geom.hi);
             let long_x = uh[0] - ul[0] >= uh[1] - ul[1];
-            let pos = [pc[0] + right[0] * off, pc[1] + right[1] * off, u.pose.t[2]];
+            // (on the top: kept at the solver's height, chopsticks lay 8 mm into the table)
+            let pos = [pc[0] + right[0] * off, pc[1] + right[1] * off, t.pose.t[2] + t.geom.hi[2] - ul[2] + 0.001];
             let ll = to_local(pos);
             if ll[0] < lo[0] + 0.03 || ll[0] > hi[0] - 0.03 || ll[1] < lo[1] + 0.03 || ll[1] > hi[1] - 0.03 { remove.push(uk.clone()); continue }
             let yaw = nw[1].atan2(nw[0]) - if long_x { 0.0 } else { std::f64::consts::FRAC_PI_2 };
@@ -224,6 +226,23 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
         log.push(format!("{} of {} chairs seated at {tk} ({} slots, {} removed)", moved, far.len(), slots_len, far.len() - moved));
         // a narrow room: chairs that cut the path between its doors go, one at a time (keeping two at the table)
         if let Some(room) = crate::furn::layout2d::room_of(state, &tk) {
+            // first the whole set slid up to 0.4 m (a table with chairs on one side only read as half set)
+            if !crate::furn::layout2d::walk_status(state, &room).0 {
+                use crate::furn::layout2d as l2;
+                let group: Vec<String> = std::iter::once(tk.clone()).chain(far.iter().filter(|k| !unseated.contains(k) && state.objs.contains_key(k.as_str())).cloned()).collect();
+                let saved: Vec<(String, crate::furn::geom::Pose)> = group.iter().map(|k| (k.clone(), state.objs[k.as_str()].pose)).collect();
+                let clear = |st: &crate::furn::state::State| group.iter().all(|k| l2::outside_room_depth(st, k, &room) < 1e-3
+                    && st.objs.iter().all(|(o, b)| group.contains(o) || b.generator.is_none() && !o.starts_with("doorclear/") && !o.starts_with("door") || l2::is_room(b) || b.tags.contains(crate::furn::tags::Tag::sem("NoCollision")) || b.relations.iter().any(|r| group.contains(&r.target)) || l2::depth(st, k, o) <= 1e-4));
+                let mut found = false;
+                'o: for step in 1..=8 {
+                    for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                        let d = step as f64 * 0.05;
+                        for (k, p) in &saved { let mut q = *p; q.translate([dx * d, dy * d, 0.0]); state.set_pose(k, q); state.touch(k); }
+                        if crate::furn::layout2d::walk_status(state, &room).0 && clear(state) { found = true; log.push(format!("table set {tk} slid {d:.2} m to open the path")); break 'o }
+                    }
+                }
+                if !found { for (k, p) in &saved { state.set_pose(k, *p); state.touch(k); } }
+            }
             loop {
                 let (ok, _) = crate::furn::layout2d::walk_status(state, &room);
                 let seated: Vec<String> = far.iter().filter(|k| !unseated.contains(k) && !remove.contains(k) && state.objs.contains_key(k.as_str())).cloned().collect();

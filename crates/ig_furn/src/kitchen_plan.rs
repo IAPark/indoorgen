@@ -444,6 +444,8 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     let dc = proto_depth(state, &parked[0].1).unwrap_or(dc).max(dc);
     let (fw, fd) = pk(&fridge).unwrap_or((0.0, 0.0));
     let (ow, od) = pk(&range).unwrap_or((0.0, 0.0));
+    // (the counter at least as deep as the range less its handle: a 0.65 m counter left a 0.79 m range 13 cm proud)
+    let dc = dc.max(od - 0.05);
     let (dw, dd) = pk(&dish).unwrap_or((0.0, 0.0));
     let mut rng = Rng::seeded(ig_core::int_hash(&["kitchen_plan", room]));
     let sink_w = if rng.f64() < 0.5 { 0.6 } else { 0.8 };
@@ -555,7 +557,12 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
                 }
                 run_i += 1;
                 for q in &on[j0..i] { run_of.insert((q.line, q.idx), name.clone()); }
-                if !match_run(ctx, state, &name, proto, t1 - t0) && state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(true, |c| (c[0] - (t1 - t0)).abs() > 0.03) {
+                // the kitchen's counter depth (the first run's, or the range's when it is deeper) and the first run's height
+                let sized = {
+                    let h = state.objs.get(proto).and_then(|o| o.generator.as_ref()).and_then(super::solver::cur_size).map(|c| (c[1], c[2]));
+                    match h { Some((d0, h0)) => { let base = state.objs[&name].clone(); super::solver::set_size(ctx, state, &name, &base, [t1 - t0, d0.max(kit.d_counter), h0], 1.0) } None => match_run(ctx, state, &name, proto, t1 - t0) }
+                };
+                if !sized && state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(true, |c| (c[0] - (t1 - t0)).abs() > 0.03) {
                     if dbg { eprintln!("KPLAN build: run {name} not sized to {:.2}", t1 - t0); }
                     return Err(li)
                 }

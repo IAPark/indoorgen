@@ -385,6 +385,8 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     // features the room layer moved (a fireplace and its alcove shelves travel with the living-room group): the built asset follows its
     // solver object (span origin / yaw), with its footprint and keep-out boxes moved the same way
     let mut features = features;
+    // (and features the room layer removed -- alcove shelves where a window comes -- are not built)
+    features.retain(|pf| state.objs.contains_key(&pf.key));
     for pf in features.iter_mut() {
         let Some(o) = state.objs.get(&pf.key) else { continue };
         let (oy, ny) = (pf.yaw, o.pose.r[1][0].atan2(o.pose.r[0][0]));
@@ -420,6 +422,8 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         }
         // the shells again, with the windows where they now are
         shells = shell::build_shells(&c, &st, &res.cutters);
+        // (alcove shelves the wall layer took out for a window are not built)
+        features.retain(|pf| state.objs.contains_key(&pf.key));
     }
     Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features, complaints }
 }
@@ -617,6 +621,10 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
     for (r, (st, t, cs)) in rooms.iter().zip(results) {
         tot = (tot.0 + t.0, tot.1 + t.1, tot.2 + t.2);
         complaints.extend(cs);
+        // the room's built-ins the room layer removed (alcove shelves where a window comes) go from the house too
+        let rk = r.replace('/', "_");
+        let gone: Vec<String> = state.objs.keys().filter(|k| k.contains("Feature_") && k.contains(&rk) && !st.objs.contains_key(k.as_str())).cloned().collect();
+        for k in gone { state.objs.shift_remove(&k); }
         for (k, o) in st.objs {
             if base_keys.contains(&k) {
                 // the room's built-ins the room layer moved (a fireplace with the living-room group) keep their new place
@@ -688,6 +696,10 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         // best over walls x widths x positions: penalty for what stands against the wall, a little for narrowing the window and for
         // leaving its own wall / spot
         let mut best: Option<(f64, Cutter)> = None;
+        // what tall pieces the best spot still overlaps, m
+        let mut best_tall = 0.0f64;
+        // the best spot were the alcove shelves over it gone: (score, window, the shelves)
+        let mut best_free: Option<(f64, Cutter, Vec<String>)> = None;
         let flip = walls.first().map_or(false, |(_, a, b)| ((b[1] - a[1]).atan2(b[0] - a[0]) - ct.rot_z).cos() < 0.0);
         for (wi, (_, a, b)) in walls.iter().enumerate() {
             let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
@@ -695,6 +707,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let along = |q: [f64; 2]| (q[0] - a[0]) * u[0] + (q[1] - a[1]) * u[1];
             let off = |q: [f64; 2]| ((q[0] - a[0]) * -u[1] + (q[1] - a[1]) * u[0]).abs();
             let mut spans: Vec<(f64, f64, f64)> = vec![];
+            // alcove shelves beside a fireplace: removable when a window has nowhere else to go
+            let mut alcs: Vec<(f64, f64, f64, String)> = vec![];
             let mut sinks: Vec<(f64, f64)> = vec![];
             let mut lows: Vec<(f64, f64, f64)> = vec![];
             for (k, o) in &state.objs {
@@ -724,6 +738,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 // (10 cm each side for the tall ones: their models reach past the footprint -- a shower's glass, a wardrobe's doors)
                 let m = if weight >= 5.0 { 0.1 } else { 0.0 };
                 if weight > 0.0 { spans.push((s0 - m, s1 + m, weight)); }
+                // (and what stands on them: books, ornaments)
+                let alc_parent = if g.class == "BookshelfWallFeature" { Some(k.clone()) } else { o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.get(t).and_then(|p| p.generator.as_ref()).map_or(false, |pg| pg.class == "BookshelfWallFeature")) };
+                if let Some(a) = alc_parent { alcs.push((s0 - m, s1 + m, weight, a)); }
                 // a kitchen sink draws the window over it
                 if g.class == "SinkFactory" { sinks.push((s0, s1)); }
                 // what a window over it needs its sill above: the worktop (a run's top is its wall cabinets'), the range's back guard,
@@ -739,7 +756,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     // (a window over a bed: its sill clear of the headboard)
                     "BedFactory" => Some(hi[2] + 0.05),
                     // (low storage -- a sideboard, a low bookcase -- takes a window over it, its sill above its top)
-                    "SimpleBookcaseFactory" | "CellShelfFactory" | "SingleCabinetFactory" | "LargeShelfFactory" if hi[2] - lo[2] < 1.3 => Some(hi[2] + 0.05),
+                    "SimpleBookcaseFactory" | "CellShelfFactory" | "SingleCabinetFactory" | "LargeShelfFactory" if hi[2] - lo[2] < 1.3 => Some(hi[2] + 0.4),
                     _ => None,
                 };
                 if let Some(z) = need { lows.push((s0, s1, z)); }
@@ -751,6 +768,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 if s < -0.3 || s > len + 0.3 { continue }
                 taken.push((s - o.dims[0] / 2.0 - 0.2, s + o.dims[0] / 2.0 + 0.2));
             }
+            if std::env::var_os("WLDBG").is_some() { eprintln!("WLDBG {room} wall {wi} {:?}->{:?} len {len:.2} spans {:?} taken {:?}", a, b, spans.iter().map(|(a, b, c)| (format!("{a:.2}"), format!("{b:.2}"), *c)).collect::<Vec<_>>(), taken); }
             let t0 = along(p);
             let mut w = w0;
             // (down to 0.6 m: a short wall half taken by a wardrobe had no 0.9 m stretch beside it)
@@ -761,6 +779,12 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                         let t = margin + w / 2.0 + i as f64 * 0.1;
                         let (x0, x1) = (t - w / 2.0, t + w / 2.0);
                         if taken.iter().any(|(a0, a1)| x0 < *a1 && *a0 < x1) { continue }
+                        // (outside along its whole width: a wall exterior at its middle bordered a bathroom further along -- a living-room
+                        // window opened into it)
+                        let nrm = [-u[1], u[0]];
+                        let exterior = (0..=4).all(|i| { let tt = x0 + (x1 - x0) * i as f64 / 4.0; let q = [a[0] + u[0] * tt, a[1] + u[1] * tt];
+                            let (o1, o2) = ([q[0] + nrm[0] * 0.3, q[1] + nrm[1] * 0.3], [q[0] - nrm[0] * 0.3, q[1] - nrm[1] * 0.3]); !(inside_any(o1) && inside_any(o2)) });
+                        if !exterior { continue }
                         let pen: f64 = spans.iter().map(|(s0, s1, wt)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
                         let over_sink: f64 = sinks.iter().map(|(s0, s1)| 2.0 - ((s0 + s1) / 2.0 - t).abs().min(2.0)).fold(0.0, f64::max);
                         // over a counter / basin the sill rises to clear it (the head stays): at least 0.6 m of glass, a little penalty
@@ -768,7 +792,22 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                         let need = lows.iter().filter(|(s0, s1, _)| x0 < *s1 && *s0 < x1).map(|(_, _, z)| *z).fold(sill, f64::max);
                         if head - need < 0.6 { continue }
                         let score = over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 };
+                        let over_alc: Vec<&(f64, f64, f64, String)> = alcs.iter().filter(|(s0, s1, _, _)| x0 < *s1 && *s0 < x1).collect();
+                        let pen_alc: f64 = over_alc.iter().map(|(s0, s1, wt, _)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
+                        let mut alc_keys: Vec<String> = over_alc.iter().map(|x| x.3.clone()).collect();
+                        alc_keys.sort(); alc_keys.dedup();
+                        let free_score = score + pen_alc - 1.0 * alc_keys.len() as f64;
+                        if !over_alc.is_empty() && best_free.as_ref().map_or(true, |bb| free_score > bb.0) {
+                            let mut nc = ct.clone();
+                            let q = [a[0] + u[0] * t, a[1] + u[1] * t];
+                            nc.loc = [q[0], q[1], (need + head) / 2.0];
+                            nc.dims[0] = w;
+                            nc.dims[2] = head - need;
+                            nc.rot_z = if wi == 0 && runs_along(a, b) { ct.rot_z } else { u[1].atan2(u[0]) + if flip { std::f64::consts::PI } else { 0.0 } };
+                            best_free = Some((free_score, nc, alc_keys.clone()));
+                        }
                         if best.as_ref().map_or(true, |bb| score > bb.0) {
+                            best_tall = spans.iter().filter(|(_, _, wt)| *wt >= 5.0).map(|(s0, s1, _)| (x1.min(*s1) - x0.max(*s0)).max(0.0)).sum();
                             let mut nc = ct.clone();
                             let q = [a[0] + u[0] * t, a[1] + u[1] * t];
                             nc.loc = [q[0], q[1], (need + head) / 2.0];
@@ -784,7 +823,24 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 w -= 0.1;
             }
         }
-        let Some((score, nc)) = best else { continue };
+        let Some((mut score, mut nc)) = best else { continue };
+        // no clear stretch, but one behind alcove shelves: the shelves go (with their keep-outs and what stands on them)
+        // a bathroom window with only a spot behind something tall (the shower) is left out: windowless bathrooms are common
+        if best_tall > 0.02 && crate::rooms::state::room_type(room) == "bathroom" && best_free.as_ref().map_or(true, |b| b.0 < -5.0) {
+            if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window left out (only behind a tall piece)"); }
+            continue;
+        }
+        if let Some((fs, fnc, keys)) = best_free {
+            if score < -5.0 && fs >= -5.0 {
+                for a in &keys {
+                    let kids: Vec<String> = state.objs.keys().filter(|k| k.starts_with(&format!("{a}.keepout")) || state.objs[k.as_str()].relations.iter().any(|r| &r.target == a)).cloned().collect();
+                    for k in kids { if state.objs.contains_key(&k) { crate::furn::layout2d::remove_tree(state, &k); } }
+                    if state.objs.contains_key(a) { crate::furn::layout2d::remove_tree(state, a); }
+                    if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: alcove shelves {a} removed for a window"); }
+                }
+                score = fs; nc = fnc;
+            }
+        }
         scores.push(score);
         if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window {w0:.2} m -> {:.2} m at ({:.2}, {:.2}) (score {score:.2})", nc.dims[0], nc.loc[0], nc.loc[1]); }
         out.push(nc);
@@ -800,13 +856,16 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
     let mut it = keep.iter();
     out.retain(|_| *it.next().unwrap());
     // pictures and mirrors a window now covers come off the wall
-    let wins: Vec<([f64; 2], [f64; 2], f64, f64)> = out.iter().map(|ct| {
+    // (the plan's own windows too: a mirror hung beside one)
+    let wins: Vec<([f64; 2], [f64; 2], f64, f64)> = out.iter().chain(fixed.iter().filter(|c| c.kind == CutKind::Window)).map(|ct| {
         let (cz, sz) = (ct.rot_z.cos(), ct.rot_z.sin());
         let hw = ct.dims[0] / 2.0 + 0.05;
-        let ext = [cz * hw, sz * hw];
-        ([ct.loc[0] - ext[0].abs() - 0.15, ct.loc[1] - ext[1].abs() - 0.15], [ct.loc[0] + ext[0].abs() + 0.15, ct.loc[1] + ext[1].abs() + 0.15], ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0)
+        // along the wall its width (+15 cm), across it 35 cm each side of the centre line (past the wall face: a mirror on the face stayed)
+        let ext = [(cz * hw).abs() + 0.15 * cz.abs() + 0.35 * sz.abs(), (sz * hw).abs() + 0.15 * sz.abs() + 0.35 * cz.abs()];
+        ([ct.loc[0] - ext[0], ct.loc[1] - ext[1]], [ct.loc[0] + ext[0], ct.loc[1] + ext[1]], ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0)
     }).collect();
-    let hung: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "WallArtFactory" | "MirrorFactory"))).map(|(k, _)| k.clone()).collect();
+    // (towel rails and holders too)
+    let hung: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "WallArtFactory" | "MirrorFactory" | "HardwareFactory"))).map(|(k, _)| k.clone()).collect();
     for k in hung {
         let (lo, hi) = wb(state, &k);
         if wins.iter().any(|(wl, wh, z0, z1)| lo[0] < wh[0] && wl[0] < hi[0] && lo[1] < wh[1] && wl[1] < hi[1] && lo[2] < *z1 && *z0 < hi[2]) {
