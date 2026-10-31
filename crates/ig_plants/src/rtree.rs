@@ -73,19 +73,19 @@ fn lv(length: f64, length_v: f64, curve: f64, curve_v: f64, curve_res: usize, br
 fn params(sp: Species) -> Params {
     use Species::*;
     match sp {
-        Oak => Params { shape: 8, base_size: 0.25, scale: 13.0, scale_v: 3.0, ratio: 0.022, ratio_power: 1.3, flare: 0.8, attraction_up: 0.4,
+        Oak => Params { shape: 8, base_size: 0.25, scale: 13.0, scale_v: 3.0, ratio: 0.022, ratio_power: 1.3, flare: 0.45, attraction_up: 0.4,
             levels: vec![lv(0.36, 0.05, 0.0, 25.0, 6, 0, 0.0, 0.0, 0.0, 0.0)], leaves: 6, card: 0.85, sc: Some((0.62, 0.74)),
             bark: [0.16, 0.13, 0.1], leaf: [0.12, 0.22, 0.05], leaf_kind: LeafKind::Lobed, trunks: 1 },
-        Maple => Params { shape: 8, base_size: 0.3, scale: 14.0, scale_v: 3.0, ratio: 0.018, ratio_power: 1.3, flare: 0.5, attraction_up: 0.6,
+        Maple => Params { shape: 8, base_size: 0.3, scale: 14.0, scale_v: 3.0, ratio: 0.018, ratio_power: 1.3, flare: 0.3, attraction_up: 0.6,
             levels: vec![lv(0.46, 0.05, 0.0, 15.0, 6, 0, 0.0, 0.0, 0.0, 0.0)], leaves: 6, card: 0.8, sc: Some((0.46, 0.7)),
             bark: [0.2, 0.17, 0.14], leaf: [0.13, 0.25, 0.05], leaf_kind: LeafKind::Broad, trunks: 1 },
-        Birch => Params { shape: 7, base_size: 0.35, scale: 15.0, scale_v: 3.0, ratio: 0.013, ratio_power: 1.4, flare: 0.3, attraction_up: 0.3,
+        Birch => Params { shape: 7, base_size: 0.35, scale: 15.0, scale_v: 3.0, ratio: 0.013, ratio_power: 1.4, flare: 0.2, attraction_up: 0.3,
             levels: vec![lv(1.0, 0.0, 0.0, 10.0, 8, 0, 0.0, 0.0, 0.0, 0.0), lv(0.32, 0.06, -10.0, 30.0, 6, 42, 55.0, -15.0, 140.0, 30.0), lv(0.45, 0.1, 25.0, 40.0, 4, 18, 45.0, 15.0, 140.0, 40.0), lv(0.45, 0.1, 0.0, 30.0, 2, 6, 45.0, 10.0, 140.0, 0.0)],
             leaves: 7, card: 0.62, sc: None, bark: [0.62, 0.6, 0.56], leaf: [0.18, 0.3, 0.07], leaf_kind: LeafKind::Small, trunks: 1 },
-        Pine => Params { shape: 0, base_size: 0.2, scale: 17.0, scale_v: 4.0, ratio: 0.017, ratio_power: 1.2, flare: 0.4, attraction_up: 0.1,
+        Pine => Params { shape: 0, base_size: 0.2, scale: 17.0, scale_v: 4.0, ratio: 0.017, ratio_power: 1.2, flare: 0.3, attraction_up: 0.1,
             levels: vec![lv(1.0, 0.0, 0.0, 6.0, 10, 0, 0.0, 0.0, 0.0, 0.0), lv(0.28, 0.05, 5.0, 15.0, 5, 70, 88.0, -25.0, 137.5, 15.0), lv(0.4, 0.08, 0.0, 20.0, 3, 14, 50.0, 10.0, 140.0, 20.0)],
             leaves: 6, card: 0.6, sc: None, bark: [0.22, 0.15, 0.1], leaf: [0.05, 0.12, 0.05], leaf_kind: LeafKind::Needle, trunks: 1 },
-        Willow => Params { shape: 3, base_size: 0.3, scale: 12.0, scale_v: 2.5, ratio: 0.02, ratio_power: 1.3, flare: 0.6, attraction_up: -2.0,
+        Willow => Params { shape: 3, base_size: 0.3, scale: 12.0, scale_v: 2.5, ratio: 0.02, ratio_power: 1.3, flare: 0.4, attraction_up: -2.0,
             levels: vec![lv(1.0, 0.0, 0.0, 20.0, 6, 0, 0.0, 0.0, 0.0, 0.0), lv(0.4, 0.08, -20.0, 30.0, 6, 26, 50.0, 10.0, 140.0, 40.0), lv(0.9, 0.15, 30.0, 20.0, 8, 22, 30.0, 10.0, 120.0, 30.0)],
             leaves: 5, card: 0.42, sc: None, bark: [0.2, 0.17, 0.12], leaf: [0.2, 0.3, 0.1], leaf_kind: LeafKind::Lance, trunks: 1 },
         Shrub => Params { shape: 8, base_size: 0.0, scale: 1.6, scale_v: 0.5, ratio: 0.03, ratio_power: 1.3, flare: 0.0, attraction_up: 0.5,
@@ -133,7 +133,7 @@ impl<'a> Builder<'a> {
         let mut d = norm(dir);
         let bend_axis = perp(d);
         let mut pts = vec![start];
-        let mut rad = vec![rad0 * if level == 0 { 1.0 + self.p.flare * 0.99 * 1.6 } else { 1.0 }];
+        let mut rad = vec![rad0 * if level == 0 { 1.0 + self.p.flare * 0.99 } else { 1.0 }];
         let mut p = start;
         for i in 0..res {
             let t = (i + 1) as f64 / res as f64;
@@ -151,8 +151,10 @@ impl<'a> Builder<'a> {
             p = add(p, mul(d, seg));
             pts.push(p);
             // Weber-Penn root flare: Flare * (100^y - 1) / 100, y = 1 - 8t (a curved flare, not a cone)
-            let flare = if level == 0 { let y = (1.0 - 8.0 * t).max(0.0); self.p.flare * (100f64.powf(y) - 1.0) / 100.0 * 1.6 } else { 0.0 };
-            rad.push((rad0 * (1.0 - lp.taper * t * 0.95)).max(0.002) * (1.0 + flare));
+            let flare = if level == 0 { let y = (1.0 - 8.0 * t).max(0.0); self.p.flare * (100f64.powf(y) - 1.0) / 100.0 } else { 0.0 };
+            // (a space-colonization trunk ends at the crown base, where its limbs take over: it keeps ~60 % of its radius there)
+            let taper = if level == 0 && self.p.sc.is_some() { 0.4 } else { lp.taper * 0.95 };
+            rad.push((rad0 * (1.0 - taper * t)).max(0.002) * (1.0 + flare));
         }
         let stem_pts = pts.clone();
         self.stems.push(Stem { pts, rad: rad.clone() });
@@ -231,7 +233,9 @@ impl<'a> Builder<'a> {
         let (di, dk) = (step * 9.0, step * 1.6);
         // nodes: (pos, parent); seed nodes along the trunk's upper 45 %
         let mut nodes: Vec<(V3, Option<usize>)> = vec![];
-        let k0 = (trunk.len() as f64 * 0.4) as usize;
+        // (branches start from the top few trunk nodes: the trunk forks into a few main limbs, as in photos of oaks and maples;
+        // seeding the upper 60 % stacked parallel horizontal limbs up a pole)
+        let k0 = trunk.len().saturating_sub(3);
         for (i, &tp) in trunk.iter().enumerate() { nodes.push((tp, if i == 0 { None } else { Some(i - 1) })); let _ = k0; }
         let first_free = 0;
         for _iter in 0..90 {
@@ -254,7 +258,8 @@ impl<'a> Builder<'a> {
             for ni in keys {
                 let (dsum, _) = pull[&ni];
                 let jitter = [self.r.uniform(-0.15, 0.15), self.r.uniform(-0.15, 0.15), self.r.uniform(-0.05, 0.2)];
-                let d = norm(add(norm(dsum), jitter));
+                // (upward tropism, Runions et al. 2007: limbs rise toward the light instead of leaving the trunk flat)
+                let d = norm(add(add(norm(dsum), jitter), [0.0, 0.0, 0.3 * self.p.attraction_up.max(0.0) + 0.15]));
                 let np = add(nodes[ni].0, mul(d, step));
                 nodes.push((np, Some(ni)));
             }
@@ -268,6 +273,14 @@ impl<'a> Builder<'a> {
         let mut rad = vec![0.0f64; nn];
         for i in (0..nn).rev() {
             if children[i].is_empty() { rad[i] = r0 } else { rad[i] = children[i].iter().map(|&c| rad[c].powf(2.1)).sum::<f64>().powf(1.0 / 2.1); }
+        }
+        // limbs carry the trunk: the pipe sum at the crown's lowest seed node is scaled up to the trunk's radius there (~600 tips at
+        // r0 gave a 6 cm limb system on a 30 cm trunk -- real trees have far more twigs); tips stay at r0, thick parts scale
+        if k0 < nn && rad[k0] > r0 {
+            let target = trunk_rad[k0.min(trunk_rad.len() - 1)] * 0.8;
+            let s = (target / rad[k0]).clamp(1.0, 6.0);
+            for i in trunk.len()..nn { rad[i] = r0 + (rad[i] - r0) * s; }
+            rad[k0] *= s;
         }
         // the trunk keeps its Weber-Penn radius below the crown
         for i in 0..trunk.len().min(nn) { rad[i] = rad[i].max(trunk_rad[i.min(trunk_rad.len() - 1)] * 0.5).min(trunk_rad[0] * 1.5); }
