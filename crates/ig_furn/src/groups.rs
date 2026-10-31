@@ -896,6 +896,8 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         "FloorLampFactory" => ("floor lamps", 0),
         // (letter balloons spelt random words on the walls, one over a window)
         "BalloonFactory" => ("balloons", 0),
+        // (bar-height cocktail tables stood beside the dining table)
+        "TableCocktailFactory" if room_type == "dining-room" => ("cocktail tables", 0),
         // (a bathroom wardrobe stood in front of the toilet; a bathroom's storage is the basin's)
         "WardrobeFactory" if room_type == "bathroom" => ("wardrobes", 0),
         "BeverageFridgeFactory" => ("beverage fridges", 0),
@@ -2400,6 +2402,16 @@ pub fn kitchen_style(state: &mut State) -> Vec<String> {
 /// group passes move beds, nightstands and tables without what stood on them, and desk lamps floated at the old headboard height
 pub fn orphans(state: &mut State) -> Vec<String> {
     let mut log = vec![];
+    // one desk lamp per surface, none within 0.5 m of another (the solver stood two side by side on a shelf)
+    let lamps: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "DeskLampFactory").map(|(k, _)| k.clone()).collect();
+    let mut kept: Vec<(String, [f64; 3])> = vec![];
+    for k in lamps {
+        let o = &state.objs[&k];
+        let parent = o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.get(t).map_or(false, |p| p.generator.is_some()));
+        let t = o.pose.t;
+        let dup = kept.iter().any(|(pk, pt)| (parent.is_some() && state.objs[pk.as_str()].relations.iter().any(|r| Some(&r.target) == parent.as_ref())) || ((pt[0] - t[0]).hypot(pt[1] - t[1]) < 0.5 && (pt[2] - t[2]).abs() < 0.3));
+        if dup { layout2d::remove_tree(state, &k); log.push(format!("removed DeskLampFactory {k} (a lamp beside it already)")); } else { kept.push((k, t)); }
+    }
     let wb = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
         let o = &st.objs[k];
         let (l, h) = (o.geom.lo, o.geom.hi);

@@ -116,14 +116,18 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             if j == 0 && !kitchen_has.insert((room_k.clone(), "jars")) { break }
             plan.push((clampu(end + inward * (0.22 + j as f64 * 0.13)), 0.08, jar.clone(), (hh / jh).min(1.2), "JarFactory"));
         }
-        if r.f64() < 0.4 { plan.push((clampu((u0 + u1) / 2.0 + r.uniform(-0.3, 0.3)), depth * 0.55, assets.visual("FruitContainerFactory", r.next_u64() % 1_000_000, 0), 1.0, "FruitContainerFactory")); }
+        // (bowls at most 0.28 m across: a basin-sized bowl stood on the counter)
+        let fit = |a: &crate::assets::Asset| { let (dx, dy, _) = dims(a); (0.28 / dx.max(dy).max(0.05)).min(1.0) };
+        if r.f64() < 0.4 { let a = assets.visual("FruitContainerFactory", r.next_u64() % 1_000_000, 0); let sc = fit(&a); plan.push((clampu((u0 + u1) / 2.0 + r.uniform(-0.3, 0.3)), depth * 0.55, a, sc, "FruitContainerFactory")); }
         // a long run (2.4 m and up) holds more: a microwave at the back half the time, and a bowl or a box of food
         if u1 - u0 >= 2.4 {
             let mid = |r: &mut Rng| clampu((u0 + u1) / 2.0 + r.uniform(-0.5, 0.5));
             if r.f64() < 0.5 { let u = mid(&mut r); plan.push((u, 0.05, assets.visual("MicrowaveFactory", r.next_u64() % 1_000_000, 0), 1.0, "MicrowaveFactory")); }
             let cls = ["BowlFactory", "FoodBoxFactory"][r.choice_idx(2)];
             let u = mid(&mut r);
-            plan.push((u, depth * 0.5, assets.visual(cls, r.next_u64() % 1_000_000, 0), 1.0, cls));
+            let a = assets.visual(cls, r.next_u64() % 1_000_000, 0);
+            let sc = if cls == "BowlFactory" { fit(&a) } else { 1.0 };
+            plan.push((u, depth * 0.5, a, sc, cls));
         }
         let mut n = 0;
         for (i, (u, vb_off, item, sc, cls)) in plan.iter().enumerate() {

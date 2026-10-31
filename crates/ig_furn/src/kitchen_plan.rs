@@ -86,6 +86,8 @@ impl Kit {
         let kitchen_kids = |o: &ObjState| o.relations.iter().any(|r| state.objs.get(&r.target).map_or(false, |t| built_in(class_of(t))));
         let mut obstacles = vec![];
         let mut windows = vec![];
+        // door clearances: the line keeps 15 cm more off them along the wall (a run ending at the jamb stood in the door's passage)
+        let mut doors: Vec<Arc<Vec<Prism>>> = vec![];
         // windows the wall layer lays out after the furniture (WindowIntent): where the plan had them, a soft pull
         let intents: Vec<Arc<Vec<Prism>>> = {
             let rr = layout2d::rings(&layout2d::room_floor(state, room));
@@ -99,13 +101,15 @@ impl Kit {
             if k.starts_with("doorclear/") && !k.starts_with(&format!("doorclear/{room}/")) { continue }
             // (a feature's keep-out by its feature's room)
             let rk = layout2d::room_of(state, k).or_else(|| k.rsplit_once(".keepout").and_then(|(f, _)| layout2d::room_of(state, f)));
-            let mine = rk.as_deref() == Some(room) || k.starts_with("doorclear/") || (o.generator.is_none() && rk.is_none());
+            // (an opening shared with the next room counts wherever it is filed: a passage filed under the other room was missed)
+            let opening = ["door", "window", "passage", "entrance"].iter().any(|p| k.starts_with(p)) && o.generator.is_none();
+            let mine = rk.as_deref() == Some(room) || k.starts_with("doorclear/") || (o.generator.is_none() && rk.is_none()) || opening;
             if !mine { continue }
             let prs = layout2d::prisms(state, k);
             if prs.iter().all(|p| (p.bb[0] > 1e8)) { continue }
             // (a window with its sill under the counter top stops the counter like a wall: the floor's height is the room's)
             let low = o.tags.contains(win.clone()) && prs.iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min) < floor_z + 0.97;
-            if o.tags.contains(win.clone()) && !low { windows.push(prs) } else { obstacles.push(prs) }
+            if o.tags.contains(win.clone()) && !low { windows.push(prs) } else if k.starts_with("doorclear/") { doors.push(prs.clone()); obstacles.push(prs) } else { obstacles.push(prs) }
         }
         // lines: the straight walls (axis-aligned) in 5 cm cells, a cell free when a counter-deep strip before it clears the fixed pieces
         let segs: Vec<_> = wall_segments(state, room).into_iter().filter(|(_, _, n)| n[0].abs() > 0.99 || n[1].abs() > 0.99).collect();
@@ -118,7 +122,11 @@ impl Kit {
             let cell = 0.05;
             let nc_ = (len / cell).floor() as usize;
             let dmax = d.iter().cloned().fold(0.6, f64::max) + 0.02;
-            let free: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell + 0.005, (i + 1) as f64 * cell - 0.005, dmax); !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) }).collect();
+            let free: Vec<bool> = (0..nc_).map(|i| {
+                let r = rect(&probe, i as f64 * cell + 0.005, (i + 1) as f64 * cell - 0.005, dmax);
+                let rw = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, dmax + 0.15);
+                !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) && !doors.iter().any(|p| hits(&rw, p, -1.0, 2.0))
+            }).collect();
             let wcell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell, (i + 1) as f64 * cell, 0.2); windows.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
             let icell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, 0.25); intents.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
             let mut i = 0;
@@ -126,7 +134,8 @@ impl Kit {
                 if !free[i] { i += 1; continue }
                 let j0 = i;
                 while i < nc_ && free[i] { i += 1; }
-                let (t0, t1) = (j0 as f64 * cell, if i == nc_ { len } else { i as f64 * cell });
+                // (5 cm off an obstacle that cut the line: a passage's box reached into the next cell)
+                let (t0, t1) = (j0 as f64 * cell + if j0 > 0 { 0.05 } else { 0.0 }, if i == nc_ { len } else { i as f64 * cell - 0.05 });
                 if t1 - t0 < 0.6 { continue }
                 let mut win = vec![];
                 let mut k = j0;
@@ -601,8 +610,8 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
             let own_depth = { let (a, b) = lohi(state, &orun); b[0] - a[0] };
             let set = |state: &mut State, k: &str, f: &dyn Fn(&mut [f64; 4])| { if let Some(g) = state.objs.get_mut(k).and_then(|o| o.generator.as_mut()) { let mut j = g.join.unwrap_or([0.0; 4]); f(&mut j); g.join = Some(j); } state.touch(k); };
             set(state, &orun, &|j| if j[0] == 0.0 { j[0] = bs; j[1] = leg_depth; } else if j[0] != bs { j[0] = 2.0; j[1] = j[1].max(leg_depth); });
-            // (to the corner leg's wall-cabinet fronts: its deepest, the middle one, is two thirds of the counter deep)
-            let reach = own_depth * 0.34 - 0.01;
+            // (to the corner leg's wall-cabinet fronts: half the counter deep, less their doors' 3 cm)
+            let reach = own_depth * 0.5 - 0.04;
             set(state, &lrun, &|j| if j[2] == 0.0 { j[2] = js; j[3] = reach; } else if j[2] != js { j[2] = 2.0; j[3] = j[3].min(reach); });
             if dbg { eprintln!("KPLAN L joint at corner {ci}: {orun} blind {bs:+} {leg_depth:.2} m, {lrun} reach {js:+} {reach:.2} m"); }
         }

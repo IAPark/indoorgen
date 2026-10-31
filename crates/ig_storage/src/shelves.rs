@@ -905,10 +905,17 @@ impl KitchenSpace {
             // the wall cabinet nearest the joined end
             let ends: Vec<(usize, (f32, f32))> = (2..parts.len()).map(|i| (i, yr(&parts[i]))).collect();
             let Some(&(i, (u0, u1))) = ends.iter().min_by(|a, b| { let e = |r: &(f32, f32)| if js < 0.0 { r.0 } else { -r.1 }; e(&a.1).partial_cmp(&e(&b.1)).unwrap() }) else { return };
-            let (w, r) = (u1 - u0, reach as f32);
-            if w > 0.05 {
-                let k = (w + r) / w;
-                for v in parts[i].v.iter_mut() { v[1] = if js < 0.0 { u1 - (u1 - v[1]) * k } else { u0 + (v[1] - u0) * k }; }
+            // (a filler box in the cabinet's finish, not the cabinet stretched: stretching widened its doors and slanted the handle)
+            let r = reach as f32;
+            let (xz_lo, xz_hi) = parts[i].v.iter().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[2])], [h[0].max(v[0]), h[1].max(v[2])]));
+            let (y0, y1) = if js < 0.0 { (u0 - r, u0) } else { (u1, u1 + r) };
+            let tag = parts[i].tag.first().copied().unwrap_or(0);
+            let base = parts[i].v.len() as u32;
+            let (x0, x1, z0, z1) = (xz_lo[0], xz_hi[0], xz_lo[1], xz_hi[1]);
+            parts[i].v.extend([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]);
+            for f in [[0u32, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
+                parts[i].p.push(f.iter().map(|q| base + q).collect());
+                parts[i].tag.push(tag);
             }
         }
     }
@@ -984,20 +991,21 @@ impl KitchenSpace {
             // a run narrower than the middle wall cabinet and two side ones: one wall cabinet as wide as the base (a 1.0-1.3 m
             // cabinet over a 0.6 m run widened the set's box, and scaling it to the run's size shrank the base cabinets into its middle)
             if y < tmw + 0.45 {
-                let (mut mid, _) = self.cabinet_t([x * 0.66, y - 0.15, th * 0.8], false, 0, None, on.then_some(&mut pm));
+                let (mut mid, _) = self.cabinet_t([x / 2.0, y - 0.15, th], false, 0, None, on.then_some(&mut pm));
                 remap(&mut mid, pm, inst_seed(self.factory_seed, 0), &mut slots);
-                parts.push(Self::translated(mid, [-x / 6.0, 0.0, z - th * 0.8]));
+                parts.push(Self::translated(mid, [-x / 4.0, 0.0, z - th]));
                 return parts;
             }
             let (mut left, rnd) = self.cabinet_t([x / 2.0, ctw, th], false, 0, None, on.then_some(&mut pl));
             remap(&mut left, pl, inst_seed(self.factory_seed, 0), &mut slots);
             let (mut right, _) = self.cabinet_t([x / 2.0, ctw, th], false, 1, Some(rnd), on.then_some(&mut pr));
             remap(&mut right, pr, inst_seed(self.factory_seed, 1), &mut slots);
-            let (mut mid, _) = self.cabinet_t([x * 0.66, tmw, th * 0.8], false, 0, None, on.then_some(&mut pm));
+            // (the middle cabinet as deep and tall as the side ones: python's deeper, shorter middle unit stood out of the row)
+            let (mut mid, _) = self.cabinet_t([x / 2.0, tmw, th], false, 0, None, on.then_some(&mut pm));
             remap(&mut mid, pm, inst_seed(self.factory_seed, 0), &mut slots);
             parts.push(Self::translated(left, [-x / 4.0, 0.0, z - th]));
             parts.push(Self::translated(right, [-x / 4.0, y - ctw, z - th]));
-            parts.push(Self::translated(mid, [-x / 6.0, y / 2.0 - tmw / 2.0, z - th * 0.8]));
+            parts.push(Self::translated(mid, [-x / 4.0, y / 2.0 - tmw / 2.0, z - th]));
         }
         parts
     }

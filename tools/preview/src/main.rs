@@ -323,6 +323,10 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             }
             x += step; } y += step; }
         cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        // (not inside or right behind a piece: cameras stood in a fridge, behind a wardrobe, in a door leaf)
+        let boxes: Vec<(Vec3, Vec3)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !(nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.contains("exterior") || nm.contains("rug") || nm.contains("Ceiling")) && (d.bmax - d.bmin).max_element() > 0.25 }).map(|d| (d.bmin, d.bmax)).collect();
+        let inside = |p: Vec3, m: f32| boxes.iter().any(|(l, h)| p.x > l.x - m && p.x < h.x + m && p.y > l.y - m && p.y < h.y + m && p.z > l.z - m && p.z < h.z + m);
+        cands.retain(|(_, e)| !inside(*e, 0.15) && ![0.3f32, 0.6, 0.9].iter().any(|t| inside(*e + (tgt - *e).normalize_or_zero() * *t, 0.0)));
         let mut chosen: Vec<Vec3> = vec![]; let mut tried = 0;
         for (dist, e) in cands {
             if chosen.len() >= 2 || tried > 60 { break; }

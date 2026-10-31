@@ -8,22 +8,30 @@ const UTENSILS: [(&str, f64); 4] = [("ForkFactory", -1.0), ("KnifeFactory", 1.0)
 
 pub fn arrange(state: &mut State) -> Vec<String> {
     let mut log = vec![];
-    let tables: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "TableDiningFactory")).map(|(k, _)| k.clone()).collect();
+    // (coffee tables too, for the cookware / oversized pieces only: 0.4 m bowls stood on them like basins)
+    let tables: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "TableDiningFactory" || g.class == "CoffeeTableFactory")).map(|(k, _)| k.clone()).collect();
     let mut remove: Vec<String> = vec![];
     for tk in tables {
         let t = state.objs[&tk].clone();
+        let dining = t.generator.as_ref().map_or(false, |g| g.class == "TableDiningFactory");
         let on = |o: &crate::furn::state::ObjState| o.relations.iter().any(|r| r.target == tk);
         let class = |o: &crate::furn::state::ObjState| o.generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
         let plates: Vec<String> = state.objs.iter().filter(|(_, o)| on(o) && class(o) == "PlateFactory").map(|(k, _)| k.clone()).collect();
         // cookware (pots, pans) does not stand on a dining table, nor a piece wider than 0.4 m, nor a bowl wider than 0.3 m (the solver set
         // bowls of 0.35 m boxes there; their models came out wider still, like basins)
-        let odd: Vec<String> = state.objs.iter().filter(|(_, o)| on(o)).filter(|(_, o)| {
+        // (on the top: chairs relate to their table too)
+        let top_z = t.pose.t[2] + t.geom.lo[2] + if dining { 0.4 } else { 0.2 };
+        let odd: Vec<String> = state.objs.iter().filter(|(_, o)| on(o) && o.pose.t[2] + o.geom.lo[2] > top_z).filter(|(_, o)| {
             let c = class(o);
             let w = (o.geom.hi[0] - o.geom.lo[0]).max(o.geom.hi[1] - o.geom.lo[1]);
+            // (a fruit container deeper than about half its width reads as a stock pot)
+            let h = o.geom.hi[2] - o.geom.lo[2];
             matches!(c.as_str(), "PotFactory" | "PanFactory" | "LidFactory" | "KettleFactory") || (c != "PlateFactory" && w > 0.4) || (c == "BowlFactory" && w > 0.3)
+                || (c == "FruitContainerFactory" && h > 0.55 * w)
         }).map(|(k, _)| k.clone()).collect();
         if !odd.is_empty() { log.push(format!("{} cookware / oversized pieces removed from {tk}", odd.len())); }
         remove.extend(odd);
+        if !dining { continue }
         let utensils: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| on(o)).filter_map(|(k, o)| { let c = class(o); UTENSILS.iter().any(|u| u.0 == c).then(|| (k.clone(), c)) }).collect();
         if utensils.is_empty() { continue }
         if plates.is_empty() { remove.extend(utensils.iter().map(|u| u.0.clone())); log.push(format!("{} utensils removed from {tk} (no plate)", utensils.len())); continue }
@@ -145,6 +153,8 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
         }
         let mut moved = 0;
         let mut taken: Vec<usize> = vec![];
+        // the chairs seated so far keep 6 cm apart (two at a corner met arm to arm)
+        let mut seated: Vec<B> = vec![];
         for ck in &far {
             let c = state.objs[ck].clone();
             let (cl, ch) = (c.geom.lo, c.geom.hi);
@@ -168,6 +178,7 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 np.set_loc([sc[0] - cc[0], sc[1] - cc[1], c.pose.t[2]]);
                 let mut cand = c.clone(); cand.pose = np;
                 let b = wbox(&cand);
+                if seated.iter().any(|o| (0..2).all(|d| b.0[d] < o.1[d] + 0.06 && o.0[d] < b.1[d] + 0.06)) { continue }
                 if others.iter().any(|o| ov(&b, o)) {
                     if std::env::var_os("CHAIR_DEBUG").is_some() {
                         let hit: Vec<&String> = state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && ov(&b, &wbox(o))).map(|(k, _)| k).collect();
@@ -179,6 +190,7 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                     if ![[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.0[0], b.1[1]], [b.1[0], b.1[1]]].iter().all(|q| crate::shp::contains_pt(pg, *q)) { continue }
                 }
                 state.objs.get_mut(ck).unwrap().pose = np;
+                seated.push(b);
                 taken.push(si);
                 done = true; moved += 1; break;
             }
