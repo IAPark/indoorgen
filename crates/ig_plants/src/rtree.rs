@@ -127,12 +127,13 @@ impl<'a> Builder<'a> {
     /// Weber-Penn stem at `level`, from `start` along `dir`, length `l`, base radius `rad0`; recurses into children
     fn stem(&mut self, level: usize, start: V3, dir: V3, l: f64, rad0: f64, tree_h: f64) {
         let lp = self.p.levels[level];
-        let res = lp.curve_res.max(1);
+        // (the trunk gets 3x the segments: the root flare needs rings near the ground)
+        let res = lp.curve_res.max(1) * if level == 0 { 3 } else { 1 };
         let seg = l / res as f64;
         let mut d = norm(dir);
         let bend_axis = perp(d);
         let mut pts = vec![start];
-        let mut rad = vec![rad0 * if level == 0 { 1.0 + self.p.flare } else { 1.0 }];
+        let mut rad = vec![rad0 * if level == 0 { 1.0 + self.p.flare * 0.99 * 1.6 } else { 1.0 }];
         let mut p = start;
         for i in 0..res {
             let t = (i + 1) as f64 / res as f64;
@@ -149,7 +150,8 @@ impl<'a> Builder<'a> {
             }
             p = add(p, mul(d, seg));
             pts.push(p);
-            let flare = if level == 0 { self.p.flare * (1.0 - (t * 6.0).min(1.0)).max(0.0) } else { 0.0 };
+            // Weber-Penn root flare: Flare * (100^y - 1) / 100, y = 1 - 8t (a curved flare, not a cone)
+            let flare = if level == 0 { let y = (1.0 - 8.0 * t).max(0.0); self.p.flare * (100f64.powf(y) - 1.0) / 100.0 * 1.6 } else { 0.0 };
             rad.push((rad0 * (1.0 - lp.taper * t * 0.95)).max(0.002) * (1.0 + flare));
         }
         let stem_pts = pts.clone();

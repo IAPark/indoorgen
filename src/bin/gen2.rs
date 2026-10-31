@@ -115,12 +115,8 @@ fn main() {
     if !done { return; }
     let lap = |what: &str| { if std::env::var_os("LAPS").is_some() { eprintln!("LAP {what} {:.1}s since scene start", t_scene.elapsed().as_secs_f64()); } };
     let tw = std::time::Instant::now();
-    scene.write_glb(&out).unwrap();
-    lap("glb written");
-    if params_usd {
-        scene.write_usdc(&out.with_extension("usdc")).unwrap();
-        lap("usdc written");
-    }
+    scene.write_glb_usdc(&out, params_usd.then(|| out.with_extension("usdc")).as_deref()).unwrap();
+    lap("glb (and usdc) written");
     if cams_k > 0 { add_cameras(&room, scene, room_polys, cams_k, seed, wall_t, &out); }
     // DSPOOL=spec.json: the dataset camera pool (crates/ig_cams/src/pool.rs) for the target room, written to spec.pool_path unless it
     // exists (variants of a house share it) -- the preview engine then needs no Blender process

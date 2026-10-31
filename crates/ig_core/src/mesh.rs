@@ -177,11 +177,11 @@ impl Mesh {
     }
     /// Export form: (positions, uv, triangles) where quads/n-gons are fan-triangulated with the fan's shared
     /// vertices duplicated for k >= 2 (matching the old triangle-soup layout, so per-triangle normals/uvs are identical).
-    fn export_tris(&self) -> (Vec<V3>, Vec<[f64; 2]>, Vec<[u32; 3]>, Vec<u32>) {
+    fn export_tris(&self, tj: bool) -> (Vec<V3>, Vec<[f64; 2]>, Vec<[u32; 3]>, Vec<u32>) {
         // Full triangle soup: every triangle owns its 3 vertices. The exporter computes smooth-by-angle normals per vertex
         // (welding by position), so a vertex index shared by faces at a sharp corner would get the normal of whichever triangle was
         // processed last (dark / flipped-looking triangles on flat panels of indexed meshes such as the exact KitchenSpace slab).
-        let fixed = if std::env::var_os("NO_TJ").is_some() { None } else { self.split_tjunctions() };
+        let fixed = if !tj || std::env::var_os("NO_TJ").is_some() { None } else { self.split_tjunctions() };
         let this = fixed.as_ref().unwrap_or(self);
         let has_uv = this.uv.len() == this.pos.len();
         let mut pos: Vec<V3> = Vec::with_capacity(this.faces.len() * 6);
@@ -603,7 +603,15 @@ impl Scene {
 
     /// Write a binary glTF 2.0 (.glb). Z-up scene is converted to glTF's Y-up with a root rotation node.
     pub fn write_glb(&self, path: &std::path::Path) -> std::io::Result<()> {
-        let sidecar = self.write_glb_to(|| Ok(std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?)))?;
+        self.write_glb_usdc(path, None)
+    }
+
+    /// `write_glb`, plus the usdc of `write_usdc` when `usdc` is given, from one set of per-node blobs (triangulation, normals and
+    /// welding are the bulk of both writers' time)
+    pub fn write_glb_usdc(&self, path: &std::path::Path, usdc: Option<&std::path::Path>) -> std::io::Result<()> {
+        let blobs = self.node_blobs(&Default::default());
+        let sidecar = self.write_glb_blobs(|| Ok(std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?)), &blobs)?;
+        if let Some(u) = usdc { self.write_usdc_blobs(u, &blobs)?; }
         if let Some(sp) = path.parent() {
             let _ = std::fs::write(sp.join(format!("{}.json", path.file_stem().unwrap().to_string_lossy())), serde_json::to_vec_pretty(&sidecar).unwrap());
         }
@@ -613,11 +621,14 @@ impl Scene {
     /// The glb bytes of `write_glb` streamed into the writer returned by `open` (called once the size is known); returns the sidecar json
     /// (nodes, lights, cloth jobs) that `write_glb` stores next to the file.
     pub fn write_glb_to<W: std::io::Write>(&self, open: impl FnOnce() -> std::io::Result<W>) -> std::io::Result<serde_json::Value> {
+        self.write_glb_blobs(open, &self.node_blobs(&Default::default()))
+    }
+
+    fn write_glb_blobs<W: std::io::Write>(&self, open: impl FnOnce() -> std::io::Result<W>, blobs: &[NodeBlob]) -> std::io::Result<serde_json::Value> {
         use rayon::prelude::*;
         let t_glb = web_time::Instant::now();
         // per-node blobs are built in parallel (pure functions of the node), then concatenated in node order: deterministic
         let ph: [std::sync::atomic::AtomicU64; 4] = Default::default();
-        let blobs = self.node_blobs(&ph);
         if std::env::var_os("GLBPROF").is_some() { eprintln!("GLBPROF blobs {:.1}s (cpu s: export {:.1} normals {:.1} uv {:.1} weld {:.1})", t_glb.elapsed().as_secs_f64(), ph[0].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[1].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[2].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6, ph[3].load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6); }
         let mut bin: usize = 0; // total bin chunk length; the blobs are streamed to the file in the same order
         let mut buffer_views = vec![];
@@ -625,7 +636,7 @@ impl Scene {
         let mut meshes = vec![];
         let mut nodes = vec![];
         let mut child_ids = vec![];
-        for (ni, (n, bl)) in self.nodes.iter().zip(&blobs).enumerate() {
+        for (ni, (n, bl)) in self.nodes.iter().zip(blobs).enumerate() {
             let mut put = |data: &[u8], target: u32, bin: &mut usize| { let st = *bin; *bin += data.len(); buffer_views.push(json!({"buffer":0,"byteOffset":st,"byteLength":data.len(),"target":target})); buffer_views.len() - 1 };
             let bv = put(&bl.pos, 34962, &mut bin);
             accessors.push(json!({"bufferView":bv,"componentType":5126,"count":bl.nv,"type":"VEC3","min":[bl.lo[0],bl.lo[1],bl.lo[2]],"max":[bl.hi[0],bl.hi[1],bl.hi[2]]}));
@@ -730,7 +741,7 @@ impl Scene {
         out.write_all(&js)?;
         out.write_all(&(bin as u32).to_le_bytes())?;
         out.write_all(b"BIN\0")?;
-        for bl in &blobs {
+        for bl in blobs {
             out.write_all(&bl.pos)?;
             out.write_all(&bl.nrm)?;
             if let Some(u) = &bl.uv { out.write_all(u)?; }
@@ -918,7 +929,9 @@ impl Scene {
         let lapn = |i: usize, t: &mut web_time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = web_time::Instant::now(); };
         self.nodes.par_iter().map(|n| {
             let mut tt = web_time::Instant::now();
-            let (xpos, xuv, xtris, xface) = n.mesh.export_tris();
+            // (no T-junction repair outdoors: terrain grids have none, and the foliage is millions of open leaf-card edges -- the
+            // repair took ~55 s of a 90 s outdoor house for nothing)
+            let (xpos, xuv, xtris, xface) = n.mesh.export_tris(!n.class.starts_with("Outdoor"));
             lapn(0, &mut tt);
             let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
             let tris = &xtris;
@@ -1036,10 +1049,12 @@ impl Scene {
     /// `nodes` give the real names and materials), Z-up metres, points welded by position with face-varying normals and uvs (what a glTF
     /// import with merge_vertices gives). No materials: the renderer assigns them from the sidecar.
     pub fn write_usdc(&self, path: &std::path::Path) -> std::io::Result<()> {
+        self.write_usdc_blobs(path, &self.node_blobs(&Default::default()))
+    }
+
+    fn write_usdc_blobs(&self, path: &std::path::Path, blobs: &[NodeBlob]) -> std::io::Result<()> {
         use openusd::gf::{Vec2f, Vec3f};
         use openusd::sdf::{self, ChildrenKey, FieldKey, SpecType, Specifier, Value};
-        let ph: [std::sync::atomic::AtomicU64; 4] = Default::default();
-        let blobs = self.node_blobs(&ph);
         fn err<E: std::fmt::Debug>(e: E) -> std::io::Error { std::io::Error::new(std::io::ErrorKind::Other, format!("{e:?}")) }
         let f3 = |b: &[u8], i: usize| -> [f32; 3] { [0, 1, 2].map(|k| f32::from_le_bytes(b[(3 * i + k) * 4..(3 * i + k) * 4 + 4].try_into().unwrap())) };
         let f2 = |b: &[u8], i: usize| -> [f32; 2] { [0, 1].map(|k| f32::from_le_bytes(b[(2 * i + k) * 4..(2 * i + k) * 4 + 4].try_into().unwrap())) };

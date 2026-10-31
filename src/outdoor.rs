@@ -484,7 +484,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
         let bump_seed = r.next_u64() as u32;
         let ch = |x: f64, y: f64, z: f64| -> f64 {
             if z - t.pad_z > 25.0 { return 0.0 }
-            smooth(thresh - 0.03, thresh + 0.15, mask(x, y)) * (13.0 + 5.0 * perlin(x, y, bump_seed, 3, 0.02))
+            smooth(thresh - 0.06, thresh + 0.3, mask(x, y)).powf(1.5) * (11.0 + 5.0 * perlin(x, y, bump_seed, 3, 0.02))
         };
         let mut canopy = Mesh::new();
         let r_of = |p: [f64; 3]| (p[0] - centre[0]).hypot(p[1] - centre[1]);
@@ -518,18 +518,19 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
         let mut cent_all: std::collections::HashMap<u8, Vec<[f64; 3]>> = Default::default();
         let tree_at: Vec<([f64; 2], f64)> = props.iter().filter(|p| p["kind"] == "tree")
             .map(|p| ([p["loc"][0].as_f64().unwrap(), p["loc"][1].as_f64().unwrap()], p["crown"].as_f64().unwrap())).collect();
-        let mut n_crowded = 0;
-        for (pi, pr) in props.iter().enumerate() {
-            let kind = pr["kind"].as_str().unwrap_or("tree");
-            let variant = pr["variant"].as_u64().unwrap_or(1000);
-            let si = pr["species"].as_u64().unwrap_or(5) as usize;
-            let loc = [pr["loc"][0].as_f64().unwrap(), pr["loc"][1].as_f64().unwrap(), pr["loc"][2].as_f64().unwrap()];
-            let (rot, sc) = (pr["rot"].as_f64().unwrap_or(0.0), pr["scale"].as_f64().unwrap_or(1.0));
-            let d = (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs());
-            let lod = if d > e { Lod::Far } else { Lod::Near };
-            let bseed = seed ^ (variant * 7919) ^ (si as u64) << 20;
-            let own;
-            let (b, l, lc) = if kind == "tree" && lod == Lod::Near {
+        // the near trees' crowded builds, then the props in order (shared builds for the rest)
+        let near_of = |pr: &Value| {
+            let loc = [pr["loc"][0].as_f64().unwrap(), pr["loc"][1].as_f64().unwrap()];
+            pr["kind"] == "tree" && (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs()) <= e
+        };
+        let crowded: Vec<Option<(Mesh, Mesh, Vec<[f64; 3]>, bool)>> = {
+            props.iter().enumerate().map(|(pi, pr)| {
+                if !near_of(pr) { return None }
+                let variant = pr["variant"].as_u64().unwrap_or(1000);
+                let si = pr["species"].as_u64().unwrap_or(5) as usize;
+                let loc = [pr["loc"][0].as_f64().unwrap(), pr["loc"][1].as_f64().unwrap()];
+                let (rot, sc) = (pr["rot"].as_f64().unwrap_or(0.0), pr["scale"].as_f64().unwrap_or(1.0));
+                let bseed = seed ^ (variant * 7919) ^ (si as u64) << 20;
                 // neighbours in the tree's local frame (unrotated, unscaled)
                 let cr = pr["crown"].as_f64().unwrap_or(1.0);
                 let (cs, sn) = ((-rot).cos(), (-rot).sin());
@@ -540,11 +541,20 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
                     let (dx, dy) = ((p[0] - loc[0]) / sc, (p[1] - loc[1]) / sc);
                     ([dx * cs - dy * sn, dx * sn + dy * cs], rn / sc)
                 }).collect();
-                if !nb.is_empty() { n_crowded += 1; }
-                let t = rtree::build_crowded(species[si], bseed ^ (pi as u64) << 32, lod, cr / sc, &nb);
-                own = (t.bark, t.leaves, t.leaf_centres);
-                (&own.0, &own.1, &own.2)
-            } else {
+                let t = rtree::build_crowded(species[si], bseed ^ (pi as u64) << 32, Lod::Near, cr / sc, &nb);
+                Some((t.bark, t.leaves, t.leaf_centres, !nb.is_empty()))
+            }).collect()
+        };
+        let n_crowded = crowded.iter().filter(|c| c.as_ref().map_or(false, |c| c.3)).count();
+        for (pi, pr) in props.iter().enumerate() {
+            let variant = pr["variant"].as_u64().unwrap_or(1000);
+            let si = pr["species"].as_u64().unwrap_or(5) as usize;
+            let loc = [pr["loc"][0].as_f64().unwrap(), pr["loc"][1].as_f64().unwrap(), pr["loc"][2].as_f64().unwrap()];
+            let (rot, sc) = (pr["rot"].as_f64().unwrap_or(0.0), pr["scale"].as_f64().unwrap_or(1.0));
+            let d = (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs());
+            let lod = if d > e { Lod::Far } else { Lod::Near };
+            let bseed = seed ^ (variant * 7919) ^ (si as u64) << 20;
+            let (b, l, lc) = if let Some(c) = &crowded[pi] { (&c.0, &c.1, &c.2) } else {
                 let key = (si as u8, variant * 2 + (lod == Lod::Far) as u64);
                 let v = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], bseed, lod); (t.bark, t.leaves, t.leaf_centres) });
                 (&v.0, &v.1, &v.2)

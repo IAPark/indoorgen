@@ -168,11 +168,24 @@ pub struct B<'a> {
 
 impl<'a> B<'a> {
     pub fn new(nodes: &'a mut Vec<Value>) -> Self {
+        let memo = Self::memo_of(nodes);
+        B { nodes, memo, nvar: 0 }
+    }
+    /// the hash-consing memo of a nodes array (canonical form -> first id)
+    pub fn memo_of(nodes: &[Value]) -> HashMap<String, usize> {
         let mut memo = HashMap::new();
         for (i, n) in nodes.iter().enumerate() {
             memo.entry(canon(n)).or_insert(i);
         }
+        memo
+    }
+    /// a builder over `nodes` with its memo kept from an earlier builder (the nodes only changed through builders since): building
+    /// the memo is the cost of B::new, paid once per variant instead of once per rule
+    pub fn with_memo(nodes: &'a mut Vec<Value>, memo: HashMap<String, usize>) -> Self {
         B { nodes, memo, nvar: 0 }
+    }
+    pub fn into_memo(self) -> HashMap<String, usize> {
+        self.memo
     }
     pub fn add(&mut self, v: Value) -> usize {
         let k = canon(&v);
@@ -864,6 +877,7 @@ fn apply_variant(variant: &mut Value, spec: &RuleSpec, voc: &Vocab, warn: &mut V
             }
         }
     }
+    let mut memo = B::memo_of(variant["nodes"].as_array().unwrap());
     for (room, rr) in &spec.rooms {
         for (ri, rule) in rr.rules.iter().enumerate() {
             let class = alias(&rule.class).to_string();
@@ -877,7 +891,7 @@ fn apply_variant(variant: &mut Value, spec: &RuleSpec, voc: &Vocab, warn: &mut V
                 let typed: Vec<&Entry> = es.iter().filter(|e| if is_any { e.room.is_none() } else { e.room.as_deref() == Some(room) }).collect();
                 let mut nodes = std::mem::take(variant["nodes"].as_array_mut().unwrap());
                 {
-                    let mut b = B::new(&mut nodes);
+                    let mut b = B::with_memo(&mut nodes, std::mem::take(&mut memo));
                     let mut changes: Vec<(String, usize)> = vec![];
                     // 1. override identified built-in ranges
                     for e in &typed {
@@ -922,7 +936,7 @@ fn apply_variant(variant: &mut Value, spec: &RuleSpec, voc: &Vocab, warn: &mut V
                     } else if typed.iter().all(|e| (e.low - lo).abs() < 1e-9 && (e.high - hi).abs() < 1e-9) && changes.is_empty() {
                         // unchanged built-in
                     }
-                    drop(b);
+                    memo = b.into_memo();
                     variant["nodes"] = Value::Array(nodes);
                     for (name, id) in changes {
                         set_constraint(variant, "constraints", &name, id);
@@ -938,14 +952,14 @@ fn apply_variant(variant: &mut Value, spec: &RuleSpec, voc: &Vocab, warn: &mut V
             if let Some(p) = rule.prefer {
                 let w = rule.weight.unwrap_or(1.0);
                 let mut nodes = std::mem::take(variant["nodes"].as_array_mut().unwrap());
-                let mut b = B::new(&mut nodes);
+                let mut b = B::with_memo(&mut nodes, std::mem::take(&mut memo));
                 let scope = b.rooms_of(room);
                 let id = b.mean_over(scope, |b, item| {
                     let c = voc.counted(b, &class, &r, item);
                     let cnt = b.count(c);
                     if p == Prefer::More { b.maximize(cnt, w) } else { b.minimize(cnt, w) }
                 });
-                drop(b);
+                memo = b.into_memo();
                 variant["nodes"] = Value::Array(nodes);
                 set_constraint(variant, "score_terms", &format!("user_{room}_{n}"), id);
             }
