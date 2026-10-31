@@ -2303,6 +2303,10 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let h = hi[2] - lo[2];
                 let target_lo = if cls == "MirrorFactory" && h >= 1.2 { floor_z + 0.2 } else { floor_z + if cls == "MirrorFactory" { 1.55 } else { 1.5 } - h / 2.0 };
                 let target_lo = target_lo.min(floor_z + ceil - 0.2 - h).max(floor_z + 0.2);
+                // over a bed: clear of its headboard (tall headboards hid the lower half of the picture)
+                let head_top = state.objs.iter().filter(|(bk, bo)| class_of(bo) == "BedFactory" && layout2d::room_of(state, bk).as_deref() == Some(room.as_str()))
+                    .map(|(bk, _)| wbox(state, bk)).filter(|(bl, bh)| (0..2).all(|d| lo[d] < bh[d] + 0.3 && bl[d] - 0.3 < hi[d])).map(|(_, bh)| bh[2]).fold(f64::NEG_INFINITY, f64::max);
+                let target_lo = if head_top.is_finite() && cls == "WallArtFactory" { target_lo.max(head_top + 0.1) } else { target_lo };
                 // (a canvas taller than 1.1 m or wider than 1.6 m read as a stray panel: dropped, not rescaled; mirrors: a bathroom's
                 // at most 1.0 m by 1.0 m -- larger ones read as whiteboards -- a full-length one at most 0.8 m wide, others 1.2 m)
                 let w = (hi[0] - lo[0]).max(hi[1] - lo[1]);

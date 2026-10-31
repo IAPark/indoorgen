@@ -18,7 +18,7 @@ pub fn arrange(state: &mut State) -> Vec<String> {
         if !o.relations.iter().any(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())) { continue }
         let w = (o.geom.hi[0] - o.geom.lo[0]).max(o.geom.hi[1] - o.geom.lo[1]);
         let h = o.geom.hi[2] - o.geom.lo[2];
-        if (c == "BowlFactory" && w > 0.3) || (c == "FruitContainerFactory" && (h > 0.55 * w || w > 0.4)) { remove.push(k.clone()); }
+        if (c == "BowlFactory" && w > 0.25) || (c == "FruitContainerFactory" && (h > 0.55 * w || w > 0.4)) { remove.push(k.clone()); }
     }
     if !remove.is_empty() { log.push(format!("{} oversized bowls / pot-shaped containers removed", remove.len())); }
     for tk in tables {
@@ -36,7 +36,7 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let w = (o.geom.hi[0] - o.geom.lo[0]).max(o.geom.hi[1] - o.geom.lo[1]);
             // (a fruit container deeper than about half its width reads as a stock pot)
             let h = o.geom.hi[2] - o.geom.lo[2];
-            matches!(c.as_str(), "PotFactory" | "PanFactory" | "LidFactory" | "KettleFactory") || (c != "PlateFactory" && w > 0.4) || (c == "BowlFactory" && w > 0.3)
+            matches!(c.as_str(), "PotFactory" | "PanFactory" | "LidFactory" | "KettleFactory") || (c != "PlateFactory" && w > 0.4) || (c == "BowlFactory" && w > 0.25)
                 || (c == "FruitContainerFactory" && h > 0.55 * w)
         }).map(|(k, _)| k.clone()).collect();
         if !odd.is_empty() { log.push(format!("{} cookware / oversized pieces removed from {tk}", odd.len())); }
