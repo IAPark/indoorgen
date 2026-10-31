@@ -186,7 +186,7 @@ def view_camera(sc, room, view):
         o = mathutils.Vector((q[0], q[1], 1.5))
         fwd = (mathutils.Vector((q[0] + ux * 3.0, q[1] + uy * 3.0, 0.75)) - o).normalized()
         right = fwd.cross(mathutils.Vector((0, 0, 1))).normalized(); up = right.cross(fwd)
-        seen, furn, near, leaf, wall, n = set(), 0, 0, 0, 0, 0
+        seen, furn, near, leaf, wall, edge, n = set(), 0, 0, 0, 0, 0, 0
         for i in range(24):
             for j in range(14):
                 d = (fwd + right * ((i + 0.5) / 24 * 2 - 1) + up * ((j + 0.5) / 14 * 2 - 1) * 0.5625).normalized()
@@ -200,8 +200,11 @@ def view_camera(sc, room, view):
                     # (a bare wall close by: a third of a bedroom view was the empty wall beside the camera)
                     if dist < 1.8 and abs(nrm.z) < 0.5: wall += 1
                     continue
-                if dist <= 5.0: furn += 1; seen.add(key(ob))
-        return 2.0 * len(seen) + 30.0 * furn / n - 50.0 * near / n - 60.0 * leaf / n - 25.0 * wall / n
+                if dist <= 5.0:
+                    furn += 1; seen.add(key(ob))
+                    # (a piece in the frame's outer columns is cut by its edge: a plant half out of a bedroom view)
+                    if i in (0, 23): edge += 1
+        return 2.0 * len(seen) + 30.0 * furn / n - 50.0 * near / n - 60.0 * leaf / n - 0.15 * edge - 25.0 * wall / n
     views = []
     for (_, _, cl, p, q, _, _) in scored:
         sv, yaw = max(((view_score(q, math.radians(5 * k)), math.radians(5 * k)) for k in range(-8, 9)), key=lambda t: (t[0], -abs(t[1])))
