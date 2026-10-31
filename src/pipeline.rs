@@ -302,14 +302,16 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             state.touch(&name);
         }
     }
-    // the wall layer (on; WALL_LAYER=0 turns it off; living rooms and bedrooms): their windows are held back here and laid out after the furniture,
+    // the wall layer (on; WALL_LAYER=0 turns it off; every room): the windows are held back here and laid out after the furniture,
     // with the pictures and the pieces backed against the walls (wall_layer_windows); patio doors and rooms with a window seat keep
     // theirs. The plan keeps which walls are exterior and the doors.
     let wall_layer = std::env::var("WALL_LAYER").map_or(true, |v| v != "0");
     let mut deferred: Vec<Cutter> = vec![];
     if wall_layer {
         let seat_rooms: std::collections::HashSet<String> = features.iter().filter(|f| f.class == "WindowSeatFeature").map(|f| f.room.clone()).collect();
-        let pilot = |r: &str| matches!(crate::rooms::state::room_type(r), "living-room" | "bedroom");
+        // (WALL_LAYER=pilot: living rooms and bedrooms only, as first built)
+        let pilot_only = std::env::var("WALL_LAYER").map_or(false, |v| v == "pilot");
+        let pilot = |r: &str| !pilot_only || matches!(crate::rooms::state::room_type(r), "living-room" | "bedroom");
         let mut keep = vec![];
         for ct in std::mem::take(&mut res.cutters) {
             if ct.kind == CutKind::Window && ct.rooms.len() == 1 && pilot(&ct.rooms[0]) && !seat_rooms.contains(&ct.rooms[0]) { deferred.push(ct) } else { keep.push(ct) }
@@ -689,6 +691,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let along = |q: [f64; 2]| (q[0] - a[0]) * u[0] + (q[1] - a[1]) * u[1];
             let off = |q: [f64; 2]| ((q[0] - a[0]) * -u[1] + (q[1] - a[1]) * u[0]).abs();
             let mut spans: Vec<(f64, f64, f64)> = vec![];
+            let mut sinks: Vec<(f64, f64)> = vec![];
+            let mut lows: Vec<(f64, f64, f64)> = vec![];
             for (k, o) in &state.objs {
                 let Some(g) = &o.generator else { continue };
                 if crate::furn::layout2d::room_of(state, k).as_deref() != Some(room.as_str()) { continue }
@@ -698,14 +702,33 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 let s0 = corners.iter().map(|q| along(*q)).fold(f64::INFINITY, f64::min);
                 let s1 = corners.iter().map(|q| along(*q)).fold(f64::NEG_INFINITY, f64::max);
                 let tall = hi[2] > sill + 0.02;
+                // a counter run takes a window over its worktop (its wall cabinets come off there) when the sill clears the top
+                let counter_ok = g.class == "KitchenSpaceFactory" && sill > lo[2] + 0.95;
                 let weight = match g.class.as_str() {
-                    "WallArtFactory" | "MirrorFactory" | "RugFactory" | "CeilingLightFactory" => 0.0,
+                    "WallArtFactory" | "MirrorFactory" | "RugFactory" | "CeilingLightFactory" | "SinkFactory" => 0.0,
+                    "KitchenSpaceFactory" if counter_ok => 0.3,
+                    // (a range under a window: the curtain, the draught)
+                    "OvenFactory" => 8.0,
                     "BedFactory" => 2.0,
                     "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "WardrobeFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" | "FridgeFactory" => 10.0,
                     _ if tall => 5.0,
                     _ => 0.0,
                 };
                 if weight > 0.0 { spans.push((s0, s1, weight)); }
+                // a kitchen sink draws the window over it
+                if g.class == "SinkFactory" { sinks.push((s0, s1)); }
+                // what a window over it needs its sill above: the worktop (a run's top is its wall cabinets'), the range's back guard,
+                // a tap, the basin's dressing
+                let need = match g.class.as_str() {
+                    "KitchenSpaceFactory" => Some(lo[2] + 0.95),
+                    "OvenFactory" => Some(lo[2] + 1.02),
+                    // (a sink's tap and a basin's taps stand taller than their layout boxes; the cistern takes the dresser's items)
+                    "SinkFactory" => Some(hi[2] + 0.3),
+                    "ToiletFactory" => Some(hi[2] + 0.2),
+                    "StandingSinkFactory" => Some(hi[2] + 0.35),
+                    _ => None,
+                };
+                if let Some(z) = need { lows.push((s0, s1, z)); }
             }
             let mut taken: Vec<(f64, f64)> = vec![];
             for o in fixed.iter().chain(out.iter()) {
@@ -724,12 +747,18 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                         let (x0, x1) = (t - w / 2.0, t + w / 2.0);
                         if taken.iter().any(|(a0, a1)| x0 < *a1 && *a0 < x1) { continue }
                         let pen: f64 = spans.iter().map(|(s0, s1, wt)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
-                        let score = -pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 };
+                        let over_sink: f64 = sinks.iter().map(|(s0, s1)| 2.0 - ((s0 + s1) / 2.0 - t).abs().min(2.0)).fold(0.0, f64::max);
+                        // over a counter / basin the sill rises to clear it (the head stays): at least 0.6 m of glass, a little penalty
+                        let head = sill + ct.dims[2];
+                        let need = lows.iter().filter(|(s0, s1, _)| x0 < *s1 && *s0 < x1).map(|(_, _, z)| *z).fold(sill, f64::max);
+                        if head - need < 0.6 { continue }
+                        let score = over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 };
                         if best.as_ref().map_or(true, |bb| score > bb.0) {
                             let mut nc = ct.clone();
                             let q = [a[0] + u[0] * t, a[1] + u[1] * t];
-                            nc.loc = [q[0], q[1], ct.loc[2]];
+                            nc.loc = [q[0], q[1], (need + head) / 2.0];
                             nc.dims[0] = w;
+                            nc.dims[2] = head - need;
                             // its rotation follows the wall's direction, turned like the plan's window is against its own wall (the
                             // outline runs one way round, so the same turn faces every exterior wall's window outward)
                             nc.rot_z = if wi == 0 { ct.rot_z } else { u[1].atan2(u[0]) + if flip { std::f64::consts::PI } else { 0.0 } };

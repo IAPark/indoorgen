@@ -1,6 +1,7 @@
 //! Upper kitchen cabinets never hang in front of a window: counter runs may stand under windows (program.counter_over_windows), but
 //! their wall units covered the glass. Every part of a KitchenSpace visual that is above counter height and in front of a window (its
-//! horizontal extent overlaps the window's, within 0.6 m of the wall plane, and its height range overlaps the window's) is dropped.
+//! horizontal extent overlaps the window's, within 0.6 m of the wall plane, and its height range overlaps the window's) is dropped, with
+//! the rest of its cabinet.
 use crate::furn::state::State;
 use crate::furn::tags::Tag;
 use std::collections::HashMap;
@@ -37,15 +38,29 @@ pub fn clear_uppers(state: &State, visuals: &mut HashMap<String, crate::assets::
         if boxes.is_empty() { continue }
         let z_upper = lo[2] + 1.2;
         let n0 = a.parts.len();
-        a.parts.retain(|p| {
-            let (pl, ph) = p.mesh.bounds();
-            if pl[2] < z_upper { return true }
-            !boxes.iter().any(|(bl, bh)| {
-                // most of the part's width in front of the glass (a cabinet beside the window stays)
-                let ov = |d: usize| (ph[d].min(bh[d]) - pl[d].max(bl[d])).max(0.0) / (ph[d] - pl[d]).max(1e-6);
-                ov(0) > 0.4 && ov(1) > 0.4 && pl[2] < bh[2] && bl[2] < ph[2]
-            })
+        let bb: Vec<Box3> = a.parts.iter().map(|p| p.mesh.bounds()).collect();
+        let upper: Vec<usize> = (0..bb.len()).filter(|&i| bb[i].0[2] >= z_upper).collect();
+        // most of the part's width in front of the glass (a cabinet beside the window stays)
+        let in_front = |(pl, ph): &Box3| boxes.iter().any(|(bl, bh)| {
+            let ov = |d: usize| (ph[d].min(bh[d]) - pl[d].max(bl[d])).max(0.0) / (ph[d] - pl[d]).max(1e-6);
+            ov(0) > 0.4 && ov(1) > 0.4 && pl[2] < bh[2] && bl[2] < ph[2]
         });
+        // the upper parts grouped into cabinets (parts whose boxes intersect: frame, doors, handles of one unit); a cabinet goes whole
+        // when any of its parts is in front of the glass (part by part left a frame or a door hanging)
+        let mut group: Vec<usize> = (0..bb.len()).collect();
+        let find = |g: &mut Vec<usize>, mut i: usize| { while g[i] != i { g[i] = g[g[i]]; i = g[i]; } i };
+        for (ai, &i) in upper.iter().enumerate() {
+            for &j in &upper[ai + 1..] {
+                if (0..3).all(|d| bb[i].0[d] < bb[j].1[d] - 0.005 && bb[j].0[d] < bb[i].1[d] - 0.005) {
+                    let (ri, rj) = (find(&mut group, i), find(&mut group, j));
+                    group[ri] = rj;
+                }
+            }
+        }
+        let gone: std::collections::HashSet<usize> = upper.iter().filter(|&&i| in_front(&bb[i])).map(|&i| find(&mut group, i)).collect();
+        let drop: Vec<bool> = (0..bb.len()).map(|i| upper.contains(&i) && gone.contains(&find(&mut group, i))).collect();
+        let mut idx = 0;
+        a.parts.retain(|_| { let keep = !drop[idx]; idx += 1; keep });
         if a.parts.len() < n0 { log.push(format!("{} upper parts in front of a window removed from {k}", n0 - a.parts.len())); }
     }
     log

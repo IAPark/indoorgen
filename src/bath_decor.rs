@@ -62,7 +62,15 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 if g.class == "ToiletFactory" {
                     let mut r2 = Rng::seeded(crate::int_hash(&[&seed.to_string(), "bath_decor_wc", k]));
                     // wall shelf above the cistern (on the back wall, lo x) with toiletries and a folded towel, 70 %
-                    if r2.f64() < 0.7 {
+                    // (not under a window: the wall layer can put one over the cistern)
+                    let under_win = state.objs.iter().any(|(wk, w)| w.generator.is_none() && wk.starts_with("window") && {
+                        let wc = w.pose.t;
+                        let d = [wc[0] - o.pose.t[0], wc[1] - o.pose.t[1]];
+                        let l = [o.pose.r[0][0] * d[0] + o.pose.r[1][0] * d[1], o.pose.r[0][1] * d[0] + o.pose.r[1][1] * d[1]];
+                        let half = (w.geom.hi[0] - w.geom.lo[0]).max(w.geom.hi[1] - w.geom.lo[1]) / 2.0 + 0.4;
+                        l[0] < lo[0] + 0.2 && l[0] > lo[0] - 0.5 && l[1].abs() < half
+                    });
+                    if r2.f64() < 0.7 && !under_win {
                         let sz = hi[2] + r2.uniform(0.3, 0.45);
                         let sw = r2.uniform(0.5, 0.7);
                         let yc = (lo[1] + hi[1]) / 2.0;

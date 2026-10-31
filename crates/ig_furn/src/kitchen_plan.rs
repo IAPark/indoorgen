@@ -40,7 +40,7 @@ struct Plan { lines: Vec<LinePlan>, owner: Vec<usize> }
 /// a free stretch of wall: from `a` along `u` for `len`, room side `n`; `corner0` / `corner1`: the room corner at that end (index
 /// into the corner list) when the stretch reaches it; `win`: window intervals along it
 #[derive(Clone, Debug)]
-struct Line { a: [f64; 2], u: [f64; 2], n: [f64; 2], len: f64, corner: [Option<usize>; 2], win: Vec<(f64, f64)> }
+struct Line { a: [f64; 2], u: [f64; 2], n: [f64; 2], len: f64, corner: [Option<usize>; 2], win: Vec<(f64, f64)>, intent: Vec<(f64, f64)> }
 
 /// a placed item: its footprint rectangle and front centre
 #[derive(Clone, Debug)]
@@ -86,6 +86,13 @@ impl Kit {
         let kitchen_kids = |o: &ObjState| o.relations.iter().any(|r| state.objs.get(&r.target).map_or(false, |t| built_in(class_of(t))));
         let mut obstacles = vec![];
         let mut windows = vec![];
+        // windows the wall layer lays out after the furniture (WindowIntent): where the plan had them, a soft pull
+        let intents: Vec<Arc<Vec<Prism>>> = {
+            let rr = layout2d::rings(&layout2d::room_floor(state, room));
+            // (a window lies in the wall: within 0.3 m of the room's outline)
+            state.objs.iter().filter(|(_, o)| o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| layout2d::prisms(state, k))
+                .filter(|pr| pr.iter().any(|p| layout2d::ring_dist(&rr, [(p.bb[0] + p.bb[2]) / 2.0, (p.bb[1] + p.bb[3]) / 2.0]) < 0.3)).collect()
+        };
         for (k, o) in &state.objs {
             if layout2d::is_room(o) || o.tags.contains(nc.clone()) || built_in(class_of(o)) || kitchen_kids(o) || class_of(o).contains("Rug") { continue }
             if matches!(class_of(o), "WallArtFactory" | "MirrorFactory" | "CeilingLightFactory") { continue }
@@ -107,12 +114,13 @@ impl Kit {
         for (a, b, n) in &segs {
             let len = dist(*a, *b);
             let u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
-            let probe = Line { a: *a, u, n: *n, len, corner: [None, None], win: vec![] };
+            let probe = Line { a: *a, u, n: *n, len, corner: [None, None], win: vec![], intent: vec![] };
             let cell = 0.05;
             let nc_ = (len / cell).floor() as usize;
             let dmax = d.iter().cloned().fold(0.6, f64::max) + 0.02;
             let free: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell + 0.005, (i + 1) as f64 * cell - 0.005, dmax); !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) }).collect();
             let wcell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell, (i + 1) as f64 * cell, 0.2); windows.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
+            let icell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, 0.25); intents.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
             let mut i = 0;
             while i < nc_ {
                 if !free[i] { i += 1; continue }
@@ -123,8 +131,11 @@ impl Kit {
                 let mut win = vec![];
                 let mut k = j0;
                 while k < i { if wcell[k] { let s = k; while k < i && wcell[k] { k += 1; } win.push((s as f64 * cell - t0, k as f64 * cell - t0)); } else { k += 1; } }
+                let mut intent = vec![];
+                let mut k = j0;
+                while k < i { if icell[k] { let s = k; while k < i && icell[k] { k += 1; } intent.push((s as f64 * cell - t0, k as f64 * cell - t0)); } else { k += 1; } }
                 let li = lines.len();
-                lines.push(Line { a: [a[0] + u[0] * t0, a[1] + u[1] * t0], u, n: *n, len: t1 - t0, corner: [None, None], win });
+                lines.push(Line { a: [a[0] + u[0] * t0, a[1] + u[1] * t0], u, n: *n, len: t1 - t0, corner: [None, None], win, intent });
                 if j0 == 0 { ends.push((*a, li, 0)); }
                 if i == nc_ { ends.push((*b, li, 1)); }
             }
@@ -228,6 +239,11 @@ impl Kit {
                 if ov_win && p.kind == Kind::Fridge { return None }
                 if ov_win && p.kind == Kind::Range { pen(&mut s, 3.0, &|| "range under a window".into()); }
                 if ov_win && p.kind == Kind::Sink { s += 2.0; }
+                // a window still to come there (the wall layer moves it to the clearest stretch): leave it counter, ideally the sink
+                let ov_int = self.lines[li].intent.iter().map(|(a, b)| (p.t1.min(*b) - p.t0.max(*a)).max(0.0)).sum::<f64>();
+                if ov_int > 0.05 {
+                    match p.kind { Kind::Fridge => pen(&mut s, 3.0, &|| "fridge where a window comes".into()), Kind::Range => pen(&mut s, 2.0, &|| "range where a window comes".into()), Kind::Sink => s += 1.5, _ => {} }
+                }
             }
         }
         // footprints: inside the room, clear of the fixed pieces and of each other (corners)

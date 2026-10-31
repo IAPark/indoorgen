@@ -931,6 +931,14 @@ impl KitchenSpace {
             // left and right share one KitchenCabinetFactory object: the second instance reuses the first one's frame parameters
             let (mut pl, mut pr, mut pm) = (vec![], vec![], vec![]);
             let on = slots.is_some();
+            // a run narrower than the middle wall cabinet and two side ones: one wall cabinet as wide as the base (a 1.0-1.3 m
+            // cabinet over a 0.6 m run widened the set's box, and scaling it to the run's size shrank the base cabinets into its middle)
+            if y < tmw + 0.45 {
+                let (mut mid, _) = self.cabinet_t([x * 0.66, y - 0.15, th * 0.8], false, 0, None, on.then_some(&mut pm));
+                remap(&mut mid, pm, inst_seed(self.factory_seed, 0), &mut slots);
+                parts.push(Self::translated(mid, [-x / 6.0, 0.0, z - th * 0.8]));
+                return parts;
+            }
             let (mut left, rnd) = self.cabinet_t([x / 2.0, ctw, th], false, 0, None, on.then_some(&mut pl));
             remap(&mut left, pl, inst_seed(self.factory_seed, 0), &mut slots);
             let (mut right, _) = self.cabinet_t([x / 2.0, ctw, th], false, 1, Some(rnd), on.then_some(&mut pr));

@@ -118,7 +118,9 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let Some(a) = inp.visuals.get(k) else { continue };
         let (l, h) = a.bounds();
         let e = [h[1] - l[1], h[0] - l[0], h[2] - l[2]];
-        let off = (0..3).map(|i| (e[i] - sz[i]).abs()).fold(0.0, f64::max);
+        // (a counter run under a window loses its wall cabinets there: its height is not held to the size)
+        let dims = if g.class == "KitchenSpaceFactory" { 2 } else { 3 };
+        let off = (0..dims).map(|i| (e[i] - sz[i]).abs()).fold(0.0, f64::max);
         if off > 0.02 { add("size", format!("{k} {} [{}]: built {:.2?} for {:.2?}", g.class, room_of(k), e, sz)); }
     }
     for l in &lines { eprintln!("{l}"); }
