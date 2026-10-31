@@ -21,8 +21,11 @@ use bevy::prelude::*;
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
-use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use bevy::render::RenderPlugin;
+use bevy::render::render_asset::RenderAssets;
+use bevy::render::render_resource::{BufferDescriptor, BufferUsages, CachedPipelineState, CommandEncoderDescriptor, MapMode, PipelineCache, PollType, TexelCopyBufferInfo, TexelCopyBufferLayout};
+use bevy::render::renderer::{RenderDevice, RenderQueue};
+use bevy::render::texture::GpuImage;
+use bevy::render::{Render, RenderApp, RenderPlugin, RenderSystems};
 use bevy::window::ExitCondition;
 use cams::{CamSpec, DrawInfo, SceneInfo};
 use rayon::prelude::*;
@@ -195,6 +198,7 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
     // materials keyed by (glb material, texture, flags)
     let mut mat_h: HashMap<(usize, String, u32), Handle<StandardMaterial>> = HashMap::new();
     let mut draws = vec![]; let mut bmin = Vec3::splat(1e9); let mut bmax = Vec3::splat(-1e9);
+    let (mut obmin, mut obmax) = (Vec3::splat(1e9), Vec3::splat(-1e9));
     let mut ents = vec![];
     let mut spawn: Vec<(Mesh, Handle<StandardMaterial>, Aabb, bool)> = vec![];
     for (p, mesh) in plist.iter().zip(meshes) {
@@ -202,7 +206,9 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
         let mi = pr.mat.min(g.mats.len().saturating_sub(1));
         let (lo, hi) = (Vec3::from(pr.bmin), Vec3::from(pr.bmax));
         let lname = n.name.to_lowercase();
-        if !p.ceil && !lname.starts_with("skirting_ceiling") { bmin = bmin.min(lo); bmax = bmax.max(hi); }
+        if !p.ceil && !lname.starts_with("skirting_ceiling") {
+            if lname.starts_with("outdoor") { obmin = obmin.min(lo); obmax = obmax.max(hi); } else { bmin = bmin.min(lo); bmax = bmax.max(hi); }
+        }
         draws.push(DrawInfo { node: p.node, pos: pr.pos, idx: pr.idx, u16: pr.idx_u16, icount: pr.icount, bmin: lo, bmax: hi });
         let Some(mesh) = mesh else { continue };
         let m = g.mats.get(mi);
@@ -232,6 +238,8 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
         if glass { e.insert(NotShadowCaster); }
         ents.push(e.id());
     }
+    // the scene bbox (used by --top) covers the house only, unless the scene is all outdoor
+    if bmin.x > bmax.x { bmin = obmin; bmax = obmax; }
     // sidecar point lights (Blender watts -> lumens)
     if let Some(ls) = side["lights"].as_array() {
         for (li, l) in ls.iter().enumerate() {
@@ -268,21 +276,58 @@ fn make_app() -> App {
     app
 }
 
-/// render frames until a screenshot of `target` comes back
-fn capture(app: &mut App, target: &Handle<Image>, warm: usize) -> Image {
-    for _ in 0..warm { app.update(); }
-    let slot: Arc<Mutex<Option<Image>>> = Arc::new(Mutex::new(None));
-    let s2 = slot.clone();
-    app.world_mut().spawn(Screenshot::image(target.clone())).observe(move |ev: On<ScreenshotCaptured>| { *s2.lock().unwrap() = Some(ev.image.clone()); });
-    for _ in 0..20 { app.update(); if let Some(i) = slot.lock().unwrap().take() { return i; } }
-    panic!("screenshot never arrived");
+/// Synchronous readback of the render target, done in the render world right after the frame is submitted (Bevy's
+/// Screenshot is asynchronous and arrives several frames later).
+#[derive(Default)]
+struct GrabState { want: bool, target: Option<AssetId<Image>>, out: Option<(Vec<u8>, u32, u32, TextureFormat)> }
+#[derive(Resource, Clone, Default)]
+struct Grab(Arc<Mutex<GrabState>>);
+
+fn grab_system(grab: Res<Grab>, imgs: Res<RenderAssets<GpuImage>>, dev: Res<RenderDevice>, q: Res<RenderQueue>) {
+    let mut g = grab.0.lock().unwrap();
+    if !g.want { return; }
+    let Some(gi) = g.target.and_then(|t| imgs.get(t)) else { return };
+    let size = gi.texture_descriptor.size; let fmt = gi.texture_descriptor.format;
+    let row = (size.width * 4).div_ceil(256) * 256;
+    let buf = dev.create_buffer(&BufferDescriptor { label: Some("grab"), size: (row * size.height) as u64, usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ, mapped_at_creation: false });
+    let mut enc = dev.create_command_encoder(&CommandEncoderDescriptor { label: Some("grab") });
+    enc.copy_texture_to_buffer(gi.texture.as_image_copy(), TexelCopyBufferInfo { buffer: &buf, layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None } }, size);
+    q.submit([enc.finish()]);
+    buf.slice(..).map_async(MapMode::Read, |r| { r.expect("map grab buffer"); });
+    dev.poll(PollType::wait_indefinitely()).expect("poll");
+    let data = buf.slice(..).get_mapped_range().expect("mapped range");
+    let mut out = Vec::with_capacity((size.width * size.height * 4) as usize);
+    for y in 0..size.height as usize { out.extend_from_slice(&data[y * row as usize..y * row as usize + size.width as usize * 4]); }
+    drop(data); buf.unmap();
+    g.out = Some((out, size.width, size.height, fmt)); g.want = false;
+}
+
+/// true when no render pipeline is still queued/compiling (Bevy skips draws whose pipeline is not ready)
+fn pipelines_settled(app: &App) -> bool {
+    let pc = app.get_sub_app(RenderApp).unwrap().world().resource::<PipelineCache>();
+    pc.waiting_pipelines().next().is_none() && pc.pipelines().all(|p| matches!(p.state, CachedPipelineState::Ok(_) | CachedPipelineState::Err(_)))
+}
+
+/// render one frame (after `min_warm` warm-up frames and until pipelines have settled) and read the target back
+fn capture(app: &mut App, grab: &Grab, min_warm: usize, verbose: bool) -> (Vec<u8>, u32, u32, TextureFormat) {
+    let mut k = 0;
+    let mut settled = pipelines_settled(app);
+    while (k < min_warm || !settled) && k < 60 {
+        let t = Instant::now(); app.update(); k += 1;
+        settled = pipelines_settled(app);
+        if verbose { eprintln!("    frame {k} {:.3}s{}", t.elapsed().as_secs_f32(), if settled { "" } else { " (pipelines pending)" }); }
+    }
+    grab.0.lock().unwrap().want = true;
+    let t = Instant::now(); app.update();
+    if verbose { eprintln!("    frame+grab {:.3}s ({} pipelines)", t.elapsed().as_secs_f32(), app.get_sub_app(RenderApp).unwrap().world().resource::<PipelineCache>().pipelines().count()); }
+    grab.0.lock().unwrap().out.take().expect("render target readback failed")
 }
 
 /// box-filter `ss`x`ss` blocks in linear light -> sRGB RGBA8
-fn downsample(im: &Image, res: (u32, u32), ss: u32) -> image::RgbaImage {
-    let data = im.data.as_ref().expect("screenshot data");
-    let sw = im.texture_descriptor.size.width as usize;
-    let bgra = matches!(im.texture_descriptor.format, TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm);
+fn downsample(im: &(Vec<u8>, u32, u32, TextureFormat), res: (u32, u32), ss: u32) -> image::RgbaImage {
+    let data = &im.0;
+    let sw = im.1 as usize;
+    let bgra = matches!(im.3, TextureFormat::Bgra8UnormSrgb | TextureFormat::Bgra8Unorm);
     let lut: Vec<f32> = (0..256).map(|i| { let c = i as f32 / 255.0; if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } }).collect();
     let enc = |l: f32| -> u8 { let c = if l <= 0.0031308 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }; (c * 255.0 + 0.5).clamp(0.0, 255.0) as u8 };
     let (w, h) = (res.0 as usize, res.1 as usize); let s = ss as usize;
@@ -310,6 +355,9 @@ fn main() {
     let t0 = Instant::now();
     let o = parse_args();
     let mut app = make_app();
+    let grab = Grab::default();
+    app.get_sub_app_mut(RenderApp).unwrap().insert_resource(grab.clone()).add_systems(Render, grab_system.in_set(RenderSystems::Cleanup));
+    let frames_v = std::env::var("BP_FRAMES").is_ok();
     if o.verbose { eprintln!("bevy init {:.2}s", t0.elapsed().as_secs_f32()); }
     let (rw, rh) = (o.res.0 * o.ss, o.res.1 * o.ss);
     let target = {
@@ -317,6 +365,7 @@ fn main() {
         im.texture_descriptor.usage |= TextureUsages::COPY_SRC;
         app.world_mut().resource_mut::<Assets<Image>>().add(im)
     };
+    grab.0.lock().unwrap().target = Some(target.id());
     let tonemap = match o.tonemap.as_str() { "aces" => Tonemapping::AcesFitted, "tony" => Tonemapping::TonyMcMapface, "reinhard" => Tonemapping::ReinhardLuminance, "none" => Tonemapping::None, _ => Tonemapping::AgX };
     let medium = app.world_mut().resource_mut::<Assets<ScatteringMedium>>().add(ScatteringMedium::earth(256, 256));
     app.world_mut().spawn(Atmosphere::earth(medium));
@@ -364,7 +413,7 @@ fn main() {
                 };
             }
             // the first camera of a scene also pays for GPU upload + pipeline compilation
-            let img = capture(&mut app, &target, if i == 0 { 2 } else { 1 });
+            let img = capture(&mut app, &grab, if i == 0 { 2 } else { 0 }, frames_v);
             let img = downsample(&img, o.res, o.ss);
             if o.verbose { eprintln!("  cam {} {:.3}s{}", c.name, tc.elapsed().as_secs_f32(), if i == 0 { " (incl. GPU upload/pipelines)" } else { "" }); }
             let nm = if c.name.is_empty() { format!("cam{i}") } else { c.name.clone() };

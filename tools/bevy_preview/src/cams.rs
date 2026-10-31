@@ -70,7 +70,7 @@ fn in_tri2(p: Vec3, t: &Tri) -> bool {
 struct Shell { walls: Vec<Tri>, boxes: Vec<(Vec3, Vec3)> }
 fn shell_of(s: &SceneInfo) -> Shell {
     let walls = node_tris(s, |n| n.contains(".wall") || n.contains("exterior"));
-    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.contains("rug");
+    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.starts_with("outdoor") || nm.contains("rug");
     let boxes = s.draws.iter().filter(|d| !skip(&s.glb.nodes[d.node].name) && d.bmax.z > 0.3 && d.bmin.z < 1.9 && (d.bmax - d.bmin).length() > 0.5).map(|d| (d.bmin, d.bmax)).collect();
     Shell { walls, boxes }
 }
@@ -92,7 +92,7 @@ impl Shell {
 }
 pub fn auto_cams(s: &SceneInfo, n: usize) -> Vec<Cam> {
     let sh = shell_of(s);
-    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.contains("rug");
+    let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.starts_with("outdoor") || nm.contains("rug");
     let mut floors: HashMap<String, Vec<Tri>> = HashMap::new();
     for d in &s.draws { let nm = &s.glb.nodes[d.node].name; if nm.ends_with(".floor") { floors.entry(nm.clone()).or_default(); } }
     let names: Vec<String> = floors.keys().cloned().collect();
@@ -125,7 +125,7 @@ pub fn auto_cams(s: &SceneInfo, n: usize) -> Vec<Cam> {
             }
             x += step; } y += step; }
         cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-        let boxes: Vec<(Vec3, Vec3)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !(nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.contains("exterior") || nm.contains("rug") || nm.contains("Ceiling")) && (d.bmax - d.bmin).max_element() > 0.25 }).map(|d| (d.bmin, d.bmax)).collect();
+        let boxes: Vec<(Vec3, Vec3)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !(nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.contains("exterior") || nm.starts_with("outdoor") || nm.contains("rug") || nm.contains("Ceiling")) && (d.bmax - d.bmin).max_element() > 0.25 }).map(|d| (d.bmin, d.bmax)).collect();
         let inside = |p: Vec3, m: f32| boxes.iter().any(|(l, h)| p.x > l.x - m && p.x < h.x + m && p.y > l.y - m && p.y < h.y + m && p.z > l.z - m && p.z < h.z + m);
         cands.retain(|(_, e)| !inside(*e, 0.15) && ![0.3f32, 0.6, 0.9].iter().any(|t| inside(*e + (tgt - *e).normalize_or_zero() * *t, 0.0)));
         let mut chosen: Vec<Vec3> = vec![]; let mut tried = 0;
