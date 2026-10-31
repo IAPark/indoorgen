@@ -15,6 +15,15 @@ pub fn arrange(state: &mut State) -> Vec<String> {
         let on = |o: &crate::furn::state::ObjState| o.relations.iter().any(|r| r.target == tk);
         let class = |o: &crate::furn::state::ObjState| o.generator.as_ref().map(|g| g.class.clone()).unwrap_or_default();
         let plates: Vec<String> = state.objs.iter().filter(|(_, o)| on(o) && class(o) == "PlateFactory").map(|(k, _)| k.clone()).collect();
+        // cookware (pots, pans) does not stand on a dining table, nor a piece wider than 0.4 m, nor a bowl wider than 0.3 m (the solver set
+        // bowls of 0.35 m boxes there; their models came out wider still, like basins)
+        let odd: Vec<String> = state.objs.iter().filter(|(_, o)| on(o)).filter(|(_, o)| {
+            let c = class(o);
+            let w = (o.geom.hi[0] - o.geom.lo[0]).max(o.geom.hi[1] - o.geom.lo[1]);
+            matches!(c.as_str(), "PotFactory" | "PanFactory" | "LidFactory" | "KettleFactory") || (c != "PlateFactory" && w > 0.4) || (c == "BowlFactory" && w > 0.3)
+        }).map(|(k, _)| k.clone()).collect();
+        if !odd.is_empty() { log.push(format!("{} cookware / oversized pieces removed from {tk}", odd.len())); }
+        remove.extend(odd);
         let utensils: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| on(o)).filter_map(|(k, o)| { let c = class(o); UTENSILS.iter().any(|u| u.0 == c).then(|| (k.clone(), c)) }).collect();
         if utensils.is_empty() { continue }
         if plates.is_empty() { remove.extend(utensils.iter().map(|u| u.0.clone())); log.push(format!("{} utensils removed from {tk} (no plate)", utensils.len())); continue }

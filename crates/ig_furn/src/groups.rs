@@ -676,6 +676,13 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
                                 ok &= placed && placed2;
                             }
                             if !ok { continue }
+                            // the floor in front of the shower (0.6 m, its full width: the door) or the tub (0.45 m along its middle: getting in)
+                            // stays clear of the toilet and the basin
+                            let is_shower = class_of(&state.objs[&tub]) == "ShowerFactory";
+                            let zone = { let (l, h) = lohi(state, &tub); let tp = state.objs[&tub].pose; let ins = if is_shower { 0.0 } else { (h[1] - l[1]) * 0.2 };
+                                let d = if is_shower { 0.6 } else { 0.45 };
+                                [[h[0] + 0.01, l[1] + ins], [h[0] + d, l[1] + ins], [h[0] + d, h[1] - ins], [h[0] + 0.01, h[1] - ins]].map(|q| { let w = tp.apply([q[0], q[1], 0.0]); [w[0], w[1]] }).to_vec() };
+                            if [&wc, &sink].iter().any(|k| layout2d::prisms(state, k).iter().any(|p| layout2d::poly_dist(&p.poly, &zone) <= 0.0)) { continue }
                             // (toilet and sink on different walls read as less crammed)
                             let score = door_d(state, &wc).min(2.5) + if door_d(state, &wc) > door_d(state, &sink) { 0.5 } else { 0.0 } - if door_d(state, &sink) < 0.8 { 1.0 } else { 0.0 } + if variant == 1 { 0.4 } else { 0.0 };
                             if best.as_ref().map_or(true, |(s, _)| score > *s) { best = Some((score, state.objs.clone())); }
@@ -887,6 +894,10 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         // (placed in corners by groups::dining_furnish / room_extras; the solver dotted them around the floor)
         "LargePlantContainerFactory" => ("plants", match room_type { "dining-room" | "bedroom" | "hallway" => 1, "living-room" => 2, _ => 0 }),
         "FloorLampFactory" => ("floor lamps", 0),
+        // (letter balloons spelt random words on the walls, one over a window)
+        "BalloonFactory" => ("balloons", 0),
+        // (a bathroom wardrobe stood in front of the toilet; a bathroom's storage is the basin's)
+        "WardrobeFactory" if room_type == "bathroom" => ("wardrobes", 0),
         "BeverageFridgeFactory" => ("beverage fridges", 0),
         "FridgeFactory" => ("fridges", if room_type == "kitchen" { 1 } else { 0 }),
         "OvenFactory" => ("ovens", if room_type == "kitchen" { 1 } else { 0 }),
@@ -2271,6 +2282,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
         let rt = room_type_of(&room).to_string();
         let ceil = state.objs[&room].geom.hi[2] - floor_z;
         let in_room = |st: &State, c: &str| -> Vec<String> { st.objs.iter().filter(|(k, o)| class_of(o) == c && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect() };
+        // what already hangs in the room (pictures and mirrors overlapped: two frames one over the other)
+        let mut hung: Vec<([f64; 3], [f64; 3])> = vec![];
         for (cls, max) in [("WallArtFactory", match rt.as_str() { "living-room" | "bedroom" | "hallway" => 2usize, "dining-room" => 1, _ => 0 }),
                            ("MirrorFactory", if matches!(rt.as_str(), "bedroom" | "bathroom" | "hallway") { 1 } else { 0 })] {
             let mut ks = in_room(state, cls);
@@ -2288,17 +2301,21 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let h = hi[2] - lo[2];
                 let target_lo = if cls == "MirrorFactory" && h >= 1.2 { floor_z + 0.2 } else { floor_z + if cls == "MirrorFactory" { 1.55 } else { 1.5 } - h / 2.0 };
                 let target_lo = target_lo.min(floor_z + ceil - 0.2 - h).max(floor_z + 0.2);
-                // (a canvas taller than 1.1 m or wider than 1.6 m read as a stray panel: dropped, not rescaled)
-                let big = cls == "WallArtFactory" && (h > 1.1 || (hi[0] - lo[0]).max(hi[1] - lo[1]) > 1.6);
+                // (a canvas taller than 1.1 m or wider than 1.6 m read as a stray panel: dropped, not rescaled; mirrors: a bathroom's
+                // at most 1.0 m by 1.0 m -- larger ones read as whiteboards -- a full-length one at most 0.8 m wide, others 1.2 m)
+                let w = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+                let big = if cls == "WallArtFactory" { h > 1.1 || w > 1.6 } else if rt == "bathroom" { h > 1.0 || w > 1.0 } else if h >= 1.2 { w > 0.8 } else { w > 1.2 };
                 let fits = kept < max && !big && target_lo + h <= floor_z + ceil - 0.2 + 1e-6;
                 let dz = target_lo - lo[2];
                 // over a window or a door at the new height: dropped
                 let clash = fits && openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..2).all(|d| lo[d] < wh[d] + 0.05 && wl[d] - 0.05 < hi[d]) && lo[2] + dz < wh[2] && wl[2] < hi[2] + dz });
-                if !fits || clash {
+                let over = fits && !clash && hung.iter().any(|(ol, oh)| (0..2).all(|d| lo[d] < oh[d] + 0.05 && ol[d] - 0.05 < hi[d]) && lo[2] + dz < oh[2] + 0.05 && ol[2] - 0.05 < hi[2] + dz);
+                if !fits || clash || over {
                     layout2d::remove_tree(state, &k);
-                    log.push(format!("{room}: removed {cls} {k} ({})", if clash { "over an opening" } else if big { "too large" } else { "over the count" }));
+                    log.push(format!("{room}: removed {cls} {k} ({})", if clash { "over an opening" } else if over { "over another hanging" } else if big { "too large" } else { "over the count" }));
                     continue;
                 }
+                hung.push(([lo[0], lo[1], lo[2] + dz], [hi[0], hi[1], hi[2] + dz]));
                 if dz.abs() > 0.01 {
                     let mut p = state.objs[&k].pose;
                     p.translate([0.0, 0.0, dz]);
@@ -2329,7 +2346,11 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 state.touch(&m);
                 let (lo, hi) = wbox(state, &m);
                 let clash = openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..3).all(|d| lo[d] < wh[d] + 0.02 && wl[d] - 0.02 < hi[d]) });
-                if clash { state.set_pose(&m, old); state.touch(&m); } else { log.push(format!("{room}: mirror {m} over the washbasin")); }
+                // (no spot over the basin: the mirror goes -- left where the solver hung it, it was over the toilet)
+                if clash { state.set_pose(&m, old); state.touch(&m); layout2d::remove_tree(state, &m); log.push(format!("{room}: removed mirror {m} (no wall over the washbasin)")); } else { log.push(format!("{room}: mirror {m} over the washbasin")); }
+            } else if let Some(m) = in_room(state, "MirrorFactory").first().cloned() {
+                layout2d::remove_tree(state, &m);
+                log.push(format!("{room}: removed mirror {m} (no washbasin)"));
             }
             for k in in_room(state, "HardwareFactory") {
                 let (lo, hi) = wbox(state, &k);

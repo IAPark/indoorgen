@@ -104,9 +104,12 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                     // toilet-paper stand beside the bowl (chrome post + roll), 80 %
                     // on a side that is clear of other furniture (it stood inside a bathtub next to the toilet)
                     let x = (lo[0] + hi[0]) / 2.0;
+                    // (and inside the room, clear of its walls: a toilet in a corner had its stand through the wall)
+                    let floor = crate::furn::layout2d::room_of(state, k).and_then(|r| state.objs.get(&r).and_then(|ro| ro.polygon.clone())).map(|g| crate::shp::buffer_mitre(&g, -0.12));
                     let free = |side: f64| {
                         let wb = wbox(&o.pose, [x - 0.1, side - 0.06, lo[2]], [x + 0.1, side + 0.06, lo[2] + 0.62]);
-                        !state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.is_some() && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
+                        let inside = floor.as_ref().map_or(true, |g| [[wb.0[0], wb.0[1]], [wb.1[0], wb.0[1]], [wb.1[0], wb.1[1]], [wb.0[0], wb.1[1]]].iter().all(|q| crate::shp::contains_pt(g, *q)));
+                        inside && !state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.is_some() && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
                     };
                     let mut sides = [lo[1] - 0.14, hi[1] + 0.14];
                     if r2.f64() < 0.5 { sides.swap(0, 1) }

@@ -11,7 +11,14 @@ use crate::rng::Rng;
 pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashMap<String, crate::assets::Asset>, assets: &crate::assets::RealAssets, seed: u64) -> Vec<String> {
     let mut log = vec![];
     let world_c = |o: &crate::furn::state::ObjState| o.pose.apply([(o.geom.lo[0] + o.geom.hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0, (o.geom.lo[2] + o.geom.hi[2]) / 2.0]);
-    for (k, o) in &state.objs {
+    // one kettle and one canister set per kitchen (each run drew its own: three kettles in a row); the runs by the range go first
+    let mut kitchen_has: std::collections::HashSet<(String, &'static str)> = Default::default();
+    let near_range = |k: &str| state.objs.iter().any(|(rk, ro)| ro.generator.as_ref().map_or(false, |g| g.class == "OvenFactory") && crate::furn::layout2d::dist(state, k, rk) < 0.1);
+    let mut runs: Vec<&String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "KitchenSpaceFactory")).map(|(k, _)| k).collect();
+    runs.sort_by_key(|k| !near_range(k));
+    for k in runs {
+        let o = &state.objs[k.as_str()];
+        let room_k = crate::furn::layout2d::room_of(state, k).unwrap_or_default();
         if o.generator.as_ref().map_or(true, |g| g.class != "KitchenSpaceFactory") { continue }
         let Some(a) = visuals.get(k) else { continue };
         let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "dress_counter", k]));
@@ -100,12 +107,13 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             if d0 > d1 { u0 + 0.2 } else { u1 - 0.2 }
         };
         let inward = if end < (u0 + u1) / 2.0 { 1.0 } else { -1.0 };
-        if r.f64() < 0.7 { plan.push((end, depth * 0.45, props::kettle(r.next_u64()), 1.0, "KettleFactory")); }
+        if r.f64() < 0.7 && kitchen_has.insert((room_k.clone(), "kettle")) { plan.push((end, depth * 0.45, props::kettle(r.next_u64()), 1.0, "KettleFactory")); }
         // canister set: one jar design at three sizes, back line
         let js = r.next_u64() % 1_000_000;
         let jar = assets.visual("JarFactory", js, 0);
         let jh = dims(&jar).2.max(0.05);
         for (j, hh) in [0.24f64, 0.2, 0.16].iter().enumerate() {
+            if j == 0 && !kitchen_has.insert((room_k.clone(), "jars")) { break }
             plan.push((clampu(end + inward * (0.22 + j as f64 * 0.13)), 0.08, jar.clone(), (hh / jh).min(1.2), "JarFactory"));
         }
         if r.f64() < 0.4 { plan.push((clampu((u0 + u1) / 2.0 + r.uniform(-0.3, 0.3)), depth * 0.55, assets.visual("FruitContainerFactory", r.next_u64() % 1_000_000, 0), 1.0, "FruitContainerFactory")); }
