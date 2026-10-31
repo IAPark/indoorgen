@@ -1,0 +1,24 @@
+[package]
+name = "bevy_preview"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+debug = false
+incremental = false
+codegen-units = 16
+
+[dependencies]
+bevy = { version = "0.20.1", default-features = false, features = [
+  "std", "multi_threaded", "async_executor", "bevy_asset", "bevy_log",
+  "bevy_render", "bevy_core_pipeline", "bevy_pbr", "bevy_post_process", "bevy_anti_alias",
+  "bevy_light", "bevy_camera", "bevy_image", "bevy_mesh", "bevy_shader", "bevy_material", "bevy_color", "bevy_window",
+  "png", "ktx2", "zstd_rust", "tonemapping_luts", "smaa_luts", "bluenoise_texture",
+] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde_json = "1"
+rayon = "1"
