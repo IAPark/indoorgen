@@ -677,7 +677,10 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let d = ((a[0] + dx * t - p[0]).powi(2) + (a[1] + dy * t - p[1]).powi(2)).sqrt();
             walls.push((d, a, b));
         }
-        walls.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        // the window's own wall first: the nearest one running along it (the nearest wall alone was sometimes the one round the
+        // corner: the window kept its rotation there, across the wall -- no hole, a curtain on a blank wall)
+        let runs_along = |a: &[f64; 2], b: &[f64; 2]| ((b[1] - a[1]).atan2(b[0] - a[0]) - ct.rot_z).cos().abs() > 0.99;
+        walls.sort_by(|x, y| (!runs_along(&x.1, &x.2), x.0).partial_cmp(&(!runs_along(&y.1, &y.2), y.0)).unwrap());
         let w0 = ct.dims[0];
         let sill = ct.loc[2] - ct.dims[2] / 2.0;
         let margin = c.wall_thickness / 2.0 + 0.35;
@@ -763,7 +766,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                             nc.dims[2] = head - need;
                             // its rotation follows the wall's direction, turned like the plan's window is against its own wall (the
                             // outline runs one way round, so the same turn faces every exterior wall's window outward)
-                            nc.rot_z = if wi == 0 { ct.rot_z } else { u[1].atan2(u[0]) + if flip { std::f64::consts::PI } else { 0.0 } };
+                            nc.rot_z = if wi == 0 && runs_along(a, b) { ct.rot_z } else { u[1].atan2(u[0]) + if flip { std::f64::consts::PI } else { 0.0 } };
                             best = Some((score, nc));
                         }
                     }
