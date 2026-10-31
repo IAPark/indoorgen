@@ -222,6 +222,8 @@ pub fn build_person_g(avatar: usize, kind: PoseKind, seed: u64, seat_z: Option<f
             metallic: 0.0,
             emissive: [0.0; 3],
             emissive_strength: 0.0,
+            texture: None,
+            alpha_cutoff: 0.5,
         };
         asset.parts.push(ig_kit::api::Part { mesh: m, mat, col: None });
     }

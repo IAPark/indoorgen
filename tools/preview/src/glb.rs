@@ -14,7 +14,8 @@ pub struct Prim {
     pub bmin: [f32; 3], pub bmax: [f32; 3],
 }
 pub struct Node { pub name: String, pub prims: Vec<Prim> }
-pub struct Mat { pub name: String, pub color: [f32; 4], pub emissive: [f32; 3] }
+/// `tex`: embedded base-colour image (PNG bytes) when the material has a baseColorTexture; `mask`: alphaMode MASK
+pub struct Mat { pub name: String, pub color: [f32; 4], pub emissive: [f32; 3], pub tex: Option<std::sync::Arc<Vec<u8>>>, pub mask: bool }
 pub struct Glb { pub nodes: Vec<Node>, pub mats: Vec<Mat>, pub chunks: Vec<Vec<u8>> }
 
 fn f3(v: &Value) -> [f32; 3] {
@@ -52,11 +53,19 @@ pub fn load(path: &Path) -> Glb {
         let ao = ac["byteOffset"].as_u64().unwrap_or(0);
         View { chunk: v.chunk, off: v.off + ao, len: v.len - ao }
     };
+    // embedded images (bufferView PNGs), shared by every material that uses them
+    let imgs: Vec<Option<std::sync::Arc<Vec<u8>>>> = j["images"].as_array().map(|a| a.iter().map(|im| {
+        let bv = im["bufferView"].as_u64()? as usize;
+        let o = views[bv]["byteOffset"].as_u64().unwrap_or(0) as usize; let l = views[bv]["byteLength"].as_u64()? as usize;
+        Some(std::sync::Arc::new(bin[o..o + l].to_vec()))
+    }).collect()).unwrap_or_default();
+    let tex_img = |ti: u64| -> Option<std::sync::Arc<Vec<u8>>> { let src = j["textures"][ti as usize]["source"].as_u64()? as usize; imgs.get(src).cloned().flatten() };
     let mats: Vec<Mat> = j["materials"].as_array().map(|m| m.iter().map(|m| {
         let c = m["pbrMetallicRoughness"]["baseColorFactor"].as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap() as f32).collect::<Vec<_>>()).unwrap_or(vec![0.8, 0.8, 0.8, 1.0]);
         let es = m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"].as_f64().unwrap_or(1.0) as f32;
         let e = if m["emissiveFactor"].is_array() { f3(&m["emissiveFactor"]) } else { [0.0; 3] };
-        Mat { name: m["name"].as_str().unwrap_or("").to_string(), color: [c[0], c[1], c[2], c[3]], emissive: [e[0] * es, e[1] * es, e[2] * es] }
+        let tex = m["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64().and_then(tex_img);
+        Mat { name: m["name"].as_str().unwrap_or("").to_string(), color: [c[0], c[1], c[2], c[3]], emissive: [e[0] * es, e[1] * es, e[2] * es], tex, mask: m["alphaMode"].as_str() == Some("MASK") }
     }).collect()).unwrap_or_default();
     let meshes = j["meshes"].as_array().unwrap();
     let nodes = j["nodes"].as_array().unwrap().iter().filter_map(|n| {

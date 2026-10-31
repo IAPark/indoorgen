@@ -53,7 +53,9 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
 @fragment fn fs_main(v: VOut, @builtin(front_facing) ff: bool) -> FOut {
   var albedo = m.color;
   let tex = textureSample(base_tex, base_smp, v.uv);
-  albedo = vec4<f32>(albedo.rgb * tex.rgb, albedo.a * tex.a);
+  // alpha-masked cards: coverage from the full-resolution level (mip averaging dropped the leaves below the cutoff at a distance)
+  let a0 = textureSampleLevel(base_tex, base_smp, v.uv, 0.0).a;
+  albedo = vec4<f32>(albedo.rgb * tex.rgb, albedo.a * select(tex.a, a0, m.flags.x > 0.5));
   if (m.flags.x > 0.5 && albedo.a < 0.5) { discard; }
   var n = normalize(v.nrm);
   if (dot(v.nrm, v.nrm) < 0.25) {

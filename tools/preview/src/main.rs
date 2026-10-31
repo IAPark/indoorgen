@@ -150,6 +150,10 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
     let decoded: Vec<Option<image::RgbaImage>> = tex_paths.par_iter().map(|p| image::open(p).ok().map(|i| i.to_rgba8())).collect();
     let mut tex_views: HashMap<String, wgpu::TextureView> = HashMap::new();
     for (p, d) in tex_paths.iter().zip(decoded) { if let Some(img) = d { tex_views.insert(p.clone(), load_texture(&gpu.dev, &gpu.q, img)); } }
+    // textures embedded in the glb (leaf cards), keyed "glb:<material index>"
+    for (mi, m) in glb.mats.iter().enumerate() {
+        if let Some(png) = &m.tex { if let Ok(img) = image::load_from_memory(png) { tex_views.insert(format!("glb:{mi}"), load_texture(&gpu.dev, &gpu.q, img.to_rgba8())); } }
+    }
     // material bind groups keyed by (material, texture path)
     let mut mat_bgs: Vec<wgpu::BindGroup> = vec![]; let mut bg_key: HashMap<(usize, String, u32), usize> = HashMap::new();
     let mut draws = vec![]; let mut bmin = Vec3::splat(1e9); let mut bmax = Vec3::splat(-1e9);
@@ -162,7 +166,9 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
         let glass = lname.ends_with(".glass") && !lname.contains("wineglass");
         for p in &n.prims {
             let m = &glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))];
-            let flags = if cls == "people.hair" { 1u32 } else if glass { 2 } else { 0 };
+            let mi = p.mat.min(glb.mats.len().saturating_sub(1));
+            let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
+            let flags = if cls == "people.hair" || m.mask { 1u32 } else if glass { 2 } else { 0 };
             let key = (p.mat, tex.clone(), flags);
             let bi = *bg_key.entry(key).or_insert_with(|| {
                 let u = MatU { color: m.color, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, 0.0, 0.0, 0.0] };

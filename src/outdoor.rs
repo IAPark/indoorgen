@@ -45,12 +45,15 @@ pub struct OutdoorCfg {
     /// Distance over which the ground eases from the pad into the terrain (m).
     #[schemars(range(min = 2.0, max = 100.0))]
     pub pad_blend: f64,
-    /// Trees per 1000 m2 of the fine grid (outside the clear zone).
+    /// Tree density inside groves (trees per 1000 m2 of grove; groves cover part of the land, see the grove mask).
     #[schemars(range(min = 0.0, max = 20.0))]
     pub tree_density: f64,
     /// Bushes per 100 m2 of the 1.5-12 m band around the house.
     #[schemars(range(min = 0.0, max = 20.0))]
     pub bush_density: f64,
+    /// Woodland extends this far from the house (m; trees past the fine grid are cheap instances).
+    #[schemars(range(min = 50.0, max = 2000.0))]
+    pub tree_far: f64,
     /// Closest a tree trunk stands to a wall (m).
     #[schemars(range(min = 1.0, max = 30.0))]
     pub tree_wall_clearance: f64,
@@ -64,7 +67,7 @@ pub struct OutdoorCfg {
 impl Default for OutdoorCfg {
     fn default() -> Self {
         OutdoorCfg { on: true, near_extent: 70.0, near_spacing: 1.0, far_radius: 2500.0, ground_scale: 4.0, mountain_height: None, mountain_coverage: None, pad_depth: 0.45, pad_blend: 18.0,
-            tree_density: 2.5, bush_density: 3.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4 }
+            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4 }
     }
 }
 
@@ -237,7 +240,8 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     // (Infinigen's ground weights without mud and sand: mud's puddles mirrored the sky -- a flooded field -- without grass on it)
     let ground_cls = ["terrain.Dirt", "terrain.Dirt", "terrain.Soil", "terrain.Soil", "terrain.CobbleStone", "terrain.CrackedGround", "terrain.Stone"];
     let gcls = ground_cls[r.randint(0, ground_cls.len() as i64) as usize];
-    let mcls = if r.f64() < 0.8 { "terrain.Mountain" } else { "terrain.Sandstone" };
+    // (Stone mostly: the Mountain shader samples each of its 16 strata colours independently -- teal and pink bands at a distance)
+    let mcls = if r.f64() < 0.7 { "terrain.Stone" } else { "terrain.Mountain" };
     let gm = scene.material(spec(&format!("outdoor_ground:{gcls}"), gcls, r.next_u64(), [0.32, 0.28, 0.2]));
     let mm = scene.material(spec(&format!("outdoor_mountain:{mcls}"), mcls, r.next_u64(), [0.4, 0.38, 0.35]));
     // ---- fine grid (quads entirely under the house dropped)
@@ -296,29 +300,56 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);
     scene.add("outdoor_terrain_far#0", "OutdoorTerrain", far_g, gm);
     if !far_m.is_empty() { scene.add("outdoor_terrain_far#1", "OutdoorTerrain", far_m, mm); }
-    // ---- vegetation spots: Poisson-disk, clear of the walls
+    // ---- vegetation: groves (Infinigen's per-species noise masks, generate_nature.py): trees fill the patches where a low-frequency
+    // Perlin mask is high, Poisson-spaced inside them, with clearings between and a few solitary field trees; woodland continues past
+    // the fine grid to `tree_far` m (the mid-distance was an empty plain). Bushes gather at grove edges and near the house.
     let mut props: Vec<Value> = vec![];
     let mut placed: Vec<([f64; 2], f64)> = vec![];
-    let area_trees = (2.0 * e).powi(2) - crate::shp::area(&house);
-    let n_trees = (area_trees / 1000.0 * cfg.tree_density).round() as usize;
-    let band = crate::shp::area(&crate::shp::buffer_mitre(&house, 12.0)) - crate::shp::area(&crate::shp::buffer_mitre(&house, 1.5));
-    let n_bush = (band / 100.0 * cfg.bush_density).round() as usize;
-    for (kind, count, dmin, dmax, sep, variants, scale) in [("tree", n_trees, cfg.tree_wall_clearance, e * 0.95, 5.0, cfg.tree_variants, (0.8, 1.35)), ("bush", n_bush, 1.5, 12.0, 1.8, cfg.bush_variants, (0.7, 1.4))] {
-        let mut got = 0;
-        for _ in 0..count * 30 {
-            if got >= count { break }
-            let (x, y) = (centre[0] + r.uniform(-e, e), centre[1] + r.uniform(-e, e));
-            let d = t.dist(x, y);
-            if d < dmin || d > dmax { continue }
-            if placed.iter().any(|(p, rr)| (p[0] - x).hypot(p[1] - y) < rr.max(sep)) { continue }
-            let z = t.height(x, y, d) - 0.05;
-            let variant = 1000 + r.randint(0, variants as i64) as u64;
-            props.push(json!({"kind": kind, "variant": variant, "loc": [x, y, z], "rot": r.uniform(0.0, std::f64::consts::TAU), "scale": r.uniform(scale.0, scale.1)}));
-            placed.push(([x, y], sep));
-            got += 1;
-        }
-        log.push(format!("{got} {kind}(s)"));
+    let grove_seed = r.next_u64() as u32;
+    let mask = |x: f64, y: f64| perlin(x, y, grove_seed, 3, 0.012);
+    let thresh = 0.12 - 0.25 * (cfg.tree_density / 10.0).min(1.0);
+    let far = cfg.tree_far.max(e);
+    let mut add = |kind: &str, x: f64, y: f64, d: f64, sep: f64, variants: u32, sc: (f64, f64), r: &mut Rng, placed: &mut Vec<([f64; 2], f64)>, props: &mut Vec<Value>| -> bool {
+        if placed.iter().any(|(p, rr)| (p[0] - x).hypot(p[1] - y) < rr.max(sep)) { return false }
+        let z = t.height(x, y, d) - 0.05;
+        let variant = 1000 + r.randint(0, variants as i64) as u64;
+        props.push(json!({"kind": kind, "variant": variant, "loc": [x, y, z], "rot": r.uniform(0.0, std::f64::consts::TAU), "scale": r.uniform(sc.0, sc.1)}));
+        placed.push(([x, y], sep));
+        true
+    };
+    let (mut n_grove, mut n_solo, mut n_far) = (0, 0, 0);
+    // near: within the fine grid
+    for _ in 0..(((2.0 * e).powi(2) / 1000.0) * cfg.tree_density * 12.0) as usize {
+        let (x, y) = (centre[0] + r.uniform(-e, e), centre[1] + r.uniform(-e, e));
+        let d = t.dist(x, y);
+        if d < cfg.tree_wall_clearance || d > e * 0.97 { continue }
+        let m = mask(x, y);
+        let solo = r.f64() < 0.02;
+        if m < thresh && !solo { continue }
+        if add("tree", x, y, d, if solo { 12.0 } else { 4.5 }, cfg.tree_variants, (0.8, 1.35), &mut r, &mut placed, &mut props) { if solo { n_solo += 1 } else { n_grove += 1 } }
     }
+    // far: woodland on the ring out to `far` (sparser sampling, same mask; only on gentle ground)
+    let ring_area = std::f64::consts::PI * far * far - (2.0 * e).powi(2);
+    for _ in 0..((ring_area / 1000.0) * cfg.tree_density * 3.0) as usize {
+        let rr = (e * e + r.f64() * (far * far - e * e)).sqrt();
+        let a = r.uniform(0.0, std::f64::consts::TAU);
+        let (x, y) = (centre[0] + rr * a.cos(), centre[1] + rr * a.sin());
+        if (x - centre[0]).abs() < e && (y - centre[1]).abs() < e { continue }
+        if mask(x, y) < thresh { continue }
+        if add("tree", x, y, rr, 6.0, cfg.tree_variants, (0.9, 1.4), &mut r, &mut placed, &mut props) { n_far += 1 }
+    }
+    // bushes: grove edges (mask just below the threshold) and the band around the house
+    let mut n_bush = 0;
+    for _ in 0..((crate::shp::area(&crate::shp::buffer_mitre(&house, 25.0)) / 100.0) * cfg.bush_density * 6.0) as usize {
+        let (x, y) = (centre[0] + r.uniform(-e, e), centre[1] + r.uniform(-e, e));
+        let d = t.dist(x, y);
+        if d < 1.5 || d > e * 0.97 { continue }
+        let m = mask(x, y);
+        let near_house = d < 12.0 && r.f64() < 0.35;
+        if !(near_house || (m > thresh - 0.12 && m < thresh + 0.05)) { continue }
+        if add("bush", x, y, d, 1.8, cfg.bush_variants, (0.7, 1.4), &mut r, &mut placed, &mut props) { n_bush += 1 }
+    }
+    log.push(format!("{n_grove} grove trees, {n_solo} field trees, {n_far} far trees (to {far:.0} m), {n_bush} bushes"));
     log.push(format!("terrain {gcls} / {mcls}, mountains {m_height:.0} m coverage {coverage:.2}, pad {:.2} m below the floor", cfg.pad_depth));
     let rec = json!({"terrain": {"ground_material": gcls, "mountain_material": mcls, "mountain_height": m_height, "coverage": coverage, "pad_z": t.pad_z},
         "props": props, "tree_variants": cfg.tree_variants, "bush_variants": cfg.bush_variants});

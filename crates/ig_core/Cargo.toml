@@ -25,6 +25,7 @@ num-rational = { workspace = true }
 num-traits = { workspace = true }
 num-integer = { workspace = true }
 robust = { workspace = true }
+flate2 = "1"
 
 [build-dependencies]
 cc = { workspace = true }

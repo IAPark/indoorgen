@@ -1011,6 +1011,7 @@ dependencies = [
  "anyhow",
  "cc",
  "earcutr",
+ "flate2",
  "geos",
  "i_overlay",
  "indexmap 2.14.2",

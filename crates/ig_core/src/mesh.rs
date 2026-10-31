@@ -498,6 +498,9 @@ pub struct Material {
     pub metallic: f32,
     pub emissive: [f32; 3],
     pub emissive_strength: f32,
+    /// base-colour texture (PNG bytes, shared) with alpha-mask cutoff: leaf cards (glTF alphaMode MASK); None = plain colour
+    pub texture: Option<std::sync::Arc<Vec<u8>>>,
+    pub alpha_cutoff: f32,
 }
 
 impl Material {
@@ -510,6 +513,8 @@ impl Material {
             metallic: 0.0,
             emissive: [0.0; 3],
             emissive_strength: 0.0,
+            texture: None,
+            alpha_cutoff: 0.5,
         }
     }
 }
@@ -628,13 +633,41 @@ impl Scene {
         // Z-up -> Y-up: rotate -90deg about X
         let s = std::f64::consts::FRAC_1_SQRT_2;
         nodes.push(json!({"name":"root","children":child_ids,"rotation":[-s,0.0,0.0,s]}));
+        // textures: one image (PNG in its own buffer view after the meshes) per distinct texture
+        let mut images: Vec<serde_json::Value> = vec![];
+        let mut textures: Vec<serde_json::Value> = vec![];
+        let mut img_blobs: Vec<std::sync::Arc<Vec<u8>>> = vec![];
+        let mut buffer_views = buffer_views;
+        let mut tex_of: Vec<Option<usize>> = vec![];
+        for m in &self.materials {
+            let Some(t) = &m.texture else { tex_of.push(None); continue };
+            let ti = match img_blobs.iter().position(|b| std::sync::Arc::ptr_eq(b, t)) {
+                Some(i) => i,
+                None => {
+                    buffer_views.push(json!({"buffer":0,"byteOffset":bin,"byteLength":t.len()}));
+                    images.push(json!({"bufferView": buffer_views.len() - 1, "mimeType": "image/png"}));
+                    textures.push(json!({"source": images.len() - 1, "sampler": 0}));
+                    bin += t.len();
+                    while bin % 4 != 0 { bin += 1; }
+                    img_blobs.push(t.clone());
+                    img_blobs.len() - 1
+                }
+            };
+            tex_of.push(Some(ti));
+        }
         let materials: Vec<_> = self
             .materials
             .iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(mi, m)| {
                 let mut j = json!({"name":m.name,
                     "pbrMetallicRoughness":{"baseColorFactor":m.color,"metallicFactor":m.metallic,"roughnessFactor":m.roughness},
                     "doubleSided": true});
+                if let Some(ti) = tex_of[mi] {
+                    j["pbrMetallicRoughness"]["baseColorTexture"] = json!({"index": ti});
+                    j["alphaMode"] = json!("MASK");
+                    j["alphaCutoff"] = json!(m.alpha_cutoff);
+                }
                 if m.emissive_strength > 0.0 {
                     j["emissiveFactor"] = json!(m.emissive);
                     j["extensions"] = json!({"KHR_materials_emissive_strength":{"emissiveStrength":m.emissive_strength}});
@@ -659,6 +692,11 @@ impl Scene {
             "accessors":accessors,"bufferViews":buffer_views,
             "buffers":[{"byteLength":bin}]
         });
+        let mut gltf = gltf;
+        if !images.is_empty() {
+            gltf["images"] = json!(images); gltf["textures"] = json!(textures);
+            gltf["samplers"] = json!([{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}]);
+        }
         let mut js = serde_json::to_vec(&gltf).unwrap();
         while js.len() % 4 != 0 {
             js.push(b' ');
@@ -680,6 +718,11 @@ impl Scene {
             out.write_all(&bl.nrm)?;
             if let Some(u) = &bl.uv { out.write_all(u)?; }
             out.write_all(&bl.idx)?;
+        }
+        for b in &img_blobs {
+            out.write_all(b)?;
+            let pad = (4 - b.len() % 4) % 4;
+            out.write_all(&[0u8; 3][..pad])?;
         }
         out.flush()?;
         Ok(sidecar)
@@ -1019,4 +1062,29 @@ impl Scene {
         }
         openusd::usdc::CrateWriter::write_to_file(&d, path).map_err(err)
     }
+}
+
+/// Minimal RGBA8 PNG encoder (zlib via flate2): procedural textures for the glb (leaf cards).
+pub fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    fn crc32(data: &[u8]) -> u32 {
+        let mut c = 0xffff_ffffu32;
+        for &b in data { c ^= b as u32; for _ in 0..8 { c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 }; } }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, ty: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut c = ty.to_vec(); c.extend_from_slice(data);
+        out.extend_from_slice(&c);
+        out.extend_from_slice(&crc32(&c).to_be_bytes());
+    }
+    let mut raw = Vec::with_capacity((w as usize * 4 + 1) * h as usize);
+    for y in 0..h as usize { raw.push(0u8); raw.extend_from_slice(&rgba[y * w as usize * 4..(y + 1) * w as usize * 4]); }
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    z.write_all(&raw).unwrap();
+    let idat = z.finish().unwrap();
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let mut ihdr = vec![]; ihdr.extend_from_slice(&w.to_be_bytes()); ihdr.extend_from_slice(&h.to_be_bytes()); ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr); chunk(&mut out, b"IDAT", &idat); chunk(&mut out, b"IEND", &[]);
+    out
 }

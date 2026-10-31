@@ -727,6 +727,160 @@ def add_outdoor(sc, side):
         e.location = p["loc"]; e.rotation_euler = (0, 0, p["rot"]); e.scale = (p["scale"],) * 3
         sc.collection.objects.link(e); n += 1
     print("OUTDOOR", n, "instances of", len(colls), "variants")
+    add_grass(side)
+
+def tint_lawn(o):
+    # the ground under the grass turns lawn-green (strands alone covered ~5 % of it: from the windows it read as bare earth): each
+    # material of the terrain mixes toward a mottled green by the "grass" vertex-group weight
+    for slot in o.material_slots:
+        gm = slot.material
+        if gm is None or not gm.use_nodes or gm.name.startswith("outdoor_grass") or gm.get("lawn"): continue
+        gm = gm.copy(); gm["lawn"] = 1; slot.material = gm
+        g = gm.node_tree; out = next((n for n in g.nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output), None)
+        if out is None or not out.inputs["Surface"].is_linked: continue
+        orig = out.inputs["Surface"].links[0].from_socket
+        attr = g.nodes.new("ShaderNodeAttribute"); attr.attribute_name = "grass"
+        noise = g.nodes.new("ShaderNodeTexNoise"); noise.inputs["Scale"].default_value = 0.6; noise.inputs["Detail"].default_value = 6.0
+        col = g.nodes.new("ShaderNodeValToRGB")
+        col.color_ramp.elements[0].color = (0.035, 0.07, 0.015, 1); col.color_ramp.elements[1].color = (0.14, 0.2, 0.05, 1)
+        g.links.new(noise.outputs["Fac"], col.inputs["Fac"])
+        lawn = g.nodes.new("ShaderNodeBsdfPrincipled"); lawn.inputs["Roughness"].default_value = 0.9
+        for _k in ("Specular IOR Level", "Specular"):
+            if _k in lawn.inputs: lawn.inputs[_k].default_value = 0.25
+        g.links.new(col.outputs["Color"], lawn.inputs["Base Color"])
+        # patchy edge: the weight through a noise threshold (some dry ground shows)
+        patch = g.nodes.new("ShaderNodeTexNoise"); patch.inputs["Scale"].default_value = 0.15
+        mulm = g.nodes.new("ShaderNodeMath"); mulm.operation = "MULTIPLY"
+        g.links.new(attr.outputs["Fac"], mulm.inputs[0])
+        rmp = g.nodes.new("ShaderNodeMapRange"); rmp.inputs["From Min"].default_value = 0.22; rmp.inputs["From Max"].default_value = 0.34
+        g.links.new(patch.outputs["Fac"], rmp.inputs["Value"]); g.links.new(rmp.outputs["Result"], mulm.inputs[1])
+        mix = g.nodes.new("ShaderNodeMixShader")
+        g.links.new(mulm.outputs[0], mix.inputs["Fac"]); g.links.new(orig, mix.inputs[1]); g.links.new(lawn.outputs["BSDF"], mix.inputs[2])
+        g.links.new(mix.outputs["Shader"], out.inputs["Surface"])
+
+def add_haze():
+    """aerial perspective as Infinigen does it (terrain/elements/atmosphere.py): a CLOSED volume of air over the terrain -- a cylinder
+    2.4 km in radius and ~450 m tall -- with a Principled Volume (near-white albedo, anisotropy 0.5); the World keeps no volume (an
+    unbounded world volume blacked out the sky and the sun). HAZE = density per m (default 0.0004: ~60 % transmittance at 1.3 km)"""
+    import os
+    d = float(os.environ.get("HAZE", "0.00016"))
+    if d <= 0: return
+    flo = [o for o in bpy.data.objects if o.type == "MESH" and ".floor" in o.name]
+    pts = [o.matrix_world @ mathutils.Vector(c) for o in flo for c in o.bound_box] or [mathutils.Vector((0, 0, 0))]
+    cx = (min(p.x for p in pts) + max(p.x for p in pts)) / 2; cy = (min(p.y for p in pts) + max(p.y for p in pts)) / 2
+    me = bpy.data.meshes.new("outdoor_haze"); import bmesh; bm = bmesh.new()
+    bmesh.ops.create_cone(bm, cap_ends=True, segments=64, radius1=2400.0, radius2=2400.0, depth=460.0)
+    bm.to_mesh(me); bm.free()
+    ob = bpy.data.objects.new("outdoor_haze", me); ob.location = (cx, cy, 180.0); bpy.context.scene.collection.objects.link(ob)
+    m = bpy.data.materials.new("outdoor_haze"); m.use_nodes = True; nt = m.node_tree
+    for n in list(nt.nodes):
+        if n.type != "OUTPUT_MATERIAL": nt.nodes.remove(n)
+    pv = nt.nodes.new("ShaderNodeVolumePrincipled")
+    pv.inputs["Density"].default_value = d; pv.inputs["Color"].default_value = (0.92, 0.95, 1.0, 1); pv.inputs["Anisotropy"].default_value = 0.5
+    nt.links.new(pv.outputs[0], nt.nodes["Material Output"].inputs["Volume"])
+    me.materials.append(m)
+    ob.visible_shadow = False  # (the sun keeps lighting the ground at full strength)
+    print("HAZE", d)
+
+def add_grass(side):
+    """grass on the near terrain (Blender hair particles: Infinigen's grass scatter builds its node groups in python that predates
+    Blender 5): dense short blades from 1.2 m off the walls out to ~45 m, none under the house; GRASS_DENSITY parents per m2"""
+    import os, math
+    if os.environ.get("NO_GRASS"): return
+    terr = [o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("outdoor_terrain_near")]
+    # the far ground: a full-weight "grass" attribute (lawn tint, no strands) so the green does not stop at the fine grid's edge;
+    # the ridge material (outdoor_terrain_far#1) keeps its rock
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o.name.startswith("outdoor_terrain_far"):
+            a_ = o.data.attributes.new("grass", "FLOAT", "POINT")
+            if o.name.endswith("#0"):
+                a_.data.foreach_set("value", [1.0] * len(o.data.vertices))
+            else:
+                # ridges: green where the slope is under ~25 deg, bare rock above ~40 deg (the striped sandstone read as painted)
+                a_.data.foreach_set("value", [max(0.0, min(1.0, (v.normal.z - 0.77) / 0.14)) for v in o.data.vertices])
+            tint_lawn(o)
+    add_haze()
+    floors = [o for o in bpy.data.objects if o.type == "MESH" and ".floor" in o.name and not o.name.startswith("outdoor")]
+    if not terr or not floors: return
+    boxes = []
+    for f in floors:
+        bb = [f.matrix_world @ mathutils.Vector(c) for c in f.bound_box]
+        boxes.append((min(b.x for b in bb), max(b.x for b in bb), min(b.y for b in bb), max(b.y for b in bb)))
+    def dist(x, y):
+        return min(math.hypot(max(x0 - x, 0, x - x1), max(y0 - y, 0, y - y1)) for x0, x1, y0, y1 in boxes)
+    mat = bpy.data.materials.new("outdoor_grass"); mat.use_nodes = True
+    nt = mat.node_tree; bs = nt.nodes["Principled BSDF"]
+    hi = nt.nodes.new("ShaderNodeHairInfo")
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.018, 0.04, 0.008, 1); ramp.color_ramp.elements[1].color = (0.09, 0.17, 0.03, 1)
+    nt.links.new(hi.outputs["Intercept"], ramp.inputs["Fac"])
+    dry = nt.nodes.new("ShaderNodeMix"); dry.data_type = "RGBA"
+    dry.inputs[7].default_value = (0.3, 0.27, 0.1, 1)
+    gate = nt.nodes.new("ShaderNodeMath"); gate.operation = "GREATER_THAN"; gate.inputs[1].default_value = 0.82
+    nt.links.new(hi.outputs["Random"], gate.inputs[0]); nt.links.new(gate.outputs[0], dry.inputs["Factor"])
+    nt.links.new(ramp.outputs["Color"], dry.inputs[6]); nt.links.new(dry.outputs[2], bs.inputs["Base Color"])
+    bs.inputs["Roughness"].default_value = 0.45
+    # 70 % translucent (grass_blade.py): blades glow when backlit and stop reading as a glossy sheet
+    tr = nt.nodes.new("ShaderNodeBsdfTranslucent"); nt.links.new(dry.outputs[2], tr.inputs["Color"])
+    mx = nt.nodes.new("ShaderNodeMixShader"); mx.inputs["Fac"].default_value = 0.7
+    out = nt.nodes["Material Output"]
+    nt.links.new(bs.outputs["BSDF"], mx.inputs[1]); nt.links.new(tr.outputs["BSDF"], mx.inputs[2]); nt.links.new(mx.outputs["Shader"], out.inputs["Surface"])
+    # per-strand tint: hair Random shifts the green toward yellow-olive or deeper green
+    hue = nt.nodes.new("ShaderNodeHueSaturation"); hue.inputs["Saturation"].default_value = 1.0
+    rmp2 = nt.nodes.new("ShaderNodeMapRange"); rmp2.inputs["To Min"].default_value = 0.46; rmp2.inputs["To Max"].default_value = 0.56
+    nt.links.new(hi.outputs["Random"], rmp2.inputs["Value"]); nt.links.new(rmp2.outputs["Result"], hue.inputs["Hue"])
+    nt.links.new(ramp.outputs["Color"], hue.inputs["Color"]); nt.links.new(hue.outputs["Color"], dry.inputs[6])
+    for _k in ("Specular IOR Level", "Specular"):
+        if _k in bs.inputs: bs.inputs[_k].default_value = 0.12  # (glossy blades read as frost at grazing angles)
+    dens = float(os.environ.get("GRASS_DENSITY", "12"))
+    for o in terr:
+        me = o.data
+        vg = o.vertex_groups.new(name="grass")
+        w_area = 0.0
+        for v in me.vertices:
+            wv = o.matrix_world @ v.co
+            d = dist(wv.x, wv.y)
+            w = 0.0 if d < 1.2 else max(0.0, min(1.0, (d - 1.2) / 1.5)) * max(0.0, min(1.0, (68.0 - d) / 10.0))
+            if w > 0: vg.add([v.index], w, "REPLACE")
+        for poly in me.polygons:
+            w_area += poly.area * sum(1.0 for i in poly.vertices if o.vertex_groups["grass"].index in [g.group for g in me.vertices[i].groups]) / len(poly.vertices)
+        tint_lawn(o)
+        o.data.materials.append(mat)
+        psys = o.modifiers.new("grass", "PARTICLE_SYSTEM").particle_system
+        psys.vertex_group_density = "grass"; psys.vertex_group_length = "grass"
+        ps = psys.settings
+        # (set one by one: Blender versions renamed or dropped some hair settings)
+        for k, v in [("type", "HAIR"), ("use_advanced_hair", True), ("count", int(min(400000, w_area * dens))), ("hair_length", 0.13),
+                     ("material_slot", mat.name), ("child_type", "INTERPOLATED"), ("rendered_child_count", 12), ("child_percent", 1),
+                     ("child_radius", 0.25), ("child_length", 1.0), ("child_length_threshold", 0.45), ("roughness_1", 0.02),
+                     ("roughness_endpoint", 0.06), ("roughness_2", 0.03), ("root_radius", 0.6), ("tip_radius", 0.0), ("radius_scale", 0.008),
+                     ("render_step", 3), ("display_step", 2)]:
+            try: setattr(ps, k, v)
+            except Exception as e: print("GRASS setting", k, repr(e))
+        print("GRASS", o.name, ps.count, "parents over", round(w_area), "m2")
+
+def auto_exposure(sc):
+    """one tiny probe render: nudge the film exposure toward a mid-grey frame (rooms beside bright windows washed out, dark ones went
+    murky once the terrain stopped lighting them from below); NO_AUTOEXP=1 keeps --exposure"""
+    import os, tempfile
+    if os.environ.get("NO_AUTOEXP") or args.top or args.showcase: return
+    keep = (sc.render.resolution_percentage, sc.cycles.samples, sc.render.filepath, sc.cycles.use_denoising)
+    sc.render.use_persistent_data = True
+    sc.render.resolution_percentage = max(5, keep[0] // 8); sc.cycles.samples = 4; sc.cycles.use_denoising = False
+    tmp = os.path.join(tempfile.gettempdir(), "autoexp_probe.png"); sc.render.filepath = tmp
+    import math
+    # up to 3 probes: the image is tone mapped (AgX compresses), so one step undershoots
+    for it in range(3):
+        bpy.ops.render.render(write_still=True)
+        img = bpy.data.images.load(tmp); px = list(img.pixels); bpy.data.images.remove(img)
+        lum = [0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2] for i in range(0, len(px), 4)]
+        lum.sort(); core = lum[len(lum) // 20: len(lum) * 19 // 20] or lum
+        avg = sum(core) / len(core)
+        if 0.36 < avg < 0.5: break
+        step = max(-2.5, min(1.5, math.log2(0.43 / max(avg, 1e-3)) * 2.0))
+        sc.cycles.film_exposure *= 2 ** step
+        print("AUTOEXP probe %d mean %.3f -> x%.2f (exposure %.3f)" % (it, avg, 2 ** step, sc.cycles.film_exposure))
+    sc.render.resolution_percentage, sc.cycles.samples, sc.render.filepath, sc.cycles.use_denoising = keep
 
 # point lights (PointLampFactory)
 _lamp = dscap.lamp_state(DS.get("variation"), sidecar) if DS else (lambda L: (True, 1.0))
@@ -864,6 +1018,41 @@ sc.cycles.use_adaptive_sampling = True
 sc.render.filepath = args.out
 # (after the camera, which only needs the room)
 add_outdoor(sc, sidecar)
+# --view outdoor[:AZ[:DIST]]: the outdoor scene alone (the house hidden), a camera on the terrain at eye height DIST m (default 25)
+# from the house centre toward compass azimuth AZ (degrees, default 0 = +y), looking outward 4 deg down
+if args.view and args.view.startswith("outdoor"):
+    import math
+    from mathutils.bvhtree import BVHTree
+    parts = (args.view.split(":") + ["0", "25"])[1:3]
+    az, dist = math.radians(float(parts[0] or 0)), float(parts[1] or 25)
+    for o in bpy.data.objects:
+        # (only the house's own objects: the instanced tree collections are not linked into the scene)
+        if o.type in ("MESH", "CURVES") and o.users_scene and not o.name.startswith("outdoor"): o.hide_render = True
+    for o in bpy.data.objects:
+        if o.type == "LIGHT" and not o.data.type == "SUN": o.hide_render = True
+    flo = [o for o in bpy.data.objects if o.type == "MESH" and ".floor" in o.name]
+    pts = [o.matrix_world @ mathutils.Vector(c) for o in flo for c in o.bound_box]
+    cx = (min(p.x for p in pts) + max(p.x for p in pts)) / 2; cy = (min(p.y for p in pts) + max(p.y for p in pts)) / 2
+    x, y = cx + dist * math.sin(az), cy + dist * math.cos(az)
+    dg = bpy.context.evaluated_depsgraph_get(); z = 0.0
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o.name.startswith("outdoor_terrain_near"):
+            me = o.evaluated_get(dg).to_mesh()
+            bvh = BVHTree.FromPolygons([o.matrix_world @ v.co for v in me.vertices], [list(f.vertices) for f in me.polygons])
+            hit = bvh.ray_cast(mathutils.Vector((x, y, 500)), mathutils.Vector((0, 0, -1)))
+            if hit[0] is not None: z = hit[0].z
+    cam = bpy.data.cameras.new("ocam"); cam.lens = float(os.environ.get("OUT_LENS", 24)); co = bpy.data.objects.new("ocam", cam)
+    sc.collection.objects.link(co); sc.camera = co
+    co.location = (x, y, z + 1.7)
+    co.rotation_euler = (math.radians(86), 0, -az)
+    print("OUTCAM", round(x, 1), round(y, 1), round(z + 1.7, 2), "az", parts[0])
+    # photographic tone: AgX with more contrast (the default look left outdoor views flat and milky)
+    try:
+        sc.view_settings.view_transform = "AgX"
+        for _lk in ("AgX - Medium High Contrast", "Medium High Contrast"):
+            try: sc.view_settings.look = _lk; break
+            except Exception: pass
+    except Exception as e: print("LOOK", repr(e))
 if os.environ.get('DEBUGL'):
     from collections import Counter
     print('LIGHTS', Counter((o.data.type, round(o.data.energy,1), getattr(o.data.cycles,'is_portal',False)) for o in bpy.data.objects if o.type=='LIGHT'))
@@ -887,4 +1076,5 @@ if os.environ.get("DUMPLIGHTS"):
                        o.data.type if o.type == 'LIGHT' else None, getattr(o.data.cycles, 'is_portal', None) if o.type == 'LIGHT' else None] for o in bpy.data.objects if o.type != 'MESH']),
               open(os.environ["DUMPLIGHTS"], "w"))
 if args.norender: print('NORENDER done'); sys.exit(0)
+auto_exposure(sc)
 t = time.time(); bpy.ops.render.render(write_still=True); print("render time", time.time() - t)
