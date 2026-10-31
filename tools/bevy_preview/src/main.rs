@@ -10,7 +10,7 @@ mod glb;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::Aabb;
-use bevy::camera::{Exposure, Hdr, RenderTarget, ScalingMode};
+use bevy::camera::{Exposure, Hdr, RenderTarget, ScalingMode, ShadowLodOrigin};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::{atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight, CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight, NotShadowCaster, SunDisk};
@@ -40,7 +40,7 @@ use std::time::Instant;
 /// lumens per watt (and lux per W/m², nits per W/m²/sr): Blender radiometric units -> Bevy photometric units
 const LM_PER_W: f32 = 683.0;
 /// EV100 at --exposure 0.5 (the tools/preview default), tuned so default renders land near tools/preview brightness
-const EV_AT_DEFAULT: f32 = 9.0;
+const EV_AT_DEFAULT: f32 = 9.6;
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
@@ -53,7 +53,7 @@ fn parse_args() -> Opts {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
         sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.5, sun_i: 1.0, light_scale: 1.0,
-        sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0, saturation: 1.15, dump_cams: None, indoor_ambient: 0.4 };
+        sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0, saturation: 1.25, dump_cams: None, indoor_ambient: 0.4 };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -196,15 +196,19 @@ fn build_mesh(g: &glb::Glb, p: &glb::Prim) -> Mesh {
     m
 }
 
-fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
+/// one glb primitive to draw (+ per-node flags)
+struct P { node: usize, prim: usize, cls: String, tex: String, ceil: bool, glass: bool }
+/// CPU side of a scene load (no Bevy world access, so it can run on a thread while pipelines compile)
+struct Parsed { path: PathBuf, t: Instant, g: glb::Glb, side: Value, plist: Vec<P>, tex_keys: Vec<(String, Option<f32>)>, images: Vec<Option<Image>>, meshes: Vec<Option<Mesh>> }
+
+fn parse_scene(path: &Path, o: &Opts) -> Parsed {
     let t = Instant::now();
     let g = glb::load(path);
     let side: Value = std::fs::read(path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
     if o.verbose { eprintln!("  glb read {:.2}s ({} nodes, {:.0} MB)", t.elapsed().as_secs_f32(), g.nodes.len(), g.data.len() as f32 / 1e6); }
     let mut specs: HashMap<String, Value> = HashMap::new();
     if let Some(ns) = side["nodes"].as_array() { for n in ns { if let Some(nm) = n["name"].as_str() { specs.insert(nm.to_string(), n.clone()); } } }
-    // flat list of primitives (+ per-node flags)
-    struct P { node: usize, prim: usize, cls: String, tex: String, ceil: bool, glass: bool }
+    // flat list of primitives
     let mut plist: Vec<P> = vec![];
     for (ni, n) in g.nodes.iter().enumerate() {
         let spec = specs.get(&n.name);
@@ -225,6 +229,31 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
         }).collect(),
         || plist.par_iter().map(|p| if show(p) { Some(build_mesh(&g, &g.nodes[p.node].prims[p.prim])) } else { None }).collect());
     if o.verbose { eprintln!("  meshes+textures built {:.2}s ({} prims, {} textures)", t.elapsed().as_secs_f32(), plist.len(), tex_keys.len()); }
+    Parsed { path: path.to_path_buf(), t, g, side, plist, tex_keys, images, meshes }
+}
+
+/// StandardMaterial for a glb material; flags: 1 = alpha-masked (leaf cards, hair), 2 = glass
+fn std_mat(m: Option<&glb::Mat>, flags: u32, tex: Option<Handle<Image>>) -> StandardMaterial {
+    let (c, e, rough, metal, cut) = m.map_or(([0.8, 0.8, 0.8, 1.0], [0.0; 3], 0.6, 0.0, 0.5), |m| (m.color, m.emissive, m.roughness, m.metallic, m.mask.unwrap_or(0.5)));
+    let mut sm = StandardMaterial {
+        base_color: Color::linear_rgba(c[0], c[1], c[2], if flags == 2 { 0.18 } else { c[3] }),
+        base_color_texture: tex,
+        perceptual_roughness: rough.clamp(0.089, 1.0), metallic: metal,
+        emissive: LinearRgba::rgb(e[0], e[1], e[2]) * LM_PER_W,
+        double_sided: true, cull_mode: None,
+        alpha_mode: match flags { 1 => AlphaMode::Mask(cut), 2 => AlphaMode::Blend, _ => if m.map_or(false, |m| m.blend) { AlphaMode::Blend } else { AlphaMode::Opaque } },
+        ..default()
+    };
+    if flags == 2 { sm.perceptual_roughness = 0.08; sm.metallic = 0.0; sm.reflectance = 0.5; }
+    if flags == 1 && m.map_or(false, |m| m.mask.is_some()) {
+        // foliage cards: matte-ish, a little light through the leaf when backlit
+        sm.perceptual_roughness = sm.perceptual_roughness.max(0.7); sm.reflectance = 0.35; sm.diffuse_transmission = 0.3;
+    }
+    sm
+}
+
+fn load_scene(world: &mut World, ps: Parsed, o: &Opts) -> Loaded {
+    let Parsed { path, t, g, side, plist, tex_keys, images, meshes } = ps;
     let mut tex_h: HashMap<String, Handle<Image>> = HashMap::new();
     {
         let mut ia = world.resource_mut::<Assets<Image>>();
@@ -250,21 +279,7 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
         let tex = if m.map_or(false, |m| m.tex.is_some()) { format!("glb:{mi}") } else { p.tex.clone() };
         let flags = if p.cls == "people.hair" || m.map_or(false, |m| m.mask.is_some()) { 1u32 } else if p.glass { 2 } else { 0 };
         let mh = mat_h.entry((mi, tex.clone(), flags)).or_insert_with(|| {
-            let (c, e, rough, metal, cut) = m.map_or(([0.8, 0.8, 0.8, 1.0], [0.0; 3], 0.6, 0.0, 0.5), |m| (m.color, m.emissive, m.roughness, m.metallic, m.mask.unwrap_or(0.5)));
-            let mut sm = StandardMaterial {
-                base_color: Color::linear_rgba(c[0], c[1], c[2], if flags == 2 { 0.18 } else { c[3] }),
-                base_color_texture: tex_h.get(&tex).cloned(),
-                perceptual_roughness: rough.clamp(0.089, 1.0), metallic: metal,
-                emissive: LinearRgba::rgb(e[0], e[1], e[2]) * LM_PER_W,
-                double_sided: true, cull_mode: None,
-                alpha_mode: match flags { 1 => AlphaMode::Mask(cut), 2 => AlphaMode::Blend, _ => if m.map_or(false, |m| m.blend) { AlphaMode::Blend } else { AlphaMode::Opaque } },
-                ..default()
-            };
-            if flags == 2 { sm.perceptual_roughness = 0.08; sm.metallic = 0.0; sm.reflectance = 0.5; }
-            if flags == 1 && m.map_or(false, |m| m.mask.is_some()) {
-                // foliage cards: matte-ish, a little light through the leaf when backlit
-                sm.perceptual_roughness = sm.perceptual_roughness.max(0.7); sm.reflectance = 0.35; sm.diffuse_transmission = 0.3;
-            }
+            let sm = std_mat(m, flags, tex_h.get(&tex).cloned());
             world.resource_mut::<Assets<StandardMaterial>>().add(sm)
         }).clone();
         let (a, b) = (zup(pr.bmin), zup(pr.bmax));
@@ -363,6 +378,42 @@ fn capture(app: &mut App, grab: &Grab, min_warm: usize, verbose: bool) -> (Vec<u
     grab.0.lock().unwrap().out.take().expect("render target readback failed")
 }
 
+/// Compile the render pipelines the scene will need (vertex layouts x material variants, main/prepass/shadow passes)
+/// on a tiny stand-in scene in front of the camera; the pipeline cache then serves the real scene.
+fn warm_pipelines(app: &mut App, cam: Entity, verbose: bool) {
+    let quad = |uv: bool, x: f32| {
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+        m.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[x, -0.5, -3.0], [x + 0.5, -0.5, -3.0], [x + 0.5, 0.5, -3.0], [x, 0.5, -3.0]]);
+        m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0f32]; 4]);
+        if uv { m.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0f32], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]); }
+        m.insert_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+        m
+    };
+    let mk = |mask: Option<f32>, blend: bool| glb::Mat { name: String::new(), color: [0.5, 0.5, 0.5, 1.0], emissive: [0.0; 3], tex: None, mask, blend, metallic: 0.0, roughness: 0.5 };
+    let w = app.world_mut();
+    let tex = w.resource_mut::<Assets<Image>>().add(make_image(image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])), Some(0.5)));
+    // (material, flags, textured, uv)
+    let combos = [(mk(None, false), 0, false, false), (mk(None, false), 0, false, true), (mk(None, false), 0, true, true), (mk(None, true), 0, false, false),
+        (mk(None, true), 0, false, true), (mk(Some(0.5), false), 1, true, true), (mk(None, false), 1, true, true), (mk(None, false), 2, false, false), (mk(None, false), 2, false, true)];
+    let mut ents = vec![];
+    for (i, (m, flags, textured, uv)) in combos.iter().enumerate() {
+        let mh = w.resource_mut::<Assets<StandardMaterial>>().add(std_mat(Some(m), *flags, if *textured { Some(tex.clone()) } else { None }));
+        let h = w.resource_mut::<Assets<Mesh>>().add(quad(*uv, -2.5 + i as f32 * 0.55));
+        let mut e = w.spawn((Mesh3d(h), MeshMaterial3d(mh), Transform::IDENTITY));
+        if *flags == 2 { e.insert(NotShadowCaster); }
+        ents.push(e.id());
+    }
+    // the generated sky environment map only exists after a frame or two and changes the view's shader key: wait for it
+    let (mut k, mut env_frames) = (0, 0);
+    while (k < 2 || env_frames < 2 || !pipelines_settled(app)) && k < 60 {
+        let t = Instant::now(); app.update(); k += 1;
+        if app.world().get::<EnvironmentMapLight>(cam).is_some() { env_frames += 1; }
+        if verbose { eprintln!("    warm frame {k} {:.3}s{}", t.elapsed().as_secs_f32(), if env_frames > 0 { " (env map)" } else { "" }); }
+    }
+    let w = app.world_mut();
+    for e in ents { w.despawn(e); }
+}
+
 /// box-filter `ss`x`ss` blocks in linear light -> sRGB RGBA8
 fn downsample(im: &(Vec<u8>, u32, u32, TextureFormat), res: (u32, u32), ss: u32) -> image::RgbaImage {
     let data = &im.0;
@@ -412,7 +463,7 @@ fn main() {
     let ev = EV_AT_DEFAULT - (o.exposure / 0.5).log2();
     let cam_e = {
         let w = app.world_mut();
-        let mut e = w.spawn((Camera3d::default(), RenderTarget::Image(target.clone().into()), Hdr, Msaa::Off, tonemap, Exposure { ev100: ev },
+        let mut e = w.spawn((Camera3d::default(), RenderTarget::Image(target.clone().into()), Hdr, Msaa::Off, ShadowLodOrigin, tonemap, Exposure { ev100: ev },
             Projection::Perspective(PerspectiveProjection { near: 0.05, far: 4000.0, ..default() }), Transform::IDENTITY,
             AtmosphereSettings::default(), AtmosphereEnvironmentMapLight { intensity: o.ambient, ..default() },
             ColorGrading { global: ColorGradingGlobal { post_saturation: o.saturation, ..default() }, ..default() }));
@@ -426,9 +477,21 @@ fn main() {
     let sun_e = app.world_mut().spawn((DirectionalLight { shadow_maps_enabled: true, ..default() }, Transform::IDENTITY, SunDisk::EARTH,
         CascadeShadowConfigBuilder { num_cascades: 4, minimum_distance: 0.05, first_cascade_far_bound: 6.0, maximum_distance: o.shadow_dist, overlap_proportion: 0.25 }.build())).id();
     let mut frames: Vec<(String, image::RgbaImage)> = vec![];
-    for path in &o.inputs {
-        let t = Instant::now();
-        let s = load_scene(app.world_mut(), path, &o);
+    std::thread::scope(|sc| {
+    let o = &o;
+    // parse the first glb on a thread while the render pipelines compile on a stand-in scene; later glbs are parsed
+    // while the previous one renders
+    let mut pending = Some(sc.spawn(move || parse_scene(&o.inputs[0], o)));
+    let tw = Instant::now();
+    warm_pipelines(&mut app, cam_e, frames_v);
+    if o.verbose { eprintln!("pipelines warmed {:.2}s", tw.elapsed().as_secs_f32()); }
+    for idx in 0..o.inputs.len() {
+        let tj = Instant::now();
+        let ps = pending.take().unwrap().join().expect("glb parse thread");
+        if o.verbose { eprintln!("  waited {:.2}s for the parse thread", tj.elapsed().as_secs_f32()); }
+        if let Some(p) = o.inputs.get(idx + 1) { pending = Some(sc.spawn(move || parse_scene(p, o))); }
+        let t = ps.t;
+        let s = load_scene(app.world_mut(), ps, o);
         let cams = cams::resolve_cams(&s.info, &o.cams, o.ncams, o.res);
         // sun
         let (sun_az, sun_el, sun_i, ambient) = s.lit.map_or((o.sun.0, o.sun.1, o.sun_i, o.ambient), |l| (l.0, l.1, l.2, l.3));
@@ -480,6 +543,7 @@ fn main() {
         for e in s.ents { w.despawn(e); }
         if o.verbose { eprintln!("scene {} done {:.2}s", s.name, t.elapsed().as_secs_f32()); }
     }
+    });
     if frames.is_empty() { eprintln!("no frames"); std::process::exit(2); }
     let is_png = o.out.extension().map_or(false, |e| e == "png");
     if o.sheet || (is_png && frames.len() > 1) {
