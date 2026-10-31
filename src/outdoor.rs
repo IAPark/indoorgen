@@ -358,9 +358,10 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     // sidecar props are then left empty (the renderer's Infinigen tree cache is for trees = "infinigen")
     if cfg.trees == "rust" {
         use crate::assets::rtree::{self, Lod, Species};
-        let mut built: std::collections::HashMap<(u8, u64, u8), (Mesh, Mesh)> = Default::default();
+        let mut built: std::collections::HashMap<(u8, u64, u8), (Mesh, Mesh, Vec<[f64; 3]>)> = Default::default();
         let mut mats: std::collections::HashMap<u8, (usize, usize)> = Default::default();
         let (mut bark_all, mut leaf_all): (std::collections::HashMap<u8, Mesh>, std::collections::HashMap<u8, Mesh>) = (Default::default(), Default::default());
+        let mut cent_all: std::collections::HashMap<u8, Vec<[f64; 3]>> = Default::default();
         let species = [Species::Oak, Species::Maple, Species::Birch, Species::Pine, Species::Willow, Species::Shrub];
         // species mix of this house: 2-3 tree species (groves read as stands, not a catalogue)
         let mut pool: Vec<usize> = (0..5).collect();
@@ -374,7 +375,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
             let d = (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs());
             let lod = if d > e { Lod::Far } else { Lod::Near };
             let key = (si as u8, variant, (lod == Lod::Far) as u8);
-            let (b, l) = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], seed ^ (variant * 7919) ^ (si as u64) << 20, lod); (t.bark, t.leaves) });
+            let (b, l, lc) = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], seed ^ (variant * 7919) ^ (si as u64) << 20, lod); (t.bark, t.leaves, t.leaf_centres) });
             let m = Mat4::translation(loc).mul(&Mat4::rot_z(pr["rot"].as_f64().unwrap_or(0.0))).mul(&Mat4::scale([pr["scale"].as_f64().unwrap_or(1.0); 3]));
             let (mut bb, mut ll) = (b.clone(), l.clone());
             bb.transform(&m); ll.transform(&m);
@@ -382,13 +383,14 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
             let le = leaf_all.entry(si as u8).or_default();
             if le.uv.len() != le.pos.len() { le.uv.resize(le.pos.len(), [0.0, 0.0]); }
             le.append(&ll);
+            cent_all.entry(si as u8).or_default().extend(lc.iter().map(|c| m.apply(*c)));
             mats.entry(si as u8).or_insert_with(|| { let (bm, lm) = rtree::materials(species[si], 0.0); (scene.material(bm), scene.material(lm)) });
         }
         let mut keys: Vec<u8> = bark_all.keys().copied().collect(); keys.sort();
         for k in keys {
             let (bi, li) = mats[&k];
             scene.add(&format!("outdoor_rtree_{:?}#0", species[k as usize]), "OutdoorTree", bark_all.remove(&k).unwrap(), bi);
-            scene.add(&format!("outdoor_rtree_{:?}#1", species[k as usize]), "OutdoorTree", leaf_all.remove(&k).unwrap(), li);
+            scene.add_bent(&format!("outdoor_rtree_{:?}#1", species[k as usize]), "OutdoorTree", leaf_all.remove(&k).unwrap(), li, cent_all.remove(&k).unwrap_or_default());
         }
         log.push(format!("rust trees: {} builds, species {:?}", built.len(), pool.iter().map(|&i| species[i]).collect::<Vec<_>>()));
         props.clear();

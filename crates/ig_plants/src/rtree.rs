@@ -100,6 +100,8 @@ struct Stem { pts: Vec<V3>, rad: Vec<f64> }
 pub struct Tree {
     pub bark: Mesh,
     pub leaves: Mesh,
+    /// one crown centre per leaf face (Scene::add_bent: leaf-card normals bent away from it)
+    pub leaf_centres: Vec<V3>,
     pub height: f64,
 }
 
@@ -243,10 +245,10 @@ impl<'a> Builder<'a> {
         let nn = nodes.len();
         let mut children: Vec<Vec<usize>> = vec![vec![]; nn];
         for (i, (_, pa)) in nodes.iter().enumerate() { if let Some(p) = pa { children[*p].push(i); } }
-        let r0 = (h * 0.0012).max(0.004);
+        let r0 = 0.003 * (h / 10.0).max(0.4);
         let mut rad = vec![0.0f64; nn];
         for i in (0..nn).rev() {
-            if children[i].is_empty() { rad[i] = r0 } else { rad[i] = children[i].iter().map(|&c| rad[c].powf(2.5)).sum::<f64>().powf(1.0 / 2.5); }
+            if children[i].is_empty() { rad[i] = r0 } else { rad[i] = children[i].iter().map(|&c| rad[c].powf(2.1)).sum::<f64>().powf(1.0 / 2.1); }
         }
         // the trunk keeps its Weber-Penn radius below the crown
         for i in 0..trunk.len().min(nn) { rad[i] = rad[i].max(trunk_rad[i.min(trunk_rad.len() - 1)] * 0.5).min(trunk_rad[0] * 1.5); }
@@ -256,10 +258,10 @@ impl<'a> Builder<'a> {
             // start a chain where the parent is a fork or the trunk
             if children[pa].len() == 1 && pa >= trunk.len() { continue }
             let mut pts = vec![nodes[pa].0];
-            let mut rs = vec![rad[pa].min(rad[i] * 1.6)];
+            let mut rs = vec![rad[pa].min(rad[i] * 1.6).min(rad[pa] * 0.7)];
             let mut cur = i;
             loop {
-                pts.push(nodes[cur].0); rs.push(rad[cur]);
+                pts.push(nodes[cur].0); rs.push(rad[cur].min(rs[0]));
                 if children[cur].len() != 1 { break }
                 cur = children[cur][0];
             }
@@ -272,7 +274,7 @@ impl<'a> Builder<'a> {
             let thin = rad[i] < r0 * 3.5;
             if !thin { continue }
             let d = match nodes[i].1 { Some(p) => norm(sub(nodes[i].0, nodes[p].0)), None => [0.0, 0.0, 1.0] };
-            let n = if self.lod == Lod::Far { if self.r.f64() < 0.3 { 1 } else { 0 } } else if children[i].is_empty() { 4 } else { 3 };
+            let n = if self.lod == Lod::Far { if self.r.f64() < 0.3 { 1 } else { 0 } } else if children[i].is_empty() { 6 } else { 4 };
             for _ in 0..n { self.cards.push((nodes[i].0, d)); }
         }
     }
@@ -360,12 +362,18 @@ pub fn build(sp: Species, seed: u64, lod: Lod) -> Tree {
     }
     let mut bark = Mesh::new();
     for s in &b.stems { tube(&mut bark, s, lod); }
-    let centre = [0.0, 0.0, h * 0.65];
+    // crown centre: the mean of the card positions (the volume the cards shade as)
+    let centre = if b.cards.is_empty() { [0.0, 0.0, h * 0.65] } else {
+        let n = b.cards.len() as f64;
+        let c = b.cards.iter().fold([0.0; 3], |a, (p, _)| add(a, *p));
+        [c[0] / n, c[1] / n, c[2] / n]
+    };
     let mut leaves = Mesh::new();
     let size = p.card * if lod == Lod::Far { 2.6 } else { 1.0 } * (h / p.scale).sqrt();
     let cards = std::mem::take(&mut b.cards);
+    let n_cards = cards.len();
     for (pos, d) in cards { card(&mut leaves, &mut b.r, pos, d, size, centre); }
-    Tree { bark, leaves, height: h }
+    Tree { bark, leaves, leaf_centres: vec![centre; n_cards], height: h }
 }
 
 /// The species' materials: bark (plain) and the leaf-cluster card material (RGBA texture, alpha mask). `tint` shifts the leaf colour

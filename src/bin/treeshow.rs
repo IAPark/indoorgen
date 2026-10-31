@@ -20,9 +20,10 @@ fn main() {
         let shift = Mat4::translation([x, 0.0, 0.0]);
         let (mut b, mut l) = (tr.bark, tr.leaves);
         b.transform(&shift); l.transform(&shift);
+        let centres: Vec<[f64; 3]> = tr.leaf_centres.iter().map(|c| shift.apply(*c)).collect();
         eprintln!("{sp:?}: height {:.1} m, bark {} faces, {} leaf cards, {:.2}s", tr.height, b.faces.len(), l.faces.len(), t.elapsed().as_secs_f64());
         scene.add(&format!("tree_{sp:?}#0"), "RTree", b, bi);
-        scene.add(&format!("tree_{sp:?}#1"), "RTree", l, li);
+        scene.add_bent(&format!("tree_{sp:?}#1"), "RTree", l, li, centres);
         x += 14.0;
     }
     scene.write_glb(&out).unwrap();

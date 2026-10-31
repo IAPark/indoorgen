@@ -59,7 +59,7 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
             let mut mesh = part.mesh.clone();
             mesh.transform(&m);
             of_key.entry(k.clone()).or_default().push(nodes.len());
-            nodes.push(Node { name: format!("{k}#{pi}"), mesh, material: 0, class: String::new(), pose: None });
+            nodes.push(Node { name: format!("{k}#{pi}"), mesh, material: 0, class: String::new(), pose: None, bend: None });
             owner.push(ki);
         }
     }

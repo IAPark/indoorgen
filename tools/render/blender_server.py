@@ -82,6 +82,7 @@ def run_job(job):
     if sep:
         path = os.path.join(SCENES, key + ".blend")
         t = time.time()
+        bpy.context.preferences.filepaths.save_version = 0  # (no .blend1 backups: the scenes are ~1 GB each)
         bpy.ops.wm.save_as_mainfile(filepath=path, copy=True, compress=False)
         _cache[key] = (path, g)
         print("BSRV saved scene %s (%.1fs)" % (key, time.time() - t), flush=True)

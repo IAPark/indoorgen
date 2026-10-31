@@ -177,7 +177,7 @@ impl Mesh {
     }
     /// Export form: (positions, uv, triangles) where quads/n-gons are fan-triangulated with the fan's shared
     /// vertices duplicated for k >= 2 (matching the old triangle-soup layout, so per-triangle normals/uvs are identical).
-    fn export_tris(&self) -> (Vec<V3>, Vec<[f64; 2]>, Vec<[u32; 3]>) {
+    fn export_tris(&self) -> (Vec<V3>, Vec<[f64; 2]>, Vec<[u32; 3]>, Vec<u32>) {
         // Full triangle soup: every triangle owns its 3 vertices. The exporter computes smooth-by-angle normals per vertex
         // (welding by position), so a vertex index shared by faces at a sharp corner would get the normal of whichever triangle was
         // processed last (dark / flipped-looking triangles on flat panels of indexed meshes such as the exact KitchenSpace slab).
@@ -187,8 +187,9 @@ impl Mesh {
         let mut pos: Vec<V3> = Vec::with_capacity(this.faces.len() * 6);
         let mut uv: Vec<[f64; 2]> = vec![];
         let mut tris = Vec::with_capacity(this.faces.len() * 2);
+        let mut tri_face: Vec<u32> = Vec::with_capacity(this.faces.len() * 2);
         let mut seen: std::collections::HashSet<u128, FxBuild> = Default::default();
-        for f in &this.faces {
+        for (fi, f) in this.faces.iter().enumerate() {
             for [ia, ib, ic] in triangulate_face(&this.pos, f) {
                 // a triangle that coincides with an earlier one (same welded corners, either winding: collapsed cloth layers, merged
                 // box-comforter seams, boolean leftovers) would z-fight with it (one side lit, one dark): keep the first only
@@ -221,9 +222,10 @@ impl Mesh {
                     }
                 }
                 tris.push([n, n + 1, n + 2]);
+                tri_face.push(fi as u32);
             }
         }
-        (pos, uv, tris)
+        (pos, uv, tris, tri_face)
     }
 }
 
@@ -534,6 +536,9 @@ pub struct Node {
     /// asset placement (row-major 4x4, Z-up world) the mesh was transformed by; written to the sidecar so the renderer can
     /// restore python-style object-local coordinates (Infinigen shaders use Object texture coordinates)
     pub pose: Option<[[f64; 4]; 4]>,
+    /// foliage: a crown centre per mesh face; the exporter bends that face's vertex normals 75 % toward pointing away from it (leaf cards
+    /// shade as a volume -- Décoret et al. / game foliage "crown normals" -- instead of as scattered flat quads)
+    pub bend: Option<std::sync::Arc<Vec<V3>>>,
 }
 
 /// Fast deterministic hasher (FxHash) for lookup-only maps in the exporter whose iteration order never reaches the output.
@@ -580,12 +585,19 @@ impl Scene {
     }
     pub fn add(&mut self, name: &str, class: &str, mesh: Mesh, material: usize) {
         if !mesh.is_empty() {
-            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None });
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: None });
+        }
+    }
+    /// add a foliage node: `centres` = one crown centre per face of `mesh` (see Node::bend)
+    pub fn add_bent(&mut self, name: &str, class: &str, mesh: Mesh, material: usize, centres: Vec<V3>) {
+        if !mesh.is_empty() {
+            debug_assert_eq!(centres.len(), mesh.faces.len());
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: Some(std::sync::Arc::new(centres)) });
         }
     }
     pub fn add_posed(&mut self, name: &str, class: &str, mesh: Mesh, material: usize, pose: [[f64; 4]; 4]) {
         if !mesh.is_empty() {
-            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: Some(pose) });
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: Some(pose), bend: None });
         }
     }
 
@@ -906,7 +918,7 @@ impl Scene {
         let lapn = |i: usize, t: &mut web_time::Instant| { ph[i].fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed); *t = web_time::Instant::now(); };
         self.nodes.par_iter().map(|n| {
             let mut tt = web_time::Instant::now();
-            let (xpos, xuv, xtris) = n.mesh.export_tris();
+            let (xpos, xuv, xtris, xface) = n.mesh.export_tris();
             lapn(0, &mut tt);
             let m = &Mesh { pos: xpos, faces: vec![], uv: xuv };
             let tris = &xtris;
@@ -950,6 +962,23 @@ impl Scene {
                         }
                     }
                     g0 = g1;
+                }
+            }
+            if let Some(b) = &n.bend {
+                for (ti, t) in tris.iter().enumerate() {
+                    let Some(c) = b.get(xface[ti] as usize) else { continue };
+                    for &v in t {
+                        let v = v as usize;
+                        let d = sub(m.pos[v], *c);
+                        let dl = dot(d, d).sqrt().max(1e-9);
+                        let nv = normals[v];
+                        let nl = ((nv[0] * nv[0] + nv[1] * nv[1] + nv[2] * nv[2]) as f64).sqrt().max(1e-12);
+                        // (a card's own normal may face either way: flip it to the outward side before blending)
+                        let mut own = [nv[0] as f64 / nl, nv[1] as f64 / nl, nv[2] as f64 / nl];
+                        if dot(own, d) < 0.0 { own = [-own[0], -own[1], -own[2]]; }
+                        let b2 = [0.25 * own[0] + 0.75 * d[0] / dl, 0.25 * own[1] + 0.75 * d[1] / dl, 0.25 * own[2] + 0.75 * d[2] / dl];
+                        normals[v] = [b2[0] as f32, b2[1] as f32, b2[2] as f32];
+                    }
                 }
             }
             lapn(1, &mut tt);
