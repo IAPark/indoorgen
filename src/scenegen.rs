@@ -23,6 +23,8 @@ pub struct Built {
     pub variation: Option<serde_json::Value>,
     /// sidecar `objects` list (key, class, parent, room per generated object)
     pub objects: Vec<serde_json::Value>,
+    /// sidecar `outdoor` record (terrain settings, vegetation spots for the renderer); None without the outdoor stage
+    pub outdoor: Option<serde_json::Value>,
 }
 
 impl Built {
@@ -30,6 +32,7 @@ impl Built {
     pub fn merge_sidecar(&self, side: &mut serde_json::Value) {
         side["objects"] = serde_json::Value::Array(self.objects.clone());
         if let Some(v) = &self.variation { side["variation"] = v.clone(); }
+        if let Some(v) = &self.outdoor { side["outdoor"] = v.clone(); }
     }
 }
 
@@ -235,7 +238,7 @@ pub fn build_scene(p: &Params) -> Built {
     }
     if LAYOUT_ONLY.with(|c| c.get()) {
         LAYOUT_OUT.with(|o| *o.borrow_mut() = Some(crate::layout_dump::to_json(seed, &g)));
-        return Built { scene: Scene::default(), room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene: web_time::Instant::now(), done: false, variation: None, objects: vec![] };
+        return Built { scene: Scene::default(), room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene: web_time::Instant::now(), done: false, variation: None, objects: vec![], outdoor: None };
     }
     if let Ok(path) = std::env::var("LAYOUT_DUMP") {
         crate::layout_dump::dump(&path, seed, &g);
@@ -796,6 +799,13 @@ pub fn build_scene(p: &Params) -> Built {
         let _ = crate::invariants::check(&crate::invariants::Inv { scene: &scene, state: &g.state, visuals: &visuals, qc: &qi, floor_z: g.c.wall_thickness / 2.0, ceiling_z: g.c.wall_height - g.c.wall_thickness / 2.0 });
         lap("invariants");
     }
+    // terrain and vegetation outside (after the invariants: the terrain is not furniture)
+    let outdoor = if cfg.program.outdoor.on && !orig_prog {
+        let (rec, log) = crate::outdoor::add(&mut scene, &g.room_polys, seed, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.outdoor);
+        for l in log { eprintln!("OUTDOOR {l}"); }
+        lap("outdoor");
+        Some(rec)
+    } else { None };
     // sidecar `variation` record: every factor's effective seed / settings and the values the renderer needs (written only when some factor is not default)
     let variation = if var.record || *var != Default::default() || cfg.mess.seed.is_some() || cfg.people.seed.is_some() {
         Some(serde_json::json!({
@@ -811,10 +821,10 @@ pub fn build_scene(p: &Params) -> Built {
             "people": {"count": people_n, "seed": people_seed, "placed": people.len()},
         }))
     } else { None };
-    if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false, variation, objects }; }
+    if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false, variation, objects, outdoor }; }
     lap("qc done");
     { let tb = web_time::Instant::now(); let (a, b, k) = indoorgen::budget::apply(&mut scene, &cfg.geometry); if a > 0 { eprintln!("BUDGET tris {a} -> {b} ({k} nodes simplified) in {:.1}s", tb.elapsed().as_secs_f64()); } }
-    Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true, variation, objects }
+    Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true, variation, objects, outdoor }
 }
 
 /// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through

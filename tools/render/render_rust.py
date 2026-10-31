@@ -697,6 +697,37 @@ if args.showcase:
     sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
     sc.render.resolution_x, sc.render.resolution_y = 1200, 500; sc.render.filepath = args.out
     bpy.ops.render.render(write_still=True); sys.exit(0)
+# outdoor vegetation (sidecar `outdoor.props`, src/outdoor.rs): Infinigen TreeFactory / BushFactory variants, built once by
+# tools/render/tree_cache.py under Blender 4.2 (TREE_CACHE dir, IG42_PYTHON interpreter) and instanced at every spot
+def add_outdoor(sc, side):
+    import os, subprocess
+    props = (side.get("outdoor") or {}).get("props") or []
+    if not props or os.environ.get("NO_OUTDOOR"): return
+    cache = os.environ.get("TREE_CACHE", os.path.expanduser("~/work/bench/tree_cache")); os.makedirs(cache, exist_ok=True)
+    py42 = os.environ.get("IG42_PYTHON", os.path.expanduser("~/work/infinigen-ref/.venv/bin/python"))
+    src = os.environ.get("IG_REF_SRC", os.path.expanduser("~/work/infinigen-ref/src"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    colls = {}
+    for kind, variant in sorted({(p["kind"], int(p["variant"])) for p in props}):
+        path = os.path.join(cache, f"{kind}_{variant}.blend")
+        if not os.path.exists(path):
+            r = subprocess.run([py42, os.path.join(here, "tree_cache.py"), kind, str(variant), path], cwd=src, capture_output=True, text=True)
+            print("TREECACHE build", kind, variant, r.returncode, [l for l in r.stdout.splitlines() if l.startswith("TREECACHE")])
+            if r.returncode != 0 or not os.path.exists(path): print("TREECACHE FAIL", r.stderr[-800:]); continue
+        name = f"outdoor_{kind}_{variant}"
+        with bpy.data.libraries.load(path, link=False) as (src_d, dst_d):
+            dst_d.collections = [c for c in src_d.collections if c == name]
+        if dst_d.collections: colls[(kind, variant)] = dst_d.collections[0]
+    n = 0
+    for i, p in enumerate(props):
+        c = colls.get((p["kind"], int(p["variant"])))
+        if c is None: continue
+        e = bpy.data.objects.new(f"outdoor_{p['kind']}_inst{i}", None)
+        e.instance_type = "COLLECTION"; e.instance_collection = c
+        e.location = p["loc"]; e.rotation_euler = (0, 0, p["rot"]); e.scale = (p["scale"],) * 3
+        sc.collection.objects.link(e); n += 1
+    print("OUTDOOR", n, "instances of", len(colls), "variants")
+
 # point lights (PointLampFactory)
 _lamp = dscap.lamp_state(DS.get("variation"), sidecar) if DS else (lambda L: (True, 1.0))
 for L in sidecar.get("lights", []) + ([dict(L, _off=True) for L in sidecar.get("lights_off", [])] if DS else []):
@@ -831,6 +862,8 @@ import os as _os
 sc.render.resolution_percentage = int(_os.environ.get("RES_PCT", "100"))
 sc.cycles.use_adaptive_sampling = True
 sc.render.filepath = args.out
+# (after the camera, which only needs the room)
+add_outdoor(sc, sidecar)
 if os.environ.get('DEBUGL'):
     from collections import Counter
     print('LIGHTS', Counter((o.data.type, round(o.data.energy,1), getattr(o.data.cycles,'is_portal',False)) for o in bpy.data.objects if o.type=='LIGHT'))

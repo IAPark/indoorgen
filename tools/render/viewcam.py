@@ -88,7 +88,7 @@ def view_camera(sc, room, view):
     cen = (ax / area, ay / area)
     outline = _simplify(_hull(pts))
     print("VIEWOUT", [(round(a, 2), round(b, 2)) for a, b in outline], "floors", [o.name for o in fl])
-    skip = (".floor", ".wall", ".ceiling", "skirting", "exterior", "entrance", "placeholder", "vc", "portal", "window", "door")
+    skip = (".floor", ".wall", ".ceiling", "skirting", "exterior", "entrance", "placeholder", "vc", "portal", "window", "door", "outdoor")
     groups = {}
     def key(o):
         r = o
@@ -96,7 +96,8 @@ def view_camera(sc, room, view):
         return r.name.split("#")[0]  # Rust exports asset parts as "<id>#<k>"; python joins an asset or parents its parts
     for o in bpy.data.objects:
         n = o.name.lower()
-        if o.type != "MESH" or o.hide_render or any(k in n for k in skip) or o.name.endswith(".meshed"): continue
+        # (not linked into the scene: library objects such as the outdoor tree variants, instanced elsewhere)
+        if o.type != "MESH" or o.hide_render or not o.users_scene or any(k in n for k in skip) or o.name.endswith(".meshed"): continue
         if any(c.name.startswith("placeholders") for c in o.users_collection): continue
         bb = [o.matrix_world @ mathutils.Vector(c) for c in o.bound_box]
         z0 = min(b.z for b in bb); z1 = max(b.z for b in bb)
@@ -155,10 +156,32 @@ def view_camera(sc, room, view):
     ceil = [o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith(room) and ".ceiling" in o.name]
     cz = max(((o.matrix_world @ mathutils.Vector(c)).z for o in ceil for c in o.bound_box), default=None)
     dg = bpy.context.evaluated_depsgraph_get()
+    # one BVH of the room's own geometry for every probe ray: the meshes within 1 m of its outline (walls, floor, ceiling, furniture,
+    # window glass and doors -- a ray through a window stops at the glass); scene.ray_cast walked the whole scene per call, which crawled
+    # once the outdoor trees were in it
+    from mathutils.bvhtree import BVHTree
+    xs = [p[0] for p in outline]; ys = [p[1] for p in outline]
+    rx0, rx1, ry0, ry1 = min(xs) - 1.0, max(xs) + 1.0, min(ys) - 1.0, max(ys) + 1.0
+    verts, polys, owner = [], [], []
+    for o in bpy.data.objects:
+        if o.type != "MESH" or o.hide_render or not o.users_scene or "outdoor" in o.name.lower(): continue
+        bb = [o.matrix_world @ mathutils.Vector(c) for c in o.bound_box]
+        if max(b.x for b in bb) < rx0 or min(b.x for b in bb) > rx1 or max(b.y for b in bb) < ry0 or min(b.y for b in bb) > ry1: continue
+        me = o.evaluated_get(dg).to_mesh()
+        base = len(verts)
+        verts.extend(o.matrix_world @ v.co for v in me.vertices)
+        for f in me.polygons:
+            polys.append([base + i for i in f.vertices]); owner.append(o)
+        o.evaluated_get(dg).to_mesh_clear()
+    room_bvh = BVHTree.FromPolygons(verts, polys, all_triangles=False)
+    def cast(o, d, dist):
+        loc, nrm, idx, _ = room_bvh.ray_cast(o, d, dist)
+        if loc is None: return False, None, None, None
+        return True, loc, nrm, owner[idx]
     def headroom(q):
         # nothing over the camera short of the ceiling (a window alcove's header: the spot was on the floor, the view a black slab)
         if cz is None: return True
-        hit, loc, *_ = sc.ray_cast(dg, mathutils.Vector((q[0], q[1], 1.5)), mathutils.Vector((0, 0, 1)))
+        hit, loc, *_ = cast(mathutils.Vector((q[0], q[1], 1.5)), mathutils.Vector((0, 0, 1)), 10.0)
         return not hit or loc.z > cz - 0.1
     cands = sorted(outline, key=lambda p: -math.hypot(p[0] - cen[0], p[1] - cen[1]))[:6]
     # (and the walls' midpoints, after the corners: a small room's corners can all stand against furniture -- a wardrobe's side
@@ -177,7 +200,7 @@ def view_camera(sc, room, view):
     # Footprint boxes misjudged it every way (a wardrobe's side filled the frame, a duvet the foreground, a blank wall the rest):
     # + each different piece of furniture seen, + the share of the frame on furniture 1-5 m out, - the share within 1.4 m of the lens,
     # - the share on a door leaf, - the share on a wall within 1.8 m. The heading is searched +-30 deg about the room's centre; the pitch is fixed (3 m out, 0.75 m up).
-    fixed = ("wall", "floor", "ceiling", "skirting", "exterior", "entrance", "window", "portal", "door", "frame", "light")
+    fixed = ("wall", "floor", "ceiling", "skirting", "exterior", "entrance", "window", "portal", "door", "frame", "light", "outdoor")
     leaf_re = re.compile(r"door\d+(#|$)")
     def view_score(q, yaw):
         fx, fy = cen[0] - q[0], cen[1] - q[1]; L = math.hypot(fx, fy) or 1.0
@@ -190,7 +213,7 @@ def view_camera(sc, room, view):
         for i in range(24):
             for j in range(14):
                 d = (fwd + right * ((i + 0.5) / 24 * 2 - 1) + up * ((j + 0.5) / 14 * 2 - 1) * 0.5625).normalized()
-                hit, loc, nrm, _, ob, _ = sc.ray_cast(dg, o, d, distance=8.0)
+                hit, loc, nrm, ob = cast(o, d, 8.0)
                 n += 1
                 if not hit: continue
                 dist = (loc - o).length; name = ob.name.lower()
