@@ -111,9 +111,19 @@ struct Builder<'a> {
     stems: Vec<Stem>,
     cards: Vec<(V3, V3)>,
     lod: Lod,
+    /// crowding (Palubicki et al. 2009, Pirk et al. 2012: crowns share the space between neighbours): the tree's own crown radius
+    /// and its neighbours' (trunk position, crown radius), local frame; space past the power-diagram boundary belongs to a neighbour
+    own_r: f64,
+    nb: Vec<([f64; 2], f64)>,
 }
 
 impl<'a> Builder<'a> {
+    /// is the point in this tree's share of the space (its Laguerre / power cell among the neighbours' crowns)?
+    fn mine(&self, p: V3) -> bool {
+        let own = p[0] * p[0] + p[1] * p[1] - self.own_r * self.own_r;
+        self.nb.iter().all(|(c, r)| own <= (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) - r * r)
+    }
+
     /// Weber-Penn stem at `level`, from `start` along `dir`, length `l`, base radius `rad0`; recurses into children
     fn stem(&mut self, level: usize, start: V3, dir: V3, l: f64, rad0: f64, tree_h: f64) {
         let lp = self.p.levels[level];
@@ -177,6 +187,13 @@ impl<'a> Builder<'a> {
             let side = perp(pdir);
             let mut cd = rot(pdir, side, down.to_radians());
             cd = rot(cd, pdir, rot_acc.to_radians());
+            // (a crowded first-order branch stops at the boundary with its neighbour's crown)
+            let mut cl_len = cl_len;
+            if level == 0 && !self.nb.is_empty() {
+                let mut f = 1.0;
+                while f > 0.3 && !self.mine(add(at, mul(cd, cl_len * f))) { f -= 0.1; }
+                cl_len *= f;
+            }
             let prad = rad_at(&rad, off);
             let crad = (prad * (cl_len / l).powf(self.p.ratio_power)).min(prad * 0.9);
             self.stem(level + 1, at, cd, cl_len, crad, tree_h);
@@ -206,7 +223,7 @@ impl<'a> Builder<'a> {
             let pnt = [base[0] + q[0] * cr, base[1] + q[1] * cr, cz + q[2] * ch * 0.5];
             let in_core = dot(q, q) < 0.36 && q[2] > -0.6;
             let in_lobe = lobes.iter().any(|(c, lr)| len(sub(pnt, [base[0] + c[0], base[1] + c[1], cz + c[2]])) < *lr);
-            if in_core || in_lobe { attr.push(pnt); }
+            if (in_core || in_lobe) && self.mine(pnt) { attr.push(pnt); }
         }
         let step = h * 0.035;
         let (di, dk) = (step * 9.0, step * 1.6);
@@ -346,9 +363,20 @@ fn card(m: &mut Mesh, r: &mut Rng, p: V3, d: V3, size: f64, centre: V3) {
 }
 
 /// Build one tree (local frame: trunk base at the origin, z up).
-pub fn build(sp: Species, seed: u64, lod: Lod) -> Tree {
+pub fn build(sp: Species, seed: u64, lod: Lod) -> Tree { build_crowded(sp, seed, lod, 0.0, &[]) }
+
+/// The nominal crown radius of a species at scale 1 (m): what the outdoor stage's plant simulation sizes trees against.
+pub fn crown_radius(sp: Species) -> f64 {
     let p = params(sp);
-    let mut b = Builder { p: &p, r: Rng::seeded(seed), stems: vec![], cards: vec![], lod };
+    match p.sc { Some((rr, _)) => p.scale * rr * 0.85, None => p.scale * match sp { Species::Willow => 0.42, Species::Birch => 0.22, _ => 0.24 } }
+}
+
+/// Build one tree among neighbours: `own_r` its crown radius, `nb` the neighbours' (trunk xy, crown radius), all in the tree's local
+/// frame; branches and attraction points stay on this tree's side of the power-diagram boundaries, so crowns grow away from each
+/// other and lean into gaps. (own_r 0 / no neighbours = a free-standing tree.)
+pub fn build_crowded(sp: Species, seed: u64, lod: Lod, own_r: f64, nb: &[([f64; 2], f64)]) -> Tree {
+    let p = params(sp);
+    let mut b = Builder { p: &p, r: Rng::seeded(seed), stems: vec![], cards: vec![], lod, own_r, nb: nb.to_vec() };
     let h = (p.scale + b.r.uniform(-1.0, 1.0) * p.scale_v).max(0.5);
     for t in 0..p.trunks.max(1) {
         let (dir, start) = if p.trunks > 1 {

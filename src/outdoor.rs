@@ -9,8 +9,9 @@
 //! Geometry: a regular grid out to `near_extent` around the house (quads under the house dropped) and a radial ring beyond it to
 //! `far_radius`; materials are Infinigen's terrain shaders (terrain.Mud / Dirt / Soil / Sand / Stone / CrackedGround / CobbleStone
 //! by its ground weights; terrain.Mountain / Sandstone on the ridges), resolved by the renderer like every material spec.
-//! Vegetation: tree and bush spots (Poisson-disk, clear of the walls) go to the sidecar `outdoor.props`; the renderer instances
-//! Infinigen's TreeFactory / BushFactory variants there (tools/render/tree_cache.py builds them once in Blender 4.2).
+//! Vegetation: a plant-community simulation places trees (species by site, sizes by competition) and understory shrubs, with a
+//! canopy shell for the distant forest; Rust trees go in as geometry, or (trees = "infinigen") the spots go to the sidecar
+//! `outdoor.props` and the renderer instances Infinigen's TreeFactory / BushFactory variants (tools/render/tree_cache.py).
 //! Stream: int_hash(seed, "outdoor").
 use crate::mesh::{Mat4, Material, Mesh, Scene};
 use crate::rng::Rng;
@@ -304,79 +305,251 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);
     scene.add("outdoor_terrain_far#0", "OutdoorTerrain", far_g, gm);
     if !far_m.is_empty() { scene.add("outdoor_terrain_far#1", "OutdoorTerrain", far_m, mm); }
-    // ---- vegetation: groves (Infinigen's per-species noise masks, generate_nature.py): trees fill the patches where a low-frequency
-    // Perlin mask is high, Poisson-spaced inside them, with clearings between and a few solitary field trees; woodland continues past
-    // the fine grid to `tree_far` m (the mid-distance was an empty plain). Bushes gather at grove edges and near the house.
+    // ---- vegetation: a plant-community simulation (Deussen et al., "Realistic modeling and rendering of plant ecosystems", 1998;
+    // Lane & Prusinkiewicz, "Generating spatial distributions for multilevel models of plant communities", 2002). Seeds fall where
+    // Infinigen's low-frequency grove mask (generate_nature.py) is high, plus a few in the open; each plant is a crown circle that grows
+    // toward its species' size, and where two crowns overlap the smaller one is shaded: it grows slower and dies with a chance set by
+    // its shade tolerance (self-thinning). Old trees die (gaps), mature trees drop seeds of their own species nearby (stands, not a
+    // catalogue), so the survivors have natural spacing and a mix of ages and sizes. Species follow the site (a light version of
+    // Pałubicki et al., "Ecoclimates", 2022): willows in wet hollows, pines on slopes and high ground, oak and maple on the mesic
+    // ground, birch as the fast short-lived pioneer of gaps and edges, all weighted by a per-house dominance draw. Understory shrubs
+    // survive at edges and in gaps, not deep under the canopy. Woodland continues past the fine grid to `tree_far` m.
     let mut props: Vec<Value> = vec![];
-    let mut placed: Vec<([f64; 2], f64)> = vec![];
     let grove_seed = r.next_u64() as u32;
     let mask = |x: f64, y: f64| perlin(x, y, grove_seed, 3, 0.012);
     let thresh = 0.12 - 0.25 * (cfg.tree_density / 10.0).min(1.0);
     let far = cfg.tree_far.max(e);
-    let mut add = |kind: &str, x: f64, y: f64, d: f64, sep: f64, variants: u32, sc: (f64, f64), r: &mut Rng, placed: &mut Vec<([f64; 2], f64)>, props: &mut Vec<Value>| -> bool {
-        if placed.iter().any(|(p, rr)| (p[0] - x).hypot(p[1] - y) < rr.max(sep)) { return false }
-        let z = t.height(x, y, d) - 0.05;
-        let variant = 1000 + r.randint(0, variants as i64) as u64;
-        props.push(json!({"kind": kind, "variant": variant, "loc": [x, y, z], "rot": r.uniform(0.0, std::f64::consts::TAU), "scale": r.uniform(sc.0, sc.1)}));
-        placed.push(([x, y], sep));
-        true
+    // species (rtree order Oak, Maple, Birch, Pine, Willow): max crown radius (m), growth (m per step), shade tolerance, life (steps),
+    // seed dispersal (m), seed rain (chance per mature tree per recruitment)
+    struct Sp { rmax: f64, grow: f64, tol: f64, life: f64, disperse: f64, fec: f64 }
+    let sps = [
+        Sp { rmax: 7.0, grow: 0.30, tol: 0.5, life: 60.0, disperse: 12.0, fec: 0.3 },
+        Sp { rmax: 5.5, grow: 0.35, tol: 0.8, life: 45.0, disperse: 18.0, fec: 0.35 },
+        Sp { rmax: 3.4, grow: 0.6, tol: 0.15, life: 22.0, disperse: 40.0, fec: 0.55 },
+        Sp { rmax: 3.8, grow: 0.35, tol: 0.25, life: 50.0, disperse: 25.0, fec: 0.4 },
+        Sp { rmax: 5.5, grow: 0.5, tol: 0.2, life: 30.0, disperse: 15.0, fec: 0.5 },
+    ];
+    // per-house dominance: one or two species lead
+    let mut dom = [0.0f64; 5];
+    for w in dom.iter_mut() { *w = r.uniform(0.05, 0.35); }
+    let lead = r.randint(0, 5) as usize; dom[lead] = 1.0;
+    if r.f64() < 0.6 { dom[r.randint(0, 5) as usize] = 0.8; }
+    let nat = |x: f64, y: f64| t.height(x, y, 1e4);
+    let site = |x: f64, y: f64| -> [f64; 5] {
+        let h = nat(x, y);
+        let (dx, dy) = ((nat(x + 3.0, y) - nat(x - 3.0, y)) / 6.0, (nat(x, y + 3.0) - nat(x, y - 3.0)) / 6.0);
+        let slope = dx.hypot(dy);
+        let wet = (nat(x + 30.0, y) + nat(x - 30.0, y) + nat(x, y + 30.0) + nat(x, y - 30.0)) / 4.0 - h;
+        let elev = h - (t.pad_z + cfg.pad_depth);
+        let (w, s, hi) = (ramp(wet, 0.12, 0.7), ramp(slope, 0.12, 0.45), ramp(elev, 8.0, 50.0));
+        [(1.0 - 0.8 * s) * (1.0 - 0.6 * w) * (1.0 - 0.4 * hi), (1.0 - 0.7 * s) * (1.0 - 0.5 * w) * (1.0 - 0.7 * hi), 0.6 * (1.0 - 0.5 * w),
+         0.15 + 0.9 * s.max(hi) - 0.5 * w, 0.03 + 1.2 * w * (1.0 - s)]
     };
-    let (mut n_grove, mut n_solo, mut n_far) = (0, 0, 0);
-    // near: within the fine grid
-    for _ in 0..(((2.0 * e).powi(2) / 1000.0) * cfg.tree_density * 12.0) as usize {
-        let (x, y) = (centre[0] + r.uniform(-e, e), centre[1] + r.uniform(-e, e));
-        let d = t.dist(x, y);
-        if d < cfg.tree_wall_clearance || d > e * 0.97 { continue }
-        let m = mask(x, y);
-        let solo = r.f64() < 0.02;
-        if m < thresh && !solo { continue }
-        if add("tree", x, y, d, if solo { 12.0 } else { 4.5 }, cfg.tree_variants, (0.8, 1.35), &mut r, &mut placed, &mut props) { if solo { n_solo += 1 } else { n_grove += 1 } }
-    }
-    // far: woodland on the ring out to `far` (sparser sampling, same mask; only on gentle ground)
-    let ring_area = std::f64::consts::PI * far * far - (2.0 * e).powi(2);
-    for _ in 0..((ring_area / 1000.0) * cfg.tree_density * 3.0) as usize {
-        let rr = (e * e + r.f64() * (far * far - e * e)).sqrt();
+    let pick = |r: &mut Rng, suit: &[f64; 5]| -> (usize, f64) {
+        let ws: Vec<f64> = (0..5).map(|i| (suit[i] * dom[i]).max(0.0)).collect();
+        let tot: f64 = ws.iter().sum();
+        let mut u = r.f64() * tot;
+        for i in 0..5 { if u < ws[i] { return (i, suit[i].clamp(0.2, 1.0)) } u -= ws[i]; }
+        (4, suit[4].clamp(0.2, 1.0))
+    };
+    let seed_ok = |x: f64, y: f64, r: &mut Rng| -> Option<f64> {
+        let rr = (x - centre[0]).hypot(y - centre[1]);
+        if rr > far { return None }
+        let d = if (x - centre[0]).abs() < e * 0.5 && (y - centre[1]).abs() < e * 0.5 { t.dist(x, y) } else { rr };
+        if d < cfg.tree_wall_clearance { return None }
+        let p = ramp(mask(x, y), thresh - 0.08, thresh + 0.05).max(0.006);
+        if r.f64() < p { Some(d) } else { None }
+    };
+    // plants: pos, species, crown radius, age, vigour, alive
+    struct Pl { p: [f64; 2], s: usize, r: f64, age: f64, life: f64, vig: f64, alive: bool }
+    let mut pls: Vec<Pl> = vec![];
+    let area = std::f64::consts::PI * far * far;
+    for _ in 0..(area * cfg.tree_density / 1000.0 * 3.0) as usize {
+        let rr = far * r.f64().sqrt();
         let a = r.uniform(0.0, std::f64::consts::TAU);
         let (x, y) = (centre[0] + rr * a.cos(), centre[1] + rr * a.sin());
-        if (x - centre[0]).abs() < e && (y - centre[1]).abs() < e { continue }
-        if mask(x, y) < thresh { continue }
-        if add("tree", x, y, rr, 6.0, cfg.tree_variants, (0.9, 1.4), &mut r, &mut placed, &mut props) { n_far += 1 }
+        if seed_ok(x, y, &mut r).is_none() { continue }
+        let (s, vig) = pick(&mut r, &site(x, y));
+        let life = sps[s].life * r.uniform(0.75, 1.3);
+        let age = r.uniform(0.0, 0.5 * life);
+        pls.push(Pl { p: [x, y], s, r: r.uniform(0.3, 1.0) + sps[s].grow * age * 0.5, age, life, vig, alive: true });
     }
-    // bushes: grove edges (mask just below the threshold) and the band around the house
-    let mut n_bush = 0;
-    for _ in 0..((crate::shp::area(&crate::shp::buffer_mitre(&house, 25.0)) / 100.0) * cfg.bush_density * 6.0) as usize {
+    let n_seeded = pls.len();
+    let cell = 16.0;
+    let key = |p: [f64; 2]| ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32);
+    let (mut n_thinned, mut n_old) = (0, 0);
+    let cap = pls.len() * 2;
+    for step in 0..28 {
+        let mut grid: std::collections::HashMap<(i32, i32), Vec<usize>> = Default::default();
+        for (i, q) in pls.iter().enumerate() { if q.alive { grid.entry(key(q.p)).or_default().push(i); } }
+        // shading: per plant, the strongest overlap by a larger crown
+        let mut shade = vec![0.0f64; pls.len()];
+        for i in 0..pls.len() {
+            if !pls[i].alive { continue }
+            let (cx, cy) = key(pls[i].p);
+            for gx in cx - 1..=cx + 1 { for gy in cy - 1..=cy + 1 {
+                let Some(v) = grid.get(&(gx, gy)) else { continue };
+                for &j in v {
+                    if j == i || pls[j].r <= pls[i].r { continue }
+                    let d = (pls[i].p[0] - pls[j].p[0]).hypot(pls[i].p[1] - pls[j].p[1]);
+                    let reach = 0.65 * (pls[i].r + pls[j].r);
+                    if d < reach { shade[i] = shade[i].max(1.0 - d / reach); }
+                }
+            }}
+        }
+        for i in 0..pls.len() {
+            let q = &mut pls[i];
+            if !q.alive { continue }
+            let sp = &sps[q.s];
+            q.age += 1.0;
+            if shade[i] > 0.0 && r.f64() < shade[i] * (1.0 - sp.tol) * 0.3 { q.alive = false; n_thinned += 1; continue }
+            if q.age > q.life { q.alive = false; n_old += 1; continue }
+            let light = 1.0 - shade[i] * (1.0 - sp.tol);
+            q.r += sp.grow * q.vig * light * (1.0 - q.r / sp.rmax).max(0.0);
+        }
+        // recruitment: mature trees seed their own species nearby
+        if step % 3 == 2 && pls.len() < cap {
+            let parents: Vec<([f64; 2], usize)> = pls.iter().filter(|q| q.alive && q.r > 0.5 * sps[q.s].rmax).map(|q| (q.p, q.s)).collect();
+            for (pp, s) in parents {
+                if r.f64() > sps[s].fec { continue }
+                let a = r.uniform(0.0, std::f64::consts::TAU);
+                let dd = sps[s].disperse * r.f64().sqrt();
+                let (x, y) = (pp[0] + dd * a.cos(), pp[1] + dd * a.sin());
+                if seed_ok(x, y, &mut r).is_none() { continue }
+                let vig = site(x, y)[s].clamp(0.2, 1.0);
+                if r.f64() > vig { continue }
+                pls.push(Pl { p: [x, y], s, r: 0.3, age: 0.0, life: sps[s].life * r.uniform(0.75, 1.3), vig, alive: true });
+            }
+        }
+    }
+    // (saplings only in the fine grid: past it they are invisible and only cost geometry)
+    let trees: Vec<&Pl> = pls.iter().filter(|q| {
+        let near = (q.p[0] - centre[0]).abs() < e && (q.p[1] - centre[1]).abs() < e;
+        q.alive && q.r >= if near { 0.9 } else { 2.2 }
+    }).collect();
+    let n_near = trees.iter().filter(|q| (q.p[0] - centre[0]).abs() < e && (q.p[1] - centre[1]).abs() < e).count();
+    let mut by_sp = [0usize; 5];
+    for q in &trees { by_sp[q.s] += 1; }
+    // understory shrubs (near grid only): seeds at grove edges and in the band around the house; deep under a crown they die, and
+    // shrubs thin each other (Poisson spacing)
+    let mut shrubs: Vec<[f64; 2]> = vec![];
+    let mut tgrid: std::collections::HashMap<(i32, i32), Vec<usize>> = Default::default();
+    for (i, q) in trees.iter().enumerate() { tgrid.entry(key(q.p)).or_default().push(i); }
+    let cover = |x: f64, y: f64| -> f64 {
+        let (cx, cy) = key([x, y]);
+        let mut c = 0.0f64;
+        for gx in cx - 1..=cx + 1 { for gy in cy - 1..=cy + 1 {
+            for &j in tgrid.get(&(gx, gy)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                let d = (x - trees[j].p[0]).hypot(y - trees[j].p[1]);
+                if d < 0.8 { return 9.0 }
+                c = c.max(1.0 - d / trees[j].r);
+            }
+        }}
+        c
+    };
+    for _ in 0..((2.0 * e).powi(2) / 100.0 * cfg.bush_density * 0.6) as usize {
         let (x, y) = (centre[0] + r.uniform(-e, e), centre[1] + r.uniform(-e, e));
         let d = t.dist(x, y);
         if d < 1.5 || d > e * 0.97 { continue }
         let m = mask(x, y);
         let near_house = d < 12.0 && r.f64() < 0.35;
-        if !(near_house || (m > thresh - 0.12 && m < thresh + 0.05)) { continue }
-        if add("bush", x, y, d, 1.8, cfg.bush_variants, (0.7, 1.4), &mut r, &mut placed, &mut props) { n_bush += 1 }
+        if !(near_house || (m > thresh - 0.14 && r.f64() < 0.5)) { continue }
+        let c = cover(x, y);
+        if c > 0.55 || r.f64() < c { continue }
+        if shrubs.iter().any(|p| (p[0] - x).hypot(p[1] - y) < 2.5) { continue }
+        shrubs.push([x, y]);
     }
-    log.push(format!("{n_grove} grove trees, {n_solo} field trees, {n_far} far trees (to {far:.0} m), {n_bush} bushes"));
-    // Rust trees (crates/ig_plants/src/rtree.rs) as scene geometry, one build per (species, variant, LOD) copied to every spot; the
-    // sidecar props are then left empty (the renderer's Infinigen tree cache is for trees = "infinigen")
+    log.push(format!("plant community: {n_seeded} seeds, {} trees survive ({n_near} in the fine grid; {n_thinned} thinned, {n_old} died of age; oak/maple/birch/pine/willow {:?}), {} shrubs (to {far:.0} m)",
+        trees.len(), by_sp, shrubs.len()));
+    // props: trees (crown radius -> scale against the species' nominal crown) and shrubs
+    let crown = |s: usize| crate::assets::rtree::crown_radius(crate::assets::rtree::ALL[s]);
+    let ground_z = |x: f64, y: f64| {
+        let d = if (x - centre[0]).abs() < e && (y - centre[1]).abs() < e { t.dist(x, y) } else { (x - centre[0]).hypot(y - centre[1]) };
+        t.height(x, y, d) - 0.05
+    };
+    for q in &trees {
+        let variant = 1000 + r.randint(0, cfg.tree_variants as i64) as u64;
+        let scale = (q.r / crown(q.s)).clamp(0.3, 1.4);
+        props.push(json!({"kind": "tree", "species": q.s, "crown": q.r, "variant": variant, "loc": [q.p[0], q.p[1], ground_z(q.p[0], q.p[1])],
+            "rot": r.uniform(0.0, std::f64::consts::TAU), "scale": scale}));
+    }
+    for p in &shrubs {
+        let variant = 1000 + r.randint(0, cfg.bush_variants as i64) as u64;
+        props.push(json!({"kind": "bush", "species": 5, "variant": variant, "loc": [p[0], p[1], ground_z(p[0], p[1])], "rot": r.uniform(0.0, std::f64::consts::TAU), "scale": r.uniform(0.7, 1.4)}));
+    }
+    // ---- far canopy (after Bruneton & Neyret, "Real-time realistic rendering and lighting of forests", 2012: distant forest as a
+    // canopy surface, not trees): past ~0.9 tree_far the grove mask raises a crown-height shell over the far ring, sinking into the
+    // ground at the grove edges; off the rock (the ridge material) only
+    {
+        let bump_seed = r.next_u64() as u32;
+        let ch = |x: f64, y: f64, z: f64| -> f64 {
+            if z - t.pad_z > 25.0 { return 0.0 }
+            smooth(thresh - 0.03, thresh + 0.15, mask(x, y)) * (13.0 + 5.0 * perlin(x, y, bump_seed, 3, 0.02))
+        };
+        let mut canopy = Mesh::new();
+        let r_of = |p: [f64; 3]| (p[0] - centre[0]).hypot(p[1] - centre[1]);
+        for k in 0..nr {
+            for a in 0..na {
+                let b = (a + 1) % na;
+                let q = [ring[k][a], ring[k][b], ring[k + 1][b], ring[k + 1][a]];
+                if r_of(q[0]) < 0.9 * far { continue }
+                let hs: Vec<f64> = q.iter().map(|p| ch(p[0], p[1], p[2])).collect();
+                if hs.iter().all(|h| *h < 0.3) { continue }
+                let v: Vec<[f64; 3]> = q.iter().zip(&hs).map(|(p, h)| [p[0], p[1], p[2] + if *h < 0.3 { -1.5 } else { *h }]).collect();
+                canopy.add_quad(v[0], v[1], v[2], v[3]);
+            }
+        }
+        if !canopy.is_empty() {
+            canopy.weld(1e-6);
+            let cm = scene.material(Material::diffuse("outdoor_canopy", [0.03, 0.06, 0.022], 0.95));
+            log.push(format!("far canopy: {} quads", canopy.faces.len()));
+            scene.add("outdoor_canopy#0", "OutdoorTree", canopy, cm);
+        }
+    }
+    // Rust trees (crates/ig_plants/src/rtree.rs) as scene geometry. Trees in the fine grid are built one by one among their
+    // neighbours (rtree::build_crowded: crowns share the space, lean into gaps); far trees and shrubs are one build per (species,
+    // variant) copied to every spot. The sidecar props are then left empty (the renderer's Infinigen tree cache is for trees = "infinigen").
     if cfg.trees == "rust" {
-        use crate::assets::rtree::{self, Lod, Species};
-        let mut built: std::collections::HashMap<(u8, u64, u8), (Mesh, Mesh, Vec<[f64; 3]>)> = Default::default();
+        use crate::assets::rtree::{self, Lod};
+        let species = rtree::ALL;
+        let mut built: std::collections::HashMap<(u8, u64), (Mesh, Mesh, Vec<[f64; 3]>)> = Default::default();
         let mut mats: std::collections::HashMap<u8, (usize, usize)> = Default::default();
         let (mut bark_all, mut leaf_all): (std::collections::HashMap<u8, Mesh>, std::collections::HashMap<u8, Mesh>) = (Default::default(), Default::default());
         let mut cent_all: std::collections::HashMap<u8, Vec<[f64; 3]>> = Default::default();
-        let species = [Species::Oak, Species::Maple, Species::Birch, Species::Pine, Species::Willow, Species::Shrub];
-        // species mix of this house: 2-3 tree species (groves read as stands, not a catalogue)
-        let mut pool: Vec<usize> = (0..5).collect();
-        r.shuffle(&mut pool);
-        let pool = &pool[..r.randint(2, 4) as usize];
-        for pr in &props {
+        let tree_at: Vec<([f64; 2], f64)> = props.iter().filter(|p| p["kind"] == "tree")
+            .map(|p| ([p["loc"][0].as_f64().unwrap(), p["loc"][1].as_f64().unwrap()], p["crown"].as_f64().unwrap())).collect();
+        let mut n_crowded = 0;
+        for (pi, pr) in props.iter().enumerate() {
             let kind = pr["kind"].as_str().unwrap_or("tree");
             let variant = pr["variant"].as_u64().unwrap_or(1000);
-            let si = if kind == "bush" { 5 } else { pool[(variant as usize) % pool.len()] };
+            let si = pr["species"].as_u64().unwrap_or(5) as usize;
             let loc = [pr["loc"][0].as_f64().unwrap(), pr["loc"][1].as_f64().unwrap(), pr["loc"][2].as_f64().unwrap()];
+            let (rot, sc) = (pr["rot"].as_f64().unwrap_or(0.0), pr["scale"].as_f64().unwrap_or(1.0));
             let d = (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs());
             let lod = if d > e { Lod::Far } else { Lod::Near };
-            let key = (si as u8, variant, (lod == Lod::Far) as u8);
-            let (b, l, lc) = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], seed ^ (variant * 7919) ^ (si as u64) << 20, lod); (t.bark, t.leaves, t.leaf_centres) });
-            let m = Mat4::translation(loc).mul(&Mat4::rot_z(pr["rot"].as_f64().unwrap_or(0.0))).mul(&Mat4::scale([pr["scale"].as_f64().unwrap_or(1.0); 3]));
+            let bseed = seed ^ (variant * 7919) ^ (si as u64) << 20;
+            let own;
+            let (b, l, lc) = if kind == "tree" && lod == Lod::Near {
+                // neighbours in the tree's local frame (unrotated, unscaled)
+                let cr = pr["crown"].as_f64().unwrap_or(1.0);
+                let (cs, sn) = ((-rot).cos(), (-rot).sin());
+                let nb: Vec<([f64; 2], f64)> = tree_at.iter().filter(|(p, rn)| {
+                    let dd = (p[0] - loc[0]).hypot(p[1] - loc[1]);
+                    dd > 0.05 && dd < cr + rn
+                }).map(|(p, rn)| {
+                    let (dx, dy) = ((p[0] - loc[0]) / sc, (p[1] - loc[1]) / sc);
+                    ([dx * cs - dy * sn, dx * sn + dy * cs], rn / sc)
+                }).collect();
+                if !nb.is_empty() { n_crowded += 1; }
+                let t = rtree::build_crowded(species[si], bseed ^ (pi as u64) << 32, lod, cr / sc, &nb);
+                own = (t.bark, t.leaves, t.leaf_centres);
+                (&own.0, &own.1, &own.2)
+            } else {
+                let key = (si as u8, variant * 2 + (lod == Lod::Far) as u64);
+                let v = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], bseed, lod); (t.bark, t.leaves, t.leaf_centres) });
+                (&v.0, &v.1, &v.2)
+            };
+            let m = Mat4::translation(loc).mul(&Mat4::rot_z(rot)).mul(&Mat4::scale([sc; 3]));
             let (mut bb, mut ll) = (b.clone(), l.clone());
             bb.transform(&m); ll.transform(&m);
             bark_all.entry(si as u8).or_default().append(&bb);
@@ -392,7 +565,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
             scene.add(&format!("outdoor_rtree_{:?}#0", species[k as usize]), "OutdoorTree", bark_all.remove(&k).unwrap(), bi);
             scene.add_bent(&format!("outdoor_rtree_{:?}#1", species[k as usize]), "OutdoorTree", leaf_all.remove(&k).unwrap(), li, cent_all.remove(&k).unwrap_or_default());
         }
-        log.push(format!("rust trees: {} builds, species {:?}", built.len(), pool.iter().map(|&i| species[i]).collect::<Vec<_>>()));
+        log.push(format!("rust trees: {n_crowded} near trees built among neighbours, {} shared builds", built.len()));
         props.clear();
     }
     log.push(format!("terrain {gcls} / {mcls}, mountains {m_height:.0} m coverage {coverage:.2}, pad {:.2} m below the floor", cfg.pad_depth));

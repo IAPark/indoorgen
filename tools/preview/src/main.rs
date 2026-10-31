@@ -81,6 +81,10 @@ struct Scene {
     bmin: Vec3, bmax: Vec3, side: Value, glb: glb::Glb, sun_vp: Mat4, shadow_view: wgpu::TextureView, shadow_done: bool,
 }
 
+fn clip_range(s: &Scene) -> (f32, f32) {
+    let diag = (s.bmax - s.bmin).length();
+    if diag <= 200.0 { (0.05, 200.0) } else { (0.1, (diag * 1.1).min(20000.0)) }
+}
 fn perspective_rh(fovy: f32, aspect: f32, n: f32, f: f32) -> Mat4 {
     let t = 1.0 / (fovy / 2.0).tan();
     Mat4::from_cols(Vec4::new(t / aspect, 0.0, 0.0, 0.0), Vec4::new(0.0, t, 0.0, 0.0), Vec4::new(0.0, 0.0, f / (n - f), -1.0), Vec4::new(0.0, 0.0, n * f / (n - f), 0.0))
@@ -495,8 +499,10 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow
 fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaImage {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let aspect = o.res.0 as f32 / o.res.1 as f32;
-    let proj = match cam.ortho { Some(w) => orthographic_rh(-w / 2.0, w / 2.0, -w / aspect / 2.0, w / aspect / 2.0, 0.05, 200.0),
-        None => perspective_rh(2.0 * ((cam.fov_x / 2.0).tan() / aspect).atan(), aspect, 0.05, 200.0) };
+    // clip range: 0.05-200 m for a house; outdoor scenes (terrain to a few km) push the far plane out and the near plane to 0.1 m
+    let (zn, zf) = clip_range(s);
+    let proj = match cam.ortho { Some(w) => orthographic_rh(-w / 2.0, w / 2.0, -w / aspect / 2.0, w / aspect / 2.0, zn, zf),
+        None => perspective_rh(2.0 * ((cam.fov_x / 2.0).tan() / aspect).atan(), aspect, zn, zf) };
     let view = cam.view.inverse(); let vp = proj * view; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
     let (sun_az, sun_el, sun_i, ambient) = s.lit.map_or((o.sun.0, o.sun.1, o.sun_i, o.ambient), |l| (l.0, l.1, l.2, l.3));
     let (az, el) = (sun_az.to_radians(), sun_el.to_radians());
@@ -560,7 +566,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaIm
         let ds = tg.dbuf.slice(..); ds.map_async(wgpu::MapMode::Read, |_| {});
         dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let data = ds.get_mapped_range().unwrap();
-        let (n, f) = (0.05f32, 200.0f32); let ss = o.ss as usize; let mut out = vec![0f32; (o.res.0 * o.res.1) as usize];
+        let (n, f) = clip_range(s); let ss = o.ss as usize; let mut out = vec![0f32; (o.res.0 * o.res.1) as usize];
         for y in 0..o.res.1 as usize { for x in 0..o.res.0 as usize {
             // the supersampled texel nearest the pixel centre (ss even: the texel just right/below of the centre)
             let (sx, sy) = (x * ss + ss / 2, y * ss + ss / 2); let off = sy * tg.dbpr as usize + sx * 4;
