@@ -123,7 +123,18 @@ pub struct DoorParams {
     pub knob_len: f64,
     pub has_mid: bool,
     pub left: bool,
+    /// the knob's faces get KNOB_SLOT (a metal slot) instead of the frame's
+    pub knob_slot: bool,
 }
+
+/// the knob radius from python's draw (3-6 mm): a 3-6 mm pin in the door's own finish read as no handle at all in renders,
+/// so the same draw is mapped onto a real cabinet knob (11-17 mm; the stream is unchanged)
+pub fn knob_r(py: f64) -> f64 {
+    0.011 + (py - 0.003) * 2.0
+}
+
+/// material slot (`tag >> 1`) of a kitchen front's knob: a knob in the front's own finish vanished on dark fronts
+pub const KNOB_SLOT: u8 = 127;
 
 /// geometry_door_nodes (+ mid board, knob), result before the Object Info placement of the cabinet.
 pub fn door_gmesh(p: &DoorParams, o: RampedOpts) -> GMesh {
@@ -206,11 +217,17 @@ pub fn door_gmesh_t(p: &DoorParams, o: RampedOpts, tags: Option<[u8; 3]>) -> GMe
         let multiply_1 = add_1 * 0.5;
         cyl.transformed([add_2, multiply_1, knob_mid], [A90, 0.0, 0.0], one)
     };
-    frame.push(knob);
     let mut join1 = GMesh::join(&frame);
     if let Some(t) = tags {
         set_tag(&mut join1, t[0]);
     }
+    let mut knob = knob;
+    if p.knob_slot {
+        knob.tag = vec![KNOB_SLOT << 1; knob.p.len()];
+    } else if let Some(t) = tags {
+        set_tag(&mut knob, t[0]);
+    }
+    let join1 = GMesh::join(&[join1, knob]);
     let geos = GMesh::join(&[join1, mid]);
     let multiply = w * -0.5;
     let tr = geos.translated([multiply, 0.0, 0.0]);
@@ -294,9 +311,10 @@ pub fn shelf_gmesh_slots(p: &ShelfParams, frame_t: u8, board_t: u8) -> GMesh {
 }
 
 /// all faces of `g` get tag `t`
+/// (knob faces carrying KNOB_SLOT keep it)
 pub fn set_tag(g: &mut GMesh, t: u8) {
     for x in g.tag.iter_mut() {
-        *x = t;
+        if *x >> 1 != KNOB_SLOT { *x = t; }
     }
 }
 
@@ -309,6 +327,8 @@ pub struct DrawerParams {
     pub width: f64,
     pub knob_r: f64,
     pub knob_len: f64,
+    /// the knob's faces get KNOB_SLOT (a metal slot) instead of the drawer's
+    pub knob_slot: bool,
 }
 
 /// cabinet drawer geometry_nodes (drawers.py)
@@ -333,7 +353,9 @@ pub fn drawer_gmesh(p: &DrawerParams) -> GMesh {
         let add_1 = multiply + 0.0001;
         let add_2 = bh + 0.0;
         let multiply_1 = add_2 * 0.5;
-        cyl.transformed([0.0, add_1, multiply_1], [A90, 0.0, 0.0], one)
+        let mut k = cyl.transformed([0.0, add_1, multiply_1], [A90, 0.0, 0.0], one);
+        if p.knob_slot { k.tag = vec![KNOB_SLOT << 1; k.p.len()]; }
+        k
     };
     // kallax_drawer_frame
     let frame = {
@@ -485,11 +507,11 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
                 let ew = r.uniform(0.03, 0.05);
                 let e2 = r.uniform(0.005, 0.008);
                 let ang = r.uniform(0.6, 0.8);
-                let kr = r.uniform(0.003, 0.006);
+                let kr = knob_r(r.uniform(0.003, 0.006));
                 let kl = r.uniform(0.018, 0.035);
                 let _gap = r.uniform(0.05, 0.15);
                 if std::env::var("KCDBG").is_ok() { eprintln!("door k={k} dh={dh} dw={dw} ew={ew} e2={e2} ang={ang} kr={kr} kl={kl} hinges={:?}", hinges); }
-                let mut dp = DoorParams { height: dh, width: dw, e1: 0.01, ew, e2, ang, knob_r: kr, knob_len: kl, has_mid: false, left: false };
+                let mut dp = DoorParams { height: dh, width: dw, e1: 0.01, ew, e2, ang, knob_r: kr, knob_len: kl, has_mid: false, left: false, knob_slot: true };
                 let right = door_gmesh(&dp, o);
                 dp.left = true;
                 let left = door_gmesh(&dp, o);
@@ -510,11 +532,11 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
                     let side_h = r.uniform(0.05, 0.2);
                     let dwid = sp.shelf_width - r.uniform(0.015, 0.025);
                     let _tilt = r.uniform(0.02, 0.03);
-                    let kr = r.uniform(0.003, 0.006);
+                    let kr = knob_r(r.uniform(0.003, 0.006));
                     let kl = r.uniform(0.018, 0.035);
                     let (idx, after) = shelf_material_pick(r);
                     shelf_material_draws(r);
-                    let dpar = DrawerParams { board_t, board_w: sp.shelf_width, board_h: drawer_h, depth, side_h, width: dwid, knob_r: kr, knob_len: kl };
+                    let dpar = DrawerParams { board_t, board_w: sp.shelf_width, board_h: drawer_h, depth, side_h, width: dwid, knob_r: kr, knob_len: kl, knob_slot: true };
                     let mut d = drawer_gmesh(&dpar);
                     if let Some(pk) = picks.as_deref_mut() {
                         set_tag(&mut d, ((2 + pk.len()) << 1) as u8);
@@ -601,7 +623,7 @@ pub fn single_cabinet_core(r: &mut Rng, dims: [f64; 3], o: RampedOpts, mut panel
     let ew = r.uniform(0.03, 0.05);
     let e2 = r.uniform(0.005, 0.008);
     let ang = r.uniform(0.6, 0.8);
-    let kr = r.uniform(0.003, 0.006);
+    let kr = knob_r(r.uniform(0.003, 0.006));
     let kl = r.uniform(0.018, 0.035);
     let gap = r.uniform(0.05, 0.15);
     let has_mid = r.choice_p(&[0.6, 0.4]) == 0;
@@ -614,7 +636,7 @@ pub fn single_cabinet_core(r: &mut Rng, dims: [f64; 3], o: RampedOpts, mut panel
     if let Some(p) = panels.as_deref_mut() {
         *p = SinglePanels { has_mid, lower_glass, upper_glass };
     }
-    let mut dp = DoorParams { height: door_h, width: door_w, e1, ew, e2, ang, knob_r: kr, knob_len: kl, has_mid, left: false };
+    let mut dp = DoorParams { height: door_h, width: door_w, e1, ew, e2, ang, knob_r: kr, knob_len: kl, has_mid, left: false, knob_slot: false };
     let dtags = if tagged { Some([4u8, 6, 8]) } else { None };
     let right = door_gmesh_t(&dp, o, dtags);
     dp.left = true;

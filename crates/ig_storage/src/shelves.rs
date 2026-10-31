@@ -107,6 +107,39 @@ fn drawer_material(p: &cabdoor::DrawerPick, seed: u64) -> Material {
     }
 }
 
+/// a kitchen front's knob (cabdoor::KNOB_SLOT): brushed steel, matte black when every front is light (steel on white read faintly)
+fn knob_metal(fronts_light: bool) -> Material {
+    let (name, rgb, rough, metal) = if fronts_light { ("cab_knob_black", 0.04, 0.4, 0.6) } else { ("cab_knob_steel", 0.7, 0.3, 1.0) };
+    let mut m = Material::diffuse(name, [rgb, rgb, rgb * 1.01], rough);
+    m.metallic = metal;
+    m
+}
+
+/// slot indices of `g`'s faces into `mats`, the knob slot appended as a metal material
+/// (`mats`: 0 frame + door fronts, then boards / countertop, drawer fronts last)
+fn with_knob(tags: &[u8], mut mats: Vec<Material>) -> (Vec<u16>, Vec<Material>) {
+    let k = mats.len() as u16;
+    let last = k - 1;
+    let ids = tags.iter().map(|&t| if t >> 1 == cabdoor::KNOB_SLOT { k } else { ((t >> 1) as u16).min(last) }).collect();
+    let luma = |m: &Material| 0.3 * m.color[0] + 0.59 * m.color[1] + 0.11 * m.color[2];
+    let light = luma(&mats[0]) > 0.4 && luma(&mats[mats.len() - 1]) > 0.4;
+    mats.push(knob_metal(light));
+    (ids, mats)
+}
+
+/// (knob faces, the rest) of a cabinet mesh
+fn split_knobs(g: &cabnodes::GMesh) -> (cabnodes::GMesh, cabnodes::GMesh) {
+    let (mut kn, mut rest) = (cabnodes::GMesh::new(), cabnodes::GMesh::new());
+    for (i, f) in g.p.iter().enumerate() {
+        let o = if g.tag[i] >> 1 == cabdoor::KNOB_SLOT { &mut kn } else { &mut rest };
+        let base = o.v.len() as u32;
+        o.v.extend(f.iter().map(|&j| g.v[j as usize]));
+        o.p.push((0..f.len() as u32).map(|j| base + j).collect());
+        o.tag.push(g.tag[i]);
+    }
+    (kn, rest)
+}
+
 /// slot materials of a kitchen cabinet row: [frame + doors (K_z), division boards (K), drawers...]
 fn kitchen_slot_mats(kind: &str, picks: &[cabdoor::DrawerPick], seed: u64) -> Vec<Material> {
     let mut v = vec![plywood(kind, true, 0), plywood(kind, false, 0)];
@@ -762,7 +795,7 @@ impl Factory for KitchenCabinet {
         let mut picks = vec![];
         let (g, _) = cabdoor::kitchen_cabinet_core(&mut r, &spec, Default::default(), None, Some(&mut picks));
         let kind = fixed_kind(fs, &[0.4, 0.3, 0.3]);
-        Some((g.tag.iter().map(|&t| (t >> 1) as u16).collect(), kitchen_slot_mats(kind, &picks, inst_seed(fs, i))))
+        Some(with_knob(&g.tag, kitchen_slot_mats(kind, &picks, inst_seed(fs, i))))
     }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
@@ -902,7 +935,7 @@ impl KitchenSpace {
                 let (xz_lo, xz_hi) = parts[0].v.iter().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[2])], [h[0].max(v[0]), h[1].max(v[2])]));
                 for v in parts[0].v.iter_mut() { v[1] = b0 + cut_lo + (v[1] - b0) * k; }
                 // the corner square closed by a blind box in the cabinets' finish (left empty, the joint showed a slot into the void)
-                let tag = parts[0].tag.first().copied().unwrap_or(0);
+                let tag = parts[0].tag.iter().copied().find(|t| t >> 1 != cabdoor::KNOB_SLOT).unwrap_or(0);
                 for (y0, y1) in [(b0, b0 + cut_lo), (b1 - cut_hi, b1)] {
                     if y1 - y0 < 0.01 { continue }
                     let base = parts[0].v.len() as u32;
@@ -1140,13 +1173,20 @@ impl Factory for KitchenSpace {
     }
     fn exact_slots(&self, i: u64) -> Option<(Vec<u16>, Vec<Material>)> {
         let mut dr = vec![];
-        let parts = self.raw_parts_t(i, Some(&mut dr));
+        let mut parts = self.raw_parts_t(i, Some(&mut dr));
+        // the same steps as `assemble` (the L legs' blind boxes add faces: slots one short of the mesh were dropped, and every
+        // part came out in one material)
+        if !self.island {
+            self.scale_to_dims(&mut parts);
+            self.fit_base_width(&mut parts);
+            self.apply_join(&mut parts);
+        }
         let g = hwexact::join_fwd(&parts);
         let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
         let mut mats = vec![plywood(kind, true, 0), plywood(kind, false, 0), cls_spec("counter_marble", "ceramic.Marble", self.factory_seed + 7, [0.85, 0.85, 0.85])];
         // one door / drawer front material for the whole run (each front drew its own of 5 shaders: patchwork kitchens)
         if let Some((p0, s0)) = dr.first() { let m0 = drawer_material(p0, *s0); mats.extend(dr.iter().map(|_| m0.clone())); }
-        Some((g.tag.iter().map(|&t| ((t >> 1) as u16).min(mats.len() as u16 - 1)).collect(), mats))
+        Some(with_knob(&g.tag, mats))
     }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
@@ -1160,8 +1200,13 @@ impl Factory for KitchenSpace {
         let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
         let cab = plywood(kind, true, self.factory_seed);
         let top = cls_spec("counter_marble", "ceramic.Marble", self.factory_seed + 7, [0.85, 0.85, 0.85]);
+        let knob = knob_metal(kind == "white");
         for (k, g) in parts.iter().enumerate() {
-            a.mesh(g.to_mesh(), if k == 1 { &top } else { &cab }, None);
+            if k == 1 { a.mesh(g.to_mesh(), &top, None); continue }
+            // the knobs (cabdoor::KNOB_SLOT faces) in metal
+            let (kn, rest) = split_knobs(g);
+            a.mesh(rest.to_mesh(), &cab, None);
+            if !kn.p.is_empty() { a.mesh(kn.to_mesh(), &knob, None); }
         }
         a
     }

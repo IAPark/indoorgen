@@ -261,6 +261,36 @@ impl Kit {
                 }
             }
         }
+        // the corner square of an L (the owner line's end under the other leg's front) is blind: counter only (an appliance there
+        // could not open; a sink there dropped its bowl into the blind box -- its geometry is a few cm wider than its module)
+        for (li, l) in self.lines.iter().enumerate() {
+            for e in 0..2 {
+                let Some(ci) = l.corner[e] else { continue };
+                let used_other = self.corners[ci].iter().any(|(o, _)| *o != li && !plan.lines[*o].items.is_empty());
+                if !used_other || plan.owner[ci] != li { continue }
+                let (b0, b1) = if e == 0 { (0.0, self.d_counter) } else { (l.len - self.d_counter, l.len) };
+                for p in ps.iter().filter(|p| p.line == li && p.kind != Kind::Counter) {
+                    let m = if p.kind == Kind::Sink { 0.05 } else { 0.0 };
+                    if p.t1 > b0 - m + 0.005 && p.t0 < b1 + m - 0.005 { return None }
+                }
+                // the counter run through the corner shows past the square: a sliver there (two cabinets squeezed into 25 cm) read
+                // as a gap; none, or a real cabinet
+                let mut on: Vec<&Placed> = ps.iter().filter(|p| p.line == li).collect();
+                on.sort_by(|a, b| a.t0.partial_cmp(&b.t0).unwrap());
+                if e == 1 { on.reverse(); }
+                // (distances from the corner)
+                let mut reach = 0.0;
+                for p in on {
+                    let (near, far) = if e == 0 { (p.t0, p.t1) } else { (l.len - p.t1, l.len - p.t0) };
+                    if !is_counter(p.kind) || near > reach + 0.01 { break }
+                    reach = far;
+                }
+                // (the other leg butts against this one's front at the corner: a run short of the square left a dead pocket beside it)
+                if reach < self.d_counter - 0.01 { pen(&mut s, 4.0, &|| format!("corner of line {li} left empty")); }
+                let shown = reach - self.d_counter;
+                if shown > 0.02 && shown < 0.4 { pen(&mut s, 3.0, &|| format!("{shown:.2} m of cabinet past the corner of line {li}")); }
+            }
+        }
         // footprints: inside the room, clear of the fixed pieces and of each other (corners)
         for (i, p) in ps.iter().enumerate() {
             for q in &p.rect { let c = [q[0] * 0.98 + (p.rect[0][0] + p.rect[2][0]) * 0.01, q[1] * 0.98 + (p.rect[0][1] + p.rect[2][1]) * 0.01]; if !layout2d::in_rings(&self.rings, c) { return None } }

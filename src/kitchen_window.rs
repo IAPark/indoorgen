@@ -58,6 +58,16 @@ pub fn clear_uppers(state: &State, visuals: &mut HashMap<String, crate::assets::
                 }
             }
         }
+        // a knob stands proud of its door, its box only touching the cabinet's: it goes with the cabinet it touches
+        for &i in &upper {
+            if !a.parts[i].mat.name.starts_with("cab_knob") { continue }
+            for &j in &upper {
+                if j != i && (0..3).all(|d| bb[i].0[d] < bb[j].1[d] + 0.01 && bb[j].0[d] < bb[i].1[d] + 0.01) {
+                    let (ri, rj) = (find(&mut group, i), find(&mut group, j));
+                    group[ri] = rj;
+                }
+            }
+        }
         let gone: std::collections::HashSet<usize> = upper.iter().filter(|&&i| in_front(&bb[i])).map(|&i| find(&mut group, i)).collect();
         let drop: Vec<bool> = (0..bb.len()).map(|i| upper.contains(&i) && gone.contains(&find(&mut group, i))).collect();
         let mut idx = 0;
