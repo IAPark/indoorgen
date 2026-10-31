@@ -1095,13 +1095,17 @@ pub fn living(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         if fixed {
             let (cx, cy) = ((tlo[0] + thi[0]) / 2.0, (tlo[1] + thi[1]) / 2.0);
             let y0 = yaw(&tp);
+            let mut best_back = f64::INFINITY;
             // (and the opposite face on the wall: the side faces of a fireplace have floor in front of them too)
             for (face, back, ang) in [([thi[0], cy, 0.0], [tlo[0], cy, 0.0], 0.0), ([cx, thi[1], 0.0], [cx, tlo[1], 0.0], std::f64::consts::FRAC_PI_2),
                                       ([cx, tlo[1], 0.0], [cx, thi[1], 0.0], -std::f64::consts::FRAC_PI_2), ([tlo[0], cy, 0.0], [thi[0], cy, 0.0], std::f64::consts::PI)] {
                 let (w, b) = (tp.apply(face), tp.apply(back));
                 let a = y0 + ang;
                 let ahead = |d: f64| layout2d::in_rings(&rings, [w[0] + a.cos() * d, w[1] + a.sin() * d]);
-                if ahead(0.5) && ahead(1.5) && layout2d::ring_dist(&rings, [b[0], b[1]]) < 0.25 { ty = a; front = w; break }
+                // (the face whose back is nearest the wall, not the first under 0.25 m: a fireplace by a corner had a side face's
+                // back 11 cm off the side wall, and the group was built facing sideways)
+                let bd = layout2d::ring_dist(&rings, [b[0], b[1]]);
+                if ahead(0.5) && ahead(1.5) && bd < 0.25 && bd < best_back { best_back = bd; ty = a; front = w; }
             }
         }
         let f = [ty.cos(), ty.sin()];
@@ -2477,6 +2481,7 @@ fn pose_at(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) {
 /// facing it). Each candidate builds the whole group -- TV, sofa, coffee table, armchairs -- and is scored as one: every piece placed
 /// legally (free_ok: no overlaps, the room, the walkways), the sofa's back on a wall, a 2.6 m view, the TV clear of the doors, the
 /// group near the room's middle, the wanted armchairs placed. Returns None (nothing changed) when no candidate seats the sofa.
+thread_local! { static FIRE_FAILS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 #[allow(clippy::too_many_arguments)]
 fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &str, sofa: &str, fixed: bool, fixed_front: (f64, [f64; 3]),
              lifted: &[(String, ObjState)], want: usize) -> Option<Vec<String>> {
@@ -2559,11 +2564,12 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
         // the moved pieces clear of everything else (doors, windows, door clearances, furniture) and inside the room
         let nc = Tag::sem("NoCollision");
         for (k, _) in members.iter().filter(|(k, _)| !k.contains(".keepout") && state.objs[k.as_str()].generator.as_ref().map_or(false, |g| g.class.ends_with("Feature"))) {
-            if layout2d::outside_room_depth(state, k, room) > 1e-3 { return None }
+            let od = layout2d::outside_room_depth(state, k, room);
+            if od > 1e-3 { if ig_core::env_on!("SADBG") { eprintln!("SADBG fire {k} outside {od:.3}"); } return None }
             for (o, b) in &state.objs {
                 if member_keys.contains(o) || b.tags.contains(nc) || layout2d::is_room(b) { continue }
                 if o.starts_with("doorclear/") && !o.starts_with(&format!("doorclear/{room}/")) { continue }
-                if layout2d::depth(state, k, o) > 1e-4 { return None }
+                if layout2d::depth(state, k, o) > 1e-4 { if ig_core::env_on!("SADBG") { eprintln!("SADBG fire {k} hits {o}"); } return None }
             }
         }
         Some((ny, [nf[0], nf[1], 0.0]))
@@ -2580,7 +2586,7 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
         let sofa_i = state.objs.get_index_of(sofa)?;
         let sofa_o = state.objs.shift_remove(sofa)?;
         // the TV and the direction it faces
-        let tv_r: Option<(f64, [f64; 3])> = if fire_move { place_fire(state, p.wall, p.t) } else if fixed { Some(fixed_front) } else {
+        let tv_r: Option<(f64, [f64; 3])> = if fire_move { let r = place_fire(state, p.wall, p.t); if r.is_none() { FIRE_FAILS.with(|c| c.set(c.get() + 1)); } r } else if fixed { Some(fixed_front) } else {
             let (a, b, n) = segs[p.wall];
             let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
             let tw = thi[1] - tlo[1];
@@ -2608,7 +2614,10 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
         if d > lr.tv_view_max + 0.4 { return None }
         let at = [tfront[0] + f[0] * d + perp[0] * p.lat, tfront[1] + f[1] * d + perp[1] * p.lat, 0.0];
         pose_at(state, sofa, ty + std::f64::consts::PI, [shi[0], (slo[1] + shi[1]) / 2.0, slo[2]], at);
-        if !free_ok(state, sofa) { return None }
+        if !free_ok(state, sofa) {
+            if ig_core::env_on!("SADBG") { let hits: Vec<String> = state.objs.keys().filter(|k| k.as_str() != sofa && layout2d::depth(state, sofa, k) > 1e-4).cloned().collect(); eprintln!("SADBG sofa hits {hits:?} outside {:.3} layout {}", layout2d::outside_room_depth(state, sofa, room), layout2d::layout_ok(state, sofa)); }
+            return None
+        }
         let back = state.objs[sofa].pose.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
         let on_wall = layout2d::ring_dist(&rings, [back[0], back[1]]) < 0.15;
         let tv_door = doors.iter().map(|q| ((q[0] - tfront[0]).powi(2) + (q[1] - tfront[1]).powi(2)).sqrt()).fold(9.0f64, f64::min);
@@ -2664,6 +2673,7 @@ fn living_sa(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, room: &str, tv: &s
             let p = rnd_p(rng);
             match build(state, &p, false) { Some(_) => why[2] += 1, None => { if state.objs.contains_key(tv) && !fire_move && !fixed && !free_ok(state, tv) { why[0] += 1 } else { why[1] += 1 } } }
         }
+        eprintln!("SADBG {room}: fire fails {} ", FIRE_FAILS.with(|c| c.get()));
         eprintln!("SADBG {room}: tv_walls {} fire_move {fire_move} fire_w {fire_w:.2} members {} -> tv-fail {} sofa-fail {} ok {}", tv_walls.len(), members.len(), why[0], why[1], why[2]);
     }
     let Some(mut cur) = cur else {
