@@ -748,3 +748,15 @@ pub fn reset_caches() {
     FLOORS.with(|c| c.borrow_mut().clear());
     HOUSE.with(|c| *c.borrow_mut() = None);
 }
+
+/// an object's world-space axis-aligned box (its local box through its pose)
+pub fn lohi_world(state: &State, k: &str) -> ([f64; 3], [f64; 3]) {
+    let o = &state.objs[k];
+    let (l, h) = (o.geom.lo, o.geom.hi);
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for i in 0..8 {
+        let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+        for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+    }
+    (lo, hi)
+}

@@ -69,7 +69,8 @@ impl Shower {
         let fixed = Mesh::cuboid([front_x - gt / 2.0, fy0 + 0.02, th + 0.01], [front_x + gt / 2.0, split - 0.005, h]);
         a.mesh(fixed, &glass, Some(([front_x - 0.01, fy0, th], [front_x + 0.01, fy1, h])));
         // door, opened a little toward the room
-        let ang: f64 = 0.25;
+        // (all but closed: ajar at 0.25 rad its glass stood 10-18 cm past the tray into the room)
+        let ang: f64 = 0.04;
         let (hx, hy) = (front_x, split);
         let dw = fy1 - split - 0.03;
         let (cx, cy) = (hx + ang.sin() * dw, hy + ang.cos() * dw);
@@ -98,11 +99,13 @@ impl Shower {
         a.mesh(rail, &chrome, None);
         // riser + head + valve on the back wall (x = 0)
         let ry = w * 0.5;
-        let riser = limb([0.04, ry, 1.0], [0.04, ry, 1.95], 0.011, 0.011, true);
+        // (the arm under the enclosure's top: at a fixed 1.95 m it stood above a 1.92 m enclosure)
+        let za = (h - 0.03).min(1.95);
+        let riser = limb([0.04, ry, 1.0], [0.04, ry, za], 0.011, 0.011, true);
         a.mesh(riser, &chrome, None);
-        let arm = limb([0.04, ry, 1.95], [0.22, ry, 1.95], 0.01, 0.01, true);
+        let arm = limb([0.04, ry, za], [0.22, ry, za], 0.01, 0.01, true);
         a.mesh(arm, &chrome, None);
-        let head = limb([0.22, ry, 1.95], [0.22, ry, 1.93], 0.11, 0.11, true);
+        let head = limb([0.22, ry, za], [0.22, ry, za - 0.02], 0.11, 0.11, true);
         a.mesh(head, &chrome, None);
         let valve = limb([0.0, ry, 1.05], [0.06, ry, 1.05], 0.035, 0.03, true);
         a.mesh(valve, &chrome, None);

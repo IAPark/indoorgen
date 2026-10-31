@@ -87,7 +87,8 @@ pub fn fit_dishwashers(state: &State, visuals: &mut HashMap<String, crate::asset
         let top = crate::dress::plateau(a, lo[2] + 0.7, lo[2] + 1.2, 6)?;
         Some((wbox(o, a), o.pose.t[2] + top))
     }).collect();
-    let dws: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "DishwasherFactory")).map(|(k, _)| k.clone()).collect();
+    // (ranges too: their cooktop at the worktop, which runs 0.8-1.05 m by the counter's style; the range is a fixed 0.92 m)
+    let dws: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| g.class == "DishwasherFactory" || g.class == "OvenFactory")).map(|(k, _)| k.clone()).collect();
     for k in dws {
         let o = &state.objs[&k];
         let Some(a) = visuals.get(&k) else { continue };
@@ -95,8 +96,12 @@ pub fn fit_dishwashers(state: &State, visuals: &mut HashMap<String, crate::asset
         let near = counters.iter().filter(|(cb, _)| (0..2).all(|d| b.0[d] < cb.1[d] + 0.3 && cb.0[d] - 0.3 < b.1[d])).map(|(_, t)| *t).fold(f64::NAN, f64::min);
         if !near.is_finite() { continue }
         let (lo, hi) = a.bounds();
-        let (z0, top) = (o.pose.t[2] + lo[2], o.pose.t[2] + hi[2]);
-        let want = near - 0.005;
+        // (a range's body top, under its back guard: the highest part ending below the worktop + 0.1)
+        let is_range = o.generator.as_ref().map_or(false, |g| g.class == "OvenFactory");
+        let body = if is_range { a.parts.iter().map(|p| p.mesh.bounds().1[2]).filter(|z| o.pose.t[2] + *z < near + 0.1).fold(f64::NAN, f64::max) } else { hi[2] };
+        let body = if body.is_finite() { body } else { hi[2] };
+        let (z0, top) = (o.pose.t[2] + lo[2], o.pose.t[2] + body);
+        let want = if is_range { near } else { near - 0.005 };
         if (top - want).abs() < 0.005 || want - z0 < 0.5 { continue }
         let s = (want - z0) / (top - z0);
         let a = visuals.get_mut(&k).unwrap();

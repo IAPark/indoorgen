@@ -907,6 +907,8 @@ fn cap(room_type: &str, cls: &str) -> Option<(&'static str, usize)> {
         // (desks read as crammed beside the bed even in large bedrooms: none)
         "SimpleDeskFactory" => ("desks", if room_type == "bedroom" && super::layout_rules::get().desks { 1 } else { 0 }),
         "KitchenCabinetFactory" if room_type == "kitchen" => return None,
+        // (outside a kitchen its generator ignores the size asked of it: 1.8 m built for 1.0 m)
+        "KitchenCabinetFactory" => ("kitchen cabinets", 0),
         // (a lone cabinet on a living-room wall reads as stray: the TV stand is the room's storage)
         _ if storage => ("storage", match room_type { "utility" => 2, "dining-room" => 2, "living-room" => 1, _ => 0 }),
         // a closet is fitted with a wardrobe (missing_pieces), not loose storage; small bathrooms keep a tub or a shower, not both
@@ -1485,7 +1487,10 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
             let (w, dp) = (h[1] - l[1], h[0] - l[0]);
             if w <= 1.6 && rng.f64() < lr0.round_table_p {
                 let base = state.objs[&t].clone();
-                let _ = super::solver::set_width(ctx, state, &t, &base, dp.clamp(0.9, 1.2), 1.0);
+                // (both sides: squared by width alone, a 0.81 m deep table was laid out 0.9 m wide and built 0.81 m round)
+                let dd = dp.clamp(0.9, 1.2);
+                let h = base.generator.as_ref().and_then(super::solver::cur_size).map_or(0.75, |c| c[2]);
+                if !super::solver::set_size(ctx, state, &t, &base, [dd, dd, h], 1.0) { let _ = super::solver::set_width(ctx, state, &t, &base, dd, 1.0); }
                 state.objs.get_mut(&t).unwrap().tags.insert(Tag::sem("RoundTable"));
                 state.touch(&t);
                 log.push(format!("{room}: table {t} round"));
@@ -2280,10 +2285,28 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
     };
     // floor level: the bottom of the door openings (doors stand on the floor); the ceiling: the room's wall height above it
     // (window intents of the wall layer are not openings yet)
-    let openings: Vec<String> = state.objs.iter().filter(|(k, o)| (k.starts_with("door") || k.starts_with("entrance") || k.starts_with("window")) && !o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| k.clone()).collect();
-    let floor_z = openings.iter().filter(|k| !k.starts_with("window")).map(|k| wbox(state, k).0[2]).fold(f64::INFINITY, f64::min);
+    // (passages too: a picture hung in mid-air in a half-wall opening)
+    let openings: Vec<String> = state.objs.iter().filter(|(k, o)| (k.starts_with("door") || k.starts_with("entrance") || k.starts_with("window") || k.starts_with("passage")) && !k.starts_with("doorclear") && !o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| k.clone()).collect();
+    let floor_z = openings.iter().filter(|k| !k.starts_with("window") && !k.starts_with("passage")).map(|k| wbox(state, k).0[2]).fold(f64::INFINITY, f64::min);
     let floor_z = if floor_z.is_finite() { floor_z.max(0.0) } else { 0.14 };
     let rooms: Vec<String> = state.objs.iter().filter(|(_, o)| layout2d::is_room(o)).map(|(k, _)| k.clone()).collect();
+    // a wall item's box (world, after a lift of dz) against the floor pieces it would hang over or into, and the door clearances
+    // (a towel rail on the side wall of a doorway, a picture inside a wardrobe's box)
+    let blocked = |st: &State, k: &str, dz: f64| -> Option<String> {
+        let (lo, hi) = wbox(st, k);
+        let (lo, hi) = ([lo[0], lo[1], lo[2] + dz], [hi[0], hi[1], hi[2] + dz]);
+        for (o, b) in &st.objs {
+            if o == k || layout2d::is_room(b) || b.tags.contains(Tag::sem("NoCollision")) { continue }
+            let door = o.starts_with("doorclear/");
+            let solid = b.generator.as_ref().map_or(false, |g| !matches!(g.class.as_str(), "WallArtFactory" | "MirrorFactory" | "RugFactory" | "CeilingLightFactory" | "HardwareFactory"))
+                && !b.relations.iter().any(|r| st.objs.get(&r.target).map_or(false, |t| t.generator.is_some()));
+            if !door && !solid { continue }
+            let (bl, bh) = wbox(st, o);
+            let m = if door { 0.0 } else { 0.03 };
+            if (0..2).all(|d| lo[d] < bh[d] + m && bl[d] - m < hi[d]) && (door || (lo[2] < bh[2] && bl[2] < hi[2])) { return Some(o.clone()) }
+        }
+        None
+    };
     for room in rooms {
         let rt = room_type_of(&room).to_string();
         let ceil = state.objs[&room].geom.hi[2] - floor_z;
@@ -2320,6 +2343,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let dz = target_lo - lo[2];
                 // over a window or a door at the new height: dropped
                 let clash = fits && openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..2).all(|d| lo[d] < wh[d] + 0.05 && wl[d] - 0.05 < hi[d]) && lo[2] + dz < wh[2] && wl[2] < hi[2] + dz });
+                let into = if fits && !clash { blocked(state, &k, dz) } else { None };
+                let clash = clash || into.is_some();
                 let over = fits && !clash && hung.iter().any(|(ol, oh)| (0..2).all(|d| lo[d] < oh[d] + 0.05 && ol[d] - 0.05 < hi[d]) && lo[2] + dz < oh[2] + 0.05 && ol[2] - 0.05 < hi[2] + dz);
                 if !fits || clash || over {
                     layout2d::remove_tree(state, &k);
@@ -2368,6 +2393,12 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let long = (hi[0] - lo[0]).max(hi[1] - lo[1]) >= 0.3;
                 let zc = floor_z + if long { 1.15 } else { 0.7 };
                 let dz = zc - (lo[2] + hi[2]) / 2.0;
+                // over a fixture or in a doorway at its height: removed
+                if let Some(b) = blocked(state, &k, dz) {
+                    layout2d::remove_tree(state, &k);
+                    log.push(format!("{room}: removed fitting {k} (into {b})"));
+                    continue;
+                }
                 if dz.abs() > 0.02 {
                     let mut p = state.objs[&k].pose;
                     p.translate([0.0, 0.0, dz]);
@@ -2411,6 +2442,14 @@ pub fn kitchen_style(state: &mut State) -> Vec<String> {
 /// group passes move beds, nightstands and tables without what stood on them, and desk lamps floated at the old headboard height
 pub fn orphans(state: &mut State) -> Vec<String> {
     let mut log = vec![];
+    // pictures and mirrors a piece moved in front of after they were hung (wardrobes grow to their alcove afterwards)
+    let hung: Vec<String> = state.objs.iter().filter(|(_, o)| matches!(class_of(o), "WallArtFactory" | "MirrorFactory")).map(|(k, _)| k.clone()).collect();
+    for k in hung {
+        let (l, h) = layout2d::lohi_world(state, &k);
+        let hit = state.objs.iter().find(|(o, b)| o.as_str() != k && matches!(class_of(b), "WardrobeFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "BookshelfWallFeature")
+            && { let (bl, bh) = layout2d::lohi_world(state, o); (0..2).all(|d| l[d] < bh[d] + 0.04 && bl[d] - 0.04 < h[d]) && l[2] < bh[2] && bl[2] < h[2] }).map(|(o, _)| o.clone());
+        if let Some(o) = hit { layout2d::remove_tree(state, &k); log.push(format!("removed {k} (behind {o})")); }
+    }
     // one desk lamp per surface, none within 0.5 m of another (the solver stood two side by side on a shelf)
     let lamps: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "DeskLampFactory").map(|(k, _)| k.clone()).collect();
     let mut kept: Vec<(String, [f64; 3])> = vec![];
@@ -2419,7 +2458,7 @@ pub fn orphans(state: &mut State) -> Vec<String> {
         let parent = o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.get(t).map_or(false, |p| p.generator.is_some()));
         let t = o.pose.t;
         // (not on a coffee table or a dining table: a table lamp stood in the middle of the seating)
-        if parent.as_ref().and_then(|p| state.objs.get(p)).map_or(false, |p| matches!(class_of(p), "CoffeeTableFactory" | "TableDiningFactory")) {
+        if parent.as_ref().and_then(|p| state.objs.get(p)).map_or(false, |p| matches!(class_of(p), "CoffeeTableFactory" | "TableDiningFactory" | "SofaFactory" | "ArmChairFactory" | "BedFactory")) {
             layout2d::remove_tree(state, &k); log.push(format!("removed DeskLampFactory {k} (on a coffee / dining table)")); continue;
         }
         let dup = kept.iter().any(|(pk, pt)| (parent.is_some() && state.objs[pk.as_str()].relations.iter().any(|r| Some(&r.target) == parent.as_ref())) || ((pt[0] - t[0]).hypot(pt[1] - t[1]) < 0.5 && (pt[2] - t[2]).abs() < 0.3));

@@ -170,7 +170,12 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
             let c = state.objs[ck].clone();
             let (cl, ch) = (c.geom.lo, c.geom.hi);
             let depth = ch[0] - cl[0];
-            let others: Vec<B> = state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && !o.generator.as_ref().unwrap().class.contains("Rug") && !o.relations.iter().any(|x| x.target == tk && o.generator.as_ref().unwrap().class != "ChairFactory")).map(|(_, o)| wbox(o)).collect();
+            // (door clearances too: a chair stood 5 cm into a doorway)
+            // (and 0.6 m around a passage, which has no clearance of its own)
+            let doors: Vec<B> = state.objs.iter().filter(|(k, o)| k.starts_with("doorclear/") || (k.starts_with("passage") && o.generator.is_none())).map(|(k, o)| {
+                let mut b = wbox(o); let m = if k.starts_with("passage") { 0.6 } else { 0.0 };
+                for d in 0..2 { b.0[d] -= m; b.1[d] += m; } b.0[2] = -10.0; b.1[2] = 10.0; b }).collect();
+            let others: Vec<B> = doors.into_iter().chain(state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && !o.generator.as_ref().unwrap().class.contains("Rug") && !o.relations.iter().any(|x| x.target == tk && o.generator.as_ref().unwrap().class != "ChairFactory")).map(|(_, o)| wbox(o))).collect();
             let mut done = false;
             let here = to_local(seat(&c));
             let mut order: Vec<usize> = (0..slots.len()).filter(|i| !taken.contains(i)).collect();
@@ -217,6 +222,26 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
         remove.extend(unseated.iter().cloned());
         let slots_len = nslots;
         log.push(format!("{} of {} chairs seated at {tk} ({} slots, {} removed)", moved, far.len(), slots_len, far.len() - moved));
+        // a narrow room: chairs that cut the path between its doors go, one at a time (keeping two at the table)
+        if let Some(room) = crate::furn::layout2d::room_of(state, &tk) {
+            loop {
+                let (ok, _) = crate::furn::layout2d::walk_status(state, &room);
+                let seated: Vec<String> = far.iter().filter(|k| !unseated.contains(k) && !remove.contains(k) && state.objs.contains_key(k.as_str())).cloned().collect();
+                if ok || seated.len() <= 2 { break }
+                let mut fix = None;
+                for c in &seated {
+                    let o = state.objs.shift_remove(c).unwrap();
+                    let good = crate::furn::layout2d::walk_status(state, &room).0;
+                    state.objs.insert(c.clone(), o);
+                    if good { fix = Some(c.clone()); break }
+                }
+                // no single chair: the one standing nearest a wall goes, and the next pass tries again
+                let c = fix.unwrap_or_else(|| seated[0].clone());
+                state.objs.shift_remove(&c);
+                remove.push(c.clone());
+                log.push(format!("chair {c} removed (it cut the path between the doors)"));
+            }
+        }
     }
     // and anything resting on a removed chair
     let mut all = remove.clone();

@@ -140,6 +140,10 @@ pub fn fill(state: &mut State, visuals: &mut HashMap<String, Asset>, seed: u64, 
                     if wt < 1.9 {
                         if let Some((cls, fs, a)) = decor_fit(ast, &mut rng, 0.3, d1 - d0, 0.45) {
                             let x = if rng.f64() < 0.5 { a0 + 0.18 } else { a1 - 0.18 };
+                            // (clear of what already stands on the top: a bowl went into a desk lamp's base)
+                            let busy = |x: f64| kids.iter().any(|(lo, hi)| hi[2] > top - 0.01 && lo[la] < x + 0.2 && hi[la] > x - 0.2);
+                            let x = if !busy(x) { x } else if !busy(a0 + a1 - x) { a0 + a1 - x } else { f64::NAN };
+                            if x.is_nan() { continue }
                             let mut at = [0.0; 3]; at[la] = x; at[da] = (d0 + d1) / 2.0; at[2] = top;
                             let name = format!("{key}.decor{n}"); n += 1;
                             add_decor(state, visuals, &up, &key, &room, name.clone(), cls, fs, a, at, rng.uniform(-0.4, 0.4));

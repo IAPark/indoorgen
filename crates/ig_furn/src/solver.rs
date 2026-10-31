@@ -354,6 +354,8 @@ pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -
     let names: Vec<String> = state.objs.iter().filter(|(k, o)| {
         // (a kitchen's planned runs are built to their plan's widths: kitchen_plan.rs)
         o.generator.as_ref().map_or(false, |g| BUILTIN.contains(&g.class.as_str()) && g.fit_box.is_some()) && !o.tags.contains(Tag::sem("KitchenPlanned"))
+            // (kitchen cabinets fill a kitchen wall only: one in a dining room grew to 4 m, past what its generator builds)
+            && !(o.generator.as_ref().map_or(false, |g| g.class == "KitchenCabinetFactory") && !super::layout2d::room_of(state, k).map_or(false, |r| r.starts_with("kitchen")))
             && only_room.map_or(true, |r| super::layout2d::room_of(state, k).as_deref() == Some(r))
     }).map(|(k, _)| k.clone()).collect();
     let mut log = vec![];

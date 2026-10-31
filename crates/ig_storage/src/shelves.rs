@@ -863,9 +863,25 @@ impl KitchenSpace {
         let mut parts = parts;
         if !self.island {
             self.scale_to_dims(&mut parts);
+            self.fit_base_width(&mut parts);
             self.apply_join(&mut parts);
         }
         hwexact::join_fwd(&parts)
+    }
+
+    /// the base cabinets and the worktop across the run's full width (the wall cabinets set it, 3 cm wider: the base stopped 1.5 cm
+    /// short of the appliances beside it, and showed 3 cm short where a window took the wall cabinets)
+    fn fit_base_width(&self, parts: &mut [cabnodes::GMesh]) {
+        let [_, y, _] = self.dims;
+        let yr = |g: &cabnodes::GMesh| g.v.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v[1]), b.max(v[1])));
+        let (a0, a1) = parts.iter().map(yr).fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), (c, d)| (a.min(c), b.max(d)));
+        if (a1 - a0 - y as f32).abs() > 0.01 { return }
+        for g in parts.iter_mut().take(2) {
+            let (b0, b1) = yr(g);
+            if b1 - b0 < 0.05 { continue }
+            let k = (a1 - a0) / (b1 - b0);
+            for v in g.v.iter_mut() { v[1] = a0 + (v[1] - b0) * k; }
+        }
     }
 
     /// one leg of an L, after the scaling to size: the corner leg's base cabinets leave the corner square (`blind` m at that end,
@@ -1133,6 +1149,7 @@ impl Factory for KitchenSpace {
         let mut parts = self.raw_parts(i);
         if !self.island {
             self.scale_to_dims(&mut parts);
+            self.fit_base_width(&mut parts);
             self.apply_join(&mut parts);
         }
         // part 0/2.. = cabinets (KitchenCabinetFactory(factory_seed): z-textured frame material), part 1 = countertop (shader_marble)

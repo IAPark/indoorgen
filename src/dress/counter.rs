@@ -145,6 +145,14 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             let f = o.pose.rot(fv);
             let yaw = f[1].atan2(f[0]) + if *cls == "DishRackFactory" { std::f64::consts::FRAC_PI_2 } else { r.uniform(-0.3, 0.3) };
             let b = box_at(item, at, yaw, *sc);
+            // (not up into a window over the counter: a microwave stood in front of the glass)
+            let in_window = state.objs.iter().any(|(wk, w)| wk.starts_with("window") && w.generator.is_none() && {
+                let (l, h) = (w.geom.lo, w.geom.hi);
+                let (mut wl, mut wh) = ([f64::MAX; 3], [f64::MIN; 3]);
+                for i in 0..8 { let p = w.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]); for d in 0..3 { wl[d] = wl[d].min(p[d]); wh[d] = wh[d].max(p[d]); } }
+                (0..2).all(|d| b.0[d] < wh[d] + 0.3 && wl[d] - 0.3 < b.1[d]) && b.1[2] > wl[2]
+            });
+            if in_window { continue }
             if !occ.free(&b) { if std::env::var_os("DRESSDBG").is_some() { eprintln!("DRESSDBG {k} item {i} {cls}: blocked") } continue }
             let bb = place(scene, &format!("dress_counter_{}_{i}", k.replace('/', "_")), cls, item, at, yaw, *sc);
             occ.boxes.push(bb);

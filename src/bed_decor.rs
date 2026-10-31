@@ -26,6 +26,10 @@ fn fab(scene: &mut Scene, name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> us
     scene.material(m)
 }
 
+/// half the house's wall thickness (set by the scene build): the walls' inner faces lie this far in from the room outlines
+pub static WALL_HALF_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x3FBE_B851_EB85_1EB8); // 0.12
+pub fn wall_half() -> f64 { f64::from_bits(WALL_HALF_BITS.load(std::sync::atomic::Ordering::Relaxed)) }
+
 pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::G)], keepout: &[([f64; 3], [f64; 3], f64)], assets: &crate::assets::RealAssets, seed: u64) -> Vec<String> {
     let mut log = vec![];
     let inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -0.18)).collect();
@@ -106,7 +110,8 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     }
     // ---- wall shelf above nightstands and desks (70 %): books, a vase or small plant, a framed photo. The wall is found by marching from
     // the object's centre along its back axis (-x of its pose) to the room's inner outline.
-    let wall_inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -0.12)).collect();
+    // (the walls' inner faces: a fixed 0.12 m in from the centre line put shelves 3-6 cm into thick walls)
+    let wall_inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -(wall_half() + 0.005))).collect();
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
         if !matches!(g.class.as_str(), "SideTableFactory" | "SimpleDeskFactory" | "SidetableDeskFactory") { continue }
@@ -137,11 +142,15 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         let Some(wq) = wall else { continue };
         let along = [-dir[1], dir[0]];
         let span = (wb.1[0] - wb.0[0]).max(wb.1[1] - wb.0[1]);
-        let sw = (span * r.uniform(0.9, 1.3)).clamp(0.5, 1.2);
+        let mut sw = (span * r.uniform(0.9, 1.3)).clamp(0.5, 1.2);
         let sd = 0.22;
         let sz = wb.1[2] + r.uniform(0.75, 0.9); // above a desk lamp
         // shelf board in world space: corners from the wall point
         let pt = |u: f64, t: f64| [wq[0] + along[0] * u - dir[0] * t, wq[1] + along[1] * u - dir[1] * t];
+        // (within the room: a shelf by a corner ran on into the side wall) -- narrowed until its front corners are inside, else none
+        let inside = |w: f64| [pt(-w / 2.0 - 0.03, sd), pt(w / 2.0 + 0.03, sd), pt(-w / 2.0 - 0.03, 0.02), pt(w / 2.0 + 0.03, 0.02)].iter().all(|q| crate::shp::contains_pt(&wall_inner[ri], *q));
+        while sw > 0.4 && !inside(sw) { sw -= 0.05; }
+        if !inside(sw) { continue }
         let shelf_box: Box3 = { let ps = [pt(-sw / 2.0, 0.0), pt(sw / 2.0, 0.0), pt(-sw / 2.0, sd), pt(sw / 2.0, sd)]; ([ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min), ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min), sz], [ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max), ps.iter().map(|p| p[1]).fold(f64::MIN, f64::max), sz + 0.4]) };
         // 2 cm tolerance: neighbouring furniture boxes (the bed beside a nightstand) touch the shelf's footprint
         let probe: Box3 = ([shelf_box.0[0] + 0.02, shelf_box.0[1] + 0.02, shelf_box.0[2] + 0.02], [shelf_box.1[0] - 0.02, shelf_box.1[1] - 0.02, shelf_box.1[2] - 0.02]);
@@ -167,8 +176,9 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 if u + fw > sw / 2.0 - 0.02 { break }
                 let fm = fab(scene, &format!("photo_frame:{k}:{n}"), "wood.Wood", r.next_u64(), [0.3, 0.22, 0.15]);
                 let art = fab(scene, &format!("photo:{k}:{n}"), "art.Art", r.next_u64(), [0.5, 0.5, 0.5]);
-                let (p0, p1) = (pt(u, 0.05), pt(u + fw, 0.05));
-                let lean = 0.08;
+                // (bottom 9 cm out, leaning 5 cm toward the wall: an 8 cm lean from 5 cm put its top into the wall)
+                let (p0, p1) = (pt(u, 0.09), pt(u + fw, 0.09));
+                let lean = 0.05;
                 let fr = [[p0[0], p0[1], sz + 0.025], [p1[0], p1[1], sz + 0.025], [p1[0] + dir[0] * lean, p1[1] + dir[1] * lean, sz + 0.025 + fh], [p0[0] + dir[0] * lean, p0[1] + dir[1] * lean, sz + 0.025 + fh]];
                 let mut m = Mesh::new(); m.add_face(&[fr[0], fr[1], fr[2], fr[3]]);
                 let mut back = m.clone();
@@ -186,7 +196,8 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             let item = assets.visual(cls, r.next_u64() % 1_000_000, 0);
             let (ilo, ihi) = item.bounds();
             let (iw, idp, ih) = (ihi[0] - ilo[0], ihi[1] - ilo[1], ihi[2] - ilo[2]);
-            let s = (0.32 / ih.max(0.05)).min((sd - 0.02) / iw.min(idp).max(0.05)).min(1.0);
+            // (fits the shelf's depth whichever way it turns: scaled by its thin side, a book turned lengthwise reached into the wall)
+            let s = (0.32 / ih.max(0.05)).min((sd - 0.04) / iw.max(idp).max(0.05)).min(1.0);
             let wlen = iw.max(idp) * s;
             if u + wlen > sw / 2.0 - 0.02 { break }
             let c2 = pt(u + wlen / 2.0, sd / 2.0);

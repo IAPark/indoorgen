@@ -49,6 +49,9 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
             if let Some(other) = s.split_whitespace().nth(1).filter(|_| s.starts_with("overlaps") || s.starts_with("penetrates")) {
                 let base = |k: &str| k.split('_').filter(|p| p.chars().all(|c| c.is_ascii_digit()) && p.len() >= 4).last().map(|x| x.to_string());
                 if other.contains(key) || key.contains(other) || (base(key).is_some() && base(key) == base(other)) { continue }
+                // the legs of an L counter meet at the corner by design (kitchen_plan.rs)
+                let leg = |k: &str| inp.state.objs.get(k).and_then(|o| o.generator.as_ref()).map_or(false, |g| g.join.is_some());
+                if leg(key) && leg(other) { continue }
             }
             let kind = match s.split_whitespace().next().unwrap_or("") {
                 "floating" => "floating", "sunk" => "sunk", "overlaps" | "penetrates" => "interpenetration", "outside" | "through" => "outside",
@@ -123,7 +126,11 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let e = [h[1] - l[1] - reach, h[0] - l[0], h[2] - l[2]];
         // (a counter run under a window loses its wall cabinets there: its height is not held to the size)
         let dims = if g.class == "KitchenSpaceFactory" { 2 } else { 3 };
-        let off = (0..dims).map(|i| (e[i] - sz[i]).abs()).fold(0.0, f64::max);
+        // (wardrobes: handles stand up to 5 cm proud of the doors, and doors the variation opened add their swing to the depth)
+        // (showers: the door's handle bar stands 3-4 cm proud of the glass)
+        let open = g.class == "WardrobeFactory" && e[1] > sz[1] * 1.4;
+        let tol = |i: usize| if open { f64::INFINITY } else if matches!(g.class.as_str(), "WardrobeFactory" | "ShowerFactory") && i == 1 { 0.05 } else { 0.02 };
+        let off = (0..dims).map(|i| (e[i] - sz[i]).abs() - (tol(i) - 0.02)).fold(0.0, f64::max);
         if off > 0.02 { add("size", format!("{k} {} [{}]: built {:.2?} for {:.2?}", g.class, room_of(k), e, sz)); }
     }
     for l in &lines { eprintln!("{l}"); }

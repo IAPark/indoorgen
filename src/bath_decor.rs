@@ -54,6 +54,10 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 let mut mesh = bx([x0, yc - w / 2.0, zt - t], [x1, yc + w / 2.0, zt], &o.pose);
                 mesh.append(&bx([x0, yc - w / 2.0, zt - drop], [x0 + t, yc + w / 2.0, zt], &o.pose));
                 mesh.append(&bx([x1 - t, yc - w / 2.0, zt - drop * r.uniform(0.6, 0.95)], [x1, yc + w / 2.0, zt], &o.pose));
+                // (a towel hanging into the basin or the cistern below the rail: none)
+                let (ml, mh) = mesh.bounds();
+                if state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "BathtubFactory" | "ShowerFactory" | "ToiletFactory" | "StandingSinkFactory")) && {
+                    let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| ml[d] < b.1[d] + 0.02 && b.0[d] - 0.02 < mh[d]) }) { continue }
                 scene.add(&format!("towel_{}#0", k.replace('/', "_")), "TowelFactory", mesh, m);
                 log.push(format!("towel on {k}"));
             }
@@ -70,36 +74,50 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         let half = (w.geom.hi[0] - w.geom.lo[0]).max(w.geom.hi[1] - w.geom.lo[1]) / 2.0 + 0.4;
                         l[0] < lo[0] + 0.2 && l[0] > lo[0] - 0.5 && l[1].abs() < half
                     });
+                    // the wall behind the cistern, marched to on the room's floor (the toilet's box reaches into thick walls: shelves
+                    // stood 3-9 cm in the wall)
+                    let floor = crate::furn::layout2d::room_of(state, k).and_then(|rm| state.objs.get(&rm).and_then(|ro| ro.polygon.clone())).map(|g| crate::shp::buffer_mitre(&g, -(crate::bed_decor::wall_half() + 0.005)));
+                    let wall_x = {
+                        let ym = (lo[1] + hi[1]) / 2.0;
+                        let mut x = (lo[0] + hi[0]) / 2.0;
+                        if let Some(f) = &floor { while x > lo[0] - 0.3 { let q = o.pose.apply([x - 0.01, ym, 0.0]); if !crate::shp::contains_pt(f, [q[0], q[1]]) { break } x -= 0.01; } }
+                        x + 0.005
+                    };
                     if r2.f64() < 0.7 && !under_win {
                         let sz = hi[2] + r2.uniform(0.3, 0.45);
-                        let sw = r2.uniform(0.5, 0.7);
+                        let mut sw = r2.uniform(0.5, 0.7);
                         let yc = (lo[1] + hi[1]) / 2.0;
                         let sd = 0.16;
+                        // (within the room: a toilet in a corner had its shelf run on into the side wall)
+                        let inside = |w: f64| floor.as_ref().map_or(true, |f| [[wall_x + sd, yc - w / 2.0 - 0.03], [wall_x + sd, yc + w / 2.0 + 0.03], [wall_x + 0.01, yc - w / 2.0 - 0.03], [wall_x + 0.01, yc + w / 2.0 + 0.03]].iter().all(|q| { let p = o.pose.apply([q[0], q[1], 0.0]); crate::shp::contains_pt(f, [p[0], p[1]]) }));
+                        while sw > 0.35 && !inside(sw) { sw -= 0.05; }
+                        // (not over a towel rail or holder on the same wall: the shelf rested on one)
+                        let rail_under = state.objs.iter().any(|(hk, ho)| ho.generator.as_ref().map_or(false, |g| g.class == "HardwareFactory") && {
+                            let b = wbox(&ho.pose, ho.geom.lo, ho.geom.hi);
+                            let s0 = o.pose.apply([wall_x, yc - sw / 2.0 - 0.05, sz - 0.35]); let s1 = o.pose.apply([wall_x + sd + 0.05, yc + sw / 2.0 + 0.05, sz + 0.45]);
+                            let (l, h) = ([s0[0].min(s1[0]), s0[1].min(s1[1]), s0[2].min(s1[2])], [s0[0].max(s1[0]), s0[1].max(s1[1]), s0[2].max(s1[2])]);
+                            hk != k && (0..3).all(|d| b.0[d] < h[d] && l[d] < b.1[d]) });
+                        if rail_under || !inside(sw) { /* no shelf */ } else {
                         let wood = scene.material(Material::diffuse(&format!("wc_shelf:{k}"), [0.85, 0.83, 0.8], 0.5));
-                        scene.add(&format!("wcshelf_{}#0", k.replace('/', "_")), "WallShelfFactory", bx([lo[0], yc - sw / 2.0, sz], [lo[0] + sd, yc + sw / 2.0, sz + 0.02], &o.pose), wood);
+                        scene.add(&format!("wcshelf_{}#0", k.replace('/', "_")), "WallShelfFactory", bx([wall_x, yc - sw / 2.0, sz], [wall_x + sd, yc + sw / 2.0, sz + 0.02], &o.pose), wood);
                         let n = r2.randint(2, 5) as usize;
                         for i in 0..n {
                             let y = yc - sw / 2.0 + sw * (i as f64 + 0.5) / n as f64;
-                            if i == n - 1 && r2.f64() < 0.6 {
-                                let m = fabric(scene, &format!("wctowel:{k}"), &mut r2);
-                                let mut tw = Mesh::cuboid([lo[0] + 0.02, y - 0.09, sz + 0.02], [lo[0] + 0.15, y + 0.09, sz + 0.1]).smoothed(0.02, 2, 1);
-                                for q in tw.pos.iter_mut() { *q = o.pose.apply(*q) }
-                                scene.add(&format!("wctowel_{}#0", k.replace('/', "_")), "TowelFactory", tw, m);
-                                continue;
-                            }
+                            // (no folded towel: it landed on a bottle)
                             let b = assets.visual("BottleFactory", r2.next_u64() % 1_000_000, 0);
                             let (blo, bhi) = b.bounds();
                             let sc = (0.17 / (bhi[2] - blo[2]).max(0.05)).min(1.0);
                             for (pi, p) in b.parts.iter().enumerate() {
                                 let mut m = p.mesh.clone();
                                 for q in m.pos.iter_mut() {
-                                    *q = o.pose.apply([lo[0] + 0.08 + (q[0] - (blo[0] + bhi[0]) / 2.0) * sc, y + (q[1] - (blo[1] + bhi[1]) / 2.0) * sc, sz + 0.02 + (q[2] - blo[2]) * sc]);
+                                    *q = o.pose.apply([wall_x + 0.08 + (q[0] - (blo[0] + bhi[0]) / 2.0) * sc, y + (q[1] - (blo[1] + bhi[1]) / 2.0) * sc, sz + 0.02 + (q[2] - blo[2]) * sc]);
                                 }
                                 let mi = scene.material(p.mat.clone());
                                 scene.add(&format!("wcbottle_{}_{i}#{pi}", k.replace('/', "_")), "BottleFactory", m, mi);
                             }
                         }
                         log.push(format!("wall shelf over {k}"));
+                        }
                     }
                     // toilet-paper stand beside the bowl (chrome post + roll), 80 %
                     // on a side that is clear of other furniture (it stood inside a bathtub next to the toilet)
@@ -115,13 +133,16 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                     if r2.f64() < 0.5 { sides.swap(0, 1) }
                     let side = sides.iter().cloned().find(|s| free(*s));
                     if let (true, Some(side)) = (r2.f64() < 0.8, side) {
+                        // the floor itself (its top lies half a wall thickness up), not the toilet's box bottom: the stand floated 8 mm
+                        let zf = crate::bed_decor::wall_half() - o.pose.t[2];
                         let chrome = scene.material(Material::diffuse("tp_chrome", [0.78, 0.78, 0.8], 0.2));
                         let paper = scene.material(Material::diffuse("tp_paper", [0.95, 0.95, 0.93], 0.9));
-                        let mut post = ig_kit::geomkit::limb([x, side, lo[2]], [x, side, lo[2] + 0.62], 0.012, 0.012, true);
-                        post.append(&ig_kit::geomkit::limb([x - 0.1, side, lo[2] + 0.004], [x + 0.1, side, lo[2] + 0.004], 0.03, 0.03, false));
+                        let mut post = ig_kit::geomkit::limb([x, side, zf], [x, side, zf + 0.62], 0.012, 0.012, true);
+                        // (the base bar's axis at its radius above the floor: at 4 mm it sank 2.6 cm into it)
+                        post.append(&ig_kit::geomkit::limb([x - 0.1, side, zf + 0.031], [x + 0.1, side, zf + 0.031], 0.03, 0.03, false));
                         for q in post.pos.iter_mut() { *q = o.pose.apply(*q) }
                         scene.add(&format!("tpstand_{}#0", k.replace('/', "_")), "ToiletPaperFactory", post, chrome);
-                        for (j, zz) in [lo[2] + 0.5, lo[2] + 0.3, lo[2] + 0.18].iter().enumerate() {
+                        for (j, zz) in [zf + 0.5, zf + 0.3, zf + 0.18].iter().enumerate() {
                             let mut roll = ig_kit::geomkit::limb([x, side, *zz], [x, side, *zz + 0.1], 0.055, 0.055, true);
                             for q in roll.pos.iter_mut() { *q = o.pose.apply(*q) }
                             scene.add(&format!("tproll_{}_{j}#0", k.replace('/', "_")), "ToiletPaperFactory", roll, paper);
@@ -134,6 +155,11 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 let (mw, md) = (r.uniform(0.5, 0.8).min(hi[1] - lo[1]), r.uniform(0.4, 0.55));
                 let yc = (lo[1] + hi[1]) / 2.0;
                 let mesh = bx([hi[0] + 0.03, yc - mw / 2.0, lo[2]], [hi[0] + 0.03 + md, yc + mw / 2.0, lo[2] + 0.012], &o.pose);
+                // (clear of the other fixtures' footprints: a toilet's mat ran under the shower tray)
+                let (ml, mh) = mesh.bounds();
+                let hit = state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "BathtubFactory" | "ShowerFactory" | "ToiletFactory" | "StandingSinkFactory")) && {
+                    let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..2).all(|d| ml[d] < b.1[d] && b.0[d] < mh[d]) });
+                if hit { continue }
                 scene.add(&format!("bathmat_{}#0", k.replace('/', "_")), "BathMatFactory", mesh, m);
                 log.push(format!("mat at {k}"));
             }

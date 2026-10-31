@@ -88,6 +88,11 @@ impl Kit {
         let mut windows = vec![];
         // door clearances: the line keeps 15 cm more off them along the wall (a run ending at the jamb stood in the door's passage)
         let mut doors: Vec<Arc<Vec<Prism>>> = vec![];
+        // passages (no door clearance of their own): 0.65 m into each room around them, as the door zones are kept
+        let passages: Vec<Vec<[f64; 2]>> = state.objs.iter().filter(|(k, o)| k.starts_with("passage") && o.generator.is_none()).flat_map(|(k, _)| layout2d::prisms(state, k).iter().map(|p| {
+            let (x0, y0, x1, y1) = (p.bb[0] - 0.65, p.bb[1] - 0.65, p.bb[2] + 0.65, p.bb[3] + 0.65);
+            vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+        }).collect::<Vec<_>>()).collect();
         // windows the wall layer lays out after the furniture (WindowIntent): where the plan had them, a soft pull
         let intents: Vec<Arc<Vec<Prism>>> = {
             let rr = layout2d::rings(&layout2d::room_floor(state, room));
@@ -125,7 +130,7 @@ impl Kit {
             let free: Vec<bool> = (0..nc_).map(|i| {
                 let r = rect(&probe, i as f64 * cell + 0.005, (i + 1) as f64 * cell - 0.005, dmax);
                 let rw = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, dmax + 0.15);
-                !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) && !doors.iter().any(|p| hits(&rw, p, -1.0, 2.0))
+                !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) && !doors.iter().any(|p| hits(&rw, p, -1.0, 2.0)) && !passages.iter().any(|q| ov(&r, q))
             }).collect();
             let wcell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell, (i + 1) as f64 * cell, 0.2); windows.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
             let icell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, 0.25); intents.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
@@ -252,7 +257,7 @@ impl Kit {
                 // a window still to come there (the wall layer moves it to the clearest stretch): leave it counter, ideally the sink
                 let ov_int = self.lines[li].intent.iter().map(|(a, b)| (p.t1.min(*b) - p.t0.max(*a)).max(0.0)).sum::<f64>();
                 if ov_int > 0.05 {
-                    match p.kind { Kind::Fridge => pen(&mut s, 3.0, &|| "fridge where a window comes".into()), Kind::Range => pen(&mut s, 2.0, &|| "range where a window comes".into()), Kind::Sink => s += 1.5, _ => {} }
+                    match p.kind { Kind::Fridge => pen(&mut s, 10.0, &|| "fridge where a window comes".into()), Kind::Range => pen(&mut s, 6.0, &|| "range where a window comes".into()), Kind::Sink => s += 1.5, _ => {} }
                 }
             }
         }
@@ -569,7 +574,8 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
             state.objs.get_mut(k).unwrap().tags.insert(planned.clone());
             if !place_along(state, k, l.a, l.u, l.n, p.t0 + 0.005) { if dbg { eprintln!("KPLAN build: {k} at line {li} {:.2} does not fit", p.t0); } return Err(li) }
             // a range or dishwasher in line with the counter front (they are shallower than the counter; a fridge stays on the wall)
-            if matches!(p.kind, Kind::Range | Kind::Dish) {
+            // (the fridge too: set back against the wall it stood 9-14 cm behind the counter front)
+            if matches!(p.kind, Kind::Range | Kind::Dish | Kind::Fridge) {
                 let fwd = (kit.d_counter - p.depth).max(0.0);
                 if fwd > 0.005 {
                     let p0 = state.objs[k].pose;

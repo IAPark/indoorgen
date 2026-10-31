@@ -122,7 +122,9 @@ pub fn tris_of(a: &Asset) -> Vec<[[f64; 3]; 3]> {
 /// 1.5 cm of each other, nothing of the furniture between that top and `clear` above it, and (`solid`) no surface between `floor_z` and
 /// the band under the probes (rims and tank lids, not the basin under them). Returns the top z.
 pub fn level_spot(tris: &[[[f64; 3]; 3]], x: f64, y: f64, rad: f64, band: (f64, f64), clear: f64, solid: Option<f64>) -> Option<f64> {
-    let probes = [[x, y], [x - rad * 0.8, y - rad * 0.8], [x + rad * 0.8, y - rad * 0.8], [x - rad * 0.8, y + rad * 0.8], [x + rad * 0.8, y + rad * 0.8]];
+    // (the whole footprint: probing to 80 % of the radius missed a basin rim sloping up under the rest of a soap dispenser's base)
+    let probes = [[x, y], [x - rad * 0.8, y - rad * 0.8], [x + rad * 0.8, y - rad * 0.8], [x - rad * 0.8, y + rad * 0.8], [x + rad * 0.8, y + rad * 0.8],
+                  [x - rad, y], [x + rad, y], [x, y - rad], [x, y + rad]];
     let mut tops = vec![];
     for pr in probes {
         let hs = heights(tris, pr[0], pr[1]);

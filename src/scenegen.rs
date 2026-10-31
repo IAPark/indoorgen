@@ -779,6 +779,7 @@ pub fn build_scene(p: &Params) -> Built {
         for l in crate::gallery_wall::add(&mut scene, &g.state, &g.room_polys, seed, ceiling_z, g.c.wall_thickness) { eprintln!("GALLERY {l}"); } lap("gallery wall");
     }
     if cfg.program.bath_decor && !orig_prog {
+        crate::bed_decor::WALL_HALF_BITS.store((g.c.wall_thickness / 2.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
         for l in crate::bath_decor::add(&mut scene, &g.state, &visuals, &assets, seed) { eprintln!("BATH {l}"); } lap("bath decor");
     }
     if cfg.program.top_dress && !orig_prog {

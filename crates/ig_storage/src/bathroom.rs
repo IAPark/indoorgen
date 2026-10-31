@@ -314,6 +314,13 @@ impl Factory for Bathtub {
         a.mesh(b.hole, &metal, None);
         if !self.alcove {
             a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
+            // a freestanding tub built to a size: its legs and curves came out up to 0.17 m over it, scaled back (about its corner)
+            if crate::api::size_hint().is_some() {
+                let (lo, hi) = a.bounds();
+                let want = [self.size, self.width, self.depth];
+                let s = [want[0] / (hi[0] - lo[0]).max(1e-6), want[1] / (hi[1] - lo[1]).max(1e-6), want[2] / (hi[2] - lo[2]).max(1e-6)];
+                for p in a.parts.iter_mut() { for q in p.mesh.pos.iter_mut() { for d in 0..3 { q[d] = lo[d] + (q[d] - lo[d]) * s[d]; } } }
+            }
         }
         a
     }

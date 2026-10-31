@@ -645,6 +645,7 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
 /// entrance, and near where the plan put it when that spot is free. Pictures and mirrors a window now covers come off the wall.
 fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(String, crate::shp::G)], fixed: &[Cutter], deferred: &[Cutter]) -> Vec<Cutter> {
     let mut out: Vec<Cutter> = vec![];
+    let mut scores: Vec<f64> = vec![];
     let wb = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
         let o = &st.objs[k];
         let (l, h) = (o.geom.lo, o.geom.hi);
@@ -712,13 +713,17 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     "WallArtFactory" | "MirrorFactory" | "RugFactory" | "CeilingLightFactory" | "SinkFactory" => 0.0,
                     "KitchenSpaceFactory" if counter_ok => 0.3,
                     // (a range under a window: the curtain, the draught)
-                    "OvenFactory" => 8.0,
-                    "BedFactory" => 2.0,
-                    "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "WardrobeFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" | "FridgeFactory" => 10.0,
+                    "OvenFactory" => 30.0,
+                    // (a headboard rising past the sill stands in front of the glass)
+                    "BedFactory" => if tall { 6.0 } else { 2.0 },
+                    "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "SingleCabinetFactory" if hi[2] - lo[2] < 1.3 => 0.5,
+                    "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "WardrobeFactory" | "ShowerFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" | "FridgeFactory" => 10.0,
                     _ if tall => 5.0,
                     _ => 0.0,
                 };
-                if weight > 0.0 { spans.push((s0, s1, weight)); }
+                // (10 cm each side for the tall ones: their models reach past the footprint -- a shower's glass, a wardrobe's doors)
+                let m = if weight >= 5.0 { 0.1 } else { 0.0 };
+                if weight > 0.0 { spans.push((s0 - m, s1 + m, weight)); }
                 // a kitchen sink draws the window over it
                 if g.class == "SinkFactory" { sinks.push((s0, s1)); }
                 // what a window over it needs its sill above: the worktop (a run's top is its wall cabinets'), the range's back guard,
@@ -731,6 +736,10 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     "SinkFactory" => Some(hi[2] + 0.3),
                     "ToiletFactory" => Some(hi[2] + 0.2),
                     "StandingSinkFactory" => Some(hi[2] + 0.35),
+                    // (a window over a bed: its sill clear of the headboard)
+                    "BedFactory" => Some(hi[2] + 0.05),
+                    // (low storage -- a sideboard, a low bookcase -- takes a window over it, its sill above its top)
+                    "SimpleBookcaseFactory" | "CellShelfFactory" | "SingleCabinetFactory" | "LargeShelfFactory" if hi[2] - lo[2] < 1.3 => Some(hi[2] + 0.05),
                     _ => None,
                 };
                 if let Some(z) = need { lows.push((s0, s1, z)); }
@@ -744,7 +753,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             }
             let t0 = along(p);
             let mut w = w0;
-            while w >= (0.9f64).max(w0 * 0.5) - 1e-9 {
+            // (down to 0.6 m: a short wall half taken by a wardrobe had no 0.9 m stretch beside it)
+            while w >= (0.6f64).max(w0 * 0.3) - 1e-9 {
                 if len >= w + 2.0 * margin {
                     let steps = ((len - 2.0 * margin - w) / 0.1).floor() as usize;
                     for i in 0..=steps {
@@ -775,9 +785,20 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             }
         }
         let Some((score, nc)) = best else { continue };
+        scores.push(score);
         if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window {w0:.2} m -> {:.2} m at ({:.2}, {:.2}) (score {score:.2})", nc.dims[0], nc.loc[0], nc.loc[1]); }
         out.push(nc);
     }
+    // a window with no clear stretch (behind a TV stand or a wardrobe) is left out when its room has another window
+    let keep: Vec<bool> = (0..out.len()).map(|i| {
+        let room = out[i].rooms.first();
+        let others = (0..out.len()).any(|j| j != i && out[j].rooms.first() == room && (scores[j] >= -5.0 || scores[j] > scores[i])) || fixed.iter().any(|o| o.kind == CutKind::Window && o.rooms.first() == room);
+        let k = !(scores[i] < -5.0 && others);
+        if !k && std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {:?}: window left out (score {:.2}, the room has another)", room, scores[i]); }
+        k
+    }).collect();
+    let mut it = keep.iter();
+    out.retain(|_| *it.next().unwrap());
     // pictures and mirrors a window now covers come off the wall
     let wins: Vec<([f64; 2], [f64; 2], f64, f64)> = out.iter().map(|ct| {
         let (cz, sz) = (ct.rot_z.cos(), ct.rot_z.sin());

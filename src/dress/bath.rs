@@ -69,7 +69,8 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
         let mut n = 0;
         for (i, (item, sc, cls)) in items.iter().enumerate() {
             let (dx, dy, dz) = dims(item);
-            let rad = (0.5 * dx.max(dy) * sc + 0.004) * if kind == 1 { 0.7 } else { 1.0 };
+            // (the full footprint on sinks too: at 70 % the base overhung the sloping rim and sank 2 cm into it)
+            let rad = 0.5 * dx.max(dy) * sc + 0.004;
             let dbg = std::env::var_os("DRESSDBG").is_some();
             let (mut f_spot, mut f_occ) = (0, 0);
             if dbg && kind != 0 {

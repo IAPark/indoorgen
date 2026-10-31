@@ -486,10 +486,29 @@ pub(crate) fn pressure_forces(x: &[V3], faces: &[Vec<u32>], p: f64, out: &mut [V
 /// When set (gen2 default), `simulate_job` returns the pre-sim positions: the cloth is exported as a sidecar job and re-simulated in Blender at render time.
 pub static SKIP_JOB_SIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The skipped job's stand-in (the cloth is re-simulated in Blender): the part of the flat cloth past the smallest collider's footprint
+/// (the mattress) hangs straight down by its overhang, stopping 1 cm above the lowest collider (the floor). Left flat, sheets stood
+/// out 0.3-0.6 m past the bed as rigid panels, into nightstands and wardrobes, in previews and the placement audit.
+fn drape_cheap(pos0: &[V3], colliders: &[&Collider]) -> Vec<V3> {
+    let bb = |c: &Collider| c.tris.iter().flatten().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[1]), l[2].min(v[2])], [h[0].max(v[0]), h[1].max(v[1]), h[2].max(v[2])]));
+    let boxes: Vec<([f64; 3], [f64; 3])> = colliders.iter().map(|c| bb(c)).collect();
+    let Some(&(lo, hi)) = boxes.iter().filter(|(l, h)| h[0] - l[0] < 10.0).min_by(|a, b| ((a.1[0] - a.0[0]) * (a.1[1] - a.0[1])).partial_cmp(&((b.1[0] - b.0[0]) * (b.1[1] - b.0[1]))).unwrap()) else { return pos0.to_vec() };
+    let floor = boxes.iter().map(|(l, _)| l[2]).fold(f64::MAX, f64::min) + 0.01;
+    pos0.iter().map(|p| {
+        let mut q = *p;
+        let mut e = 0.0f64;
+        for d in 0..2 {
+            if q[d] > hi[d] { e = e.max(q[d] - hi[d]); q[d] = hi[d] + 0.01; } else if q[d] < lo[d] { e = e.max(lo[d] - q[d]); q[d] = lo[d] - 0.01; }
+        }
+        q[2] = (q[2] - e).max(floor);
+        q
+    }).collect()
+}
+
 /// `simulate` for cloth that is also exported as a sidecar job (mattress, sheet, cover); skipped when SKIP_JOB_SIM is set
 pub fn simulate_job(pos0: &[V3], faces: &[Vec<u32>], p: &ClothParams, colliders: &[&Collider], cal: &Calib) -> Vec<V3> {
     if SKIP_JOB_SIM.load(std::sync::atomic::Ordering::Relaxed) {
-        return pos0.to_vec();
+        return drape_cheap(pos0, colliders);
     }
     simulate(pos0, faces, p, colliders, cal)
 }
