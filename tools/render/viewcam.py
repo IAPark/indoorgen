@@ -176,7 +176,7 @@ def view_camera(sc, room, view):
     # score each spot by what the camera would see: a 24 x 14 grid of rays through the frame (18 mm lens, 16:9) against the scene.
     # Footprint boxes misjudged it every way (a wardrobe's side filled the frame, a duvet the foreground, a blank wall the rest):
     # + each different piece of furniture seen, + the share of the frame on furniture 1-5 m out, - the share within 1.4 m of the lens,
-    # - the share on a door leaf. The heading is searched +-30 deg about the room's centre; the pitch is fixed (3 m out, 0.75 m up).
+    # - the share on a door leaf, - the share on a wall within 1.8 m. The heading is searched +-30 deg about the room's centre; the pitch is fixed (3 m out, 0.75 m up).
     fixed = ("wall", "floor", "ceiling", "skirting", "exterior", "entrance", "window", "portal", "door", "frame", "light")
     leaf_re = re.compile(r"door\d+(#|$)")
     def view_score(q, yaw):
@@ -186,22 +186,25 @@ def view_camera(sc, room, view):
         o = mathutils.Vector((q[0], q[1], 1.5))
         fwd = (mathutils.Vector((q[0] + ux * 3.0, q[1] + uy * 3.0, 0.75)) - o).normalized()
         right = fwd.cross(mathutils.Vector((0, 0, 1))).normalized(); up = right.cross(fwd)
-        seen, furn, near, leaf, n = set(), 0, 0, 0, 0
+        seen, furn, near, leaf, wall, n = set(), 0, 0, 0, 0, 0
         for i in range(24):
             for j in range(14):
                 d = (fwd + right * ((i + 0.5) / 24 * 2 - 1) + up * ((j + 0.5) / 14 * 2 - 1) * 0.5625).normalized()
-                hit, loc, _, _, ob, _ = sc.ray_cast(dg, o, d, distance=8.0)
+                hit, loc, nrm, _, ob, _ = sc.ray_cast(dg, o, d, distance=8.0)
                 n += 1
                 if not hit: continue
                 dist = (loc - o).length; name = ob.name.lower()
                 if leaf_re.match(name): leaf += 1; continue
                 if dist < 1.4: near += 1
-                if any(k in name for k in fixed): continue
+                if any(k in name for k in fixed):
+                    # (a bare wall close by: a third of a bedroom view was the empty wall beside the camera)
+                    if dist < 1.8 and abs(nrm.z) < 0.5: wall += 1
+                    continue
                 if dist <= 5.0: furn += 1; seen.add(key(ob))
-        return 2.0 * len(seen) + 20.0 * furn / n - 50.0 * near / n - 30.0 * leaf / n
+        return 2.0 * len(seen) + 30.0 * furn / n - 50.0 * near / n - 60.0 * leaf / n - 25.0 * wall / n
     views = []
     for (_, _, cl, p, q, _, _) in scored:
-        sv, yaw = max(((view_score(q, math.radians(10 * k)), math.radians(10 * k)) for k in range(-3, 4)), key=lambda t: (t[0], -abs(t[1])))
+        sv, yaw = max(((view_score(q, math.radians(5 * k)), math.radians(5 * k)) for k in range(-8, 9)), key=lambda t: (t[0], -abs(t[1])))
         views.append((sv, yaw, p, q))
     print("VIEWCAND", [(round(sv, 1), round(math.degrees(yaw)), round(q[0], 2), round(q[1], 2)) for sv, yaw, p, q in views])
     order = sorted(range(len(views)), key=lambda i: -views[i][0])
