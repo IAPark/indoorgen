@@ -325,7 +325,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     let sps = [
         Sp { rmax: 7.0, grow: 0.30, tol: 0.5, life: 60.0, disperse: 12.0, fec: 0.3 },
         Sp { rmax: 5.5, grow: 0.35, tol: 0.8, life: 45.0, disperse: 18.0, fec: 0.35 },
-        Sp { rmax: 3.4, grow: 0.6, tol: 0.15, life: 22.0, disperse: 40.0, fec: 0.55 },
+        Sp { rmax: 3.4, grow: 0.6, tol: 0.15, life: 22.0, disperse: 30.0, fec: 0.4 },
         Sp { rmax: 3.8, grow: 0.35, tol: 0.25, life: 50.0, disperse: 25.0, fec: 0.4 },
         Sp { rmax: 5.5, grow: 0.5, tol: 0.2, life: 30.0, disperse: 15.0, fec: 0.5 },
     ];
@@ -342,7 +342,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
         let wet = (nat(x + 30.0, y) + nat(x - 30.0, y) + nat(x, y + 30.0) + nat(x, y - 30.0)) / 4.0 - h;
         let elev = h - (t.pad_z + cfg.pad_depth);
         let (w, s, hi) = (ramp(wet, 0.12, 0.7), ramp(slope, 0.12, 0.45), ramp(elev, 8.0, 50.0));
-        [(1.0 - 0.8 * s) * (1.0 - 0.6 * w) * (1.0 - 0.4 * hi), (1.0 - 0.7 * s) * (1.0 - 0.5 * w) * (1.0 - 0.7 * hi), 0.6 * (1.0 - 0.5 * w),
+        [(1.0 - 0.8 * s) * (1.0 - 0.6 * w) * (1.0 - 0.4 * hi), (1.0 - 0.7 * s) * (1.0 - 0.5 * w) * (1.0 - 0.7 * hi), 0.45 * (1.0 - 0.5 * w),
          0.15 + 0.9 * s.max(hi) - 0.5 * w, 0.03 + 1.2 * w * (1.0 - s)]
     };
     let pick = |r: &mut Rng, suit: &[f64; 5]| -> (usize, f64) {

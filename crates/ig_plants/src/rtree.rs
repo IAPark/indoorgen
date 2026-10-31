@@ -81,7 +81,7 @@ fn params(sp: Species) -> Params {
             bark: [0.2, 0.17, 0.14], leaf: [0.13, 0.25, 0.05], leaf_kind: LeafKind::Broad, trunks: 1 },
         Birch => Params { shape: 7, base_size: 0.35, scale: 15.0, scale_v: 3.0, ratio: 0.013, ratio_power: 1.4, flare: 0.3, attraction_up: 0.3,
             levels: vec![lv(1.0, 0.0, 0.0, 10.0, 8, 0, 0.0, 0.0, 0.0, 0.0), lv(0.32, 0.06, -10.0, 30.0, 6, 42, 55.0, -15.0, 140.0, 30.0), lv(0.45, 0.1, 25.0, 40.0, 4, 18, 45.0, 15.0, 140.0, 40.0), lv(0.45, 0.1, 0.0, 30.0, 2, 6, 45.0, 10.0, 140.0, 0.0)],
-            leaves: 4, card: 0.5, sc: None, bark: [0.62, 0.6, 0.56], leaf: [0.18, 0.3, 0.07], leaf_kind: LeafKind::Small, trunks: 1 },
+            leaves: 7, card: 0.62, sc: None, bark: [0.62, 0.6, 0.56], leaf: [0.18, 0.3, 0.07], leaf_kind: LeafKind::Small, trunks: 1 },
         Pine => Params { shape: 0, base_size: 0.2, scale: 17.0, scale_v: 4.0, ratio: 0.017, ratio_power: 1.2, flare: 0.4, attraction_up: 0.1,
             levels: vec![lv(1.0, 0.0, 0.0, 6.0, 10, 0, 0.0, 0.0, 0.0, 0.0), lv(0.28, 0.05, 5.0, 15.0, 5, 70, 88.0, -25.0, 137.5, 15.0), lv(0.4, 0.08, 0.0, 20.0, 3, 14, 50.0, 10.0, 140.0, 20.0)],
             leaves: 6, card: 0.6, sc: None, bark: [0.22, 0.15, 0.1], leaf: [0.05, 0.12, 0.05], leaf_kind: LeafKind::Needle, trunks: 1 },
@@ -90,7 +90,7 @@ fn params(sp: Species) -> Params {
             leaves: 5, card: 0.42, sc: None, bark: [0.2, 0.17, 0.12], leaf: [0.2, 0.3, 0.1], leaf_kind: LeafKind::Lance, trunks: 1 },
         Shrub => Params { shape: 8, base_size: 0.0, scale: 1.6, scale_v: 0.5, ratio: 0.03, ratio_power: 1.3, flare: 0.0, attraction_up: 0.5,
             levels: vec![lv(0.35, 0.1, 0.0, 30.0, 3, 0, 0.0, 0.0, 0.0, 0.0)], leaves: 5, card: 0.32, sc: Some((0.6, 0.85)),
-            bark: [0.18, 0.14, 0.1], leaf: [0.1, 0.2, 0.05], leaf_kind: LeafKind::Small, trunks: 4 },
+            bark: [0.18, 0.14, 0.1], leaf: [0.15, 0.27, 0.07], leaf_kind: LeafKind::Small, trunks: 4 },
     }
 }
 
