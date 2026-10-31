@@ -14,11 +14,12 @@ pub fn arrange(state: &mut State) -> Vec<String> {
     // on any furniture top: bowls over 0.3 m (basin-sized, on nightstands too) and pot-shaped fruit containers go
     for (k, o) in &state.objs {
         let c = o.generator.as_ref().map(|g| g.class.as_str()).unwrap_or("");
-        if !matches!(c, "BowlFactory" | "FruitContainerFactory") { continue }
+        if !matches!(c, "BowlFactory" | "FruitContainerFactory" | "VaseFactory") { continue }
         if !o.relations.iter().any(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())) { continue }
         let w = (o.geom.hi[0] - o.geom.lo[0]).max(o.geom.hi[1] - o.geom.lo[1]);
         let h = o.geom.hi[2] - o.geom.lo[2];
-        if (c == "BowlFactory" && w > 0.25) || (c == "FruitContainerFactory" && (h > 0.55 * w || w > 0.4)) { remove.push(k.clone()); }
+        // (vases over 0.4 m stood on dining tables like floor vases)
+        if (c == "BowlFactory" && w > 0.25) || (c == "FruitContainerFactory" && (h > 0.55 * w || w > 0.4)) || (c == "VaseFactory" && h > 0.4) { remove.push(k.clone()); }
     }
     if !remove.is_empty() { log.push(format!("{} oversized bowls / pot-shaped containers removed", remove.len())); }
     for tk in tables {

@@ -2311,7 +2311,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 // at most 1.0 m by 1.0 m -- larger ones read as whiteboards -- a full-length one at most 0.8 m wide, others 1.2 m)
                 let w = (hi[0] - lo[0]).max(hi[1] - lo[1]);
                 let big = if cls == "WallArtFactory" { h > 1.1 || w > 1.6 } else if rt == "bathroom" { h > 1.0 || w > 1.0 } else if h >= 1.2 { w > 0.8 } else { w > 1.2 };
-                let fits = kept < max && !big && target_lo + h <= floor_z + ceil - 0.2 + 1e-6;
+                // (lifted over a headboard past a 1.85 m centre it reads as hung too high: dropped)
+                let fits = kept < max && !big && target_lo + h <= floor_z + ceil - 0.2 + 1e-6 && !(cls == "WallArtFactory" && target_lo + h / 2.0 - floor_z > 1.85);
                 let dz = target_lo - lo[2];
                 // over a window or a door at the new height: dropped
                 let clash = fits && openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..2).all(|d| lo[d] < wh[d] + 0.05 && wl[d] - 0.05 < hi[d]) && lo[2] + dz < wh[2] && wl[2] < hi[2] + dz });
@@ -2413,6 +2414,10 @@ pub fn orphans(state: &mut State) -> Vec<String> {
         let o = &state.objs[&k];
         let parent = o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.get(t).map_or(false, |p| p.generator.is_some()));
         let t = o.pose.t;
+        // (not on a coffee table or a dining table: a table lamp stood in the middle of the seating)
+        if parent.as_ref().and_then(|p| state.objs.get(p)).map_or(false, |p| matches!(class_of(p), "CoffeeTableFactory" | "TableDiningFactory")) {
+            layout2d::remove_tree(state, &k); log.push(format!("removed DeskLampFactory {k} (on a coffee / dining table)")); continue;
+        }
         let dup = kept.iter().any(|(pk, pt)| (parent.is_some() && state.objs[pk.as_str()].relations.iter().any(|r| Some(&r.target) == parent.as_ref())) || ((pt[0] - t[0]).hypot(pt[1] - t[1]) < 0.5 && (pt[2] - t[2]).abs() < 0.3));
         if dup { layout2d::remove_tree(state, &k); log.push(format!("removed DeskLampFactory {k} (a lamp beside it already)")); } else { kept.push((k, t)); }
     }
