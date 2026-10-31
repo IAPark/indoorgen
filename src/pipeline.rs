@@ -755,6 +755,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     "StandingSinkFactory" => Some(hi[2] + 0.35),
                     // (a window over a bed: its sill clear of the headboard)
                     "BedFactory" => Some(hi[2] + 0.05),
+                    // (over a TV stand: clear of the TV on it -- a room's one outside wall held the TV)
+                    "TVStandFactory" => Some(state.objs.iter().filter(|(_, c)| c.generator.as_ref().map_or(false, |cg| cg.class == "TVFactory") && c.relations.iter().any(|r| &r.target == k)).map(|(ck, _)| wb(state, ck).1[2]).fold(hi[2] + 0.8, f64::max) + 0.05),
                     // (low storage -- a sideboard, a low bookcase -- takes a window over it, its sill above its top)
                     "SimpleBookcaseFactory" | "CellShelfFactory" | "SingleCabinetFactory" | "LargeShelfFactory" if hi[2] - lo[2] < 1.3 => Some(hi[2] + 0.4),
                     _ => None,
@@ -865,7 +867,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         ([ct.loc[0] - ext[0], ct.loc[1] - ext[1]], [ct.loc[0] + ext[0], ct.loc[1] + ext[1]], ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0)
     }).collect();
     // (towel rails and holders too)
-    let hung: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "WallArtFactory" | "MirrorFactory" | "HardwareFactory"))).map(|(k, _)| k.clone()).collect();
+    // (and potted plants: one stood in front of the glass)
+    let hung: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "WallArtFactory" | "MirrorFactory" | "HardwareFactory" | "LargePlantContainerFactory"))).map(|(k, _)| k.clone()).collect();
     for k in hung {
         let (lo, hi) = wb(state, &k);
         if wins.iter().any(|(wl, wh, z0, z1)| lo[0] < wh[0] && wl[0] < hi[0] && lo[1] < wh[1] && wl[1] < hi[1] && lo[2] < *z1 && *z0 < hi[2]) {

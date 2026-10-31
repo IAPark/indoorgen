@@ -37,7 +37,8 @@ fn kind(class: &str) -> Option<Kind> {
     const KITCHEN: &[&str] = &["JarFactory", "JarFactory", "BottleFactory", "BowlFactory", "CupFactory", "CupFactory", "PotFactory", "PanFactory", "FruitContainerFactory", "FoodBoxFactory", "FoodBoxFactory", "PlateFactory", "CanFactory"];
     const BATH: &[&str] = &["BottleFactory", "BottleFactory", "JarFactory", "CupFactory"];
     const DECOR: &[&str] = &["VaseFactory", "JarFactory", "BowlFactory", "BottleFactory", "PlantContainerFactory", "CupFactory"];
-    const TABLE: &[&str] = &["BowlFactory", "CupFactory", "CupFactory", "PlateFactory", "JarFactory", "BottleFactory", "FruitContainerFactory"];
+    // (no fruit containers: with their handles and lid knob they read as cooking pots on a coffee table)
+    const TABLE: &[&str] = &["BowlFactory", "CupFactory", "CupFactory", "PlateFactory", "JarFactory", "BottleFactory"];
     // z band: (from, to) metres above the object's bottom (None-like negative from = relative to its top)
     Some(match class {
         // (dressed by crate::dress) "KitchenSpaceFactory" => Kind { items: K...
@@ -97,6 +98,11 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             let (ilo, ihi) = item.bounds();
             // toiletries on tub rims / cisterns are 10-20 cm (BottleFactory makes 30 cm wine bottles)
             let sc = if matches!(g.class.as_str(), "BathtubFactory" | "ToiletFactory") { (r.uniform(0.12, 0.2) / (ihi[2] - ilo[2]).max(0.05)).min(1.0) } else { 1.0 };
+            // bowls at most 0.25 m across and fruit containers 0.3 m, and a fruit container deeper than about half its width (a stock
+            // pot on the coffee table) not at all
+            let wmax = (ihi[0] - ilo[0]).max(ihi[1] - ilo[1]);
+            if cls == "FruitContainerFactory" && ihi[2] - ilo[2] > 0.55 * wmax { continue }
+            let sc = match cls { "BowlFactory" => sc.min(0.25 / wmax.max(0.05)), "FruitContainerFactory" => sc.min(0.3 / wmax.max(0.05)), _ => sc };
             let (iw, id, ih) = ((ihi[0] - ilo[0]) * sc, (ihi[1] - ilo[1]) * sc, (ihi[2] - ilo[2]) * sc);
             if iw > 0.45 || id > 0.45 || ih > 0.4 || iw <= 0.0 { continue }
             let rad = 0.5 * iw.max(id) + 0.01;
