@@ -98,9 +98,14 @@ def _patch_function(module, owner, name):
     setattr(owner, name, new)
 
 
+_INSTALLED = [False]
+
+
 def install():
-    if bpy.app.version < (5, 0, 0):
+    # once per process (the Blender server runs render_rust.py many times: patching twice broke the patched sources)
+    if bpy.app.version < (5, 0, 0) or _INSTALLED[0]:
         return
+    _INSTALLED[0] = True
     from infinigen.core import surface
     from infinigen.core.nodes import node_wrangler
     from infinigen.core.util import blender as butil

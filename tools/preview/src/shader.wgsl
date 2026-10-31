@@ -151,7 +151,20 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
     ao = 1.0 - g.params.z * occ / f32(N);
   }
   // ao only attenuates the indirect part; approximated by scaling the whole radiance gently
-  let c = hdr * mix(1.0, ao, 0.9) * g.params.y;
+  var c = hdr * mix(1.0, ao, 0.9) * g.params.y;
+  // sky where nothing was drawn (outdoor views went black) and aerial perspective toward the horizon colour on geometry
+  let ndc = vec2<f32>((f32(px.x) + 0.5) / dims.x * 2.0 - 1.0, 1.0 - (f32(px.y) + 0.5) / dims.y * 2.0);
+  let far = g.inv_viewproj * vec4<f32>(ndc, 0.9999, 1.0);
+  let rd = normalize(far.xyz / far.w - g.cam_pos.xyz);
+  let up = clamp(rd.z, 0.0, 1.0);
+  let horizon = vec3<f32>(0.75, 0.83, 0.95) * 1.1;
+  let zenith = vec3<f32>(0.22, 0.42, 0.85) * 0.9;
+  let sunglow = pow(max(dot(rd, g.sun_dir.xyz), 0.0), 64.0) * 2.0;
+  let sky = (mix(horizon, zenith, pow(up, 0.55)) + vec3<f32>(1.0, 0.9, 0.7) * sunglow) * g.params.y * 0.55;
+  if (d >= 1.0) { return aces(sky); }
+  let dist = length(world_at(px, dims) - g.cam_pos.xyz);
+  let haze = 1.0 - exp(-dist * 0.00045);
+  c = mix(c, horizon * g.params.y * 0.55, haze);
   return aces(c);
 }
 

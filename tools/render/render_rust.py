@@ -211,6 +211,20 @@ if not os.environ.get("RAW_METALS"):
         except Exception as _e:
             print("fabric palette patch skipped for", _mn, repr(_e))
 import bl5compat; bl5compat.install()  # Blender 5: geometry-nodes modifier sockets via mod.properties (no-op on 4.x)
+# CYCLES_DEVICE=GPU: Metal (Apple) when available; CPU otherwise
+import os as _osd
+_DEVICE = "CPU"
+if _osd.environ.get("CYCLES_DEVICE", "CPU").upper() == "GPU":
+    try:
+        _cp = bpy.context.preferences.addons["cycles"].preferences
+        for _t in ("METAL", "OPTIX", "CUDA", "HIP", "ONEAPI"):
+            try:
+                _cp.compute_device_type = _t; _cp.get_devices()
+                if any(d.type == _t for d in _cp.devices):
+                    for d in _cp.devices: d.use = d.type == _t
+                    _DEVICE = "GPU"; print("CYCLES GPU", _t); break
+            except Exception: pass
+    except Exception as e: print("CYCLES GPU FAIL", repr(e))
 mods = {"ceramic": ceramic, "wood": wood, "fabric": fabric, "metal": metal, "plastic": plastic, "terrain": terrain, "art": art, "lamp_shaders": lamp_shaders, "text": text}
 for _n in ("plant", "creature", "dev"):  # extra material modules for specs ("plant.SpiderPlant", ...)
     try:
@@ -678,7 +692,7 @@ if args.top:
     so = bpy.data.objects.new("s", sun); sc.collection.objects.link(so); so.rotation_euler = (0.3, 0.2, 0)
     w = bpy.data.worlds.new("w2"); w.use_nodes = True; w.node_tree.nodes["Background"].inputs[1].default_value = 1.0; sc.world = w
     sc.cycles.film_exposure = args.exposure
-    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
+    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = _DEVICE; sc.cycles.use_denoising = True
     sc.render.resolution_x = sc.render.resolution_y = 640; sc.render.filepath = args.out
     bpy.ops.render.render(write_still=True); sys.exit(0)
 if args.showcase:
@@ -694,7 +708,7 @@ if args.showcase:
     sun = bpy.data.lights.new("s", "SUN"); sun.energy = 3
     so = bpy.data.objects.new("s", sun); sc.collection.objects.link(so); so.rotation_euler = (0.9, 0.2, 0.4)
     w = bpy.data.worlds.new("w3"); w.use_nodes = True; w.node_tree.nodes["Background"].inputs[1].default_value = 1.0; sc.world = w
-    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
+    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = _DEVICE; sc.cycles.use_denoising = True
     sc.render.resolution_x, sc.render.resolution_y = 1200, 500; sc.render.filepath = args.out
     bpy.ops.render.render(write_still=True); sys.exit(0)
 # outdoor vegetation (sidecar `outdoor.props`, src/outdoor.rs): Infinigen TreeFactory / BushFactory variants, built once by
@@ -987,10 +1001,11 @@ for _o in list(bpy.data.objects):
         _ld = bpy.data.lights.new("portal", "AREA"); _ld.size = 1; _ld.size_y = 1; _ld.cycles.is_portal = True
         _po = bpy.data.objects.new("portal", _ld); sc.collection.objects.link(_po)
         _po.matrix_world = _m; _po.scale = (_w, _d.z, 1)
+# ==== VIEW ==== (blender_server.py saves the scene set up above and re-runs only the code below for further views of the same scene)
 # camera
 if DS:
     sc.cycles.film_exposure = args.exposure
-    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True; sc.cycles.use_adaptive_sampling = True
+    sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = _DEVICE; sc.cycles.use_denoising = True; sc.cycles.use_adaptive_sampling = True
     _r = dscap.run(sc, sidecar, DS); print("DSRESULT", json.dumps(_r)); sys.exit(0)
 if args.view in ("cornerA", "cornerB"):
     import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import viewcam; viewcam.view_camera(sc, args.room, args.view); co = sc.camera; cam = co.data
@@ -1006,7 +1021,7 @@ else:
     c = json.load(open(args.cam))
     co.matrix_world = mathutils.Matrix(c["matrix"]); cam.lens = c.get("lens", 15); cam.sensor_width = c.get("sensor_width", 36)
 sc.cycles.film_exposure = args.exposure
-sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = "CPU"; sc.cycles.use_denoising = True
+sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = _DEVICE; sc.cycles.use_denoising = True
 try:  # keep fine texture through the denoiser (default settings smeared walls / fabric into a waxy look)
     sc.cycles.denoiser = "OPENIMAGEDENOISE"; sc.cycles.denoising_input_passes = "RGB_ALBEDO_NORMAL"; sc.cycles.denoising_prefilter = "ACCURATE"
     sc.cycles.denoising_quality = "HIGH"
@@ -1077,4 +1092,10 @@ if os.environ.get("DUMPLIGHTS"):
               open(os.environ["DUMPLIGHTS"], "w"))
 if args.norender: print('NORENDER done'); sys.exit(0)
 auto_exposure(sc)
+if os.environ.get("ENGINE") == "EEVEE":  # fast material-accurate preview (no path tracing)
+    sc.render.engine = "BLENDER_EEVEE"
+    try:
+        sc.eevee.taa_render_samples = int(os.environ.get("EEVEE_SAMPLES", "32"))
+        sc.eevee.use_shadows = True; sc.eevee.use_raytracing = True
+    except Exception as e: print("EEVEE settings", repr(e))
 t = time.time(); bpy.ops.render.render(write_still=True); print("render time", time.time() - t)

@@ -66,6 +66,11 @@ impl Mesh {
     }
     pub fn append(&mut self, o: &Mesh) {
         let base = self.pos.len() as u32;
+        // uvs kept when either side has them (missing ones padded with 0); meshes without uvs stay without
+        if o.uv.len() == o.pos.len() && !o.pos.is_empty() || (!self.uv.is_empty() && self.uv.len() == self.pos.len()) {
+            self.uv.resize(self.pos.len(), [0.0, 0.0]);
+            if o.uv.len() == o.pos.len() { self.uv.extend_from_slice(&o.uv); } else { self.uv.resize(self.pos.len() + o.pos.len(), [0.0, 0.0]); }
+        }
         self.pos.extend_from_slice(&o.pos);
         self.faces.extend(o.faces.iter().map(|f| f.iter().map(|i| i + base).collect::<Vec<u32>>()));
     }

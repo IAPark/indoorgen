@@ -12,7 +12,7 @@
 //! Vegetation: tree and bush spots (Poisson-disk, clear of the walls) go to the sidecar `outdoor.props`; the renderer instances
 //! Infinigen's TreeFactory / BushFactory variants there (tools/render/tree_cache.py builds them once in Blender 4.2).
 //! Stream: int_hash(seed, "outdoor").
-use crate::mesh::{Material, Mesh, Scene};
+use crate::mesh::{Mat4, Material, Mesh, Scene};
 use crate::rng::Rng;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,9 @@ pub struct OutdoorCfg {
     /// Closest a tree trunk stands to a wall (m).
     #[schemars(range(min = 1.0, max = 30.0))]
     pub tree_wall_clearance: f64,
+    /// Tree source: "rust" (crates/ig_plants/src/rtree.rs, geometry in the scene) or "infinigen" (the renderer instances Infinigen's
+    /// TreeFactory variants from its cache; Blender renders only).
+    pub trees: String,
     /// Tree / bush variants the renderer builds and reuses (a cache shared by all houses).
     #[schemars(range(min = 1, max = 32))]
     pub tree_variants: u32,
@@ -67,7 +70,7 @@ pub struct OutdoorCfg {
 impl Default for OutdoorCfg {
     fn default() -> Self {
         OutdoorCfg { on: true, near_extent: 70.0, near_spacing: 1.0, far_radius: 2500.0, ground_scale: 4.0, mountain_height: None, mountain_coverage: None, pad_depth: 0.45, pad_blend: 18.0,
-            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4 }
+            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into() }
     }
 }
 
@@ -242,8 +245,9 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     let gcls = ground_cls[r.randint(0, ground_cls.len() as i64) as usize];
     // (Stone mostly: the Mountain shader samples each of its 16 strata colours independently -- teal and pink bands at a distance)
     let mcls = if r.f64() < 0.7 { "terrain.Stone" } else { "terrain.Mountain" };
-    let gm = scene.material(spec(&format!("outdoor_ground:{gcls}"), gcls, r.next_u64(), [0.32, 0.28, 0.2]));
-    let mm = scene.material(spec(&format!("outdoor_mountain:{mcls}"), mcls, r.next_u64(), [0.4, 0.38, 0.35]));
+    // (fallback colour = lawn green: what plain renderers -- the previewer, the browser -- show; Cycles uses the shader + lawn tint)
+    let gm = scene.material(spec(&format!("outdoor_ground:{gcls}"), gcls, r.next_u64(), [0.07, 0.13, 0.035]));
+    let mm = scene.material(spec(&format!("outdoor_mountain:{mcls}"), mcls, r.next_u64(), [0.22, 0.24, 0.17]));
     // ---- fine grid (quads entirely under the house dropped)
     let (e, s) = (cfg.near_extent, cfg.near_spacing);
     let n = (2.0 * e / s).round() as usize;
@@ -350,6 +354,45 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
         if add("bush", x, y, d, 1.8, cfg.bush_variants, (0.7, 1.4), &mut r, &mut placed, &mut props) { n_bush += 1 }
     }
     log.push(format!("{n_grove} grove trees, {n_solo} field trees, {n_far} far trees (to {far:.0} m), {n_bush} bushes"));
+    // Rust trees (crates/ig_plants/src/rtree.rs) as scene geometry, one build per (species, variant, LOD) copied to every spot; the
+    // sidecar props are then left empty (the renderer's Infinigen tree cache is for trees = "infinigen")
+    if cfg.trees == "rust" {
+        use crate::assets::rtree::{self, Lod, Species};
+        let mut built: std::collections::HashMap<(u8, u64, u8), (Mesh, Mesh)> = Default::default();
+        let mut mats: std::collections::HashMap<u8, (usize, usize)> = Default::default();
+        let (mut bark_all, mut leaf_all): (std::collections::HashMap<u8, Mesh>, std::collections::HashMap<u8, Mesh>) = (Default::default(), Default::default());
+        let species = [Species::Oak, Species::Maple, Species::Birch, Species::Pine, Species::Willow, Species::Shrub];
+        // species mix of this house: 2-3 tree species (groves read as stands, not a catalogue)
+        let mut pool: Vec<usize> = (0..5).collect();
+        r.shuffle(&mut pool);
+        let pool = &pool[..r.randint(2, 4) as usize];
+        for pr in &props {
+            let kind = pr["kind"].as_str().unwrap_or("tree");
+            let variant = pr["variant"].as_u64().unwrap_or(1000);
+            let si = if kind == "bush" { 5 } else { pool[(variant as usize) % pool.len()] };
+            let loc = [pr["loc"][0].as_f64().unwrap(), pr["loc"][1].as_f64().unwrap(), pr["loc"][2].as_f64().unwrap()];
+            let d = (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs());
+            let lod = if d > e { Lod::Far } else { Lod::Near };
+            let key = (si as u8, variant, (lod == Lod::Far) as u8);
+            let (b, l) = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], seed ^ (variant * 7919) ^ (si as u64) << 20, lod); (t.bark, t.leaves) });
+            let m = Mat4::translation(loc).mul(&Mat4::rot_z(pr["rot"].as_f64().unwrap_or(0.0))).mul(&Mat4::scale([pr["scale"].as_f64().unwrap_or(1.0); 3]));
+            let (mut bb, mut ll) = (b.clone(), l.clone());
+            bb.transform(&m); ll.transform(&m);
+            bark_all.entry(si as u8).or_default().append(&bb);
+            let le = leaf_all.entry(si as u8).or_default();
+            if le.uv.len() != le.pos.len() { le.uv.resize(le.pos.len(), [0.0, 0.0]); }
+            le.append(&ll);
+            mats.entry(si as u8).or_insert_with(|| { let (bm, lm) = rtree::materials(species[si], 0.0); (scene.material(bm), scene.material(lm)) });
+        }
+        let mut keys: Vec<u8> = bark_all.keys().copied().collect(); keys.sort();
+        for k in keys {
+            let (bi, li) = mats[&k];
+            scene.add(&format!("outdoor_rtree_{:?}#0", species[k as usize]), "OutdoorTree", bark_all.remove(&k).unwrap(), bi);
+            scene.add(&format!("outdoor_rtree_{:?}#1", species[k as usize]), "OutdoorTree", leaf_all.remove(&k).unwrap(), li);
+        }
+        log.push(format!("rust trees: {} builds, species {:?}", built.len(), pool.iter().map(|&i| species[i]).collect::<Vec<_>>()));
+        props.clear();
+    }
     log.push(format!("terrain {gcls} / {mcls}, mountains {m_height:.0} m coverage {coverage:.2}, pad {:.2} m below the floor", cfg.pad_depth));
     let rec = json!({"terrain": {"ground_material": gcls, "mountain_material": mcls, "mountain_height": m_height, "coverage": coverage, "pad_z": t.pad_z},
         "props": props, "tree_variants": cfg.tree_variants, "bush_variants": cfg.bush_variants});
