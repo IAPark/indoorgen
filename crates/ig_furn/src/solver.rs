@@ -352,7 +352,8 @@ pub fn set_size(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, x
 pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -> Vec<String> {
     const BUILTIN: [&str; 5] = ["KitchenSpaceFactory", "KitchenCabinetFactory", "WardrobeFactory", "BathtubFactory", "ShowerFactory"];
     let names: Vec<String> = state.objs.iter().filter(|(k, o)| {
-        o.generator.as_ref().map_or(false, |g| BUILTIN.contains(&g.class.as_str()) && g.fit_box.is_some())
+        // (a kitchen's planned runs are built to their plan's widths: kitchen_plan.rs)
+        o.generator.as_ref().map_or(false, |g| BUILTIN.contains(&g.class.as_str()) && g.fit_box.is_some()) && !o.tags.contains(Tag::sem("KitchenPlanned"))
             && only_room.map_or(true, |r| super::layout2d::room_of(state, k).as_deref() == Some(r))
     }).map(|(k, _)| k.clone()).collect();
     let mut log = vec![];

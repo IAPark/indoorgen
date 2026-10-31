@@ -13,7 +13,7 @@ use crate::mesh::V3;
 use crate::rng::Rng;
 use std::sync::Arc;
 
-fn class_of(o: &ObjState) -> &str {
+pub(crate) fn class_of(o: &ObjState) -> &str {
     o.generator.as_ref().map(|g| g.class.as_str()).unwrap_or("")
 }
 
@@ -23,7 +23,7 @@ fn at_of(state: &State, k: &str) -> Option<[f64; 2]> {
     let c = o.pose.apply([(o.geom.lo[0] + o.geom.hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0, 0.0]);
     Some([c[0], c[1]])
 }
-fn yaw(p: &super::geom::Pose) -> f64 {
+pub(crate) fn yaw(p: &super::geom::Pose) -> f64 {
     p.r[1][0].atan2(p.r[0][0])
 }
 
@@ -105,7 +105,7 @@ fn try_place(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) -> bo
     false
 }
 
-fn lohi(state: &State, name: &str) -> (V3, V3) {
+pub(crate) fn lohi(state: &State, name: &str) -> (V3, V3) {
     let g = &state.objs[name].geom;
     (g.lo, g.hi)
 }
@@ -115,7 +115,11 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
     let mut log = vec![];
     // designed kitchens first (an L from a corner: counter + fridge on one leg, counter + range on the other); the rooms it lays out
     // skip the per-run appliance placement below
-    let done = if super::layout_rules::get().kitchen_template { kitchen_template(ctx, state, &mut log) } else { vec![] };
+    // (KITCHEN_SEQ=0: the template and the run passes below; else each kitchen planned as a sequence of lengths, kitchen_plan.rs)
+    let seq = std::env::var("KITCHEN_SEQ").map_or(true, |v| v != "0");
+    let planned = if seq { super::kitchen_plan::plan_kitchens(ctx, state, &mut log) } else { vec![] };
+    let mut done = if super::layout_rules::get().kitchen_template { kitchen_template_only(ctx, state, &mut log, &planned) } else { vec![] };
+    done.extend(planned.iter().cloned());
     let runs: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "KitchenSpaceFactory" && !layout2d::room_of(state, k).map_or(false, |r| done.contains(&r))).map(|(k, _)| k.clone()).collect();
     // floor-standing kitchen cabinets box the counter run in and read as stray units: removed (wall cabinets stay)
     let _runs: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "KitchenSpaceFactory").map(|(k, _)| k.clone()).collect();
@@ -295,7 +299,7 @@ pub fn kitchen(ctx: &mut Ctx, state: &mut State) -> Vec<String> {
     }
     // counters on every wall with room: more runs along the kitchen's free walls (an L or U with the first), each grown to its span;
     // a run facing another keeps a 1 m aisle (touching at a corner is fine)
-    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").map(|(k, _)| k.clone()).collect();
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen" && !planned.contains(k)).map(|(k, _)| k.clone()).collect();
     for room in rooms {
         let mut rng = Rng::seeded(ig_core::int_hash(&["kitchen_runs", &room]));
         // an appliance standing alone mid-wall leaves no stretch long enough for a run: it slides into a corner of a wall first
@@ -412,14 +416,14 @@ fn close_counter_gaps(ctx: &mut Ctx, state: &mut State, room: &str, log: &mut Ve
 }
 
 /// a new counter run sized like the kitchen's first: one counter depth and height through the room
-fn match_run(ctx: &mut Ctx, state: &mut State, name: &str, like: &str, w: f64) -> bool {
+pub(crate) fn match_run(ctx: &mut Ctx, state: &mut State, name: &str, like: &str, w: f64) -> bool {
     let Some(cs) = state.objs.get(like).and_then(|o| o.generator.as_ref()).and_then(super::solver::cur_size) else { return false };
     let base = state.objs[name].clone();
     super::solver::set_size(ctx, state, name, &base, [w, cs[1], cs[2]], 1.0)
 }
 
 /// place `name` with its back on a wall line through `c` (inward normal `n`), covering [start, start + its width] along `u` from `c`
-fn place_along(state: &mut State, name: &str, c: [f64; 2], u: [f64; 2], n: [f64; 2], start: f64) -> bool {
+pub(crate) fn place_along(state: &mut State, name: &str, c: [f64; 2], u: [f64; 2], n: [f64; 2], start: f64) -> bool {
     let (lo, hi) = lohi(state, name);
     let yaw_ = n[1].atan2(n[0]);
     let ly = [-n[1], n[0]];
@@ -433,9 +437,9 @@ fn place_along(state: &mut State, name: &str, c: [f64; 2], u: [f64; 2], n: [f64;
 /// assignments are tried on a copy of the room's pieces and the layout with the most counter (fridge and range placed) kept.
 /// The solver's runs, sinks and dishwashers in the room go; the extra-runs pass then lines the remaining walls (U / galley).
 /// Returns the rooms laid out.
-fn kitchen_template(ctx: &mut Ctx, state: &mut State, log: &mut Vec<String>) -> Vec<String> {
+fn kitchen_template_only(ctx: &mut Ctx, state: &mut State, log: &mut Vec<String>, skip: &[String]) -> Vec<String> {
     let mut done = vec![];
-    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen").map(|(k, _)| k.clone()).collect();
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "kitchen" && !skip.contains(k)).map(|(k, _)| k.clone()).collect();
     for room in rooms {
         let in_room = |st: &State, c: &str| -> Vec<String> { st.objs.iter().filter(|(k, o)| class_of(o) == c && layout2d::room_of(st, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect() };
         let runs = in_room(state, "KitchenSpaceFactory");
@@ -698,7 +702,7 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
 
 /// a new piece of `class` standing in `room`: the solver's placeholder for the class (size from the class density), its usage tags
 /// and a floor relation copied from a piece standing in that room; inserted at the origin (the caller places it)
-fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: &str, room: &str, name: &str) -> bool {
+pub(crate) fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: &str, room: &str, name: &str) -> bool {
     let Some((geom, gen)) = sample_rand_placeholder(ctx, rng, class) else { return false };
     let mut tags = TagSet::from([Tag::sem("Object"), Tag::sem("Furniture"), Tag::gen(class), Tag::obj(name)]);
     tags.update(&ctx.usage.usages_of(class));
@@ -870,7 +874,7 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
     log
 }
 
-fn room_type_of(room: &str) -> &str {
+pub(crate) fn room_type_of(room: &str) -> &str {
     room.split('_').next().unwrap_or("")
 }
 
@@ -944,7 +948,7 @@ pub fn caps(state: &mut State) -> Vec<String> {
 }
 
 /// inner wall segments of a room's floor: (start, end, inward normal), longest first
-fn wall_segments(state: &State, room: &str) -> Vec<([f64; 2], [f64; 2], [f64; 2])> {
+pub(crate) fn wall_segments(state: &State, room: &str) -> Vec<([f64; 2], [f64; 2], [f64; 2])> {
     let floor = layout2d::room_floor(state, room);
     let rings = layout2d::rings(&floor);
     let mut out = vec![];
@@ -971,7 +975,7 @@ fn wall_segments(state: &State, room: &str) -> Vec<([f64; 2], [f64; 2], [f64; 2]
     out
 }
 
-fn door_points(state: &State, room: &str) -> Vec<[f64; 2]> {
+pub(crate) fn door_points(state: &State, room: &str) -> Vec<[f64; 2]> {
     state.objs.keys().filter(|k| k.starts_with(&format!("doorclear/{room}/"))).filter_map(|k| {
         let p = layout2d::prisms(state, k);
         p.first().map(|p| { let n = p.poly.len() as f64; [p.poly.iter().map(|v| v[0]).sum::<f64>() / n, p.poly.iter().map(|v| v[1]).sum::<f64>() / n] })
@@ -2114,6 +2118,15 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
     runs.sort_by(|a, b| rank(state, a).partial_cmp(&rank(state, b)).unwrap());
     for run in runs.clone() {
         let Some(room) = layout2d::room_of(state, &run) else { continue };
+        // a planned kitchen (kitchen_plan.rs): one sink, on the plan's run at the plan's spot (the solver's sinks go)
+        let plan = super::kitchen_plan::planned_sink(&room).filter(|(r, _)| state.objs.contains_key(r));
+        if let Some((pr, _)) = &plan {
+            if run != *pr { continue }
+            let mine = format!("{pr}_sink");
+            let others: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "SinkFactory" && **k != mine && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            for k in others { layout2d::remove_tree(state, &k); }
+            if state.objs.contains_key(&mine) { continue }
+        }
         // a sink already on this run stays unless it stands against the range (no counter between): then it is placed again
         let on_run: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "SinkFactory" && o.relations.iter().any(|r| r.target == run)).map(|(k, _)| k.clone()).collect();
         if !on_run.is_empty() {
@@ -2154,7 +2167,7 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
             let w = state.objs[r].generator.as_ref().and_then(super::solver::cur_size).map_or(0.0, |c| c[0]);
             (d, -w)
         };
-        let main = in_room.iter().min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap()).map(|r| r.to_string());
+        let main = plan.as_ref().map(|(r, _)| r.clone()).or_else(|| in_room.iter().min_by(|a, b| key(a).partial_cmp(&key(b)).unwrap()).map(|r| r.to_string()));
         let first = main.as_deref() == Some(run.as_str());
         if !first && state.objs.iter().any(|(k, o)| class_of(o) == "SinkFactory" && layout2d::room_of(state, k).as_deref() == Some(room.as_str())) { continue }
         // a sink the solver put on another run moves here (removed; the one below takes its place)
@@ -2194,6 +2207,7 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         }).collect();
         let mid = (rlo[1] + rhi[1]) / 2.0;
         for k in 0..8 { let off = (k as f64 / 2.0).ceil() * 0.3 * if k % 2 == 0 { 1.0 } else { -1.0 }; ys.push(mid + off); }
+        if let Some((_, at)) = plan.as_ref().filter(|(r, _)| *r == run) { ys.insert(0, inv([at[0], at[1], 0.0])[1]); }
         let sd = shi[0] - slo[0];
         let mut ok = false;
         // counter to work on between the sink and the range: 0.4 m or more first, then any free spot
@@ -2397,6 +2411,7 @@ pub fn orphans(state: &mut State) -> Vec<String> {
             || pc.contains("Plant");
         if !(over && level) || on_bed {
             let cls = class_of(&state.objs[&k]).to_string();
+            if ig_core::env_on!("ORPHDBG") { eprintln!("ORPHDBG {k} on {p}: t {:?} geom {:?}-{:?} parent {pl:.2?}-{ph:.2?} over {over} level {level}", state.objs[&k].pose.t, state.objs[&k].geom.lo, state.objs[&k].geom.hi); }
             layout2d::remove_tree(state, &k);
             log.push(format!("removed {cls} {k} (left behind by {p})"));
         }
