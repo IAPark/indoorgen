@@ -14,6 +14,7 @@ use bevy::camera::{Exposure, Hdr, RenderTarget, ScalingMode};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::{atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight, CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight, NotShadowCaster, SunDisk};
+use bevy::light::{EnvironmentMapLight, GeneratedEnvironmentMapLight};
 use bevy::log::LogPlugin;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{AtmosphereSettings, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
@@ -25,6 +26,7 @@ use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages, CachedPipelineState, CommandEncoderDescriptor, MapMode, PipelineCache, PollType, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 use bevy::render::texture::GpuImage;
+use bevy::render::view::{ColorGrading, ColorGradingGlobal};
 use bevy::render::{Render, RenderApp, RenderPlugin, RenderSystems};
 use bevy::window::ExitCondition;
 use cams::{CamSpec, DrawInfo, SceneInfo};
@@ -44,13 +46,14 @@ struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
     sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32,
     sidecar_lighting: bool, tonemap: String, shadow_dist: f32, fog: f32, point_shadows: usize, sun_strength: f32,
+    saturation: f32, dump_cams: Option<PathBuf>, indoor_ambient: f32,
 }
 
 fn parse_args() -> Opts {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
-        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0,
-        sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0 };
+        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.5, sun_i: 1.0, light_scale: 1.0,
+        sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0, saturation: 1.15, dump_cams: None, indoor_ambient: 0.4 };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -79,6 +82,9 @@ fn parse_args() -> Opts {
             "--tonemap" => o.tonemap = val(),
             "--shadow-dist" => o.shadow_dist = val().parse().unwrap(),
             "--fog" => o.fog = val().parse().unwrap(),
+            "--indoor-ambient" => o.indoor_ambient = val().parse().unwrap(),
+            "--saturation" => o.saturation = val().parse().unwrap(),
+            "--dump-cams" => o.dump_cams = Some(PathBuf::from(val())),
             "--point-shadows" => o.point_shadows = val().parse().unwrap(),
             "--cloth" | "--depth" => { if k == "--cloth" { val(); } eprintln!("bevy_preview: {k} is not supported (use tools/preview.sh)"); }
             "-v" => o.verbose = true,
@@ -86,7 +92,7 @@ fn parse_args() -> Opts {
         }
         i += 1;
     }
-    assert!(!o.inputs.is_empty(), "usage: bevy_preview [--cam cam.json | --cams N|cam0 | --at ex,ey,ez,tx,ty,tz[,lens] | --person I | --top]... [--sheet] [--res WxH] [--ss N] [--sun az,el] [--exposure E] [--ao A] [--ambient A] [--no-ceiling] [--tonemap agx|aces|tony|reinhard] [--shadow-dist M] [--fog F] [--point-shadows N] -o OUT scene.glb...");
+    assert!(!o.inputs.is_empty(), "usage: bevy_preview [--cam cam.json | --cams N|cam0 | --at ex,ey,ez,tx,ty,tz[,lens] | --person I | --top]... [--sheet] [--res WxH] [--ss N] [--sun az,el] [--exposure E] [--ao A] [--ambient A] [--no-ceiling] [--tonemap agx|aces|tony|reinhard] [--shadow-dist M] [--fog F] [--point-shadows N] [--saturation S] [--dump-cams DIR] -o OUT scene.glb...");
     o
 }
 
@@ -108,6 +114,7 @@ fn zup_mat() -> Mat4 { Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2) }
 fn make_image(img: image::RgbaImage, cutoff: Option<f32>) -> Image {
     let mut img = img;
     if img.width().max(img.height()) > 1024 { let s = 1024.0 / img.width().max(img.height()) as f32; img = image::imageops::resize(&img, ((img.width() as f32 * s) as u32).max(1), ((img.height() as f32 * s) as u32).max(1), image::imageops::FilterType::Triangle); }
+    if let Some(cut) = cutoff { dilate_rgb(&mut img, (cut * 255.0) as u8); }
     let (w, h) = img.dimensions();
     let levels = 32 - w.max(h).leading_zeros();
     let coverage = |im: &image::RgbaImage, cut: f32, scale: f32| { let n = im.pixels().filter(|p| (p[3] as f32 / 255.0 * scale) >= cut).count(); n as f32 / (im.width() * im.height()) as f32 };
@@ -137,8 +144,36 @@ fn make_image(img: image::RgbaImage, cutoff: Option<f32>) -> Image {
     im
 }
 
+/// Fill the RGB of (near-)transparent texels from their opaque neighbours so that filtering/mipmapping an alpha-tested
+/// texture does not bleed the (often white or black) background colour into leaf edges.
+fn dilate_rgb(img: &mut image::RgbaImage, cut: u8) {
+    let (w, h) = (img.width() as i64, img.height() as i64);
+    let mut known: Vec<bool> = img.pixels().map(|p| p[3] >= cut).collect();
+    let n_known = known.iter().filter(|k| **k).count();
+    if n_known == 0 || n_known == known.len() { return; }
+    let mut mean = [0f64; 3];
+    for (p, k) in img.pixels().zip(&known) { if *k { for c in 0..3 { mean[c] += p[c] as f64; } } }
+    for c in &mut mean { *c /= n_known as f64; }
+    for _ in 0..8 {
+        let src = img.clone(); let prev = known.clone(); let mut changed = false;
+        for y in 0..h { for x in 0..w {
+            let i = (y * w + x) as usize; if prev[i] { continue; }
+            let (mut acc, mut n) = ([0u32; 3], 0u32);
+            for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= w || ny >= h { continue; }
+                let j = (ny * w + nx) as usize; if !prev[j] { continue; }
+                let q = src.get_pixel(nx as u32, ny as u32); for c in 0..3 { acc[c] += q[c] as u32; } n += 1;
+            }
+            if n > 0 { let p = img.get_pixel_mut(x as u32, y as u32); for c in 0..3 { p[c] = (acc[c] / n) as u8; } known[i] = true; changed = true; }
+        } }
+        if !changed { break; }
+    }
+    for (p, k) in img.pixels_mut().zip(&known) { if !*k { for c in 0..3 { p[c] = mean[c] as u8; } } }
+}
+
 // ---------------- scene ----------------
-struct Loaded { info: SceneInfo, name: String, ents: Vec<Entity>, lit: Option<(f32, f32, f32, f32)> }
+struct Loaded { info: SceneInfo, name: String, ents: Vec<Entity>, lit: Option<(f32, f32, f32, f32)>, has_house: bool }
 
 fn build_mesh(g: &glb::Glb, p: &glb::Prim) -> Mesh {
     let rd3 = |v: &glb::View, n: usize| -> Vec<[f32; 3]> {
@@ -226,6 +261,10 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
                 ..default()
             };
             if flags == 2 { sm.perceptual_roughness = 0.08; sm.metallic = 0.0; sm.reflectance = 0.5; }
+            if flags == 1 && m.map_or(false, |m| m.mask.is_some()) {
+                // foliage cards: matte-ish, a little light through the leaf when backlit
+                sm.perceptual_roughness = sm.perceptual_roughness.max(0.7); sm.reflectance = 0.35; sm.diffuse_transmission = 0.3;
+            }
             world.resource_mut::<Assets<StandardMaterial>>().add(sm)
         }).clone();
         let (a, b) = (zup(pr.bmin), zup(pr.bmax));
@@ -239,7 +278,8 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
         ents.push(e.id());
     }
     // the scene bbox (used by --top) covers the house only, unless the scene is all outdoor
-    if bmin.x > bmax.x { bmin = obmin; bmax = obmax; }
+    let has_house = bmin.x <= bmax.x;
+    if !has_house { bmin = obmin; bmax = obmax; }
     // sidecar point lights (Blender watts -> lumens)
     if let Some(ls) = side["lights"].as_array() {
         for (li, l) in ls.iter().enumerate() {
@@ -256,7 +296,7 @@ fn load_scene(world: &mut World, path: &Path, o: &Opts) -> Loaded {
         (f(1).atan2(f(0)).to_degrees(), f(2).asin().to_degrees(), l["sun_strength"].as_f64().unwrap_or(4.0) as f32 / 4.0, l["sky_strength"].as_f64().unwrap_or(1.0) as f32)
     }) } else { None };
     if o.verbose { eprintln!("  scene spawned {:.2}s ({} meshes, {} materials, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), ents.len(), mat_h.len(), bmin, bmax); }
-    Loaded { info: SceneInfo { glb: g, side, draws, bmin, bmax }, name: path.file_stem().unwrap().to_string_lossy().to_string(), ents, lit }
+    Loaded { info: SceneInfo { glb: g, side, draws, bmin, bmax }, name: path.file_stem().unwrap().to_string_lossy().to_string(), ents, lit, has_house }
 }
 
 // ---------------- app / rendering ----------------
@@ -374,7 +414,8 @@ fn main() {
         let w = app.world_mut();
         let mut e = w.spawn((Camera3d::default(), RenderTarget::Image(target.clone().into()), Hdr, Msaa::Off, tonemap, Exposure { ev100: ev },
             Projection::Perspective(PerspectiveProjection { near: 0.05, far: 4000.0, ..default() }), Transform::IDENTITY,
-            AtmosphereSettings::default(), AtmosphereEnvironmentMapLight { intensity: o.ambient, ..default() }));
+            AtmosphereSettings::default(), AtmosphereEnvironmentMapLight { intensity: o.ambient, ..default() },
+            ColorGrading { global: ColorGradingGlobal { post_saturation: o.saturation, ..default() }, ..default() }));
         if o.ao > 0.0 { e.insert(ScreenSpaceAmbientOcclusion { quality_level: ScreenSpaceAmbientOcclusionQualityLevel::High, ..default() }); }
         if o.fog > 0.0 {
             // light haze on top of the physical aerial perspective (which is very weak at a few hundred metres)
@@ -398,14 +439,30 @@ fn main() {
             let up = if sdir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
             *w.get_mut::<Transform>(sun_e).unwrap() = Transform::IDENTITY.looking_to(-sdir, up);
             w.get_mut::<DirectionalLight>(sun_e).unwrap().illuminance = o.sun_strength * LM_PER_W * sun_i;
-            w.get_mut::<AtmosphereEnvironmentMapLight>(cam_e).unwrap().intensity = ambient;
         }
         if o.verbose { eprintln!("scene {} loaded {:.2}s, {} cams", s.name, t.elapsed().as_secs_f32(), cams.len()); }
+        if let Some(d) = &o.dump_cams {
+            // render_rust.py / tools/preview --cam format, so the same views can be rendered elsewhere
+            std::fs::create_dir_all(d).ok();
+            for (i, c) in cams.iter().enumerate() {
+                let m: Vec<Vec<f32>> = (0..4).map(|r| (0..4).map(|k| c.view.col(k)[r]).collect()).collect();
+                let j = serde_json::json!({"matrix": m, "lens": 18.0 / (c.fov_x / 2.0).tan(), "sensor_width": 36.0});
+                let nm = if c.name.is_empty() { format!("cam{i}") } else { c.name.clone() };
+                std::fs::write(d.join(format!("{}_{}.json", s.name, nm)), j.to_string()).unwrap();
+            }
+        }
         for (i, c) in cams.iter().enumerate() {
             let tc = Instant::now();
             {
                 let w = app.world_mut();
                 *w.get_mut::<Transform>(cam_e).unwrap() = Transform::from_matrix(zup_mat() * c.view);
+                // the sky environment light is not occluded by walls: dim it for cameras inside the house
+                let eye = c.view.w_axis.truncate();
+                let indoor = s.has_house && c.ortho.is_none() && eye.cmpge(s.info.bmin).all() && eye.cmple(s.info.bmax + Vec3::new(0.0, 0.0, 0.5)).all();
+                // (AtmosphereEnvironmentMapLight only copies its intensity on insert; the generated components are what render)
+                let amb = ambient * if indoor { o.indoor_ambient } else { 1.0 };
+                if let Some(mut g) = w.get_mut::<GeneratedEnvironmentMapLight>(cam_e) { g.intensity = amb; }
+                if let Some(mut g) = w.get_mut::<EnvironmentMapLight>(cam_e) { g.intensity = amb; }
                 let aspect = o.res.0 as f32 / o.res.1 as f32;
                 *w.get_mut::<Projection>(cam_e).unwrap() = match c.ortho {
                     Some(wd) => Projection::Orthographic(OrthographicProjection { near: 0.05, far: 4000.0, scaling_mode: ScalingMode::Fixed { width: wd, height: wd / aspect }, ..OrthographicProjection::default_3d() }),
