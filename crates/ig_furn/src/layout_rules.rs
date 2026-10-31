@@ -23,6 +23,8 @@ pub struct LayoutRules {
     // dining
     /// chair spacing along a long side, m
     pub chair_spacing: f64,
+    /// how far a dining chair's seat runs under the table top, m
+    pub chair_tuck: f64,
     /// a chair at each end of tables of `small_table` m and longer
     pub end_chairs: bool,
     /// tables shorter than this get one chair per side, m
@@ -55,6 +57,18 @@ pub struct LayoutRules {
     pub kitchen_aisle: f64,
     /// counter between the sink and the range, m
     pub sink_range_gap: f64,
+    /// the kitchen rules (kitchen_rules.rs): floor before a fridge's door past its width, m; before a range / dishwasher, m
+    pub fridge_door_clear: f64,
+    pub appliance_front_clear: f64,
+    /// open floor or in-line counter beside a fridge's sides (off corners), m
+    pub fridge_corner_gap: f64,
+    /// narrowest slot left open beside a range / dishwasher (narrower ones are closed), m
+    pub counter_gap_max: f64,
+    /// work triangle: each sink / range / fridge leg, and their sum, m
+    pub triangle_leg_min: f64,
+    pub triangle_leg_max: f64,
+    pub triangle_sum_min: f64,
+    pub triangle_sum_max: f64,
     // bathroom
     /// the wet-wall template (tub from a corner, sink and toilet beside it)
     pub bathroom_template: bool,
@@ -77,10 +91,12 @@ impl Default for LayoutRules {
         LayoutRules {
             tv_view_min: 1.3, tv_view_max: 4.0, side_wall_max: 3.6, float_min: 2.2, float_max: 3.8,
             armchair_one_m2: 20.0, armchair_two_m2: 30.0, coffee_ratio: 0.75,
-            chair_spacing: 0.6, end_chairs: true, small_table: 1.2, table_wall_clear: 0.75, table_door_clear: 1.0, small_dining_m2: 15.0, round_table_p: 0.5,
+            chair_spacing: 0.6, chair_tuck: 0.08, end_chairs: true, small_table: 1.2, table_wall_clear: 0.75, table_door_clear: 1.0, small_dining_m2: 15.0, round_table_p: 0.5,
             dining_sideboard: true, dining_cabinet_m2: 18.0, dining_rug: true, dining_plant: true,
             living_plants: 1, bedroom_plants: 1, hallway_plants: 0, living_bookcase: true,
             kitchen_template: true, extra_runs: 3, kitchen_aisle: 1.0, sink_range_gap: 0.6,
+            fridge_door_clear: 0.2, appliance_front_clear: 1.0, fridge_corner_gap: 0.3, counter_gap_max: 0.6,
+            triangle_leg_min: 1.2, triangle_leg_max: 2.7, triangle_sum_min: 4.0, triangle_sum_max: 8.0,
             bathroom_template: true, fixture_gap: 0.45, tub_and_shower_m2: 14.0, toilet_door_min: 1.0,
             desks: false, desk_min_m2: 18.0, wardrobe_bed_min: 0.7,
         }

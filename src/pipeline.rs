@@ -560,6 +560,12 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
     run_stage("obj_ontop_obj", "small", opt.steps_small, None, 3.0, state, &mut rng, &mut ctx);
     run_stage("obj_on_support", "small", opt.steps_small, Some(vec![MoveKind::Addition]), 1.0, state, &mut rng, &mut ctx);
     if crate::furn::layout2d::knobs::groups() { let mut rg = Rng::seeded(hs("sinks")); for l in crate::furn::groups::sinks(&mut ctx, state, &mut rg, only_room) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
+    if std::env::var_os("KRULEDBG").is_some() {
+        for k in state.objs.keys().filter(|k| k.starts_with("kitchen") && !k.contains('.') && crate::furn::layout2d::is_room(&state.objs[k.as_str()])).cloned().collect::<Vec<_>>() {
+            let e = crate::furn::kitchen_rules::eval(state, &k, None);
+            eprintln!("KRULES {k} {:.2} {:?}", e.score, e.broken);
+        }
+    }
     if crate::furn::layout2d::knobs::groups() { for l in crate::furn::groups::orphans(state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
     let ts = t.elapsed().as_secs_f64();
     (tl, tm, ts)

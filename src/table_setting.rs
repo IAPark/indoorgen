@@ -66,7 +66,7 @@ pub fn arrange(state: &mut State) -> Vec<String> {
 
 /// Dining chairs the solver left against the walls (their "near the table" relation is soft; cramped plans park them in pairs along
 /// a wall): a chair whose seat is more than 0.8 m from its table's edge moves to a free slot around the table, facing it (slots every
-/// ~0.6 m along each side, 0.15 m tucked under); a slot must lie in the chair's room and clear every other object. No free slot: removed.
+/// ~0.6 m along each side, layout_rules.chair_tuck under the top); a slot must lie in the chair's room and clear every other object. No free slot: removed.
 pub fn gather_chairs(state: &mut State) -> Vec<String> {
     type B = ([f64; 3], [f64; 3]);
     let wbox = |o: &crate::furn::state::ObjState| -> B {
@@ -147,9 +147,9 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
             order.sort_by(|&a, &b| { let d = |i: usize| (slots[i].0[0] - here[0]).hypot(slots[i].0[1] - here[1]); prio[a].0.cmp(&prio[b].0).then(d(a).partial_cmp(&d(b)).unwrap()) });
             for si in order {
                 let (p, nl) = (&slots[si].0, &slots[si].1);
-                // seat centre 0.5 depth out from the edge minus the tuck; chair faces -n (its +x toward the table)
-                // just outside the edge (a 5 cm gap): tucked under the top, chairs read as overlapping the table in a plan
-                let off = 0.5 * depth + 0.05;
+                // seat centre 0.5 depth out from the edge minus the tuck (layout_rules.chair_tuck: the seat's front under the top, as
+                // chairs are left at a table); chair faces -n (its +x toward the table)
+                let off = 0.5 * depth - crate::furn::layout_rules::get().chair_tuck;
                 let sc = to_world([p[0] + nl[0] * off, p[1] + nl[1] * off]);
                 let nw = [r[0][0] * nl[0] + r[0][1] * nl[1], r[1][0] * nl[0] + r[1][1] * nl[1]];
                 let yaw = (-nw[1]).atan2(-nw[0]);

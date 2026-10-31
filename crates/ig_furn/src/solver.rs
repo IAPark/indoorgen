@@ -301,6 +301,12 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
 /// geometry (exact factories) or the box, re-matches the relation faces and runs the move validity check; returns ok (state changed
 /// either way: the caller restores `base` when it rejects).
 pub fn set_width(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, w_new: f64, side: f64) -> bool {
+    let Some(cs) = base.generator.as_ref().and_then(cur_size) else { return false };
+    set_size(ctx, state, name, base, [w_new, cs[1], cs[2]], side)
+}
+
+/// as set_width, every dimension: [width, depth, height] (a new counter run takes the depth and height of the kitchen's first)
+pub fn set_size(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, x: [f64; 3], side: f64) -> bool {
     let g0 = base.generator.as_ref().unwrap();
     let class = g0.class.clone();
     let Some(m) = super::sizes::model(&class) else { return false };
@@ -313,7 +319,6 @@ pub fn set_width(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, 
         let (n, p) = state.plane_nd(name, i);
         Some((n, dot(n, p)))
     }).collect();
-    let x = [w_new, cs[1], cs[2]];
     let Some((ng, fb)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
     let far_old = if side > 0.0 { lo[1] } else { hi[1] };
     let far_new = if side > 0.0 { fb.0[1] } else { fb.1[1] };
@@ -400,7 +405,8 @@ pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -
                     if let Some(bi) = best { state.objs.get_mut(name.as_str()).unwrap().relations[ri].child_plane = bi; }
                 }
                 state.touch(name.as_str());
-                let ok = super::dof::check_post_move_validity(state, name.as_str());
+                // (the kitchen rules: a run does not grow across a fridge's side or into an appliance's door zone)
+                let ok = super::dof::check_post_move_validity(state, name.as_str()) && !super::kitchen_rules::run_breaks(state, name.as_str());
                 if !ok && e < 0.05 && ig_core::env_on!("BUILTINDBG") {
                     let hits: Vec<String> = state.objs.keys().filter(|k| k.as_str() != name && !super::layout2d::is_room(&state.objs[k.as_str()]) && super::layout2d::depth(state, &name, k) > 1e-4).map(|k| k.chars().skip_while(|c| c.is_ascii_digit() || *c == '_').collect()).collect();
                     eprintln!("BUILTINDBG {class} side {side} e {e:.3}: relations {} outside {:.3} hits {:?} layout {} far_old {far_old:.3} far_new {far_new:.3} fb {:?}", super::dof::all_relations_valid(state, &name), super::layout2d::outside_depth(state, &name), hits, super::layout2d::layout_ok(state, &name), fb);

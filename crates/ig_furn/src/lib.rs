@@ -11,6 +11,7 @@ pub mod state;
 pub mod col;
 pub mod layout2d;
 pub mod layout_rules;
+pub mod kitchen_rules;
 pub mod sizes;
 pub mod groups;
 pub mod layers;
