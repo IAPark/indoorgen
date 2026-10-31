@@ -420,7 +420,9 @@ pub fn build_scene(p: &Params) -> Built {
                 // the size the solver chose (furn::sizes): 'exact' classes build to it, the others are fitted to the box
                 let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact) || (gen.class == "RugFactory" && gen.size.is_some());
                 if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
+                ig_kit::api::set_kitchen_join(gen.join);
                 let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+                ig_kit::api::set_kitchen_join(None);
                 ig_kit::api::set_round_hint(false);
                 // SIZEDBG: a class built to a size must come out at it (extents [width (y), depth (x), height (z)] against the hint)
                 if exact && std::env::var_os("SIZEDBG").is_some() {
@@ -436,7 +438,9 @@ pub fn build_scene(p: &Params) -> Built {
                 // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
                 if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {
                     let (lo, hi) = a.bounds();
-                    let off = [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]];
+                    // (an L leg's wall cabinet reaching on into the corner widens the model toward that end: kitchen_plan.rs)
+                    let reach = gen.join.map_or(0.0, |j| if j[2].abs() > 1.5 { 0.0 } else { j[2] * j[3] / 2.0 });
+                    let off = [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 + reach - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]];
                     if off.iter().any(|v| v.abs() > 1e-6) { a.transform(&indoorgen::mesh::Mat4::translation(off)); }
                 }
                 if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {

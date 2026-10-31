@@ -288,7 +288,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         tags.insert(Tag::sem(pf.class));
         let mut o = ObjState::new(Arc::new(pf.asset.solver_geom()), pf.pose(), tags);
         o.relations.push(crate::furn::state::RelState { relation: crate::furn::relations::Relation::Traverse, target: pf.room.clone(), child_plane: 0, parent_plane: 0 });
-        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None, size: None });
+        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None, size: None, join: None });
         o.active = true;
         state.objs.insert(pf.key.clone(), o);
         state.touch(&pf.key);
@@ -703,7 +703,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 let s1 = corners.iter().map(|q| along(*q)).fold(f64::NEG_INFINITY, f64::max);
                 let tall = hi[2] > sill + 0.02;
                 // a counter run takes a window over its worktop (its wall cabinets come off there) when the sill clears the top
-                let counter_ok = g.class == "KitchenSpaceFactory" && sill > lo[2] + 0.95;
+                // (a run along this wall; one turned across it meets the wall with its wall cabinets: a corner, not a counter)
+                let counter_ok = g.class == "KitchenSpaceFactory" && (o.pose.r[0][0] * u[0] + o.pose.r[1][0] * u[1]).abs() < 0.3;
                 let weight = match g.class.as_str() {
                     "WallArtFactory" | "MirrorFactory" | "RugFactory" | "CeilingLightFactory" | "SinkFactory" => 0.0,
                     "KitchenSpaceFactory" if counter_ok => 0.3,
@@ -720,8 +721,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 // what a window over it needs its sill above: the worktop (a run's top is its wall cabinets'), the range's back guard,
                 // a tap, the basin's dressing
                 let need = match g.class.as_str() {
-                    "KitchenSpaceFactory" => Some(lo[2] + 0.95),
-                    "OvenFactory" => Some(lo[2] + 1.02),
+                    // (the worktop: the top of the run's base box, 0.8-1.05 m by its style)
+                    "KitchenSpaceFactory" => Some(crate::furn::layout2d::prisms(state, k).iter().map(|p| p.z[1]).filter(|z| *z < lo[2] + 1.3).fold(lo[2] + 0.95, f64::max) + 0.03),
+                    "OvenFactory" => Some(hi[2].max(lo[2] + 1.02) + 0.03),
                     // (a sink's tap and a basin's taps stand taller than their layout boxes; the cistern takes the dresser's items)
                     "SinkFactory" => Some(hi[2] + 0.3),
                     "ToiletFactory" => Some(hi[2] + 0.2),

@@ -117,7 +117,8 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let (Some(sz), true) = (g.size.or_else(|| crate::furn::solver::cur_size(g)), exact) else { continue };
         let Some(a) = inp.visuals.get(k) else { continue };
         let (l, h) = a.bounds();
-        let e = [h[1] - l[1], h[0] - l[0], h[2] - l[2]];
+        // (an L leg's wall cabinet reaching into the corner: kitchen_plan.rs)
+        let e = [h[1] - l[1] - g.join.map_or(0.0, |j| j[3] * j[2].abs()), h[0] - l[0], h[2] - l[2]];
         // (a counter run under a window loses its wall cabinets there: its height is not held to the size)
         let dims = if g.class == "KitchenSpaceFactory" { 2 } else { 3 };
         let off = (0..dims).map(|i| (e[i] - sz[i]).abs()).fold(0.0, f64::max);

@@ -162,7 +162,8 @@ impl Kit {
             // another used line at this corner that owns it: this one starts past its depth
             let used_other = self.corners[ci].iter().any(|(o, _)| *o != li && !plan.lines[*o].items.is_empty());
             if used_other && plan.owner[ci] != li {
-                if e == 0 { s.0 = self.d_counter + 0.02 } else { s.1 = l.len - self.d_counter - 0.02 }
+                // (butted against the corner leg's front: the pair is built as one L, kitchen_plan::build)
+                if e == 0 { s.0 = self.d_counter + 0.003 } else { s.1 = l.len - self.d_counter - 0.003 }
             }
         }
         s
@@ -520,6 +521,8 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
     let put = |state: &mut State, k: &str| { if let Some((_, o)) = parked.iter().find(|(kk, _)| kk == k) { state.objs.insert(k.to_string(), o.clone()); state.touch(k); } };
     let mut run_i = 0;
     let mut sink_on: Option<(String, [f64; 2])> = None;
+    // the run each counter item went into
+    let mut run_of: std::collections::HashMap<(usize, usize), String> = Default::default();
     for (li, _) in plan.lines.iter().enumerate() {
         let l = &kit.lines[li];
         let on: Vec<&Placed> = ps.iter().filter(|p| p.line == li).collect();
@@ -537,6 +540,7 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
                     state.touch(&name);
                 }
                 run_i += 1;
+                for q in &on[j0..i] { run_of.insert((q.line, q.idx), name.clone()); }
                 if !match_run(ctx, state, &name, proto, t1 - t0) && state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(true, |c| (c[0] - (t1 - t0)).abs() > 0.03) {
                     if dbg { eprintln!("KPLAN build: run {name} not sized to {:.2}", t1 - t0); }
                     return Err(li)
@@ -566,6 +570,41 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
                 }
             }
             i += 1;
+        }
+    }
+    // L joints: at each corner where the corner leg (the owner) and the other leg both end in counter, the pair is one unit -- the
+    // corner leg's base leaves the corner square, the other leg's wall cabinet reaches on to the corner leg's
+    let side = |state: &State, run: &str, q: [f64; 2]| -> f64 {
+        let o = &state.objs[run];
+        let d = [q[0] - o.pose.t[0], q[1] - o.pose.t[1]];
+        let ly = o.pose.r[0][1] * d[0] + o.pose.r[1][1] * d[1];
+        if ly < (o.geom.lo[1] + o.geom.hi[1]) / 2.0 { -1.0 } else { 1.0 }
+    };
+    for (ci, ends) in kit.corners.iter().enumerate() {
+        let owner = plan.owner[ci];
+        let Some(&(_, oe)) = ends.iter().find(|(l, _)| *l == owner) else { continue };
+        let lo_ = &kit.lines[owner];
+        let at_end = |p: &&Placed, l: &Line, e: usize, s0: f64, s1: f64| if e == 0 { p.t0 - s0 < 0.01 } else { s1 - p.t1 < 0.01 } && p.line == ps.iter().find(|q| std::ptr::eq(*q, *p)).map_or(usize::MAX, |q| q.line) && l.len > 0.0;
+        let (os0, os1) = kit.span(plan, owner);
+        let Some(op) = ps.iter().filter(|p| p.line == owner && is_counter(p.kind)).find(|p| at_end(p, lo_, oe, os0, os1)) else { continue };
+        let Some(orun) = run_of.get(&(op.line, op.idx)).cloned() else { continue };
+        for &(lj, je) in ends.iter().filter(|(l, _)| *l != owner) {
+            let l = &kit.lines[lj];
+            let (s0, s1) = kit.span(plan, lj);
+            let Some(lp) = ps.iter().filter(|p| p.line == lj && is_counter(p.kind)).find(|p| at_end(p, l, je, s0, s1)) else { continue };
+            let Some(lrun) = run_of.get(&(lp.line, lp.idx)).cloned() else { continue };
+            let corner_pt = if oe == 0 { lo_.a } else { [lo_.a[0] + lo_.u[0] * lo_.len, lo_.a[1] + lo_.u[1] * lo_.len] };
+            let t = if je == 0 { s0 } else { s1 };
+            let joint_pt = [l.a[0] + l.u[0] * t, l.a[1] + l.u[1] * t];
+            let (bs, js) = (side(state, &orun, corner_pt), side(state, &lrun, joint_pt));
+            let leg_depth = { let (a, b) = lohi(state, &lrun); b[0] - a[0] };
+            let own_depth = { let (a, b) = lohi(state, &orun); b[0] - a[0] };
+            let set = |state: &mut State, k: &str, f: &dyn Fn(&mut [f64; 4])| { if let Some(g) = state.objs.get_mut(k).and_then(|o| o.generator.as_mut()) { let mut j = g.join.unwrap_or([0.0; 4]); f(&mut j); g.join = Some(j); } state.touch(k); };
+            set(state, &orun, &|j| if j[0] == 0.0 { j[0] = bs; j[1] = leg_depth; } else if j[0] != bs { j[0] = 2.0; j[1] = j[1].max(leg_depth); });
+            // (to the corner leg's wall-cabinet fronts: its deepest, the middle one, is two thirds of the counter deep)
+            let reach = own_depth * 0.34 - 0.01;
+            set(state, &lrun, &|j| if j[2] == 0.0 { j[2] = js; j[3] = reach; } else if j[2] != js { j[2] = 2.0; j[3] = j[3].min(reach); });
+            if dbg { eprintln!("KPLAN L joint at corner {ci}: {orun} blind {bs:+} {leg_depth:.2} m, {lrun} reach {js:+} {reach:.2} m"); }
         }
     }
     // the sink: its run and spot, for the sinks pass (it builds sinks after the furniture stages, which rebuild placeholders)

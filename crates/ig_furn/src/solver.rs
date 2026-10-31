@@ -291,10 +291,10 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             let (lo, hi) = super::sizes::target_box(geom.lo, geom.hi, x);
             geom = crate::api::box_from_corners_geom(lo, hi);
             fit_box = Some((lo, hi));
-            if m.exact { return Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: None, fit_box, size: Some(x) })); }
+            if m.exact { return Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: None, fit_box, size: Some(x), join: None })); }
         }
     }
-    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box, size: exact_size }))
+    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box, size: exact_size, join: None }))
 }
 
 /// set a sized piece's width to `w_new` keeping one end fixed: `side` = +1 moves the +y end (local), -1 the -y end. Rebuilds the

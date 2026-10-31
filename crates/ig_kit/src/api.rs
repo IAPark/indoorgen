@@ -573,3 +573,13 @@ pub fn set_round_hint(on: bool) {
 pub fn round_hint() -> bool {
     ROUND_HINT.with(|c| c.get())
 }
+thread_local! {
+    static KITCHEN_JOIN: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
+}
+/// the next counter run built is one leg of an L (furn::kitchen_plan): [blind end, blind width, joined end, wall-cabinet reach]
+pub fn set_kitchen_join(j: Option<[f64; 4]>) {
+    KITCHEN_JOIN.with(|c| c.set(j));
+}
+pub fn kitchen_join() -> Option<[f64; 4]> {
+    KITCHEN_JOIN.with(|c| c.get())
+}

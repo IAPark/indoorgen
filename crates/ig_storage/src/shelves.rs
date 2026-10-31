@@ -783,12 +783,15 @@ impl Factory for KitchenCabinet {
     }
 }
 
+#[derive(Clone)]
 pub struct KitchenSpace {
     dims: [f64; 3],
     island: bool,
     bottom_h: f64,
     top_h: f64,
     factory_seed: u64,
+    /// one leg of an L (ig_kit::api::kitchen_join): [blind end, blind width, joined end, wall-cabinet reach]
+    join: Option<[f64; 4]>,
 }
 
 impl KitchenSpace {
@@ -805,7 +808,8 @@ impl KitchenSpace {
         }
         let bottom_h = r.uniform(0.8, 1.0);
         let top_h = r.uniform(0.8, 1.0);
-        KitchenSpace { dims, island, bottom_h, top_h, factory_seed }
+        let join = if island { None } else { crate::api::kitchen_join() };
+        KitchenSpace { dims, island, bottom_h, top_h, factory_seed, join }
     }
 }
 
@@ -856,11 +860,57 @@ impl KitchenSpace {
     /// (non-island) scaled to `dimensions`
     fn assemble(&self, inst: u64) -> cabnodes::GMesh {
         let parts = self.raw_parts(inst);
-        let mut g = hwexact::join_fwd(&parts);
+        let mut parts = parts;
         if !self.island {
-            self.scale_to_dims(std::slice::from_mut(&mut g));
+            self.scale_to_dims(&mut parts);
+            self.apply_join(&mut parts);
         }
-        g
+        hwexact::join_fwd(&parts)
+    }
+
+    /// one leg of an L, after the scaling to size: the corner leg's base cabinets leave the corner square (`blind` m at that end,
+    /// under the worktop, behind the other leg), and the other leg's wall cabinet at the joint reaches `reach` m on into the corner
+    /// to meet the corner leg's wall cabinets (parts: bottom, countertop, wall cabinets)
+    fn apply_join(&self, parts: &mut [cabnodes::GMesh]) {
+        let Some([bs, bw, js, reach]) = self.join else { return };
+        let yr = |g: &cabnodes::GMesh| g.v.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v[1]), b.max(v[1])));
+        // (an end of +-2: both ends -- the middle run of a U)
+        if bs != 0.0 && bw > 0.0 && !parts.is_empty() {
+            let (b0, b1) = yr(&parts[0]);
+            let (w, bw) = (b1 - b0, bw as f32);
+            let (cut_lo, cut_hi) = (if bs < 0.0 || bs.abs() > 1.5 { bw } else { 0.0 }, if bs > 0.0 { bw } else { 0.0 });
+            if w > cut_lo + cut_hi + 0.1 {
+                let k = (w - cut_lo - cut_hi) / w;
+                let (xz_lo, xz_hi) = parts[0].v.iter().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[2])], [h[0].max(v[0]), h[1].max(v[2])]));
+                for v in parts[0].v.iter_mut() { v[1] = b0 + cut_lo + (v[1] - b0) * k; }
+                // the corner square closed by a blind box in the cabinets' finish (left empty, the joint showed a slot into the void)
+                let tag = parts[0].tag.first().copied().unwrap_or(0);
+                for (y0, y1) in [(b0, b0 + cut_lo), (b1 - cut_hi, b1)] {
+                    if y1 - y0 < 0.01 { continue }
+                    let base = parts[0].v.len() as u32;
+                    let (x0, x1, z0, z1) = (xz_lo[0], xz_hi[0], xz_lo[1], xz_hi[1]);
+                    parts[0].v.extend([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]);
+                    for f in [[0u32, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
+                        parts[0].p.push(f.iter().map(|i| base + i).collect());
+                        parts[0].tag.push(tag);
+                    }
+                }
+            }
+        }
+        if js.abs() > 1.5 && reach > 0.0 && parts.len() > 2 {
+            for e in [-1.0f64, 1.0] { let mut j = self.clone(); j.join = Some([0.0, 0.0, e, reach]); j.apply_join(parts); }
+            return;
+        }
+        if js != 0.0 && reach > 0.0 && parts.len() > 2 {
+            // the wall cabinet nearest the joined end
+            let ends: Vec<(usize, (f32, f32))> = (2..parts.len()).map(|i| (i, yr(&parts[i]))).collect();
+            let Some(&(i, (u0, u1))) = ends.iter().min_by(|a, b| { let e = |r: &(f32, f32)| if js < 0.0 { r.0 } else { -r.1 }; e(&a.1).partial_cmp(&e(&b.1)).unwrap() }) else { return };
+            let (w, r) = (u1 - u0, reach as f32);
+            if w > 0.05 {
+                let k = (w + r) / w;
+                for v in parts[i].v.iter_mut() { v[1] = if js < 0.0 { u1 - (u1 - v[1]) * k } else { u0 + (v[1] - u0) * k }; }
+            }
+        }
     }
 
     /// non-island: scale the joined set so its bbox equals `dimensions` (applied to a list of parts it uses their common bbox)
@@ -1029,7 +1079,8 @@ impl Factory for KitchenSpace {
             return None;
         }
         let [x, y, z] = self.dims;
-        let (l1, h1) = super::geomkit::new_bbox_f32(-x / 2.0 * 1.08, x / 2.0 * 1.08, 0.0, y, 0.0, self.bottom_h + 0.13);
+        // (the base box as deep as the cabinets: python's 8 % margin left the run 3 cm off its wall and an L's legs 7 cm apart)
+        let (l1, h1) = super::geomkit::new_bbox_f32(-x / 2.0, x / 2.0, 0.0, y, 0.0, self.bottom_h + 0.13);
         let (l2, h2) = super::geomkit::new_bbox_f32(-x / 2.0, x * 0.16, 0.0, y, z - self.top_h - 0.1, z);
         let b1 = cabnodes::new_bbox_exact(l1, h1);
         let b2 = cabnodes::new_bbox_exact(l2, h2);
@@ -1074,6 +1125,7 @@ impl Factory for KitchenSpace {
         let mut parts = self.raw_parts(i);
         if !self.island {
             self.scale_to_dims(&mut parts);
+            self.apply_join(&mut parts);
         }
         // part 0/2.. = cabinets (KitchenCabinetFactory(factory_seed): z-textured frame material), part 1 = countertop (shader_marble)
         let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
@@ -1088,7 +1140,7 @@ impl Factory for KitchenSpace {
         let [x, y, z] = self.dims;
         let mut a = Asset::default();
         let m = mat("ph", [0.5; 3], 0.5);
-        a.board([-x / 2.0 * 1.08, 0.0, 0.0], [x / 2.0 * 1.08, y, self.bottom_h + 0.13], &m);
+        a.board([-x / 2.0, 0.0, 0.0], [x / 2.0, y, self.bottom_h + 0.13], &m);
         if !self.island {
             a.cuboid([-x / 2.0, 0.0, z - self.top_h - 0.1], [x * 0.16, y, z], &m);
         }

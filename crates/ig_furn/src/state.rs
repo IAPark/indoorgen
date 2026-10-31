@@ -29,6 +29,9 @@ pub struct GenRef {
     pub fit_box: Option<(V3, V3)>,
     /// the size asked of an 'exact' factory ([width, depth, height]; its mesh bounds can differ slightly, e.g. counter overhang)
     pub size: Option<[f64; 3]>,
+    /// a counter run joined into an L (kitchen_plan.rs): [blind end (-1 / +1 local y, 0 none), blind width, joined end, wall-cabinet
+    /// reach into the corner]; the generator builds the pair as one unit (ig_kit::api::set_kitchen_join)
+    pub join: Option<[f64; 4]>,
 }
 
 #[derive(Clone)]

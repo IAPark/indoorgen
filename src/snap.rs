@@ -312,10 +312,15 @@ pub fn remove_overlapping(state: &mut State, visuals: &HashMap<String, crate::as
         bs.push(B { key: k.clone(), parts, lo, hi, parent });
     }
     let vol = |b: &B| (0..3).map(|d| b.hi[d] - b.lo[d]).product::<f64>();
-    let related = |a: &B, b: &B| a.parent.as_deref() == Some(b.key.as_str()) || b.parent.as_deref() == Some(a.key.as_str());
+    let classes: std::collections::HashMap<String, (String, bool)> = state.objs.iter().filter_map(|(k, o)| o.generator.as_ref().map(|g| (k.clone(), (g.class.clone(), g.join.is_some())))).collect();
+    let class_of = |k: &str| classes.get(k).map(|c| c.0.clone()).unwrap_or_default();
+    // (the two legs of an L meet at the corner by design: kitchen_plan.rs)
+    let l_leg = |k: &str| classes.get(k).map_or(false, |c| c.1);
+    let related = |a: &B, b: &B| a.parent.as_deref() == Some(b.key.as_str()) || b.parent.as_deref() == Some(a.key.as_str()) || (l_leg(&a.key) && l_leg(&b.key));
     let mut gone: Vec<(String, String)> = vec![];
     let mut shifted: Vec<(String, f64)> = vec![];
-    let ess_key = |k: &str| ["ToiletFactory", "BathtubFactory", "ShowerFactory", "StandingSinkFactory", "BathroomSinkFactory", "KitchenSpaceFactory", "FridgeFactory", "WardrobeFactory", "TableDiningFactory", "TVStandFactory", "CoffeeTableFactory"].iter().any(|e| k.ends_with(e));
+    // (by class: pieces the group passes added carry other names, a planned kitchen's runs `<room>_kline<n>`)
+    let ess_key = |k: &str| { let c = class_of(k); ["ToiletFactory", "BathtubFactory", "ShowerFactory", "StandingSinkFactory", "BathroomSinkFactory", "KitchenSpaceFactory", "FridgeFactory", "WardrobeFactory", "TableDiningFactory", "TVStandFactory", "CoffeeTableFactory"].iter().any(|e| k.ends_with(e) || c == *e) };
     let ess_pair = |a: &B, b: &B| ess_key(&a.key) && ess_key(&b.key);
     let mut dead: std::collections::HashSet<String> = Default::default();
     for i in 0..bs.len() {
