@@ -30,6 +30,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         (lo, hi)
     };
     let mut occupied: Vec<([f64; 3], [f64; 3])> = state.objs.values().filter(|o| o.generator.is_some() || o.tags.0.iter().any(|t| format!("{t:?}").contains("Window") || format!("{t:?}").contains("Door"))).map(|o| world_box(o)).collect();
+    let mut bare_rooms: Vec<(String, ([f64; 3], [f64; 3]))> = vec![];
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
         let p = match g.class.as_str() {
@@ -38,6 +39,11 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             "SingleCabinetFactory" | "KitchenCabinetFactory" => 0.35,
             _ => continue,
         };
+        // a bedroom the solver hung nothing in gets one over its bed (its walls rendered bare)
+        let room = crate::furn::layout2d::room_of(state, k);
+        let bare = g.class == "BedFactory" && room.is_some() && !state.objs.iter().any(|(kk, oo)| oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "WallArtFactory" | "MirrorFactory")) && crate::furn::layout2d::room_of(state, kk) == room);
+        let p = if bare { 1.0 } else { p };
+        if bare { bare_rooms.push((k.clone(), world_box(o))); }
         let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "gallery_wall", k]));
         if r.f64() >= p { continue }
         let (lo, hi) = (o.geom.lo, o.geom.hi);
@@ -112,6 +118,55 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             placed += 1;
         }
         log.push(format!("{placed} frames over {k}"));
+    }
+    // the bedrooms the solver hung nothing in: one picture on the longest clear wall away from the bed's (a side wall rendered bare)
+    for (k, bb) in bare_rooms {
+        let c = [(bb.0[0] + bb.1[0]) / 2.0, (bb.0[1] + bb.1[1]) / 2.0];
+        let Some(ri) = inner.iter().position(|g| crate::shp::contains_pt(g, c)) else { continue };
+        let ring = crate::shp::exterior(&inner[ri]);
+        let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "bare_wall", &k]));
+        let (fw, fh, zc) = (r.uniform(0.7, 0.95), r.uniform(0.5, 0.7), 1.5 + bb.0[2].min(0.2));
+        let mut best: Option<(f64, [f64; 2], [f64; 2], [f64; 2])> = None;
+        for i in 1..ring.len() {
+            let (a, b) = (ring[i - 1], ring[i]);
+            let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+            if len < fw + 0.6 { continue }
+            let along = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+            let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            // into the room: the side of the edge the room is on
+            let n0 = [-along[1], along[0]];
+            let inward = if crate::shp::contains_pt(&inner[ri], [mid[0] + n0[0] * 0.1, mid[1] + n0[1] * 0.1]) { n0 } else { [-n0[0], -n0[1]] };
+            if used_walls.iter().any(|(q, _)| (q[0] - mid[0]).hypot(q[1] - mid[1]) < 1.0) { continue }
+            // clear in front of it: nothing in the 0.5 m before the picture at its height (wardrobes, shelves, windows, doors, other art)
+            let zone = {
+                let p0 = [mid[0] - along[0] * (fw / 2.0 + 0.1), mid[1] - along[1] * (fw / 2.0 + 0.1)];
+                let p1 = [mid[0] + along[0] * (fw / 2.0 + 0.1) + inward[0] * 0.5, mid[1] + along[1] * (fw / 2.0 + 0.1) + inward[1] * 0.5];
+                ([p0[0].min(p1[0]), p0[1].min(p1[1]), zc - fh / 2.0 - 0.1], [p0[0].max(p1[0]), p0[1].max(p1[1]), zc + fh / 2.0 + 0.1])
+            };
+            if occupied.iter().any(|b| (0..3).all(|d| zone.0[d] < b.1[d] && b.0[d] < zone.1[d])) { continue }
+            if best.map_or(true, |(l, ..)| len > l) { best = Some((len, mid, along, [-inward[0], -inward[1]])); }
+        }
+        let Some((_, mid, along, dir)) = best else { continue };
+        let border_cls = [("wood.Wood", [0.45f32, 0.3, 0.18]), ("metal.BrushedBlackMetal", [0.04, 0.04, 0.04]), ("plastic.PlasticRough", [0.9, 0.9, 0.88])][r.randint(0, 3) as usize];
+        let frame_m = scene.material(spec(&format!("gallery_frame:side:{k}"), border_cls.0, r.next_u64(), border_cls.1));
+        let centre = [mid[0] - dir[0] * 0.0125, mid[1] - dir[1] * 0.0125];
+        let mut m = Mesh::new();
+        {
+            let p = |s: f64, t: f64, z: f64| [centre[0] + along[0] * s - dir[0] * t, centre[1] + along[1] * s - dir[1] * t, z];
+            let (hw, hd, za, zb) = (fw / 2.0, 0.0125, zc - fh / 2.0, zc + fh / 2.0);
+            let v = [p(-hw, -hd, za), p(hw, -hd, za), p(hw, hd, za), p(-hw, hd, za), p(-hw, -hd, zb), p(hw, -hd, zb), p(hw, hd, zb), p(-hw, hd, zb)];
+            for f in [[0, 1, 2, 3], [7, 6, 5, 4], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]] { m.add_face(&[v[f[0]], v[f[1]], v[f[2]], v[f[3]]]) }
+        }
+        let name = format!("gallery_side_{}", k.replace('/', "_"));
+        scene.add(&format!("{name}#0"), "GalleryFrameFactory", m, frame_m);
+        let b = r.uniform(0.03, 0.06);
+        let art = scene.material(spec(&format!("gallery_art:side:{k}"), "art.Art", r.next_u64(), [0.6, 0.5, 0.4]));
+        let mut cm = Mesh::new();
+        let p = |s: f64, z: f64| [centre[0] + along[0] * s - dir[0] * 0.0135, centre[1] + along[1] * s - dir[1] * 0.0135, z];
+        let (hw, hh) = (fw / 2.0 - b, fh / 2.0 - b);
+        cm.add_face(&[p(-hw, zc - hh), p(hw, zc - hh), p(hw, zc + hh), p(-hw, zc + hh)]);
+        scene.add(&format!("{name}#1"), "GalleryFrameFactory", cm, art);
+        log.push(format!("picture on the bare wall of {k}'s room at ({:.2}, {:.2})", mid[0], mid[1]));
     }
     log
 }
