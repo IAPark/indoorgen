@@ -61,11 +61,13 @@ def _ray_seg(o, d, p, q, tmax):
 def view_camera(sc, room, view):
     import bpy, mathutils, bmesh
     fl = [o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith(room) and ".floor" in o.name]
-    pts = []; area = 0.0; ax = ay = 0.0
+    pts = []; area = 0.0; ax = ay = 0.0; tris = []
     for o in fl:
         b = bmesh.new(); b.from_mesh(o.data); b.transform(o.matrix_world)
         for f in b.faces:
             a = f.calc_area(); c = f.calc_center_median(); area += a; ax += c.x * a; ay += c.y * a
+            vs = [(v.co.x, v.co.y) for v in f.verts]
+            tris += [(vs[0], vs[i], vs[i + 1]) for i in range(1, len(vs) - 1)]
         pts += [(round(v.co.x, 4), round(v.co.y, 4)) for v in b.verts]
         b.free()
     cen = (ax / area, ay / area)
@@ -88,11 +90,19 @@ def view_camera(sc, room, view):
         g[0] = min(g[0], min(b.x for b in bb)); g[1] = max(g[1], max(b.x for b in bb))
         g[2] = min(g[2], min(b.y for b in bb)); g[3] = max(g[3], max(b.y for b in bb))
     boxes = [tuple(g) for g in groups.values()]
+    # open door leaves (skipped above with the frames): a corner behind one framed the leaf and little else; they count for the
+    # openness rays and the clearance, not for `blocked` (a door near a corner is common and the spot stays usable)
+    import re
+    leaves = []
+    for o in bpy.data.objects:
+        if o.type != "MESH" or not re.match(r"door\d+(#|$)", o.name.lower()): continue
+        bb = [o.matrix_world @ mathutils.Vector(c) for c in o.bound_box]
+        leaves.append((min(b.x for b in bb), max(b.x for b in bb), min(b.y for b in bb), max(b.y for b in bb)))
     def blocked(q):
         return any(x0 - 0.8 < q[0] < x1 + 0.8 and y0 - 0.8 < q[1] < y1 + 0.8 for x0, x1, y0, y1 in boxes)
     def clearance(q):
         best = 9.0
-        for x0, x1, y0, y1 in boxes:
+        for x0, x1, y0, y1 in boxes + leaves:
             best = min(best, math.hypot(max(x0 - q[0], 0, q[0] - x1), max(y0 - q[1], 0, q[1] - y1)))
         return best
     def openness(q):
@@ -100,19 +110,80 @@ def view_camera(sc, room, view):
         n = 0
         for k in range(-4, 5):
             a = math.radians(10 * k); d = (fx * math.cos(a) - fy * math.sin(a), fx * math.sin(a) + fy * math.cos(a))
-            hit = any(_ray_box(q, d, b, 2.0) for b in boxes if not (b[0] <= q[0] <= b[1] and b[2] <= q[1] <= b[3])) or any(_ray_seg(q, d, outline[i - 1], outline[i], 2.0) for i in range(len(outline)))
+            hit = any(_ray_box(q, d, b, 2.0) for b in boxes + leaves if not (b[0] <= q[0] <= b[1] and b[2] <= q[1] <= b[3])) or any(_ray_seg(q, d, outline[i - 1], outline[i], 2.0) for i in range(len(outline)))
             n += 0 if hit else 1
         return n
+    def content(q):
+        # rays (+-40 deg about the centre direction) that meet furniture 1.2-5 m out: something to look at, not empty floor
+        fx, fy = cen[0] - q[0], cen[1] - q[1]; L = math.hypot(fx, fy) or 1.0
+        n = 0
+        for k in range(-8, 9):
+            a = math.radians(5 * k); d = ((fx * math.cos(a) - fy * math.sin(a)) / L, (fx * math.sin(a) + fy * math.cos(a)) / L)
+            far = any(_ray_box(q, d, b, 5.0) for b in boxes if not (b[0] <= q[0] <= b[1] and b[2] <= q[1] <= b[3]))
+            near = any(_ray_box(q, d, b, 1.2) for b in boxes if not (b[0] <= q[0] <= b[1] and b[2] <= q[1] <= b[3]))
+            n += far and not near
+        return n
+    def leaf_near(q):
+        # a door leaf within 1.5 m inside the view cone (+-50 deg about the centre direction): it fills a side of the frame
+        fx, fy = cen[0] - q[0], cen[1] - q[1]; L = math.hypot(fx, fy) or 1.0
+        for k in range(-10, 11):
+            a = math.radians(5 * k); d = ((fx * math.cos(a) - fy * math.sin(a)) / L, (fx * math.sin(a) + fy * math.cos(a)) / L)
+            if any(_ray_box(q, d, b, 1.5) for b in leaves): return True
+        return False
+    def on_floor(q):
+        def inside(t, p):
+            (ax_, ay_), (bx_, by_), (cx_, cy_) = t
+            d1 = (p[0] - bx_) * (ay_ - by_) - (ax_ - bx_) * (p[1] - by_); d2 = (p[0] - cx_) * (by_ - cy_) - (bx_ - cx_) * (p[1] - cy_); d3 = (p[0] - ax_) * (cy_ - ay_) - (cx_ - ax_) * (p[1] - ay_)
+            return not ((d1 < 0 or d2 < 0 or d3 < 0) and (d1 > 0 or d2 > 0 or d3 > 0))
+        # the spot and 0.3 m around it on the room's floor (the outline is the floor's hull: an L room's hull edge midpoint stood in a wall)
+        return all(any(inside(t, (q[0] + dx, q[1] + dy)) for t in tris) for dx, dy in ((0, 0), (0.3, 0), (-0.3, 0), (0, 0.3), (0, -0.3)))
+    ceil = [o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith(room) and ".ceiling" in o.name]
+    cz = max(((o.matrix_world @ mathutils.Vector(c)).z for o in ceil for c in o.bound_box), default=None)
+    dg = bpy.context.evaluated_depsgraph_get()
+    def headroom(q):
+        # nothing over the camera short of the ceiling (a window alcove's header: the spot was on the floor, the view a black slab)
+        if cz is None: return True
+        hit, loc, *_ = sc.ray_cast(dg, mathutils.Vector((q[0], q[1], 1.5)), mathutils.Vector((0, 0, 1)))
+        return not hit or loc.z > cz - 0.1
     cands = sorted(outline, key=lambda p: -math.hypot(p[0] - cen[0], p[1] - cen[1]))[:6]
+    # (and the walls' midpoints, after the corners: a small room's corners can all stand against furniture -- a wardrobe's side
+    # filled half the frame)
+    cands += [((outline[i - 1][0] + outline[i][0]) / 2, (outline[i - 1][1] + outline[i][1]) / 2) for i in range(len(outline))
+              if math.hypot(outline[i][0] - outline[i - 1][0], outline[i][1] - outline[i - 1][1]) > 1.5]
     scored = []
     for p in cands:
         dx, dy = cen[0] - p[0], cen[1] - p[1]; L = math.hypot(dx, dy) or 1.0
-        q = (p[0] + dx / L * 0.45, p[1] + dy / L * 0.45)
-        scored.append((not blocked(q), openness(q), clearance(q), p, q))
-    print("VIEWCAND", [(a, b, round(c, 2), round(p[0], 2), round(p[1], 2)) for a, b, c, p, _ in scored])
-    order = sorted(range(len(scored)), key=lambda i: (-(scored[i][0] and scored[i][1] >= 8), -(scored[i][1] >= 7), -round(min(scored[i][2], 0.6), 1), -scored[i][1], i))
-    q = scored[order[1 if view == "cornerB" and len(order) > 1 else 0]][4]
-    loc = mathutils.Vector((q[0], q[1], 1.5)); tgt = mathutils.Vector((cen[0], cen[1], 0.9))
+        # 0.45 m in; deeper when that spot is not usable (a kitchen's corners all have a wall cabinet at camera height)
+        for inset in (0.45, 1.0, 1.4):
+            q = (p[0] + dx / L * inset, p[1] + dy / L * inset)
+            if inset >= L - 0.3 or not on_floor(q) or not headroom(q): continue
+            scored.append((not blocked(q), openness(q), clearance(q), p, q, not leaf_near(q), content(q)))
+    print("VIEWCAND", [(a, b, round(c, 2), round(q[0], 2), round(q[1], 2), f, n) for a, b, c, p, q, f, n in scored])
+    # a spot clear of the furniture (0.35 m) first, then the open view; the clearance after the openness (it ranked first and picked a
+    # corner 0.13 m from a wardrobe's side over an open one)
+    order = sorted(range(len(scored)), key=lambda i: (-(scored[i][2] >= 0.35), -scored[i][5], -(scored[i][1] >= 5), -scored[i][6], -scored[i][1], -round(min(scored[i][2], 0.6), 1), i))
+    # cornerB: the best spot from another corner / wall than cornerA's
+    pick = order[0]
+    if view == "cornerB":
+        far = lambda i, dmin: math.hypot(scored[i][3][0] - scored[order[0]][3][0], scored[i][3][1] - scored[order[0]][3][1]) > 0.5 and math.hypot(scored[i][4][0] - scored[order[0]][4][0], scored[i][4][1] - scored[order[0]][4][1]) > dmin
+        # (the most to look at among the clear spots: the best-ranked one looked across a kitchen's empty half)
+        good = [i for i in order[1:] if far(i, 1.5) and scored[i][2] >= 0.35 and scored[i][5]]
+        pick = max(good, key=lambda i: (scored[i][6], scored[i][1])) if good else next((i for i in order[1:] if far(i, 1.5)), next((i for i in order[1:] if far(i, 0.0)), order[min(1, len(order) - 1)]))
+    q = scored[pick][4]
+    # turn up to 20 deg off the centre when a door leaf stands in a side of the frame (an open door filled a quarter of it)
+    fx, fy = cen[0] - q[0], cen[1] - q[1]; L = math.hypot(fx, fy) or 1.0
+    def leaf_rays(yaw):
+        n = 0
+        for k in range(-9, 10):
+            a = yaw + math.radians(5 * k); d = ((fx * math.cos(a) - fy * math.sin(a)) / L, (fx * math.sin(a) + fy * math.cos(a)) / L)
+            n += any(_ray_box(q, d, b, 2.5) for b in leaves)
+        return n
+    yaw = min([math.radians(5 * k) for k in range(-4, 5)], key=lambda y: (leaf_rays(y), abs(y)))
+    tx, ty = q[0] + (fx * math.cos(yaw) - fy * math.sin(yaw)), q[1] + (fx * math.sin(yaw) + fy * math.cos(yaw))
+    print("VIEWYAW", round(math.degrees(yaw)), leaf_rays(0.0), leaf_rays(yaw))
+    # a fixed gentle pitch (3 m out, 0.75 m up): a spot near the centre aimed at the centre looked down at the floor
+    ux, uy = tx - q[0], ty - q[1]; ul = math.hypot(ux, uy) or 1.0
+    loc = mathutils.Vector((q[0], q[1], 1.5)); tgt = mathutils.Vector((q[0] + ux / ul * 3.0, q[1] + uy / ul * 3.0, 0.75))
     cam = bpy.data.cameras.new("vc"); cam.lens = 18; cam.sensor_width = 36
     co = bpy.data.objects.new("vc", cam); sc.collection.objects.link(co)
     co.location = loc; print("VIEWCAM", view, tuple(round(x, 2) for x in loc))

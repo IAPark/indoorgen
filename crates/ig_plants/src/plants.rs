@@ -475,11 +475,13 @@ impl Factory for PlantContainer {
         match self.kind {
             Kind::Cactus => {
                 plant = super::cactus::CactusFactory::new(self.factory_seed).mesh(i, 0.003);
-                leaf_mat = pm("cactus", "plant_factory.material", [0.1, 0.3, 0.12]);
+                // (from CactusFactory(fs) itself, which seeds its own draws: python's container can pick another plant for this seed,
+                // and its plant_factory.material then failed in the render -- a flat fallback green)
+                leaf_mat = ig_core::materials::spec_material("cactus", json!({"cls": "factory.cactus.generate.CactusFactory", "kwargs": {"attr": "material"}, "seed": self.factory_seed}), [0.1, 0.3, 0.12]);
             }
             Kind::Mushroom => {
                 plant = super::mushroom::MushroomFactory::new(self.factory_seed).mesh(i);
-                leaf_mat = pm("mushroom", "plant_factory.factory.cap_factory.material_cap", [0.5, 0.35, 0.25]);
+                leaf_mat = ig_core::materials::spec_material("mushroom", json!({"cls": "factory.mushroom.generate.MushroomFactory", "kwargs": {"attr": "factory.cap_factory.material_cap"}, "seed": self.factory_seed}), [0.5, 0.35, 0.25]);
             }
             Kind::Snake | Kind::Spider | Kind::Succulent => {
                 // exact node-graph ports (snakeplant.rs, spiderplant.rs, succulent.rs): the plant factory is built with the container's seed
