@@ -773,12 +773,15 @@ impl Factory for Bed {
         let kind = [BlanketKind::Blanket, BlanketKind::Comforter, BlanketKind::BoxComforter, BlanketKind::BoxComforter][s.sheet_type];
         let bc = blanket_ctor(&mut r, s.sheet_type >= 2);
         let (wm, sm) = if s.sheet_type == 0 { (r.uniform(1.4, 1.6), r.uniform(0.9, 1.1)) } else { (r.uniform(1.4, 1.8), r.uniform(0.9, 1.2)) };
-        let pressure = match s.sheet_type {
+        // `py_pressure`: python's draw, what Blender's cloth sim gets in the job; `pressure`: the Rust solver's (its calibration
+        // differs: a filled comforter at 1.0-1.5 lofted no more than a sheet; PUFF_SCALE overrides). Blender given the boosted value
+        // blew a folded comforter up into a half-metre lump over the pillows.
+        let py_pressure = match s.sheet_type {
             0 => 0.0,
-            // a filled comforter lofts (1.0-1.5 left it as flat as a sheet); PUFF_SCALE overrides
-            1 => r.uniform(1.0, 1.5) * std::env::var("PUFF_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.6),
+            1 => r.uniform(1.0, 1.5),
             _ => r.log_uniform(8.0, 15.0),
         };
+        let pressure = if s.sheet_type == 1 { py_pressure * std::env::var("PUFF_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(2.6) } else { py_pressure };
         let mut b = Blanket::from_unseeded(kind, &[mw * wm, msz * sm, bc[2], bc[3]]);
         b.margin = bc[3];
         let mut pre = b.create_asset();
@@ -817,7 +820,7 @@ impl Factory for Bed {
         let btype = ["blanket", "comforter", "box", "box"][s.sheet_type];
         let mut collide = vec![mattress_idx];
         collide.extend(frame_idx.iter().cloned());
-        a.cloth.push(ClothJob { target: sheet_idx, pre: pre.clone(), collide, kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005, "use_pressure": true, "uniform_pressure_force": pressure, "use_self_collision": s.sheet_folded}), end_frame: 50, subsurf: 2, pin: vec![], z_from: Some((mattress_idx, z_sheet)), build: Some(json!({"type": btype, "width": b.width, "size": b.size, "thickness": b.thickness, "margin": b.margin, "fold": fold_p, "x": b.size / 2.0 + off})), post: None });
+        a.cloth.push(ClothJob { target: sheet_idx, pre: pre.clone(), collide, kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005, "use_pressure": true, "uniform_pressure_force": py_pressure, "use_self_collision": s.sheet_folded}), end_frame: 50, subsurf: 2, pin: vec![], z_from: Some((mattress_idx, z_sheet)), build: Some(json!({"type": btype, "width": b.width, "size": b.size, "thickness": b.thickness, "margin": b.margin, "fold": fold_p, "x": b.size / 2.0 + off})), post: None });
         a.parts.push(Part { mesh: sheet.clone(), mat: fabric.clone(), col: Some((sb.0, sb.1)) });
 
         // ---- cover (always made: python never reads has_cover); 80 frames, no pressure

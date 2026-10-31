@@ -157,10 +157,11 @@ impl Wardrobe {
         for i in 0..self.doors {
             let (y0, y1) = (dw * i as f64, dw * (i + 1) as f64);
             if open_bay == Some(i) {
-                // the door stands open ~100 deg on its hinge (the bay's outer edge), swung out into the room
+                // the door stands open ~86 deg on its hinge (the bay's outer edge), swung out into the room
+                // (not past square: at 100 deg an end bay's door stood 10 cm out beside the carcass, into a door's swing next to it)
                 let hinge_y = if i % 2 == 0 { y0 } else { y1 };
                 let sgn = if i % 2 == 0 { 1.0 } else { -1.0 }; // +1: door spans toward +y when closed
-                let ang: f64 = 1.75;
+                let ang: f64 = 1.5;
                 let wd = y1 - y0 - 2.0 * GAP;
                 // closed direction (0, sgn); rotated by ang about z toward +x (out of the cabinet)
                 let dir = [ang.sin(), sgn * ang.cos()];

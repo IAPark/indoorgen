@@ -36,6 +36,8 @@ fn bx(lo: [f64; 3], hi: [f64; 3], pose: &crate::furn::geom::Pose) -> Mesh {
 pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::assets::Asset>, assets: &crate::assets::RealAssets, seed: u64) -> Vec<String> {
     let mut log = vec![];
     let in_bath = |o: &crate::furn::state::ObjState| o.relations.iter().any(|r| r.target.starts_with("bathroom"));
+    // the mats laid so far (world xy boxes): a toilet's mat and a tub's laid one over the other
+    let mut mats: Vec<([f64; 3], [f64; 3])> = vec![];
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
         let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "bath_decor", k]));
@@ -161,7 +163,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 let (ml, mh) = mesh.bounds();
                 let hit = state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "BathtubFactory" | "ShowerFactory" | "ToiletFactory" | "StandingSinkFactory")) && {
                     let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..2).all(|d| ml[d] < b.1[d] && b.0[d] < mh[d]) });
-                if hit { continue }
+                if hit || mats.iter().any(|(l, h)| (0..2).all(|d| ml[d] < h[d] + 0.03 && l[d] - 0.03 < mh[d])) { continue }
+                mats.push((ml, mh));
                 scene.add(&format!("bathmat_{}#0", k.replace('/', "_")), "BathMatFactory", mesh, m);
                 log.push(format!("mat at {k}"));
             }
