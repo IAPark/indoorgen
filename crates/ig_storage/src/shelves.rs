@@ -1228,7 +1228,12 @@ pub fn make(c: &str, rng: &mut Rng, factory_seed: u64) -> Option<Box<dyn Factory
         "LargeShelfFactory" => Box::new(LargeShelf::new(rng, seed)),
         "SimpleBookcaseFactory" => Box::new(SimpleBookcase::new(rng, factory_seed)),
         "CellShelfFactory" => Box::new(CellShelf::new(rng, false, seed)),
-        "TVStandFactory" => Box::new(CellShelf::new(rng, true, seed)),
+        // 60 % of TV stands are media consoles (drawers / doors / slats / cubbies on legs, a plinth or a frame), the rest infinigen's
+        // cubby bench; the choice is its own stream (NO_CONSOLE=1: off)
+        "TVStandFactory" => {
+            let mut pick = Rng::seeded(crate::int_hash(&["media_console", &seed.to_string()]));
+            if std::env::var_os("NO_CONSOLE").is_none() && pick.f64() < 0.6 { Box::new(super::console::MediaConsole::new(&mut rng.clone())) } else { Box::new(CellShelf::new(rng, true, seed)) }
+        }
         "SimpleDeskFactory" => Box::new(SimpleDesk::new(rng, false, factory_seed)),
         "SidetableDeskFactory" => Box::new(SimpleDesk::new(rng, true, factory_seed)),
         "SingleCabinetFactory" => Box::new(SingleCabinet::new(rng, factory_seed)),
