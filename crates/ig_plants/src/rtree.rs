@@ -237,33 +237,40 @@ impl<'a> Builder<'a> {
         // seeding the upper 60 % stacked parallel horizontal limbs up a pole)
         let k0 = trunk.len().saturating_sub(3);
         for (i, &tp) in trunk.iter().enumerate() { nodes.push((tp, if i == 0 { None } else { Some(i - 1) })); let _ = k0; }
-        let first_free = 0;
+        // (incremental nearest: each attraction point keeps its nearest node, updated only against the nodes added since -- a later
+        // node wins only when strictly closer, the linear scan's lower-index tie rule -- and a point is removed once that distance
+        // is under the kill distance. Same result as rescanning every node every iteration, O(points x nodes) instead of x iterations)
+        let mut near: Vec<(f64, usize)> = attr.iter().map(|a| {
+            let mut best = (f64::MAX, usize::MAX);
+            for ni in k0..nodes.len() { let dd = len(sub(*a, nodes[ni].0)); if dd < best.0 { best = (dd, ni); } }
+            best
+        }).collect();
         for _iter in 0..90 {
             if attr.is_empty() { break }
-            let mut pull: std::collections::HashMap<usize, (V3, usize)> = Default::default();
-            for a in &attr {
-                let mut best = (f64::MAX, usize::MAX);
-                for (ni, (np, _)) in nodes.iter().enumerate().skip(first_free) {
-                    if ni < k0 { continue }
-                    let dd = len(sub(*a, *np));
-                    if dd < best.0 { best = (dd, ni); }
-                }
-                if best.0 < di {
-                    let e = pull.entry(best.1).or_insert(([0.0; 3], 0));
-                    e.0 = add(e.0, norm(sub(*a, nodes[best.1].0))); e.1 += 1;
-                }
+            let n0 = nodes.len();
+            let mut pull: Vec<(V3, usize)> = vec![([0.0; 3], 0); n0];
+            for (a, &(dd, ni)) in attr.iter().zip(&near) {
+                if dd < di { let e = &mut pull[ni]; e.0 = add(e.0, norm(sub(*a, nodes[ni].0))); e.1 += 1; }
             }
-            if pull.is_empty() { break }
-            let mut keys: Vec<usize> = pull.keys().copied().collect(); keys.sort();
-            for ni in keys {
-                let (dsum, _) = pull[&ni];
+            if pull.iter().all(|e| e.1 == 0) { break }
+            for ni in 0..n0 {
+                if pull[ni].1 == 0 { continue }
+                let dsum = pull[ni].0;
                 let jitter = [self.r.uniform(-0.15, 0.15), self.r.uniform(-0.15, 0.15), self.r.uniform(-0.05, 0.2)];
                 // (upward tropism, Runions et al. 2007: limbs rise toward the light instead of leaving the trunk flat)
                 let d = norm(add(add(norm(dsum), jitter), [0.0, 0.0, 0.3 * self.p.attraction_up.max(0.0) + 0.15]));
                 let np = add(nodes[ni].0, mul(d, step));
                 nodes.push((np, Some(ni)));
             }
-            attr.retain(|a| !nodes.iter().skip(k0).any(|(np, _)| len(sub(*a, *np)) < dk));
+            for (a, nr) in attr.iter().zip(near.iter_mut()) {
+                for ni in n0..nodes.len() { let dd = len(sub(*a, nodes[ni].0)); if dd < nr.0 { *nr = (dd, ni); } }
+            }
+            // (order kept: the pull sums run in point order)
+            let keep: Vec<bool> = near.iter().map(|nr| nr.0 >= dk).collect();
+            let mut it = keep.iter();
+            attr.retain(|_| *it.next().unwrap());
+            let mut it = keep.iter();
+            near.retain(|_| *it.next().unwrap());
         }
         // pipe model radii: leaves r0, parent r = (sum child r^2.5)^(1/2.5)
         let nn = nodes.len();

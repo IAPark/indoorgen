@@ -46,13 +46,13 @@ struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
     sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32,
     sidecar_lighting: bool, tonemap: String, shadow_dist: f32, fog: f32, point_shadows: usize, sun_strength: f32,
-    saturation: f32, dump_cams: Option<PathBuf>, indoor_ambient: f32,
+    saturation: f32, dump_cams: Option<PathBuf>, indoor_ambient: f32, watch: bool, base: Option<PathBuf>,
 }
 
 fn parse_args(a: Vec<String>) -> Opts {
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
         sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.5, sun_i: 1.0, light_scale: 1.0,
-        sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0, saturation: 1.25, dump_cams: None, indoor_ambient: 0.4 };
+        sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0, saturation: 1.25, dump_cams: None, indoor_ambient: 0.4, watch: false, base: None };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -82,6 +82,8 @@ fn parse_args(a: Vec<String>) -> Opts {
             "--shadow-dist" => o.shadow_dist = val().parse().unwrap(),
             "--fog" => o.fog = val().parse().unwrap(),
             "--indoor-ambient" => o.indoor_ambient = val().parse().unwrap(),
+            "--watch" => o.watch = true,
+            "--base" => o.base = Some(PathBuf::from(val())),
             "--saturation" => o.saturation = val().parse().unwrap(),
             "--dump-cams" => o.dump_cams = Some(PathBuf::from(val())),
             "--point-shadows" => o.point_shadows = val().parse().unwrap(),
@@ -457,6 +459,49 @@ fn save_png(img: &image::RgbaImage, p: &Path) {
     enc.write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8).unwrap();
 }
 
+/// render `cams` of the loaded scene(s) (sun from `lit` or the options); used by --watch
+fn render_views(app: &mut App, grab: &Grab, cam_e: Entity, sun_e: Entity, o: &Opts, info: &cams::SceneInfo, has_house: bool, lit: Option<(f32, f32, f32, f32)>, cams: &[cams::Cam], warm: usize) -> Vec<image::RgbaImage> {
+    let (sun_az, sun_el, sun_i, ambient) = lit.unwrap_or((o.sun.0, o.sun.1, o.sun_i, o.ambient));
+    let (az, el) = (sun_az.to_radians(), sun_el.to_radians());
+    let sdir = Vec3::from(zup([el.cos() * az.cos(), el.cos() * az.sin(), el.sin()]));
+    {
+        let w = app.world_mut();
+        let up = if sdir.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+        *w.get_mut::<Transform>(sun_e).unwrap() = Transform::IDENTITY.looking_to(-sdir, up);
+        w.get_mut::<DirectionalLight>(sun_e).unwrap().illuminance = o.sun_strength * LM_PER_W * sun_i;
+    }
+    let mut out = vec![];
+    for (i, c) in cams.iter().enumerate() {
+        {
+            let w = app.world_mut();
+            *w.get_mut::<Transform>(cam_e).unwrap() = Transform::from_matrix(zup_mat() * c.view);
+            let eye = c.view.w_axis.truncate();
+            let indoor = has_house && c.ortho.is_none() && eye.cmpge(info.bmin).all() && eye.cmple(info.bmax + Vec3::new(0.0, 0.0, 0.5)).all();
+            let amb = ambient * if indoor { o.indoor_ambient } else { 1.0 };
+            if let Some(mut g) = w.get_mut::<GeneratedEnvironmentMapLight>(cam_e) { g.intensity = amb; }
+            if let Some(mut g) = w.get_mut::<EnvironmentMapLight>(cam_e) { g.intensity = amb; }
+            let aspect = o.res.0 as f32 / o.res.1 as f32;
+            *w.get_mut::<Projection>(cam_e).unwrap() = match c.ortho {
+                Some(wd) => Projection::Orthographic(OrthographicProjection { near: 0.05, far: 4000.0, scaling_mode: ScalingMode::Fixed { width: wd, height: wd / aspect }, ..OrthographicProjection::default_3d() }),
+                None => Projection::Perspective(PerspectiveProjection { fov: 2.0 * ((c.fov_x / 2.0).tan() / aspect).atan(), aspect_ratio: aspect, near: 0.05, far: 4000.0, ..default() }),
+            };
+        }
+        let img = capture(app, grab, if i == 0 { warm } else { 0 }, false);
+        out.push(downsample(&img, o.res, o.ss));
+    }
+    out
+}
+
+/// the frames as one image: a single frame, or a sheet
+fn sheet_of(frames: &[image::RgbaImage], res: (u32, u32)) -> image::RgbaImage {
+    if frames.len() == 1 { return frames[0].clone() }
+    let n = frames.len(); let cols = (n as f32).sqrt().ceil() as u32; let rows = (n as u32 + cols - 1) / cols;
+    let (w, h) = res; let gap = 4;
+    let mut sheet = image::RgbaImage::from_pixel(cols * (w + gap) + gap, rows * (h + gap) + gap, image::Rgba([20, 20, 20, 255]));
+    for (i, im) in frames.iter().enumerate() { image::imageops::replace(&mut sheet, im, (gap + (i as u32 % cols) * (w + gap)) as i64, (gap + (i as u32 / cols) * (h + gap)) as i64); }
+    sheet
+}
+
 fn main() {
     let t0 = Instant::now();
     // `bevy_preview gen SEED [ROOM] OUT.glb [gen2 flags...] -- [preview flags...]`: generate the house in this process (src/gen2cli.rs)
@@ -511,6 +556,34 @@ fn main() {
     let o = &o;
     // parse the first glb on a thread while the render pipelines compile on a stand-in scene; later glbs are parsed
     // while the previous one renders
+    if o.watch {
+        // --watch [--base BASE.glb] WATCHED.glb: keep the base scene resident and re-render whenever WATCHED's sidecar json is
+        // rewritten (gen2 writes it after the glb): the outdoor iteration loop (tools/iter.sh). Stop: touch OUT.stop
+        warm_pipelines(&mut app, cam_e, frames_v);
+        let base = o.base.as_ref().map(|b| { let ps = parse_scene(b, o); load_scene(app.world_mut(), ps, o) });
+        if o.verbose { eprintln!("watch ready {:.2}s", t0.elapsed().as_secs_f32()); }
+        let side = o.inputs[0].with_extension("json");
+        let stop = o.out.with_extension("stop");
+        let mut last = None;
+        let mut warm = 2;
+        loop {
+            if stop.exists() { let _ = std::fs::remove_file(&stop); std::process::exit(0); }
+            let m = std::fs::metadata(&side).and_then(|m| m.modified()).ok();
+            if m.is_none() || m == last { std::thread::sleep(std::time::Duration::from_millis(30)); continue; }
+            last = m;
+            let tr = Instant::now();
+            let ps = parse_scene(&o.inputs[0], o);
+            let s = load_scene(app.world_mut(), ps, o);
+            let (info, has_house, lit) = match &base { Some(b) => (&b.info, b.has_house, b.lit), None => (&s.info, s.has_house, s.lit) };
+            let cams = cams::resolve_cams(info, &o.cams, o.ncams, o.res);
+            let frames = render_views(&mut app, &grab, cam_e, sun_e, o, info, has_house, lit, &cams, warm);
+            warm = 0;
+            save_png(&sheet_of(&frames, o.res), &o.out);
+            let w = app.world_mut();
+            for e in s.ents { w.despawn(e); }
+            eprintln!("WATCH {} rendered in {:.2}s", o.out.display(), tr.elapsed().as_secs_f32());
+        }
+    }
     let mut pending = Some(sc.spawn(move || parse_scene(&o.inputs[0], o)));
     let tw = Instant::now();
     warm_pipelines(&mut app, cam_e, frames_v);

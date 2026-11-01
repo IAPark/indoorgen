@@ -87,6 +87,31 @@ pub fn run(mut args: Vec<String>, mem: bool) -> Option<Vec<u8>> {
         for part in k.rsplit('.') { over = serde_json::json!({ part: over }); }
         cfg = GenConfig::from_partial(&cfg, &over).unwrap_or_else(|e| panic!("--set {kv}: {e}"));
     }
+    // --outdoor-only HOUSE.json OUT.glb: only the outdoor stage (terrain, vegetation, exterior, ...) for the house recorded in
+    // HOUSE.json (a full run writes X.house.json next to X.glb) -- the iteration loop for outdoor work, ~1-2 s instead of ~25 s;
+    // render it together with the house generated once without outdoor (--set program.outdoor.on=false)
+    if let Some(hf) = take_val(&mut args, "--outdoor-only") {
+        let t = std::time::Instant::now();
+        let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&hf).unwrap_or_else(|e| panic!("--outdoor-only {hf}: {e}"))).unwrap();
+        let (seed, polys, cutters, wall_t, wall_h) = crate::scenegen::house_inputs(&j);
+        let out = std::path::PathBuf::from(args.last().filter(|a| a.ends_with(".glb")).cloned().unwrap_or("/tmp/outdoor.glb".into()));
+        let mut ocfg = cfg.program.outdoor.clone();
+        ocfg.on = true;
+        let mut scene = Scene::default();
+        let (rec, log) = crate::outdoor::add(&mut scene, &polys, &cutters, wall_h, seed, wall_t / 2.0, wall_t, &ocfg);
+        for l in log { eprintln!("OUTDOOR {l}"); }
+        let t_gen = t.elapsed().as_secs_f64();
+        let mut buf: Vec<u8> = vec![];
+        let mut side = scene.write_glb_to(|| Ok(&mut buf)).unwrap();
+        side["outdoor"] = rec;
+        if mem { std::fs::write(out.with_extension("json"), serde_json::to_vec_pretty(&side).unwrap()).unwrap(); }
+        else {
+            std::fs::write(&out, &buf).unwrap();
+            std::fs::write(out.with_extension("json"), serde_json::to_vec_pretty(&side).unwrap()).unwrap();
+        }
+        eprintln!("OUTDOOR-ONLY {} in {:.2}s (outdoor {t_gen:.2}s, {:.0} MB)", out.display(), t.elapsed().as_secs_f64(), buf.len() as f64 / 1e6);
+        return if mem { Some(buf) } else { None };
+    }
     // positional: <seed> [room] [out.glb]
     if let Some(s) = args.get(1) { cfg.house.seed = s.parse().expect("seed"); }
     if let Some(r) = args.get(2) { cfg.house.room = Some(r.clone()); }
@@ -158,6 +183,8 @@ pub fn run(mut args: Vec<String>, mem: bool) -> Option<Vec<u8>> {
             built.merge_sidecar(&mut j);
             std::fs::write(&sp, serde_json::to_vec_pretty(&j).unwrap()).unwrap();
         }
+        // the outdoor stage's inputs, for --outdoor-only
+        let _ = std::fs::write(out.with_extension("house.json"), serde_json::to_vec(&built.house).unwrap());
     }
     if crate::assets::prof_on() {
         eprintln!("write_glb {:?}", tw.elapsed());

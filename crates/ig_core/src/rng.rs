@@ -81,9 +81,17 @@ impl Rng {
         y
     }
 
-    /// next raw 32-bit word without consuming it
+    /// next raw 32-bit word without consuming it (tempers the next state word in place; the 2.5 KB state is cloned only when a
+    /// refill is due -- every f64 / uniform call peeks for the trace guard, and the clone was most of their cost)
+    #[inline]
     pub fn peek(&self) -> u32 {
-        self.clone().next_u32()
+        if self.pos >= N { return self.clone().next_u32() }
+        let mut y = self.mt[self.pos];
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c5680;
+        y ^= (y << 15) & 0xefc60000;
+        y ^= y >> 18;
+        y
     }
 
     #[inline]

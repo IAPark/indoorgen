@@ -25,6 +25,33 @@ pub struct Built {
     pub objects: Vec<serde_json::Value>,
     /// sidecar `outdoor` record (terrain settings, vegetation spots for the renderer); None without the outdoor stage
     pub outdoor: Option<serde_json::Value>,
+    /// the outdoor stage's inputs (rooms as WKT, final cutters, wall dimensions): gen2 writes them as X.house.json for
+    /// `--outdoor-only` (src/gen2cli.rs), which re-runs only the outdoor stage
+    pub house: serde_json::Value,
+}
+
+/// the outdoor stage's inputs as JSON (Built::house)
+pub fn house_record(seed: u64, polys: &[(String, indoorgen::shp::G)], cutters: &[indoorgen::rooms::solidify::Cutter], c: &indoorgen::rooms::consts::RoomConstants) -> serde_json::Value {
+    use geos::Geom;
+    serde_json::json!({
+        "seed": seed, "wall_thickness": c.wall_thickness, "wall_height": c.wall_height,
+        "rooms": polys.iter().map(|(k, g)| serde_json::json!([k, g.to_wkt().unwrap_or_default()])).collect::<Vec<_>>(),
+        "cutters": cutters.iter().map(|ct| serde_json::json!({"kind": format!("{:?}", ct.kind), "style": ct.style.name(), "loc": ct.loc, "rot_z": ct.rot_z, "dims": ct.dims, "rooms": ct.rooms})).collect::<Vec<_>>(),
+    })
+}
+
+/// inverse of house_record: (seed, rooms, cutters, wall thickness, wall height)
+pub fn house_inputs(j: &serde_json::Value) -> (u64, Vec<(String, indoorgen::shp::G)>, Vec<indoorgen::rooms::solidify::Cutter>, f64, f64) {
+    use indoorgen::rooms::solidify::{CutKind, Cutter, DoorStyle};
+    let rooms = j["rooms"].as_array().map(|a| a.iter().filter_map(|r| Some((r[0].as_str()?.to_string(), geos::Geometry::new_from_wkt(r[1].as_str()?).ok()?))).collect()).unwrap_or_default();
+    let f3 = |v: &serde_json::Value| [0, 1, 2].map(|k| v[k].as_f64().unwrap_or(0.0));
+    let cutters = j["cutters"].as_array().map(|a| a.iter().map(|c| Cutter {
+        kind: match c["kind"].as_str().unwrap_or("") { "Door" => CutKind::Door, "Entrance" => CutKind::Entrance, "Passage" => CutKind::Passage, _ => CutKind::Window },
+        style: match c["style"].as_str().unwrap_or("") { "double" => DoorStyle::Double, "sliding" => DoorStyle::Sliding, "sliding_glass" => DoorStyle::SlidingGlass, "half_wall" => DoorStyle::HalfWall, _ => DoorStyle::Swing },
+        loc: f3(&c["loc"]), rot_z: c["rot_z"].as_f64().unwrap_or(0.0), dims: f3(&c["dims"]),
+        rooms: c["rooms"].as_array().map(|r| r.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+    }).collect()).unwrap_or_default();
+    (j["seed"].as_u64().unwrap_or(0), rooms, cutters, j["wall_thickness"].as_f64().unwrap_or(0.1), j["wall_height"].as_f64().unwrap_or(2.7))
 }
 
 impl Built {
@@ -238,7 +265,7 @@ pub fn build_scene(p: &Params) -> Built {
     }
     if LAYOUT_ONLY.with(|c| c.get()) {
         LAYOUT_OUT.with(|o| *o.borrow_mut() = Some(crate::layout_dump::to_json(seed, &g)));
-        return Built { scene: Scene::default(), room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene: web_time::Instant::now(), done: false, variation: None, objects: vec![], outdoor: None };
+        return Built { scene: Scene::default(), room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene: web_time::Instant::now(), done: false, variation: None, objects: vec![], outdoor: None, house: serde_json::Value::Null };
     }
     if let Ok(path) = std::env::var("LAYOUT_DUMP") {
         crate::layout_dump::dump(&path, seed, &g);
@@ -799,6 +826,7 @@ pub fn build_scene(p: &Params) -> Built {
         let _ = crate::invariants::check(&crate::invariants::Inv { scene: &scene, state: &g.state, visuals: &visuals, qc: &qi, floor_z: g.c.wall_thickness / 2.0, ceiling_z: g.c.wall_height - g.c.wall_thickness / 2.0 });
         lap("invariants");
     }
+    let house = house_record(seed, &g.room_polys, &g.cutters, &g.c);
     // terrain and vegetation outside (after the invariants: the terrain is not furniture)
     let outdoor = if cfg.program.outdoor.on && !orig_prog {
         let (rec, log) = crate::outdoor::add(&mut scene, &g.room_polys, &g.cutters, g.c.wall_height, seed, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.outdoor);
@@ -821,10 +849,10 @@ pub fn build_scene(p: &Params) -> Built {
             "people": {"count": people_n, "seed": people_seed, "placed": people.len()},
         }))
     } else { None };
-    if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false, variation, objects, outdoor }; }
+    if no_glb { return Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: false, variation, objects, outdoor, house }; }
     lap("qc done");
     { let tb = web_time::Instant::now(); let (a, b, k) = indoorgen::budget::apply(&mut scene, &cfg.geometry); if a > 0 { eprintln!("BUDGET tris {a} -> {b} ({k} nodes simplified) in {:.1}s", tb.elapsed().as_secs_f64()); } }
-    Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true, variation, objects, outdoor }
+    Built { scene, room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene, done: true, variation, objects, outdoor, house }
 }
 
 /// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through
