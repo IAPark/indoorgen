@@ -664,6 +664,14 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         }
         (lo, hi)
     };
+    // the street side: the entrance's facade (the outdoor stage runs the road in front of it, crates/ig_outdoor/src/site.rs); a
+    // window on a wall facing that way is preferred (a house showed the street a long blank wall: its rooms' windows had all gone
+    // to the side and back walls)
+    let inside_any0 = |q: [f64; 2]| room_polys.iter().any(|(_, g)| crate::shp::contains_pt(g, q));
+    let front_n: Option<[f64; 2]> = fixed.iter().find(|ct| ct.kind == CutKind::Entrance).map(|ct| {
+        let n = [-ct.rot_z.sin(), ct.rot_z.cos()];
+        if inside_any0([ct.loc[0] + n[0] * 0.6, ct.loc[1] + n[1] * 0.6]) { [-n[0], -n[1]] } else { n }
+    });
     for ct in deferred {
         let room = &ct.rooms[0];
         let Some((_, poly)) = room_polys.iter().find(|(n, _)| n == room) else { out.push(ct.clone()); continue };
@@ -705,6 +713,14 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
             let u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
             let along = |q: [f64; 2]| (q[0] - a[0]) * u[0] + (q[1] - a[1]) * u[1];
+            // this wall faces the street (outward normal within ~25 deg of the entrance's): +1.1, a little more than leaving the
+            // window's own wall costs
+            let street = front_n.map_or(0.0, |f| {
+                let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                let mut n = [-u[1], u[0]];
+                if inside_any0([m[0] + n[0] * 0.3, m[1] + n[1] * 0.3]) { n = [-n[0], -n[1]]; }
+                if n[0] * f[0] + n[1] * f[1] > 0.9 { 1.1 } else { 0.0 }
+            });
             let off = |q: [f64; 2]| ((q[0] - a[0]) * -u[1] + (q[1] - a[1]) * u[0]).abs();
             let mut spans: Vec<(f64, f64, f64)> = vec![];
             // alcove shelves beside a fireplace: removable when a window has nowhere else to go
@@ -793,7 +809,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                         let head = sill + ct.dims[2];
                         let need = lows.iter().filter(|(s0, s1, _)| x0 < *s1 && *s0 < x1).map(|(_, _, z)| *z).fold(sill, f64::max);
                         if head - need < 0.6 { continue }
-                        let score = over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 };
+                        let score = over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 } + street;
                         let over_alc: Vec<&(f64, f64, f64, String)> = alcs.iter().filter(|(s0, s1, _, _)| x0 < *s1 && *s0 < x1).collect();
                         let pen_alc: f64 = over_alc.iter().map(|(s0, s1, wt, _)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
                         let mut alc_keys: Vec<String> = over_alc.iter().map(|x| x.3.clone()).collect();
