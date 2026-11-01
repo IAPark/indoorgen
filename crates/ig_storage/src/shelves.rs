@@ -304,6 +304,13 @@ impl SimpleBookcase {
 pub use super::cabnodes::BookParams;
 
 impl SimpleBookcase {
+    /// the closed-base draw of `asset` (own stream, after the finish)
+    fn has_doors(&self, i: u64) -> bool {
+        if std::env::var_os("NO_BOOKCASE_STYLES").is_some() { return false }
+        let mut q = Rng::seeded(crate::int_hash(&["bookcase_style", &self.fseed.to_string(), &i.to_string()]));
+        let _ = q.choice_p(&[0.45, 0.35, 0.2]);
+        q.f64() < 0.4
+    }
     /// built to the layout box [width (y), depth (x), height]: the back board adds its thickness to the depth and the screw heads
     /// their length to the width
     fn sized(&self, d: f64, w: f64, h: f64, bt: f64, screw_depth: f64) -> (f64, f64, f64) {
@@ -339,6 +346,8 @@ impl Factory for SimpleBookcase {
         Some([dims[1] + screw_depth, dims[0] - 0.015 + bt, dims[2]])
     }
     fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
+        // (a case with doors renders its own asset: the exact mesh is infinigen's open case and would drop them)
+        if self.has_doors(i) { return None }
         Some(cabnodes::bookcase_gmesh(&self.params(i)).to_exact())
     }
     fn asset(&self, i: u64) -> Asset {
@@ -363,6 +372,12 @@ impl Factory for SimpleBookcase {
         // get_asset_params tail: frame_material = get_shelf_material("white"), metal_material = get_shelf_material("metal") (stream continues after the 11 draws above)
         let m = shelf_white_choice(&mut r, self.fseed * 1000 + i);
         let metal = shelf_metal(&mut r, self.fseed * 1000 + i + 1);
+        // finish and a closed base from their own stream (the draws above keep their order): white 45 %, wood 35 %, black 20 %; 40 % have
+        // flush doors over the lower compartment (every bookcase was an open white box). NO_BOOKCASE_STYLES=1: as infinigen
+        let mut q = Rng::seeded(crate::int_hash(&["bookcase_style", &self.fseed.to_string(), &i.to_string()]));
+        let styled = std::env::var_os("NO_BOOKCASE_STYLES").is_none();
+        let m = if !styled { m } else { match q.choice_p(&[0.45, 0.35, 0.2]) { 0 => m, 1 => plywood("wood", false, self.fseed * 1000 + i), _ => plywood("black_wood", false, self.fseed * 1000 + i) } };
+        let doors = styled && q.f64() < 0.4;
         let mut a = Asset::default();
         use cabnodes::*;
         let push = |a: &mut Asset, mesh: Mesh, mt: &Material, sup: bool| {
@@ -386,6 +401,19 @@ impl Factory for SimpleBookcase {
         }
         // back board
         push(&mut a, cube_at([w, bt, h], [0.0, d * -0.5 + bt * -0.5, h * 0.5]), &m, false);
+        // flush doors over the lower compartment (one, or a pair on a wide case), a finger groove along their top edge (no proud pull:
+        // the case keeps to its box)
+        if doors {
+            let (zl, zh) = (zs[0] + dt * 0.5 + 0.003, zs[1] - dt * 0.5 - 0.003);
+            let xi = w * 0.5 - st - 0.002;
+            let n = if w > 0.55 { 2 } else { 1 };
+            let dw = 2.0 * xi / n as f64;
+            for k in 0..n {
+                let (x0, x1) = (-xi + dw * k as f64 + 0.0015, -xi + dw * (k + 1) as f64 - 0.0015);
+                push(&mut a, cube_at([x1 - x0, 0.016, zh - zl], [0.5 * (x0 + x1), d * 0.5 - 0.008, 0.5 * (zl + zh)]), &m, false);
+                push(&mut a, cube_at([(x1 - x0) * 0.6, 0.004, 0.008], [0.5 * (x0 + x1), d * 0.5 - 0.001, zh - 0.02]), &metal, false);
+            }
+        }
         // screw heads (axis along x), mirrored in x
         let sy = d * 0.5 - screw_gap;
         let z_top = h - dt * 0.5;
