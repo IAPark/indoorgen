@@ -302,7 +302,9 @@ fn load_scene(world: &mut World, ps: Parsed, o: &Opts) -> Loaded {
         }).clone();
         let (a, b) = (zup(pr.bmin), zup(pr.bmax));
         let aabb = Aabb::from_min_max(Vec3::new(a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])), Vec3::new(a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])));
-        spawn.push((mesh, mh, aabb, flags == 2, xf.unwrap_or(Transform::IDENTITY)));
+        // (glass, and the sky's cloud layer / rain streaks: no shadows -- the cloud layer shadowed the whole scene)
+        let no_shadow = flags == 2 || lname.starts_with("outdoor_sky") || lname.starts_with("outdoor_rain");
+        spawn.push((mesh, mh, aabb, no_shadow, xf.unwrap_or(Transform::IDENTITY)));
     }
     for (h, mh, aabb, glass, tf) in spawn {
         let mut e = world.spawn((Mesh3d(h), MeshMaterial3d(mh), tf, aabb));

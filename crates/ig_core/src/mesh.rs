@@ -505,7 +505,8 @@ pub struct Material {
     pub metallic: f32,
     pub emissive: [f32; 3],
     pub emissive_strength: f32,
-    /// base-colour texture (PNG bytes, shared) with alpha-mask cutoff: leaf cards (glTF alphaMode MASK); None = plain colour
+    /// base-colour texture (PNG bytes, shared) with alpha-mask cutoff: leaf cards (glTF alphaMode MASK; cutoff < 0 = alpha blend,
+    /// 0 = opaque); None = plain colour
     pub texture: Option<std::sync::Arc<Vec<u8>>>,
     pub alpha_cutoff: f32,
 }
@@ -718,6 +719,8 @@ impl Scene {
                         j["alphaCutoff"] = json!(m.alpha_cutoff);
                     }
                 }
+                // alpha_cutoff < 0: an alpha-blended texture (clouds); an untextured colour with alpha < 1 (rain streaks) blends too
+                if m.alpha_cutoff < 0.0 || (tex_of[mi].is_none() && m.color[3] < 1.0) { j["alphaMode"] = json!("BLEND"); }
                 if m.emissive_strength > 0.0 {
                     j["emissiveFactor"] = json!(m.emissive);
                     j["extensions"] = json!({"KHR_materials_emissive_strength":{"emissiveStrength":m.emissive_strength}});

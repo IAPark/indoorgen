@@ -23,6 +23,7 @@ mod trees;
 mod veg;
 pub mod exterior;
 pub mod site;
+pub mod weather;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -69,6 +70,8 @@ pub struct OutdoorCfg {
     pub site: bool,
     /// Site layout: "suburban", "rural", "culdesac" (null: drawn per seed).
     pub layout: Option<String>,
+    /// Weather: "clear", "partly", "overcast", "rain" (null: drawn per seed; src/weather.rs).
+    pub weather: Option<String>,
     /// Tree source: "rust" (crates/ig_plants/src/rtree.rs, geometry in the scene) or "infinigen" (the renderer instances Infinigen's
     /// TreeFactory variants from its cache; Blender renders only).
     pub trees: String,
@@ -82,7 +85,7 @@ pub struct OutdoorCfg {
 impl Default for OutdoorCfg {
     fn default() -> Self {
         OutdoorCfg { on: true, near_extent: 70.0, near_spacing: 1.0, far_radius: 2500.0, ground_scale: 4.0, mountain_height: None, mountain_coverage: None, pad_depth: 0.45, pad_blend: 18.0,
-            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into(), exterior: true, site: true, layout: None }
+            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into(), exterior: true, site: true, layout: None, weather: None }
     }
 }
 
@@ -341,6 +344,13 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters:
         let nf = site::add_meshes(scene, st, &|x, y| t.height(x, y, t.dist(x, y)), seed);
         log.push(format!("site meshes: {nf} faces"));
     }
+    // weather (own stream)
+    let wx = weather::Weather::draw(&mut Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "weather"])), cfg.weather.as_deref());
+    {
+        let paved = |x: f64, y: f64| t.site.as_ref().and_then(|s| s.road_near(x, y)).filter(|(d, _)| *d < t.site.as_ref().unwrap().half - 0.3).map(|(_, z)| z + 0.03);
+        let nf = weather::add(scene, &wx, seed, centre, t.pad_z, &paved);
+        log.push(format!("weather: {:?} cover {:.2} ({nf} faces)", wx.state, wx.cover));
+    }
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);
     scene.add("outdoor_terrain_far#0", "OutdoorTerrain", far_g, gm);
     if !far_m.is_empty() { scene.add("outdoor_terrain_far#1", "OutdoorTerrain", far_m, mm); }
@@ -399,6 +409,6 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters:
     lap("tree builds", &mut times);
     log.push(format!("times {:.2}s: {}", t_all.elapsed().as_secs_f64(), times.iter().map(|(k, v)| format!("{k} {v:.2}")).collect::<Vec<_>>().join(", ")));
     let rec = json!({"terrain": {"ground_material": gcls, "mountain_material": mcls, "mountain_height": m_height, "coverage": coverage, "pad_z": t.pad_z},
-        "props": props, "tree_variants": cfg.tree_variants, "bush_variants": cfg.bush_variants});
+        "props": props, "tree_variants": cfg.tree_variants, "bush_variants": cfg.bush_variants, "weather": wx.record()});
     (rec, log)
 }
