@@ -443,6 +443,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         // (alcove shelves the wall layer took out for a window are not built)
         features.retain(|pf| state.objs.contains_key(&pf.key));
     }
+    if raise_sills(&state, &mut res.cutters) { shells = shell::build_shells(&c, &st, &res.cutters); }
     Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features, complaints }
 }
 
@@ -671,21 +672,82 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
 /// the spot that keeps it clear of what stands against that wall -- tall pieces (wardrobes, bookcases, the TV, built-ins, kitchen
 /// units) weigh most, a headboard a little, low pieces (a sofa's back, a bench) not at all -- never over another window, door or the
 /// entrance, and near where the plan put it when that spot is free. Pictures and mirrors a window now covers come off the wall.
+/// a piece's world box (its local box's eight corners, posed)
+fn win_wb(st: &State, k: &str) -> ([f64; 3], [f64; 3]) {
+    let o = &st.objs[k];
+    let (l, h) = (o.geom.lo, o.geom.hi);
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for i in 0..8 {
+        let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+        for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
+    }
+    (lo, hi)
+}
+
+/// what a window over a piece needs its sill above: the worktop (a run's top is its wall cabinets'), the range's back guard, a tap, the
+/// basin's dressing, a headboard, ...; None: nothing (a window does not go over it, or it is no matter)
+fn sill_need(state: &State, k: &str, cls: &str, lo: [f64; 3], hi: [f64; 3]) -> Option<f64> {
+    match cls {
+        // (the worktop: the top of the run's base box, 0.8-1.05 m by its style)
+        "KitchenSpaceFactory" => Some(crate::furn::layout2d::prisms(state, k).iter().map(|p| p.z[1]).filter(|z| *z < lo[2] + 1.3).fold(lo[2] + 0.95, f64::max) + 0.03),
+        "OvenFactory" => Some(hi[2].max(lo[2] + 1.02) + 0.03),
+        // (a sink's tap and a basin's taps stand taller than their layout boxes; the cistern takes the dresser's items)
+        "SinkFactory" => Some(hi[2] + 0.3),
+        "ToiletFactory" => Some(hi[2] + 0.2),
+        "StandingSinkFactory" => Some(hi[2] + 0.35),
+        // (a window over a bed: its sill clear of the headboard)
+        "BedFactory" => Some(hi[2] + 0.05),
+        // (over a nightstand / side table: clear of the lamp on it -- a window over a headboard ran on over the nightstands)
+        "SideTableFactory" => Some(hi[2] + 0.55),
+        // (over a sofa or an armchair: clear of its back -- an armchair's back stood 11 cm into the glass)
+        "SofaFactory" | "ArmChairFactory" => Some(hi[2] + 0.05),
+        // (over a TV stand: clear of the TV on it -- a room's one outside wall held the TV)
+        "TVStandFactory" => Some(state.objs.iter().filter(|(_, c)| c.generator.as_ref().map_or(false, |cg| cg.class == "TVFactory") && c.relations.iter().any(|r| &r.target == k)).map(|(ck, _)| win_wb(state, ck).1[2]).fold(hi[2] + 0.8, f64::max) + 0.05),
+        // (low storage -- a sideboard, a low bookcase -- takes a window over it, its sill above its top)
+        "SimpleBookcaseFactory" | "CellShelfFactory" | "SingleCabinetFactory" | "LargeShelfFactory" if hi[2] - lo[2] < 1.3 => Some(hi[2] + 0.4),
+        _ => None,
+    }
+}
+
+/// The plan's own windows over a bed (or another low piece) standing in front of them: the sill rises clear of it, as the wall layer
+/// lays its windows (a 3.7 m window filled a bedroom's wall, the headboard rose 0.84 m past its sill, 1083), while 0.45 m of glass
+/// stays; true when any window changed
+fn raise_sills(state: &State, cutters: &mut [Cutter]) -> bool {
+    let mut changed = false;
+    for ct in cutters.iter_mut().filter(|c| c.kind == CutKind::Window) {
+        let Some(room) = ct.rooms.first().cloned() else { continue };
+        let (u, n) = ([ct.rot_z.cos(), ct.rot_z.sin()], [-ct.rot_z.sin(), ct.rot_z.cos()]);
+        let (hw, sill, head) = (ct.dims[0] / 2.0, ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0);
+        let mut need = sill;
+        for (k, o) in &state.objs {
+            let Some(g) = &o.generator else { continue };
+            if crate::furn::layout2d::room_of(state, k).as_deref() != Some(room.as_str()) { continue }
+            let corners: Vec<[f64; 2]> = { let (gl, gh) = (o.geom.lo, o.geom.hi); [[gl[0], gl[1]], [gh[0], gl[1]], [gh[0], gh[1]], [gl[0], gh[1]]].iter().map(|c| { let p = o.pose.apply([c[0], c[1], 0.0]); [p[0], p[1]] }).collect() };
+            let rel = |q: [f64; 2]| { let d = [q[0] - ct.loc[0], q[1] - ct.loc[1]]; (d[0] * u[0] + d[1] * u[1], (d[0] * n[0] + d[1] * n[1]).abs()) };
+            // (within 0.6 m of the window's plane, across its width)
+            if corners.iter().map(|q| rel(*q).1).fold(f64::INFINITY, f64::min) > 0.6 { continue }
+            let (s0, s1) = corners.iter().map(|q| rel(*q).0).fold((f64::INFINITY, f64::NEG_INFINITY), |a, v| (a.0.min(v), a.1.max(v)));
+            if s1 <= -hw || s0 >= hw { continue }
+            let (lo, hi) = win_wb(state, k);
+            if hi[2] <= sill { continue }
+            if let Some(z) = sill_need(state, k, &g.class, lo, hi) { need = need.max(z); }
+        }
+        if need > sill + 0.005 && head - need >= 0.45 {
+            if std::env::var_os("LAYERDBG").is_some() { eprintln!("SILL window at ({:.2}, {:.2}) in {room}: sill {sill:.2} -> {need:.2} m", ct.loc[0], ct.loc[1]); }
+            ct.dims[2] = head - need;
+            ct.loc[2] = (need + head) / 2.0;
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(String, crate::shp::G)], fixed: &[Cutter], deferred: &[Cutter]) -> Vec<Cutter> {
     let mut out: Vec<Cutter> = vec![];
     let mut scores: Vec<f64> = vec![];
     // how much of each window stands behind a tall piece (wardrobe, shelf unit, ...)
     let mut talls: Vec<f64> = vec![];
-    let wb = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
-        let o = &st.objs[k];
-        let (l, h) = (o.geom.lo, o.geom.hi);
-        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
-        for i in 0..8 {
-            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
-            for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); }
-        }
-        (lo, hi)
-    };
+    let wb = win_wb;
     // the street side: the entrance's facade (the outdoor stage runs the road in front of it, crates/ig_outdoor/src/site.rs); a
     // window on a wall facing that way is preferred (a house showed the street a long blank wall: its rooms' windows had all gone
     // to the side and back walls)
@@ -792,26 +854,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 if g.class == "SinkFactory" { sinks.push((s0, s1)); }
                 // what a window over it needs its sill above: the worktop (a run's top is its wall cabinets'), the range's back guard,
                 // a tap, the basin's dressing
-                let need = match g.class.as_str() {
-                    // (the worktop: the top of the run's base box, 0.8-1.05 m by its style)
-                    "KitchenSpaceFactory" => Some(crate::furn::layout2d::prisms(state, k).iter().map(|p| p.z[1]).filter(|z| *z < lo[2] + 1.3).fold(lo[2] + 0.95, f64::max) + 0.03),
-                    "OvenFactory" => Some(hi[2].max(lo[2] + 1.02) + 0.03),
-                    // (a sink's tap and a basin's taps stand taller than their layout boxes; the cistern takes the dresser's items)
-                    "SinkFactory" => Some(hi[2] + 0.3),
-                    "ToiletFactory" => Some(hi[2] + 0.2),
-                    "StandingSinkFactory" => Some(hi[2] + 0.35),
-                    // (a window over a bed: its sill clear of the headboard)
-                    "BedFactory" => Some(hi[2] + 0.05),
-                    // (over a nightstand / side table: clear of the lamp on it -- a window over a headboard ran on over the nightstands)
-                    "SideTableFactory" => Some(hi[2] + 0.55),
-                    // (over a sofa or an armchair: clear of its back -- an armchair's back stood 11 cm into the glass)
-                    "SofaFactory" | "ArmChairFactory" => Some(hi[2] + 0.05),
-                    // (over a TV stand: clear of the TV on it -- a room's one outside wall held the TV)
-                    "TVStandFactory" => Some(state.objs.iter().filter(|(_, c)| c.generator.as_ref().map_or(false, |cg| cg.class == "TVFactory") && c.relations.iter().any(|r| &r.target == k)).map(|(ck, _)| wb(state, ck).1[2]).fold(hi[2] + 0.8, f64::max) + 0.05),
-                    // (low storage -- a sideboard, a low bookcase -- takes a window over it, its sill above its top)
-                    "SimpleBookcaseFactory" | "CellShelfFactory" | "SingleCabinetFactory" | "LargeShelfFactory" if hi[2] - lo[2] < 1.3 => Some(hi[2] + 0.4),
-                    _ => None,
-                };
+                let need = sill_need(state, k, &g.class, lo, hi);
                 if let Some(z) = need { lows.push((s0, s1, z)); }
                 if g.class == "BedFactory" { beds.push((s0, s1)); }
             }
