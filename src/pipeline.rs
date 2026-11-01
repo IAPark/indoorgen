@@ -897,7 +897,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         }
         // a window with nowhere to go but behind a wardrobe (a bedroom's one outside wall, 1.5 m, all wardrobe): the wardrobe goes, the
         // room keeps its daylight
-        if score < -20.0 {
+        // (any window that has to stand behind one: -5 and under -- a wardrobe pinned in a corner had a window 11 cm behind its side)
+        if score < -5.0 {
             let (c, sn) = (nc.rot_z.cos(), nc.rot_z.sin());
             let gone: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |g| g.class == "WardrobeFactory") && crate::furn::layout2d::room_of(state, k).as_deref() == Some(room.as_str()) && {
                 let (lo, hi) = wb(state, k);
