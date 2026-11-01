@@ -342,7 +342,9 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             _ => continue,
         };
         // cutter boxes: dims[0] = opening width along the wall (rot_z), dims[1] = depth through the wall
-        let (along, w) = (ct.rot_z, ct.dims[0]);
+        // (4 cm wider each side than the opening: models reach a few cm past their boxes -- a shower's handle bar and glass stood in
+        // a bathroom doorway)
+        let (along, w) = (ct.rot_z, ct.dims[0] + 0.08);
         let n = [-along.sin(), along.cos()];
         for room in &ct.rooms {
             let Some((_, poly)) = room_polys.iter().find(|(k, _)| k == room) else { continue };

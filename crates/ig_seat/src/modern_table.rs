@@ -80,6 +80,8 @@ impl ModernTable {
         let w: &[f64] = if dining { &[0.4, 0.15, 0.2, 0.15, 0.1, 0.0] } else if lowish && cls == "CoffeeTableFactory" { &[0.35, 0.15, 0.0, 0.1, 0.2, 0.2] } else { &[0.35, 0.15, 0.0, 0.2, 0.1, 0.2] };
         let mut base = [Base::Legs, Base::Splayed, Base::Trestle, Base::Pedestal, Base::Slab, Base::Drum][r.choice_p(w)];
         // a pedestal carries a round / square-ish top or a short oval; a trestle a long one
+        // (a square dining table seats its chairs at the corners, diagonally: corner legs went through their seats -- a pedestal there)
+        if dining && squareish && matches!(base, Base::Legs | Base::Splayed | Base::Slab) { base = Base::Pedestal; }
         if base == Base::Pedestal && hy.max(hx) / hy.min(hx) > 1.6 { base = Base::Trestle; }
         // (the trestle frames stand across y: a long top along y)
         if base == Base::Trestle && hy / hx < 1.3 { base = Base::Legs; }
@@ -108,8 +110,10 @@ impl ModernTable {
         let mut legs: Vec<Mesh> = vec![];
         // leg spots: inside the outline (a superellipse shrinks the corners: legs move in with it)
         let k = if self.sq >= 30.0 { 0.88 } else if self.sq >= 4.0 { 0.8 } else { 0.68 };
-        let corners = [[-hx * k, -hy * k], [hx * k, -hy * k], [hx * k, hy * k], [-hx * k, hy * k]];
-        let r0 = self.leg_r;
+        let r0 = self.leg_r.min(0.12 * hx.min(hy));
+        // (the leg's outer face inside the top's edge: a narrow nightstand's thick legs stood past it)
+        let (cx, cy) = ((hx * k).min(hx - r0 * 1.15), (hy * k).min(hy - r0 * 1.15));
+        let corners = [[-cx, -cy], [cx, -cy], [cx, cy], [-cx, cy]];
         match self.base {
             Base::Legs | Base::Splayed => {
                 // (the splayed feet stay inside the top's outline: the table keeps to its layout box)
@@ -120,17 +124,10 @@ impl ModernTable {
                         else { limb([c[0], c[1], ztop], [c[0] + sx, c[1] + sy, 0.0], r0, r0 * 0.6, true) };
                     legs.push(m);
                 }
-                // an apron under a dining top
-                if self.h > 0.65 && self.sq >= 4.0 {
-                    let (ax, ay, at) = (hx * k, hy * k, 0.018);
-                    legs.push(bx([-ax, -ay - at, ztop - 0.08], [ax, -ay + at, ztop]));
-                    legs.push(bx([-ax, ay - at, ztop - 0.08], [ax, ay + at, ztop]));
-                    legs.push(bx([-ax - at, -ay, ztop - 0.08], [-ax + at, ay, ztop]));
-                    legs.push(bx([ax - at, -ay, ztop - 0.08], [ax + at, ay, ztop]));
-                }
+                // (no apron: dining chairs tuck under the top, an apron at chair-arm height cut into them)
                 if self.shelf {
                     let zs = h * r.uniform(0.18, 0.3);
-                    let mut s = prism(&outline(hx * k * 0.98, hy * k * 0.98, self.sq.max(4.0), 64), zs, zs + 0.018, 0.004);
+                    let mut s = prism(&outline(cx + r0, cy + r0, self.sq.max(4.0), 64), zs, zs + 0.018, 0.004);
                     box_uv(&mut s);
                     let sb = s.bounds();
                     a.mesh(s, &topm, Some(sb));
