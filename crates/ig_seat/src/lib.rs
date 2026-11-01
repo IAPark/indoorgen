@@ -30,4 +30,5 @@ pub mod modern_chair;
 pub mod stools;
 pub mod tables;
 pub mod modern_table;
+pub mod nightstand;
 pub mod towel;

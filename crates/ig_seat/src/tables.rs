@@ -272,6 +272,11 @@ pub fn make(c: &str, rng: &mut Rng) -> Option<Box<dyn Factory>> {
     // (a round table in a box that is not square: infinigen's round table builds a circle to the short side and missed the box by up
     // to 10 cm; ModernTable builds the oval that fills it)
     let oval = c == "TableDiningFactory" && ig_kit::api::round_hint() && crate::api::size_hint().map_or(false, |h| (h[0] - h[1]).abs() > 0.01);
+    // 35 % of side tables are bedside cabinets (drawers / shelf / door), their own stream (NO_NIGHTSTAND=1: off)
+    if c == "SideTableFactory" && std::env::var_os("NO_NIGHTSTAND").is_none() {
+        let mut pick = Rng::seeded(crate::int_hash(&["nightstand", &rng.clone().next_u64().to_string()]));
+        if pick.f64() < 0.35 { return Some(Box::new(super::nightstand::Nightstand::new(&mut rng.clone()))); }
+    }
     if c != "TableCocktailFactory" && (oval || std::env::var_os("NO_MODERN_TABLE").is_none()) {
         let mut pick = Rng::seeded(crate::int_hash(&["modern_table", &rng.clone().next_u64().to_string()]));
         if oval || pick.f64() < 0.55 { return Some(Box::new(super::modern_table::ModernTable::new(c, &mut rng.clone()))); }

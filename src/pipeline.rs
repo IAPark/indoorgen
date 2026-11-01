@@ -781,6 +781,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     "StandingSinkFactory" => Some(hi[2] + 0.35),
                     // (a window over a bed: its sill clear of the headboard)
                     "BedFactory" => Some(hi[2] + 0.05),
+                    // (over a nightstand / side table: clear of the lamp on it -- a window over a headboard ran on over the nightstands)
+                    "SideTableFactory" => Some(hi[2] + 0.55),
                     // (over a sofa or an armchair: clear of its back -- an armchair's back stood 11 cm into the glass)
                     "SofaFactory" | "ArmChairFactory" => Some(hi[2] + 0.05),
                     // (over a TV stand: clear of the TV on it -- a room's one outside wall held the TV)
