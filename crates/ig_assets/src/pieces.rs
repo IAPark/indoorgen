@@ -10,6 +10,10 @@ use ig_core::rng::Rng;
 /// classes kept on the solver's old path for now (counter runs and kitchen cabinets: real per-cabinet placeholders, kitchen plans)
 const NOT_YET: &[&str] = &["KitchenSpaceFactory", "KitchenCabinetFactory", "KitchenIslandFactory"];
 
+/// plant generators that only build the plant inside a PlantContainerFactory (whose collision fits the plant into its box over the
+/// soil): never placed on their own, so no pieces
+const COMPONENTS: &[&str] = &["CactusFactory", "FernFactory", "MonocotFactory", "MushroomFactory", "SnakePlantFactory", "SpiderPlantFactory", "SucculentFactory"];
+
 /// install the registry (once per process: gen2, the wasm entry, tools)
 pub fn install_pieces() {
     ig_kit::piece::install(make_piece);
@@ -28,7 +32,7 @@ thread_local! {
 }
 
 pub fn make_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
-    if NOT_YET.contains(&class) { return None }
+    if NOT_YET.contains(&class) || COMPONENTS.contains(&class) { return None }
     let wrapped = std::env::var_os("PIECES_WRAPPED").is_some() && WRAPPED.contains(&class);
     // (every proposal of every class comes through here: a class known not to be native goes straight back)
     if !wrapped && NOT_NATIVE.with(|n| n.borrow().contains(class)) { return None }
@@ -47,7 +51,7 @@ pub fn make_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
 
 /// any class with a factory as a piece (what colcheck checks): native when its factory writes its volumes, else wrapped
 pub fn any_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
-    if NOT_YET.contains(&class) { return None }
+    if NOT_YET.contains(&class) || COMPONENTS.contains(&class) { return None }
     crate::make_factory(class, seed)?;
     let mut p = FactoryPiece::new(class, seed, None);
     p.volumes();
