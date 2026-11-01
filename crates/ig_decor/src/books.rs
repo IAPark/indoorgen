@@ -357,13 +357,26 @@ impl BookF {
 
     /// create_asset: (paper, cover) meshes in the book's local frame
     fn create(&self, r: &mut Rng) -> (Mesh, Mesh) {
+        let (width, height, depth) = self.dims(r);
+        let paper = cube32([width / 2.0, height / 2.0, depth / 2.0], [width / 2.0 - 1e-4, height / 2.0, depth / 2.0 - 1e-4]);
+        let cover = if self.paperback { self.paperback_cover(width, height, depth) } else { self.hardcover(width, height, depth) };
+        (paper, cover)
+    }
+
+    /// create_asset's draws: (width, height, depth) of the next book
+    fn dims(&self, r: &mut Rng) -> (f64, f64, f64) {
         plaster_draws(r);
         let width = ((r.log_uniform(0.08, 0.15) * self.rel_scale / UNIT) as i64) as f64 * UNIT;
         let height = (((width * self.skew) / UNIT) as i64) as f64 * UNIT;
         let depth = r.uniform(0.01, 0.02) * self.rel_scale;
-        let paper = cube32([width / 2.0, height / 2.0, depth / 2.0], [width / 2.0 - 1e-4, height / 2.0, depth / 2.0 - 1e-4]);
-        let cover = if self.paperback { self.paperback_cover(width, height, depth) } else { self.hardcover(width, height, depth) };
-        (paper, cover)
+        (width, height, depth)
+    }
+
+    /// bounds of a (width, height, depth) book in its frame: the pages, and the cover -- a hardcover's boards margin past the pages on
+    /// three sides, its spine bowed in by up to offset (the cover's thickness goes inward)
+    fn local_box(&self, w: f64, h: f64, d: f64) -> (V3, V3) {
+        if self.paperback { return ([0.0; 3], [w, h, d]) }
+        ([-self.offset, -self.margin, 0.0], [w + self.margin, h + self.margin, d])
     }
 
     fn paperback_cover(&self, w: f64, h: f64, d: f64) -> Mesh {
@@ -546,6 +559,57 @@ impl Factory for Books {
             a.mesh(c, &cover_m, Some(cb));
         }
         a
+    }
+
+    /// collision, replaying the build's draws: a book's box; a stack's books each turned about z about the origin, moved to centre and
+    /// stacked on the one below; a column's row, its length the sum of the books' widths leaning (each book's thickness and height
+    /// projected by its lean -- they pack against each other at most that long), its height the tallest lean
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let mut r = inst_rng(self.fseed, i);
+        let m = 0.002;
+        match self.kind {
+            0 => {
+                let (w, h, d) = self.bases[0].dims(&mut r);
+                let (lo, hi) = self.bases[0].local_box(w, h, d);
+                Some(vec![Volume::hard([lo[0] - m, lo[1] - m, lo[2] - m], [hi[0] + m, hi[1] + m, hi[2] + m])])
+            }
+            1 => {
+                let mut v = vec![];
+                let mut z = 0.0;
+                for _ in 0..self.n_books {
+                    let b = &self.bases[r.randint(0, self.bases.len() as i64) as usize];
+                    let (w, h, d) = b.dims(&mut r);
+                    let (lo, hi) = b.local_box(w, h, d);
+                    let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+                    let (sn, cs) = r.uniform(-self.max_angle, self.max_angle).sin_cos();
+                    let (mut a, mut bb) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+                    for x in [lo[0], hi[0]] { for y in [lo[1], hi[1]] {
+                        let q = [x * cs - y * sn - c[0], x * sn + y * cs - c[1]];
+                        for k in 0..2 { a[k] = a[k].min(q[k]); bb[k] = bb[k].max(q[k]); }
+                    } }
+                    let th = hi[2] - lo[2];
+                    v.push(Volume::hard([a[0] - m, a[1] - m, z - m], [bb[0] + m, bb[1] + m, z + th + m]));
+                    z += th;
+                }
+                Some(v)
+            }
+            _ => {
+                let (mut len, mut top, mut deep) = (0.0f64, 0.0f64, 0.0f64);
+                for _ in 0..self.n_books {
+                    let b = &self.bases[r.randint(0, self.bases.len() as i64) as usize];
+                    let (w, h, d) = b.dims(&mut r);
+                    let (lo, hi) = b.local_box(w, h, d);
+                    let (ew, eh, ed) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+                    r.uniform(0.0, 1.0);
+                    let (sn, cs) = r.uniform(0.0, self.max_angle).sin_cos();
+                    len += ed * cs + eh * sn;
+                    top = top.max(eh * cs + ed * sn);
+                    deep = deep.max(ew);
+                }
+                Some(vec![Volume::hard([-m, -deep - m, -m], [len + m, m, top + m])])
+            }
+        }
     }
 
     fn placeholder(&self, _i: u64) -> Option<Asset> {
