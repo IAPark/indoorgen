@@ -128,6 +128,9 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
                 let at = w(*s);
                 let yaw_i = yaw + if k == 1 { std::f64::consts::FRAC_PI_2 * if r.f64() < 0.5 { 0.0 } else { 1.0 } } else { 0.0 };
                 let b = box_at(item, at, yaw_i, 1.0);
+                // (inside the room: the floor spot beside a breast in a corner put a log basket 12 cm into the side wall)
+                let inner = crate::furn::layout2d::room_of(state, &pf.key).and_then(|rm| state.objs.get(&rm).and_then(|ro| ro.polygon.clone())).map(|g| crate::shp::buffer_mitre(&g, -crate::bed_decor::wall_half()));
+                if inner.as_ref().map_or(false, |g| [[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.1[0], b.1[1]], [b.0[0], b.1[1]]].iter().any(|q| !crate::shp::contains_pt(g, *q))) { continue }
                 if !occ.free(&b) { continue }
                 let bb = place(scene, &format!("dress_hearth_{}_{k}_{j}", pf.key), if k == 0 { "FireplaceToolsFactory" } else { "FirewoodFactory" }, item, at, yaw_i, 1.0);
                 occ.boxes.push(bb);

@@ -169,11 +169,14 @@ pub fn fans(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp:
         let blade_abs = ceiling_z + fan.build().2.blade_z;
         for (k, o) in &state.objs {
             if o.generator.is_none() || crate::furn::layout2d::is_room(o) || k == &lk { continue }
-            let Some((lo, hi, top)) = footprint(state, k) else { continue };
-            if top < blade_abs - 0.15 { continue }
+            // (the built meshes: a wardrobe's open door stands outside its solver box)
+            let Some((lo, hi, top)) = footprint_built(scene, state, k) else { continue };
+            // (within 0.3 m of the blade plane: the pitched blades hang below it -- a 2.25 m wardrobe met blades set at 2.44 m)
+            if top < blade_abs - 0.3 { continue }
             let dx = (lo[0] - c[0]).max(0.0).max(c[0] - hi[0]);
             let dy = (lo[1] - c[1]).max(0.0).max(c[1] - hi[1]);
-            span = span.min(dx.hypot(dy) - 0.15);
+            // (0.25 m: curved blade tips reach past the span radius)
+            span = span.min(dx.hypot(dy) - 0.25);
         }
         if span < 0.4 { log.push(format!("{room}: no fan (no room for the blades: {span:.2} m)")); continue }
         fan = fan.clone_with_span(span);
