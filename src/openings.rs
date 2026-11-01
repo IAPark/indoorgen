@@ -617,15 +617,16 @@ pub fn settle_doors(
 /// bathroom left no wall for the toilet)
 pub fn swing_sign(ct: &Cutter, polys: &[(String, crate::shp::G)]) -> f64 {
     let dn = (-ct.rot_z.sin(), ct.rot_z.cos());
-    let side = |sg: f64| -> Option<(i32, f64)> {
+    // (and a bedroom under 10 m2: its doors' swings left a small or many-door bedroom no wall for a bed)
+    let side = |sg: f64| -> Option<(i32, f64, bool)> {
         let p = crate::shp::point(ct.loc[0] + sg * 0.5 * dn.0, ct.loc[1] + sg * 0.5 * dn.1);
-        polys.iter().find(|(_, g)| crate::shp::contains(g, &p)).map(|(n, g)| (rank(crate::rooms::state::room_type(n)), crate::shp::area(g)))
+        polys.iter().find(|(_, g)| crate::shp::contains(g, &p)).map(|(n, g)| { let t = crate::rooms::state::room_type(n); (rank(t), crate::shp::area(g), t == "bedroom") })
     };
     match (side(1.0), side(-1.0)) {
         (Some(a), Some(b)) => {
             let into_b = b.0 > a.0;
             let (tgt, other) = if into_b { (b, a) } else { (a, b) };
-            let flip = tgt.1 < 3.0 && other.1 >= 3.0;
+            let flip = (tgt.1 < 3.0 || (tgt.2 && tgt.1 < 10.0)) && other.1 >= 3.0;
             if into_b != flip { -1.0 } else { 1.0 }
         }
         (None, Some(_)) => -1.0,
