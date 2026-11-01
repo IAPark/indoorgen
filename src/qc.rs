@@ -351,6 +351,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     issues.push(format!("floating {:.1}mm", gap * 1000.0));
                 } else if gap < -0.005 && !on_rug && !o.class.contains("Rug") {
                     issues.push(format!("sunk {:.1}mm", -gap * 1000.0));
+                    if std::env::var_os("QCDBG").is_some() { eprintln!("QCDBG {} sunk into {:?}", o.key, m.get("support")); }
                 }
             }
             if let Some(p) = &parent {

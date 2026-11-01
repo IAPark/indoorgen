@@ -2403,7 +2403,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let back = sp.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
                 let sink_top = wbox(state, &sink).1[2];
                 let h = mhi[2] - mlo[2];
-                let zc = (floor_z + 1.55).max(sink_top + 0.2 + h / 2.0).min(floor_z + ceil - 0.2 - h / 2.0);
+                // (its bottom 0.35 m over the basin's box: the tap stands above the box, and a mirror 0.2 m up sat on it)
+                let zc = (floor_z + 1.55).max(sink_top + 0.35 + h / 2.0).min(floor_z + ceil - 0.2 - h / 2.0);
                 let (s_, c_) = ys.sin_cos();
                 let a = [mlo[0], (mlo[1] + mhi[1]) / 2.0, (mlo[2] + mhi[2]) / 2.0];
                 let ra = [c_ * a[0] - s_ * a[1], s_ * a[0] + c_ * a[1]];
@@ -2430,8 +2431,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let long = (hi[0] - lo[0]).max(hi[1] - lo[1]) >= 0.3;
                 let zc = floor_z + if long { 1.15 } else { 0.7 };
                 let dz = zc - (lo[2] + hi[2]) / 2.0;
-                // over a fixture or in a doorway at its height, or into another fitting: removed
-                let fit_hit = { let (l, h) = wbox(state, &k); state.objs.iter().find(|(o, b)| o.as_str() != k && class_of(b) == "HardwareFactory" && { let (bl, bh) = wbox(state, o); (0..2).all(|d| l[d] < bh[d] + 0.03 && bl[d] - 0.03 < h[d]) && l[2] + dz < bh[2] + 0.05 && bl[2] - 0.05 < h[2] + dz }).map(|(o, _)| o.clone()) };
+                // over a fixture or in a doorway at its height, or into another fitting or the mirror: removed
+                let fit_hit = { let (l, h) = wbox(state, &k); state.objs.iter().find(|(o, b)| o.as_str() != k && matches!(class_of(b), "HardwareFactory" | "MirrorFactory") && { let (bl, bh) = wbox(state, o); (0..2).all(|d| l[d] < bh[d] + 0.03 && bl[d] - 0.03 < h[d]) && l[2] + dz < bh[2] + 0.05 && bl[2] - 0.05 < h[2] + dz }).map(|(o, _)| o.clone()) };
                 if let Some(b) = blocked(state, &k, dz).or(fit_hit) {
                     layout2d::remove_tree(state, &k);
                     log.push(format!("{room}: removed fitting {k} (into {b})"));
