@@ -157,7 +157,9 @@ impl MediaConsole {
 
 impl MediaConsole {
     fn proud(&self) -> f64 {
-        let p: f64 = match self.pull { Pull::Knob => 0.025, Pull::Bar => 0.036, Pull::Push => 0.001 };
+        // (pulls only on fronts: a console of open cubbies has none)
+        let fronts = self.cols.iter().any(|c| *c != Col::Open);
+        let p: f64 = if !fronts { 0.0 } else { match self.pull { Pull::Knob => 0.025, Pull::Bar => 0.036, Pull::Push => 0.001 } };
         p.max(if self.cols.contains(&Col::Slats) { 0.012 } else { 0.0 })
     }
 }

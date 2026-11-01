@@ -75,6 +75,8 @@ impl ModernTable {
         let squareish = hy.max(hx) / hy.min(hx) < 1.15;
         // outline: round / oval tops only where the box allows (round in a square box, oval in a long one), else (rounded) rectangles
         let sq = match r.choice_p(&[0.45, 0.3, 0.25]) { 0 => 40.0, 1 => r.uniform(4.0, 7.0), _ => if squareish { 2.0 } else { 2.4 } };
+        // (the layout made it round -- RoundTable: chairs set round it -- a circle / oval)
+        let sq = if ig_kit::api::round_hint() { 2.0 } else { sq };
         let dining = cls == "TableDiningFactory";
         let lowish = cls != "TableDiningFactory";
         let w: &[f64] = if dining { &[0.4, 0.15, 0.2, 0.15, 0.1, 0.0] } else if lowish && cls == "CoffeeTableFactory" { &[0.35, 0.15, 0.0, 0.1, 0.2, 0.2] } else { &[0.35, 0.15, 0.0, 0.2, 0.1, 0.2] };
