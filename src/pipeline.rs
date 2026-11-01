@@ -872,7 +872,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let t0 = along(p);
             let mut w = w0;
             // (down to 0.6 m: a short wall half taken by a wardrobe had no 0.9 m stretch beside it)
-            while w >= (0.6f64).max(w0 * 0.3) - 1e-9 {
+            // (down to 0.4 m: a narrow window beside a fireplace beat one behind it -- 312's only window stood 29 cm behind a breast)
+            while w >= (0.4f64).max(w0 * 0.3) - 1e-9 {
                 if len >= w + 2.0 * margin {
                     let steps = ((len - 2.0 * margin - w) / 0.1).floor() as usize;
                     for i in 0..=steps {
@@ -996,6 +997,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         // (counting only a window that is clear itself: two behind tall pieces would each leave the other out)
         let clear_other = (0..out.len()).any(|j| j != i && out[j].rooms.first() == room && scores[j] >= -5.0 && talls[j] <= 0.02) || fixed.iter().any(|o| o.kind == CutKind::Window && o.rooms.first() == room);
         let k = !(scores[i] < -5.0 && others) && !(service && scores[i] < -2.5) && !(talls[i] > 0.02 && clear_other);
+        if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLKEEP {:?} score {:.2} tall {:.2} others {others} clear_other {clear_other} keep {k}", room, scores[i], talls[i]); }
         if !k && std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {:?}: window left out (score {:.2}, the room has another)", room, scores[i]); }
         k
     }).collect();

@@ -1,285 +1,351 @@
-//! tables/dining_table.py, cocktail_table.py: Dining/Coffee/Side/Cocktail tables built from the shared table_utils node-group geometry
-use super::geomkit::*;
+//! Tables: dining, coffee, side and cocktail (bar-height) tables as one piece. A top whose outline is a superellipse -- rectangular,
+//! rounded-rectangular, oval or round -- with an edge bevel, on one of nine bases: plain legs (round or square), splayed legs, tapered
+//! legs joined by stretchers (infinigen's table legs), a sled frame at each end, a trestle, a pedestal, a waterfall slab, a solid drum,
+//! or a cocktail table's stand; coffee and side tables can carry a lower shelf. Built straight to its size ([width (y), depth (x),
+//! height]); every shape decision is made when the table is made, so its collision (`volumes`, from these parameters, no mesh built)
+//! and its build agree. Frame: centred on x / y, y the long side, z = 0 on the floor.
 use super::tableparts::*;
 use super::*;
 use crate::materials::*;
+use super::modern_sofa::box_uv;
+use crate::piece::Volume;
+use ig_kit::geomkit::limb;
 use serde_json::json;
 
 pub fn handles(c: &str) -> bool {
     matches!(c, "TableDiningFactory" | "CoffeeTableFactory" | "SideTableFactory" | "TableCocktailFactory")
 }
 
-// coffee-table finishes as in real living rooms: mostly wood, some marble and glass, rarely plastic; legs wood / metal (infinigen's
-// table drew plastic tops in random hues and ceramic or plastic legs equally often)
-const TOP: Weighted = &[("ceramic.Marble", 1.0), ("wood.TiledWood", 1.0), ("wood.Wood", 2.5), ("plastic.PlasticRough", 0.15), ("ceramic.GlassVolume", 0.8)];
-const LEG: Weighted = &[("ceramic.Ceramic", 0.2), ("ceramic.Glass", 0.3), ("plastic.Plastic", 0.2), ("metal.MetalBasic", 1.5), ("metal.BrushedBlackMetal", 1.0), ("wood.Wood", 2.0)];
+const TOP: Weighted = &[("ceramic.Marble", 1.0), ("wood.TiledWood", 0.6), ("wood.Wood", 3.0), ("ceramic.GlassVolume", 0.5), ("plastic.PlasticRough", 0.2)];
+const LEG: Weighted = &[("wood.Wood", 3.0), ("metal.BrushedBlackMetal", 1.2), ("metal.MetalBasic", 0.8), ("metal.BrushedMetal", 0.5)];
 
-#[derive(Clone, Copy, PartialEq)]
-enum Style {
-    Straight,
-    Stand,
-    Square,
-}
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Kind { Dining, Coffee, Side, Cocktail }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Base { Legs, Splayed, Tapered, Sled, Trestle, Pedestal, Slab, Drum, Stand }
 
 pub struct Table {
-    x: f64,
-    y: f64,
-    z: f64,
-    style: Style,
-    legs: usize,
-    leg_d: f64,
-    top_scale: f64,
-    bottom_scale: f64,
-    curve: Vec<(f64, f64)>,
+    kind: Kind,
+    /// half extents (x short, y long), height
+    hx: f64,
+    hy: f64,
+    h: f64,
+    /// superellipse exponent of the top outline: 2 = ellipse / circle, 4-7 rounded rectangle, 40 = sharp rectangle
+    sq: f64,
     top_t: f64,
-    top_n: usize,
-    top_w: f64,
-    top_aspect: f64,
-    fillet: f64,
-    vfillet: f64,
+    base: Base,
+    /// leg radius at the top (legs, splayed, tapered), a sled frame's profile half-width
+    leg_r: f64,
+    square_legs: bool,
+    /// tapered legs: their radius profile (fraction down the leg, fraction of the top radius), how far the feet spread (x the anchor),
+    /// stretcher height (fraction of the way down) and pattern, the leg's section (4: square, 32: round)
+    taper: Vec<(f64, f64)>,
+    spread: f64,
+    stretch_at: f64,
+    stretch_incr: usize,
     leg_ngon: usize,
-    stretch_pos: f64,
-    incr: usize,
+    /// a lower shelf's height (coffee / side tables on legs)
+    shelf_z: Option<f64>,
+    /// the slab panels' distance in from the ends (a dining table's: chairs at the ends tuck into flush panels)
+    slab_inset: f64,
     seed: u64,
-    cocktail: bool,
+}
+
+/// superellipse outline (n points, CCW)
+fn outline(hx: f64, hy: f64, e: f64, n: usize) -> Vec<[f64; 2]> {
+    (0..n).map(|i| {
+        let t = std::f64::consts::TAU * i as f64 / n as f64;
+        let (c, s) = (t.cos(), t.sin());
+        [hx * c.signum() * c.abs().powf(2.0 / e), hy * s.signum() * s.abs().powf(2.0 / e)]
+    }).collect()
+}
+
+/// a closed prism over `ring` from z0 to z1 (a small bevel: the top ring is inset by `bev`)
+fn prism(ring: &[[f64; 2]], z0: f64, z1: f64, bev: f64) -> Mesh {
+    let mut m = Mesh::new();
+    let n = ring.len();
+    let c = ring.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n as f64, a[1] + p[1] / n as f64]);
+    let inset = |p: [f64; 2], d: f64| { let (dx, dy) = (p[0] - c[0], p[1] - c[1]); let l = dx.hypot(dy).max(1e-9); [p[0] - dx / l * d, p[1] - dy / l * d] };
+    let zb = z1 - bev.min(0.4 * (z1 - z0));
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        m.add_quad([a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], zb], [a[0], a[1], zb]);
+        let (ai, bi) = (inset(a, bev), inset(b, bev));
+        m.add_quad([a[0], a[1], zb], [b[0], b[1], zb], [bi[0], bi[1], z1], [ai[0], ai[1], z1]);
+    }
+    let base = m.pos.len() as u32;
+    for p in ring.iter().rev() { m.pos.push([p[0], p[1], z0]); }
+    m.faces.push((0..n as u32).map(|k| base + k).collect());
+    let base = m.pos.len() as u32;
+    for p in ring { let q = inset(*p, bev); m.pos.push([q[0], q[1], z1]); }
+    m.faces.push((0..n as u32).map(|k| base + k).collect());
+    m
+}
+
+fn bx(lo: V3, hi: V3) -> Mesh { let mut m = Mesh::cuboid(lo, hi); box_uv(&mut m); m }
+
+/// the axis-aligned bounds of a capped cylinder of radius `r` from `a` to `b` (it reaches r * sqrt(1 - d_k^2) past its ends on axis k)
+fn cyl_box(a: V3, b: V3, r: f64) -> (V3, V3) {
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-12);
+    let e = [0, 1, 2].map(|k| r * (1.0 - (d[k] / l).powi(2)).max(0.0).sqrt());
+    ([0, 1, 2].map(|k| a[k].min(b[k]) - e[k]), [0, 1, 2].map(|k| a[k].max(b[k]) + e[k]))
 }
 
 impl Table {
-    /// bounding box of the table as built: the top (its rim sweeps a little beyond the nominal outline) and the legs (the tips of
-    /// straight legs end a little under z = 0, a wide stance reaches past the top)
-    fn overall(&self) -> (V3, V3) {
-        let top_h = self.z - self.top_t;
-        let mut top = table_top_exact(self.top_n, self.top_w, self.top_aspect, self.fillet, self.top_t, self.vfillet);
-        top.transform(&Mat4::translation([0.0, 0.0, top_h]));
-        let (mut lo, mut hi) = top.bounds();
-        let (_, meshes) = self.leg_meshes(top_h);
-        for m in &meshes {
-            let (a, b) = m.bounds();
-            for k in 0..3 {
-                lo[k] = lo[k].min(a[k]);
-                hi[k] = hi[k].max(b[k]);
-            }
-        }
-        (lo, hi)
-    }
-    fn set_outline(&mut self, nx: f64, ny: f64) {
-        if self.style == Style::Stand {
-            self.leg_d *= nx / self.x;
-        }
-        let round = self.top_n == 32;
-        self.x = nx;
-        self.y = ny;
-        self.top_w = if round { ny } else { 1.414 * nx };
-        self.top_aspect = if round { 1.0 } else { ny / nx };
-    }
-    /// built to the layout box [width (y), depth (x), height]: the table's overall extents are the box's, the legs follow the top
-    fn fit(&mut self, h: [f64; 3]) {
-        if self.cocktail {
-            return;
-        }
-        let round = self.top_n == 32;
-        let (nx, ny) = if round { let d = h[0].min(h[1]); (d, d) } else { (h[1], h[0]) };
-        self.z = h[2];
-        self.set_outline(nx, ny);
-        for _ in 0..4 {
-            let (lo, hi) = self.overall();
-            let (ex, ey, ez) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-            if (ex - nx).abs() < 5e-4 && (ey - ny).abs() < 5e-4 && (ez - h[2]).abs() < 5e-4 { break }
-            let (cx, cy) = (self.x, self.y);
-            self.set_outline(cx - (ex - nx), cy - (ey - ny));
-            self.z -= ez - h[2];
-        }
-    }
-    fn new(cls: &str, rng: &mut Rng) -> Table {
-        let mut t = Table::new_raw(cls, rng);
-        if let Some(h) = crate::api::size_hint() {
-            t.fit(h);
-        }
-        t
-    }
-    fn new_raw(cls: &str, rng: &mut Rng) -> Table {
-        // exact python draw order (dining_table.py / cocktail_table.py sample_parameters), fresh FixedSeed stream
-        let mut r = rng.clone();
-        let r = &mut r;
-        if cls == "TableCocktailFactory" {
-            let x = r.uniform(0.5, 0.8);
-            let z = r.uniform(1.0, 1.5);
-            let ngon = [4usize, 32][r.choice_idx(2)];
-            let round = ngon >= 32;
-            let stand = r.choice_idx(2) == 1;
-            let (style, legs, leg_d, curve, bottom_scale_default);
-            if stand {
-                style = Style::Stand;
-                legs = 1;
-                leg_d = r.uniform(0.7 * x, 0.9 * x);
-                curve = vec![(0.0, r.uniform(0.1, 0.2)), (0.5, r.uniform(0.1, 0.2)), (0.9, r.uniform(0.2, 0.3)), (1.0, 1.0)];
-                bottom_scale_default = 1.0;
-            } else {
-                style = Style::Straight;
-                leg_d = r.uniform(0.05, 0.07);
-                legs = if round { 3 + r.choice_idx(2) } else { ngon };
-                curve = vec![(0.0, 1.0), (0.4, r.uniform(0.85, 0.95)), (1.0, r.uniform(0.4, 0.6))];
-                bottom_scale_default = 1.0;
-            }
-            let _ = bottom_scale_default;
-            let top_t = r.uniform(0.02, 0.05);
-            let fillet = if round { 0.499 } else { r.uniform(0.0, 0.05) };
-            let vfillet = r.uniform(0.1, 0.3);
-            let leg_ngon = [4usize, 32][r.choice_idx(2)];
-            let bottom_scale = r.uniform(1.1, 1.3);
-            let stretch_pos = r.uniform(0.2, 0.6);
-            let incr = r.choice_idx(3);
-            return Table { x, y: x, z, style, legs, leg_d, top_scale: 0.7, bottom_scale, curve, top_t, top_n: if round { 32 } else { 4 }, top_w: if round { x } else { 1.414 * x }, top_aspect: 1.0, fillet, vfillet, leg_ngon, stretch_pos, incr, seed: r.randint(0, 1_000_000) as u64, cocktail: true };
-        }
-        // Coffee/Side tables compute their dimensions BEFORE the seeded block (from global state, unseeded in python): emulate with
-        // an independent stream, and do not consume them from the parameter stream. Dining draws them inside the block.
-        let dims = match cls {
-            "SideTableFactory" => {
-                let u = super::unseeded().unwrap_or_else(|| { let mut g = rng.clone(); vec![g.normal(1.0, 0.05), g.normal(1.0, 0.05)] });
-                let w = 0.55 * u[0];
-                [w, w, 0.95 * w * u[1]]
-            }
-            "CoffeeTableFactory" => {
-                let u = super::unseeded().unwrap_or_else(|| { let mut g = rng.clone(); vec![g.uniform(1.0, 1.5), g.uniform(0.6, 0.9), g.uniform(0.4, 0.5)] });
-                [u[0], u[1], u[2]]
-            }
-            _ => {
-                let w = r.uniform(0.91, 1.16);
-                let l = if r.f64() < 0.7 { r.uniform(1.4, 2.8) } else { w * r.normal(1.0, 0.1) };
-                [l, w, r.uniform(0.65, 0.85)]
-            }
+    pub fn new(cls: &str, r: &mut Rng) -> Table {
+        let kind = match cls { "TableDiningFactory" => Kind::Dining, "CoffeeTableFactory" => Kind::Coffee, "TableCocktailFactory" => Kind::Cocktail, _ => Kind::Side };
+        let (mut hx, mut hy, mut h) = match kind {
+            Kind::Dining => { let w = r.uniform(0.85, 1.05); let l = if r.f64() < 0.7 { r.uniform(1.4, 2.4) } else { w }; (w / 2.0, l / 2.0, r.uniform(0.72, 0.77)) }
+            Kind::Coffee => { let w = r.uniform(0.55, 0.8); let l = if r.f64() < 0.75 { r.uniform(1.0, 1.4) } else { w }; (w / 2.0, l / 2.0, r.uniform(0.38, 0.47)) }
+            Kind::Side => { let w = r.uniform(0.4, 0.6); (w / 2.0, w / 2.0 * r.uniform(1.0, 1.25), r.uniform(0.5, 0.65)) }
+            Kind::Cocktail => { let w = r.uniform(0.55, 0.8); (w / 2.0, w / 2.0, r.uniform(1.0, 1.12)) }
         };
-        let [x, y, z] = dims;
-        let style = [Style::Straight, Style::Stand, Style::Square][r.choice_p(&[0.5, 0.1, 0.4])];
-        let (legs, leg_d, top_scale, bottom_scale, curve);
-        match style {
-            Style::Stand => {
-                legs = 2;
-                leg_d = r.uniform(0.22 * x, 0.28 * x);
-                curve = vec![(0.0, r.uniform(0.1, 0.2)), (0.5, r.uniform(0.1, 0.2)), (0.9, r.uniform(0.2, 0.3)), (1.0, 1.0)];
-                top_scale = r.uniform(0.6, 0.7);
-                bottom_scale = 1.0;
-            }
-            Style::Square => {
-                legs = 2;
-                leg_d = r.uniform(0.07, 0.10);
-                curve = vec![];
-                top_scale = 0.8;
-                bottom_scale = 1.0;
-            }
-            Style::Straight => {
-                leg_d = r.uniform(0.05, 0.07);
-                legs = 4;
-                curve = vec![(0.0, 1.0), (0.4, r.uniform(0.85, 0.95)), (1.0, r.uniform(0.4, 0.6))];
-                top_scale = 0.8;
-                bottom_scale = r.uniform(1.0, 1.2);
-            }
-        }
-        let top_t = r.uniform(0.03, 0.06);
-        let fillet = r.uniform(0.0, 0.02);
-        let vfillet = r.uniform(0.1, 0.3);
-        let stretch_pos = r.uniform(0.2, 0.6);
-        let incr = r.choice_idx(3);
-        let seed = r.randint(0, 1_000_000) as u64;
-        // a dining table the layout made round (ig_kit round hint): a circular top as wide as the table is deep, the same draws
-        if cls == "TableDiningFactory" && ig_kit::api::round_hint() {
-            return Table { x: y, y, z, style, legs, leg_d, top_scale, bottom_scale, curve, top_t, top_n: 32, top_w: y, top_aspect: 1.0, fillet: 0.499, vfillet, leg_ngon: 4, stretch_pos, incr, seed, cocktail: false };
-        }
-        Table { x, y, z, style, legs, leg_d, top_scale, bottom_scale, curve, top_t, top_n: 4, top_w: 1.414 * x, top_aspect: y / x, fillet, vfillet, leg_ngon: 4, stretch_pos, incr, seed, cocktail: false }
+        // (the size asked: the layout box as given -- a nightstand's box can be deeper than wide)
+        if let Some(sz) = crate::api::size_hint() { hy = sz[0] / 2.0; hx = sz[1] / 2.0; h = sz[2]; } else if hx > hy { std::mem::swap(&mut hx, &mut hy); }
+        let squareish = hy.max(hx) / hy.min(hx) < 1.15;
+        // outline: round / oval tops only where the box allows (round in a square box, oval in a long one), else (rounded) rectangles;
+        // the layout made it round (RoundTable: chairs set round it): a circle / oval
+        let mut sq = match r.choice_p(&[0.45, 0.3, 0.25]) { 0 => 40.0, 1 => r.uniform(4.0, 7.0), _ => if squareish { 2.0 } else { 2.4 } };
+        if ig_kit::api::round_hint() { sq = 2.0; }
+        let w: &[f64] = match kind {
+            //               Legs  Splay Taper Sled  Trest Pedes Slab  Drum  Stand
+            Kind::Dining => &[0.25, 0.1, 0.15, 0.1, 0.15, 0.15, 0.1, 0.0, 0.0],
+            Kind::Coffee => &[0.25, 0.1, 0.1, 0.1, 0.0, 0.1, 0.15, 0.2, 0.0],
+            Kind::Side => &[0.25, 0.1, 0.1, 0.05, 0.0, 0.2, 0.1, 0.2, 0.0],
+            Kind::Cocktail => &[0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
+        };
+        let mut base = [Base::Legs, Base::Splayed, Base::Tapered, Base::Sled, Base::Trestle, Base::Pedestal, Base::Slab, Base::Drum, Base::Stand][r.choice_p(w)];
+        // (a square dining table seats its chairs at the corners, diagonally: corner legs went through their seats -- a pedestal there)
+        if kind == Kind::Dining && squareish && matches!(base, Base::Legs | Base::Splayed | Base::Tapered | Base::Slab | Base::Sled) { base = Base::Pedestal; }
+        // a pedestal carries a round / square-ish top or a short oval; a trestle a long one (its frames stand across y)
+        if base == Base::Pedestal && hy.max(hx) / hy.min(hx) > 1.6 { base = Base::Trestle; }
+        if base == Base::Trestle && hy / hx < 1.3 { base = Base::Legs; }
+        let leg_r = r.uniform(0.018, 0.032) * if kind == Kind::Dining { 1.2 } else { 1.0 };
+        let square_legs = r.f64() < 0.35;
+        let top_t = if base == Base::Slab { r.uniform(0.035, 0.05) } else { r.uniform(0.022, 0.045) };
+        let taper = vec![(0.0, 1.0), (0.4, r.uniform(0.85, 0.95)), (1.0, r.uniform(0.4, 0.6))];
+        let spread = r.uniform(1.0, 1.2);
+        let stretch_at = r.uniform(0.2, 0.6);
+        let stretch_incr = r.choice_idx(3);
+        let leg_ngon = [4usize, 32][r.choice_idx(2)];
+        let shelf_z = if matches!(kind, Kind::Coffee | Kind::Side) && matches!(base, Base::Legs | Base::Splayed) && r.f64() < 0.4 { Some(h * r.uniform(0.18, 0.3)) } else { None };
+        let slab_inset = if kind == Kind::Dining { (hy * 0.3).min(0.28) } else { 0.0 };
+        Table { kind, hx, hy, h, sq, top_t, base, leg_r, square_legs, taper, spread, stretch_at, stretch_incr, leg_ngon, shelf_z, slab_inset, seed: r.randint(0, 1_000_000) as u64 }
     }
 
-    /// leg anchors and the leg / stretcher meshes for a top at height `top_h`
-    fn leg_meshes(&self, top_h: f64) -> (Vec<V3>, Vec<Mesh>) {
-        let anch = anchor_points(self.legs, self.top_scale * self.top_w, self.top_aspect);
-        let meshes = match self.style {
-            Style::Straight => {
-                let leg = leg_straight(&self.curve, 1.0, self.leg_d, 32, self.leg_ngon, 0.1);
-                let st = strecher(self.leg_d * 0.5);
-                legs_and_stretchers(&anch, top_h, self.bottom_scale, &leg, Some((&st, self.incr, self.stretch_pos)))
-            }
-            Style::Stand => {
-                let leg = leg_single_stand(&self.curve, 1.0, self.leg_d, 64);
-                legs_and_stretchers(&anch, top_h, self.bottom_scale, &leg, None)
-            }
-            Style::Square => {
-                let w = 0.707 * self.top_scale * self.top_w * self.top_aspect;
-                let leg = leg_square(w, 1.0, self.incr > 0, self.leg_d);
-                legs_and_stretchers(&anch, top_h, self.bottom_scale, &leg, None)
-            }
-        };
-        (anch, meshes)
+    fn bevel(&self) -> f64 { self.top_t * 0.3 }
+    fn ztop(&self) -> f64 { self.h - self.top_t }
+    fn k(&self) -> f64 { if self.sq >= 30.0 { 0.88 } else if self.sq >= 4.0 { 0.8 } else { 0.68 } }
+
+    /// leg radius at the top, kept inside the top's edge
+    fn r0(&self) -> f64 { self.leg_r.min(0.12 * self.hx.min(self.hy)) }
+
+    /// where the legs stand under the top (a superellipse shrinks the corners: the legs move in with it)
+    fn leg_spots(&self) -> [[f64; 2]; 4] {
+        let (k, r0) = (self.k(), self.r0());
+        let (cx, cy) = ((self.hx * k).min(self.hx - r0 * 1.15), (self.hy * k).min(self.hy - r0 * 1.15));
+        [[-cx, -cy], [cx, -cy], [cx, cy], [-cx, cy]]
+    }
+
+    /// the splayed legs' foot offset (the feet stay inside the top's outline)
+    fn splay(&self) -> f64 { (0.06 * (self.h / 0.75)).min(self.hx.min(self.hy) * (1.0 - self.k()) - self.r0() * 0.6).max(0.0) }
+
+    /// tapered legs: their radius at the top, the feet's spread kept inside the top's outline
+    fn taper_r(&self) -> f64 { self.r0() * 1.4 }
+    fn spread(&self) -> f64 {
+        let s = self.leg_spots()[2];
+        let r = self.taper_r();
+        self.spread.min((self.hx - r) / s[0].abs().max(1e-6)).min((self.hy - r) / s[1].abs().max(1e-6)).max(1.0)
+    }
+
+    /// pedestal / stand: column radius, foot half extents
+    fn pedestal(&self) -> (f64, f64, f64) {
+        let (hx, hy) = (self.hx, self.hy);
+        let rc = (hx.min(hy) * 0.13).clamp(0.05, 0.1);
+        let fr = hx.min(hy) * 0.62;
+        (rc, fr * (hx / hy).clamp(0.7, 1.0), fr * (hy / hx).clamp(0.7, 1.4))
+    }
+
+    /// a sled frame's posts: their x, the frames' y, the profile half-width
+    fn sled(&self) -> (f64, f64, f64) {
+        let p = self.r0();
+        (self.hx - 0.04 - p, self.hy - 0.06 - p, p)
+    }
+
+    /// the flat of the top, inside its bevel (on a round / oval top: the inscribed rectangle)
+    fn support(&self) -> (V3, V3) {
+        let c = std::f64::consts::FRAC_1_SQRT_2.powf(2.0 / self.sq);
+        let (ix, iy) = (self.hx * c - self.bevel(), self.hy * c - self.bevel());
+        ([-ix, -iy, self.h - 0.001], [ix, iy, self.h])
     }
 
     fn build(&self) -> Asset {
         let mut r = Rng::seeded(self.seed);
-        let topm = spec_material("table_top", json!({"cls": weighted(&mut r, TOP), "kwargs": {}, "seed": self.seed}), [0.6, 0.45, 0.3]);
-        let legm = spec_material("table_leg", json!({"cls": weighted(&mut r, LEG), "kwargs": {}, "seed": self.seed + 1}), [0.3, 0.3, 0.3]);
+        let topm = spec_material("table_top", json!({"cls": weighted(&mut r, TOP), "kwargs": {}, "seed": self.seed}), [0.55, 0.40, 0.26]);
+        // a slab / drum base is the top's own material (a waterfall table, a solid block)
+        let legm = if matches!(self.base, Base::Slab | Base::Drum) { topm.clone() } else {
+            spec_material("table_leg", json!({"cls": weighted(&mut r, LEG), "kwargs": {}, "seed": self.seed + 1}), [0.3, 0.25, 0.2])
+        };
+        let (hx, hy, h) = (self.hx, self.hy, self.h);
+        let ztop = self.ztop();
         let mut a = Asset::default();
-        let top_h = self.z - self.top_t;
-        let mut top = table_top_exact(self.top_n, self.top_w, self.top_aspect, self.fillet, self.top_t, self.vfillet);
-        top.transform(&Mat4::translation([0.0, 0.0, top_h]));
-        let (anch, meshes) = self.leg_meshes(top_h);
-        // Join Geometry output order: the last-linked input first -> [stretchers, legs] then the top
-        let nl = anch.len();
-        let (legs, st) = meshes.split_at(nl);
-        for m in st.iter().chain(legs.iter()) {
-            let b = m.bounds();
-            a.mesh(m.clone(), &legm, Some(b));
-        }
+        let mut top = prism(&outline(hx, hy, self.sq, 96), ztop, h, self.bevel());
+        box_uv(&mut top);
         let tb = top.bounds();
         a.mesh(top, &topm, Some(tb));
-        a.supports.push(([tb.0[0], tb.0[1], tb.1[2] - 0.001], tb.1));
+        let mut legs: Vec<Mesh> = vec![];
+        let r0 = self.r0();
+        let spots = self.leg_spots();
+        match self.base {
+            Base::Legs | Base::Splayed => {
+                let splay = if self.base == Base::Splayed { self.splay() } else { 0.0 };
+                for c in spots {
+                    let (sx, sy) = (c[0].signum() * splay, c[1].signum() * splay);
+                    legs.push(if self.square_legs && splay == 0.0 { bx([c[0] - r0, c[1] - r0, 0.0], [c[0] + r0, c[1] + r0, ztop]) }
+                        else { limb([c[0], c[1], ztop], [c[0] + sx, c[1] + sy, 0.0], r0, r0 * 0.6, true) });
+                }
+                // (no apron: dining chairs tuck under the top, an apron at chair-arm height cut into them)
+                if let Some(zs) = self.shelf_z {
+                    let (cx, cy) = (spots[2][0], spots[2][1]);
+                    let mut s = prism(&outline(cx + r0, cy + r0, self.sq.max(4.0), 64), zs, zs + 0.018, 0.004);
+                    box_uv(&mut s);
+                    let sb = s.bounds();
+                    a.mesh(s, &topm, Some(sb));
+                }
+            }
+            Base::Tapered => {
+                // infinigen's table legs: a radius profile along each leg, the feet spread out, stretchers between them
+                let anch: Vec<V3> = spots.iter().map(|c| [c[0], c[1], 0.0]).collect();
+                let d = 2.0 * self.taper_r();
+                let leg = leg_straight(&self.taper, 1.0, d, 32, self.leg_ngon, 0.1);
+                let st = strecher(d * 0.5);
+                legs.extend(legs_and_stretchers(&anch, ztop, self.spread(), &leg, Some((&st, self.stretch_incr, self.stretch_at))));
+            }
+            Base::Sled => {
+                // a frame at each end: two posts on a foot rail, under a top rail
+                let (fx, fy, p) = self.sled();
+                for sy in [-1.0f64, 1.0] {
+                    let y = sy * fy;
+                    for sx in [-1.0f64, 1.0] { legs.push(bx([sx * fx - p, y - p, 0.0], [sx * fx + p, y + p, ztop])); }
+                    legs.push(bx([-fx - p, y - p, 0.0], [fx + p, y + p, 2.0 * p]));
+                    legs.push(bx([-fx - p, y - p, ztop - 2.0 * p], [fx + p, y + p, ztop]));
+                }
+            }
+            Base::Trestle => {
+                // two end frames (a post on a foot, under a cleat) and a stretcher between them
+                for sy in [-1.0f64, 1.0] {
+                    let y = sy * hy * 0.72;
+                    legs.push(bx([-hx * 0.7, y - 0.04, ztop - 0.05], [hx * 0.7, y + 0.04, ztop]));
+                    legs.push(bx([-0.04, y - 0.035, 0.06], [0.04, y + 0.035, ztop - 0.05]));
+                    legs.push(bx([-hx * 0.75, y - 0.045, 0.0], [hx * 0.75, y + 0.045, 0.06]));
+                }
+                legs.push(bx([-0.025, -hy * 0.72, 0.28 * h], [0.025, hy * 0.72, 0.28 * h + 0.07]));
+            }
+            Base::Pedestal | Base::Stand => {
+                let (rc, fx, fy) = self.pedestal();
+                legs.push(limb([0.0, 0.0, ztop], [0.0, 0.0, 0.05], rc, rc * 1.15, true));
+                let mut foot = prism(&outline(fx, fy, 2.0, 48), 0.0, 0.05, 0.02);
+                box_uv(&mut foot);
+                legs.push(foot);
+            }
+            Base::Slab => {
+                // two solid side panels flush with the top's ends (a waterfall table); a dining table's set in from the ends
+                let (t, i) = (self.top_t.max(0.035), self.slab_inset);
+                let px = if i > 0.0 { hx - 0.06 } else { hx };
+                legs.push(bx([-px, -hy + i, 0.0], [px, -hy + i + t, ztop]));
+                legs.push(bx([-px, hy - i - t, 0.0], [px, hy - i, ztop]));
+            }
+            Base::Drum => {
+                let mut d = prism(&outline(hx * 0.9, hy * 0.9, self.sq, 64), 0.0, ztop, 0.0);
+                box_uv(&mut d);
+                legs.push(d);
+            }
+        }
+        for m in legs { let b = m.bounds(); a.mesh(m, &legm, Some(b)); }
+        a.supports.push(self.support());
         a
+    }
+
+    /// collision from the parameters: the top, the base's parts, the support
+    fn vols(&self) -> Vec<Volume> {
+        let (hx, hy, h) = (self.hx, self.hy, self.h);
+        let ztop = self.ztop();
+        let r0 = self.r0();
+        let spots = self.leg_spots();
+        let mut v = vec![Volume::hard([-hx, -hy, ztop], [hx, hy, h])];
+        let (s0, s1) = self.support();
+        v.push(Volume::support(s0, s1));
+        match self.base {
+            Base::Legs | Base::Splayed => {
+                let splay = if self.base == Base::Splayed { self.splay() } else { 0.0 };
+                for c in spots {
+                    let (lo, hi) = if self.square_legs && splay == 0.0 { ([c[0] - r0, c[1] - r0, 0.0], [c[0] + r0, c[1] + r0, ztop]) }
+                        else { cyl_box([c[0], c[1], ztop], [c[0] + c[0].signum() * splay, c[1] + c[1].signum() * splay, 0.0], r0) };
+                    v.push(Volume::hard(lo, hi));
+                }
+                if let Some(zs) = self.shelf_z {
+                    let (cx, cy) = (spots[2][0] + r0, spots[2][1] + r0);
+                    v.push(Volume::hard([-cx, -cy, zs], [cx, cy, zs + 0.018]));
+                }
+            }
+            Base::Tapered => {
+                let rr = self.taper_r();
+                let s = self.spread();
+                for c in spots {
+                    let (lo, hi) = cyl_box([c[0], c[1], ztop], [c[0] * s, c[1] * s, 0.0], rr);
+                    v.push(Volume::hard(lo, hi));
+                }
+                // stretchers: between the legs' points at their height
+                let f = self.stretch_at;
+                let g = 1.0 + (s - 1.0) * f;
+                let (sx, sy) = (spots[2][0] * g, spots[2][1] * g);
+                let zs = ztop * (1.0 - f);
+                let rs = rr * 0.5;
+                v.push(Volume::hard([-sx - rs, -sy - rs, zs - rs], [sx + rs, sy + rs, zs + rs]));
+            }
+            Base::Sled => {
+                let (fx, fy, p) = self.sled();
+                for sy in [-1.0f64, 1.0] { v.push(Volume::hard([-fx - p, sy * fy - p, 0.0], [fx + p, sy * fy + p, ztop])); }
+            }
+            Base::Trestle => {
+                for sy in [-1.0f64, 1.0] {
+                    let y = sy * hy * 0.72;
+                    v.push(Volume::hard([-hx * 0.75, y - 0.045, 0.0], [hx * 0.75, y + 0.045, ztop]));
+                }
+                v.push(Volume::hard([-0.025, -hy * 0.72, 0.28 * h], [0.025, hy * 0.72, 0.28 * h + 0.07]));
+            }
+            Base::Pedestal | Base::Stand => {
+                let (rc, fx, fy) = self.pedestal();
+                let rr = rc * 1.15;
+                v.push(Volume::hard([-rr, -rr, 0.05], [rr, rr, ztop]));
+                v.push(Volume::hard([-fx, -fy, 0.0], [fx, fy, 0.05]));
+            }
+            Base::Slab => {
+                let (t, i) = (self.top_t.max(0.035), self.slab_inset);
+                let px = if i > 0.0 { hx - 0.06 } else { hx };
+                v.push(Volume::hard([-px, -hy + i, 0.0], [px, -hy + i + t, ztop]));
+                v.push(Volume::hard([-px, hy - i - t, 0.0], [px, hy - i, ztop]));
+            }
+            Base::Drum => v.push(Volume::hard([-hx * 0.9, -hy * 0.9, 0.0], [hx * 0.9, hy * 0.9, ztop])),
+        }
+        v
     }
 }
 
 impl Factory for Table {
-    fn natural_size(&self, _inst_seed: u64) -> Option<[f64; 3]> {
-        if self.cocktail {
-            return None;
-        }
-        let (lo, hi) = self.overall();
-        let (ex, ey) = (hi[0] - lo[0], hi[1] - lo[1]);
-        Some([ex.max(ey), ex.min(ey), hi[2] - lo[2]])
-    }
-    fn placeholder(&self, _i: u64) -> Option<Asset> {
-        if !self.cocktail {
-            return None;
-        }
-        // TableCocktailFactory.create_placeholder: the 512-sample top profile resampled to 10 points, filled and extruded over the full height.
-        let prof = ngon_profile_curve(self.top_n, self.top_w, self.top_aspect, self.fillet).resample(512).resample(10);
-        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for p in &prof.pts {
-            for k in 0..2 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
-        }
-        let mut a = Asset::default();
-        let m = spec_material("table_top", json!({"cls": "ceramic.Marble", "kwargs": {}, "seed": 0}), [0.6, 0.45, 0.3]);
-        a.cuboid([lo[0], lo[1], 0.0], [hi[0], hi[1], self.z], &m);
-        Some(a)
-    }
-    fn asset(&self, _i: u64) -> Asset {
-        self.build()
-    }
+    fn natural_size(&self, _i: u64) -> Option<[f64; 3]> { Some([2.0 * self.hy, 2.0 * self.hx, self.h]) }
+    fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> { Some(([-self.hx, -self.hy, 0.0], [self.hx, self.hy, self.h])) }
+    fn asset(&self, _i: u64) -> Asset { self.build() }
+    fn volumes(&self, _i: u64) -> Option<Vec<Volume>> { Some(self.vols()) }
 }
 
 pub fn make(c: &str, rng: &mut Rng) -> Option<Box<dyn Factory>> {
-    // 55 % of dining / coffee / side tables are ModernTable (round / oval / rounded tops, trestle / pedestal / slab / drum bases,
-    // lower shelves), the rest infinigen's; the choice is its own stream so infinigen's draws are unchanged. NO_MODERN_TABLE=1: off
-    // (a round table in a box that is not square: infinigen's round table builds a circle to the short side and missed the box by up
-    // to 10 cm; ModernTable builds the oval that fills it)
-    let oval = c == "TableDiningFactory" && ig_kit::api::round_hint() && crate::api::size_hint().map_or(false, |h| (h[0] - h[1]).abs() > 0.01);
     // 35 % of side tables are bedside cabinets (drawers / shelf / door), their own stream (NO_NIGHTSTAND=1: off)
     if c == "SideTableFactory" && std::env::var_os("NO_NIGHTSTAND").is_none() {
         let mut pick = Rng::seeded(crate::int_hash(&["nightstand", &rng.clone().next_u64().to_string()]));
         if pick.f64() < 0.35 { return Some(Box::new(super::nightstand::Nightstand::new(&mut rng.clone()))); }
-    }
-    if c != "TableCocktailFactory" && (oval || std::env::var_os("NO_MODERN_TABLE").is_none()) {
-        let mut pick = Rng::seeded(crate::int_hash(&["modern_table", &rng.clone().next_u64().to_string()]));
-        if oval || pick.f64() < 0.55 { return Some(Box::new(super::modern_table::ModernTable::new(c, &mut rng.clone()))); }
     }
     Some(Box::new(Table::new(c, rng)))
 }

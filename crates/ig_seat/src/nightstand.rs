@@ -24,6 +24,8 @@ pub struct Nightstand {
     fronts: Fronts,
     base: Base,
     pull: Pull,
+    /// the door (drawer over a door) hinges on the +y side (else -y)
+    hinge_pos: bool,
     seed: u64,
 }
 
@@ -36,7 +38,52 @@ impl Nightstand {
         let fronts = [Fronts::DrawerShelf, Fronts::Drawers(2), Fronts::Drawers(3), Fronts::DrawerDoor][r.choice_p(&[0.35, 0.3, 0.15, 0.2])];
         let base = [Base::Legs, Base::Plinth, Base::Feet][r.choice_p(&[0.45, 0.3, 0.25])];
         let pull = [Pull::Knob, Pull::Bar, Pull::Groove][r.choice_p(&[0.4, 0.35, 0.25])];
-        Nightstand { hx, hy, h, fronts, base, pull, seed: r.randint(0, 1_000_000) as u64 }
+        let seed = r.randint(0, 1_000_000) as u64;
+        Nightstand { hx, hy, h, fronts, base, pull, hinge_pos: crate::int_hash(&["nightstand_hinge", &seed.to_string()]) % 2 == 0, seed }
+    }
+
+    /// the front's x (the pulls stand proud of it up to hx), the carcass's back and front x, the base height, the carcass half width
+    fn frame(&self) -> (f64, f64, f64, f64, f64) {
+        let proud = match self.pull { Pull::Knob => 0.025, Pull::Bar => 0.03, Pull::Groove => 0.0 };
+        let xf = self.hx - proud;
+        let bh = match self.base { Base::Legs => (self.h * 0.3).clamp(0.12, 0.2), Base::Plinth => 0.06, Base::Feet => 0.035 };
+        (xf, -self.hx + 0.01, xf - 0.018, bh, self.hy - 0.012)
+    }
+
+    /// the fronts' z ranges (bottom to top) and whether each is a drawer (else the door)
+    fn fronts_z(&self) -> Vec<(f64, f64, bool)> {
+        let (_, _, _, bh, _) = self.frame();
+        let bt = 0.016;
+        let (fz0, fz1) = (bh + bt, self.h - 0.025);
+        let span = fz1 - fz0;
+        match self.fronts {
+            Fronts::DrawerShelf => { let zd = fz1 - (span * 0.38).clamp(0.11, 0.17); vec![(zd, fz1, true)] }
+            Fronts::Drawers(n) => (0..n).map(|i| (fz0 + span * i as f64 / n as f64, fz0 + span * (i + 1) as f64 / n as f64, true)).collect(),
+            Fronts::DrawerDoor => { let zd = fz1 - (span * 0.3).clamp(0.1, 0.15); vec![(fz0, zd, false), (zd, fz1, true)] }
+        }
+    }
+
+    /// collision: the body (top, carcass, base, pulls) and an opening per drawer (pulled out 3/4 of its depth) and door (100 degrees)
+    fn vols(&self) -> Vec<crate::piece::Volume> {
+        use crate::piece::{Leaf, Volume};
+        let (hx, hy, h) = (self.hx, self.hy, self.h);
+        let (xf, x0, x1, _, cy) = self.frame();
+        // (the tapered legs' tips end 1 mm under the floor)
+        let mut v = vec![Volume::hard([-hx, -hy, -0.002], [hx, hy, h])];
+        v.push(Volume::support([-hx, -hy, h - 0.001], [xf.max(hx - 0.01), hy, h]));
+        let (fy0, fy1) = (-cy + 0.016, cy - 0.016);
+        for (z0, z1, drawer) in self.fronts_z() {
+            if drawer {
+                let panel = ([x0 + 0.01, fy0, z0], [hx, fy1, z1]);
+                v.push(Volume::opening(Leaf::Drawer { panel, dir: [1.0, 0.0, 0.0], travel: 0.75 * (x1 - x0) }));
+            } else {
+                // a door on a vertical hinge at its front corner, swinging out
+                let (hy_, ax) = if self.hinge_pos { (fy1, [0.0, 0.0, -1.0]) } else { (fy0, [0.0, 0.0, 1.0]) };
+                let panel = ([x1, fy0, z0], [hx, fy1, z1]);
+                v.push(Volume::opening(Leaf::Hinged { panel, hinge: [xf, hy_, z0], axis: ax, max_angle: 100f64.to_radians() }));
+            }
+        }
+        v
     }
 
     fn build(&self) -> Asset {
@@ -123,4 +170,5 @@ impl Factory for Nightstand {
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> { Some([2.0 * self.hy, 2.0 * self.hx, self.h]) }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> { Some(([-self.hx, -self.hy, 0.0], [self.hx, self.hy, self.h])) }
     fn asset(&self, _i: u64) -> Asset { self.build() }
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> { Some(self.vols()) }
 }

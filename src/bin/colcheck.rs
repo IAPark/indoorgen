@@ -10,6 +10,7 @@ fn main() {
     indoorgen::assets::install_pieces();
     let mut seeds = 6u64;
     let mut only: Vec<String> = vec![];
+    let detail = std::env::args().any(|a| a == "--detail");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < args.len() {
@@ -38,6 +39,7 @@ fn main() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let vols = p.collision();
                     let mesh = p.mesh();
+                    if detail { sides(c, s, &vols, &mesh); }
                     check(&vols, &mesh)
                 }));
                 match r {
@@ -90,4 +92,20 @@ fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String
     let gaps = [mlo[0] - clo[0], mlo[1] - clo[1], mlo[2] - clo[2], chi[0] - mhi[0], chi[1] - mhi[1], chi[2] - mhi[2]];
     let loose: Vec<String> = (0..6).filter(|&k| gaps[k] > LOOSE).map(|k| format!("{} {:.0}cm", names[k], gaps[k] * 100.0)).collect();
     (ro, so, bad, loose.join(" "))
+}
+
+/// --detail: per rigid mesh part, how far it pokes out of the rigid volumes on each side (cm, + = outside), and the collision's
+/// rigid bounds against the rigid mesh's
+fn sides(class: &str, seed: u64, vols: &[Volume], mesh: &ig_kit::api::Asset) {
+    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid()).map(Prepared::new).collect();
+    let (clo, chi) = rigid_bounds(vols);
+    let (mut mlo, mut mhi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for (i, part) in mesh.parts.iter().enumerate() {
+        if mesh.is_soft(i) { continue }
+        let worst = part.mesh.pos.iter().map(|p| (rigid.iter().map(|v| v.outside(*p)).fold(f64::INFINITY, f64::min), *p)).fold((0.0f64, [0.0; 3]), |a, b| if b.0 > a.0 { b } else { a });
+        let (lo, hi) = part.mesh.bounds();
+        for k in 0..3 { mlo[k] = mlo[k].min(lo[k]); mhi[k] = mhi[k].max(hi[k]); }
+        if worst.0 > 0.001 { println!("  {class} seed {seed} part {i}: {:.1} cm out at ({:.3}, {:.3}, {:.3}); part box {:.3?}..{:.3?}", worst.0 * 100.0, worst.1[0], worst.1[1], worst.1[2], lo, hi); }
+    }
+    println!("  {class} seed {seed} gaps cm (collision past mesh) -x {:.1} -y {:.1} -z {:.1} +x {:.1} +y {:.1} +z {:.1}", (mlo[0] - clo[0]) * 100.0, (mlo[1] - clo[1]) * 100.0, (mlo[2] - clo[2]) * 100.0, (chi[0] - mhi[0]) * 100.0, (chi[1] - mhi[1]) * 100.0, (chi[2] - mhi[2]) * 100.0);
 }

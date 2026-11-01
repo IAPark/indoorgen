@@ -287,6 +287,10 @@ pub fn layout_geom_of(boxes: &[(V3, V3)], supports: &[(V3, V3)], max_boxes: usiz
 pub trait Factory {
     /// create_asset (final, detailed asset)
     fn asset(&self, inst_seed: u64) -> Asset;
+    /// the piece's collision from this factory's parameters (ig_kit::piece: no mesh built); None: not ported yet
+    fn volumes(&self, _inst_seed: u64) -> Option<Vec<crate::piece::Volume>> {
+        None
+    }
     /// create_placeholder override, if the class defines one
     fn placeholder(&self, _inst_seed: u64) -> Option<Asset> {
         None
