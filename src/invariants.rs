@@ -5,7 +5,8 @@
 //!   * appliance_flush: a range / dishwasher / fridge touching a counter run whose front is off the run's by more than 5 cm (range and
 //!     dishwasher: top off the counter top by more than 4 cm),
 //!   * door_paths: a room whose doors are not all joined by walkable floor (layout2d::walk_status),
-//!   * size: a piece built to a layout size whose model is off it by more than 2 cm on an axis.
+//!   * size: a piece built to a layout size whose model is off it by more than 2 cm on an axis,
+//!   * unfurnished: a bedroom without a bed, a living room without a sofa or an armchair, a bathroom without a toilet.
 //! One `INV <kind> <key> <class> [room]: <detail>` line per violation and an `INVARIANTS n` summary line; the counts are returned.
 use crate::mesh::Scene;
 use std::collections::BTreeMap;
@@ -127,6 +128,17 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let (connected, bad) = crate::furn::layout2d::walk_status(inp.state, room);
         if !connected { add("door_paths", format!("{room} room [{room}]: doors not joined by walkable floor")); }
         for b in bad { add("door_paths", format!("{b} {} [{room}]: out of reach", inp.state.objs.get(&b).and_then(|o| o.generator.as_ref()).map_or("?".to_string(), |g| g.class.clone()))); }
+    }
+    // 6. unfurnished rooms (a 3 x 3 m bedroom whose bed found no wall stayed empty, and no check said so)
+    for (rk, ro) in &inp.state.objs {
+        if !crate::furn::layout2d::is_room(ro) { continue }
+        let rt = crate::rooms::state::room_type(rk);
+        let need: &[&str] = match rt { "bedroom" => &["BedFactory"], "living-room" => &["SofaFactory", "ArmChairFactory"], "bathroom" => &["ToiletFactory"], _ => continue };
+        // (by position: a piece the group passes added carries the relation of whatever floor piece it was copied from)
+        let Some(pg) = ro.polygon.as_ref() else { continue };
+        let has = inp.state.objs.iter().any(|(_, o)| o.generator.as_ref().map_or(false, |g| need.contains(&g.class.as_str())) && {
+            let (l, h) = (o.geom.lo, o.geom.hi); let c = o.pose.apply([(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0, 0.0]); crate::shp::contains_pt(pg, [c[0], c[1]]) });
+        if !has { add("unfurnished", format!("{rk} room [{rk}]: no {}", need.join(" / "))); }
     }
     // 5. built to size
     for (k, o) in &inp.state.objs {

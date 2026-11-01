@@ -219,7 +219,8 @@ pub fn is_room(o: &ObjState) -> bool {
 
 /// object-object penetration depth (rooms excluded: see `outside_depth`). The deepest overlap of any one pair of convex parts: for a
 /// piece built of boards (cabinets, shelves) that is at most a board's thickness however far the piece stands into the other (a cabinet
-/// 0.35 m into a door keep-out read 0.02); groups::door_keepouts measures world boxes for that reason
+/// 0.35 m into a door keep-out read 0.02); groups::door_keepouts measures world boxes for that reason. The callers that ask "any overlap"
+/// (> 1e-4: the solver's hit lists, try_place, the dof moves) are exact; only a threshold above a board's thickness would miss
 pub fn depth(state: &State, a: &str, b: &str) -> f64 {
     let (pa, pb) = (prisms(state, a), prisms(state, b));
     let mut best = 0.0f64;
@@ -786,7 +787,8 @@ pub fn repair(state: &mut State) -> Vec<String> {
         // and a bed (never removed) slid along its headboard wall, with what is related to it (nightstands, what stands on them), to the
         // nearest spot that joins the room up, inside it and clear of everything else (a bed across a narrow room cut its doors apart)
         if cur != (0, 0) {
-            let beds: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "BedFactory" && room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            // (and a sofa or a TV stand the same way: a living room's only sofa is not removed for a path)
+            let beds: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "BedFactory" | "SofaFactory" | "TVStandFactory") && room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
             'beds: for b in beds {
                 let mut tree = vec![b.clone()];
                 loop {
@@ -799,9 +801,9 @@ pub fn repair(state: &mut State) -> Vec<String> {
                 for step in 1..=12 { for sgn in [1.0, -1.0] {
                     let d = sgn * 0.1 * step as f64;
                     for (k, p) in &old { let mut q = *p; let t = q.t; q.set_loc([t[0] + ax[0] * d, t[1] + ax[1] * d, t[2]]); state.set_pose(k, q); state.touch(k); }
-                    let clear = outside_room_depth(state, &b, &room) < 0.01 && tree.iter().all(|k| !state.objs.iter().any(|(o, ob)| !tree.contains(o) && !is_room(ob) && ((ob.generator.is_some() && floor_foot(state, o).is_some()) || o.starts_with("doorclear/") || o.contains(".keepout")) && depth(state, k, o) > 0.01));
+                    let clear = outside_room_depth(state, &b, &room) < 0.01 && tree.iter().all(|k| !state.objs.iter().any(|(o, ob)| !tree.contains(o) && !is_room(ob) && ((ob.generator.is_some() && floor_foot(state, o).is_some()) || o.starts_with("doorclear/") || o.contains(".keepout")) && depth(state, k, o) > 1e-4));
                     if clear && score(state) < cur {
-                        log.push(format!("{room}: bed {b} slid {d:+.1} m along its wall (last resort)"));
+                        log.push(format!("{room}: {b} slid {d:+.1} m along its wall (last resort)"));
                         cur = score(state);
                         if cur == (0, 0) { break 'beds }
                         continue 'beds;

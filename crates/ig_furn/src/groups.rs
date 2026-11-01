@@ -1659,14 +1659,30 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                 let score = |_: &State, _c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| len - (t - len / 2.0).abs();
                 let mut ok = place_on_wall(state, &name, &room, &score);
                 if !ok {
-                    let crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "WardrobeFactory" | "LargeShelfFactory" | "SimpleDeskFactory" | "SingleCabinetFactory")
+                    // (plants and pictures first: a spot blocked only by a corner plant or a picture over it left the room bedless)
+                    let mut crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory" | "WardrobeFactory" | "LargeShelfFactory" | "SimpleDeskFactory" | "SingleCabinetFactory")
                         && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+                    crowd.sort_by_key(|k| if matches!(class_of(&state.objs[k.as_str()]), "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory") { 0 } else { 1 });
                     for k in crowd {
                         layout2d::remove_tree(state, &k);
                         log.push(format!("{room}: removed {k} to fit a bed"));
                         ok = place_on_wall(state, &name, &room, &score);
                         if ok { break; }
                     }
+                }
+                // (then another draw of the bed, up to eight, taking only the narrower ones: a 3 x 3 m room took no 2.1 m wide king even with
+                // its wardrobe gone, and stayed empty; beds have no size model to shrink one to)
+                if !ok {
+                    for _ in 0..16 {
+                        state.objs.shift_remove(&name);
+                        super::solver::forget_placeholder("BedFactory");
+                        if !new_piece(ctx, state, rng, "BedFactory", &room, &name) { break }
+                        let bw = { let g = &state.objs[&name].geom; g.hi[1] - g.lo[1] };
+                        if bw > 1.65 { continue }
+                        ok = place_on_wall(state, &name, &room, &score);
+                        if ok { log.push(format!("{room}: bed redrawn {bw:.2} m wide to fit")); break }
+                    }
+                    if !state.objs.contains_key(&name) { continue }
                 }
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
             }
