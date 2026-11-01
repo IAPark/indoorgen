@@ -1712,6 +1712,18 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
             }
         }
+        // a living room left without anywhere to sit (the living group seated no sofa in an angled room): a sofa against the longest
+        // free wall, else an armchair
+        if rt == "living-room" && !has(state, "SofaFactory") && !has(state, "ArmChairFactory") {
+            for cls in ["SofaFactory", "ArmChairFactory"] {
+                let name = format!("{room}_seat").replace('/', "_");
+                if !new_piece(ctx, state, rng, cls, &room, &name) { continue }
+                let dd = door_d.clone();
+                let score = move |_: &State, c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| len - (t - len / 2.0).abs() + dd(c).min(1.5);
+                if place_on_wall(state, &name, &room, &score) { log.push(format!("{room}: added a {cls}")); break }
+                state.objs.shift_remove(&name);
+            }
+        }
         // a bathroom the solver left without a toilet (a 1.5 x 1.5 m room): one on the wall farthest from the door, the shelving and
         // plants that crowd the room giving way if no wall takes it
         if rt == "bathroom" && !has(state, "ToiletFactory") {
