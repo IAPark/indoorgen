@@ -28,6 +28,9 @@ pub struct Site {
     pub drive: Vec<P2>,
     pub drive_half: f64,
     pub neighbours: Vec<Neighbour>,
+    /// the house centre and the front's outward normal (toward the road)
+    pub house_c: P2,
+    pub front_n: P2,
     grid: HashMap<(i32, i32), Vec<usize>>,
 }
 
@@ -73,6 +76,18 @@ impl Site {
             h = h * (1.0 - w) + (rz - 0.02) * w;
         }
         h
+    }
+
+    /// the sidecar's `outdoor.site`: the layout and a street camera -- on the far side of the road (the sidewalk), 10 m along
+    /// from the driveway, eye height, looking at the house (tools/render/render_rust.py --view street)
+    pub fn record(&self) -> serde_json::Value {
+        let e = self.drive.last().copied().unwrap_or(self.house_c);
+        let along = [-self.front_n[1], self.front_n[0]];
+        let off = if self.layout == Layout::Rural { self.half + 1.5 } else { self.half + 2.75 };
+        let eye = [e[0] + self.front_n[0] * (self.half + off) + along[0] * 10.0, e[1] + self.front_n[1] * (self.half + off) + along[1] * 10.0];
+        let ez = self.road_near(eye[0], eye[1]).map_or(0.0, |r| r.1) + 1.65;
+        serde_json::json!({"layout": format!("{:?}", self.layout), "neighbours": self.neighbours.len(),
+            "street_cam": {"eye": [eye[0], eye[1], ez], "target": [self.house_c[0], self.house_c[1], ez + 0.4]}})
     }
 
     /// nothing grows here: the road and its verges, the driveway, the neighbours' houses and `yard` m around them (a tree's
@@ -152,7 +167,8 @@ pub fn plan(seed: u64, ring: &[P2], cutters: &[Cutter], wall_t: f64, nat: &dyn F
     let drive_half = if layout == Layout::Rural { 1.6 } else { 1.7 };
     let drive_end = [door[0] + nn[0] * (front_off + setback + half - half), door[1] + nn[1] * (front_off + setback + half - half)];
     let drive = vec![[door[0] + nn[0] * 0.8, door[1] + nn[1] * 0.8], drive_end];
-    let mut site = Site { layout, road, half, bulb, drive, drive_half, neighbours: vec![], grid };
+    let hc0 = ring.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n as f64, a[1] + p[1] / n as f64]);
+    let mut site = Site { layout, road, half, bulb, drive, drive_half, neighbours: vec![], house_c: hc0, front_n: nn, grid };
     // neighbour lots: along both sides of the road (suburban), a few far apart (rural), around the turning circle (cul-de-sac)
     let mut spots: Vec<(P2, P2)> = vec![]; // (house centre, unit vector toward the road)
     match layout {

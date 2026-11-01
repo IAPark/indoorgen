@@ -116,7 +116,9 @@ if os.environ.get("OLD_SMOOTH"):
             bpy.ops.object.select_all(action='DESELECT'); _o.select_set(True); bpy.context.view_layer.objects.active = _o
             bpy.ops.object.shade_smooth_by_angle(angle=math.radians(35))
 else:
-    _meshes = [o for o in bpy.data.objects if o.type == 'MESH']
+    # (not the outdoor meshes: they carry the generator's normals -- terrain smooth, leaf cards bent away from their crown centre;
+    # re-smoothing replaced the bent normals and dense crowns / shrubs shaded as black blobs)
+    _meshes = [o for o in bpy.data.objects if o.type == 'MESH' and not o.name.startswith("outdoor_")]
     bpy.ops.object.select_all(action='DESELECT')
     for _o in _meshes:
         _o.select_set(True)
@@ -1042,16 +1044,94 @@ sc.cycles.use_adaptive_sampling = True
 sc.render.filepath = args.out
 # (after the camera, which only needs the room)
 add_outdoor(sc, sidecar)
+
+
+def leaf_look():
+    """Rust tree leaf cards (rtree_leaf* materials from the glb): a third of the light passes through the leaf (Translucent BSDF of
+    the same colour), as real foliage does -- dense crowns and shrubs rendered as black blobs with opaque cards; the alpha cutout
+    is kept by a Transparent mix on the texture's alpha"""
+    n_done = 0
+    for m in bpy.data.materials:
+        if not m.name.startswith("rtree_leaf") or not m.use_nodes or m.get("leaf_look"): continue
+        nt = m.node_tree
+        p = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        out = next((n for n in nt.nodes if n.type == "OUTPUT_MATERIAL"), None)
+        if p is None or out is None or not p.inputs["Base Color"].is_linked: continue
+        col = p.inputs["Base Color"].links[0].from_socket
+        alpha = p.inputs["Alpha"].links[0].from_socket if p.inputs["Alpha"].is_linked else None
+        tr = nt.nodes.new("ShaderNodeBsdfTranslucent"); nt.links.new(col, tr.inputs["Color"])
+        mx = nt.nodes.new("ShaderNodeMixShader"); mx.inputs["Fac"].default_value = 0.35
+        nt.links.new(p.outputs[0], mx.inputs[1]); nt.links.new(tr.outputs[0], mx.inputs[2])
+        final = mx.outputs[0]
+        if alpha is not None:
+            for l in list(p.inputs["Alpha"].links): nt.links.remove(l)
+            p.inputs["Alpha"].default_value = 1.0
+            tp = nt.nodes.new("ShaderNodeBsdfTransparent")
+            mx2 = nt.nodes.new("ShaderNodeMixShader"); nt.links.new(alpha, mx2.inputs["Fac"])
+            nt.links.new(tp.outputs[0], mx2.inputs[1]); nt.links.new(final, mx2.inputs[2]); final = mx2.outputs[0]
+        nt.links.new(final, out.inputs["Surface"])
+        p.inputs["Roughness"].default_value = max(p.inputs["Roughness"].default_value, 0.6)
+        m["leaf_look"] = 1
+        n_done += 1
+    print("LEAFLOOK", n_done, "leaf materials")
+
+
+def apply_weather(sc, side):
+    """the sidecar's outdoor.weather (crates/ig_outdoor/src/weather.rs): sun (lights and the sky texture's sun disc) by sun_strength,
+    the world by sky_ambient, the haze volume by haze; the cloud layer and rain streaks cast no shadows; wet surfaces (terrain,
+    road, house exteriors) get a clear coat by wetness. NO_WEATHER=1 skips it."""
+    import os
+    wx = (side.get("outdoor") or {}).get("weather")
+    if not wx or os.environ.get("NO_WEATHER"): return
+    s_sun, s_amb, s_haze, wet = wx["sun_strength"], wx["sky_ambient"], wx["haze"], wx["wetness"]
+    for o in bpy.data.objects:
+        if o.type == "LIGHT" and o.data.type == "SUN": o.data.energy *= s_sun
+    wo = sc.world
+    if wo and wo.use_nodes:
+        for n in wo.node_tree.nodes:
+            if n.type == "TEX_SKY":
+                if hasattr(n, "sun_intensity"): n.sun_intensity *= s_sun
+                # (overcast / rain: no sun disc at all -- scaling its intensity did not take in Blender 5's sky model, hard shadows stayed)
+                if s_sun < 0.2 and hasattr(n, "sun_disc"): n.sun_disc = False
+            elif n.type == "BACKGROUND":
+                n.inputs["Strength"].default_value *= s_amb
+    hz = bpy.data.materials.get("outdoor_haze")
+    if hz and hz.use_nodes:
+        for n in hz.node_tree.nodes:
+            if n.type == "PRINCIPLED_VOLUME": n.inputs["Density"].default_value *= s_haze
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o.name.startswith(("outdoor_sky", "outdoor_rain")):
+            o.visible_shadow = False
+    if wet > 0:
+        done = set()
+        for o in bpy.data.objects:
+            if o.type != "MESH" or not o.name.startswith(("outdoor_terrain", "outdoor_road", "exterior_")): continue
+            for sl in o.material_slots:
+                m = sl.material
+                if m is None or not m.use_nodes or m.name in done: continue
+                done.add(m.name)
+                for n in m.node_tree.nodes:
+                    if n.type == "BSDF_PRINCIPLED" and "Coat Weight" in n.inputs and not n.inputs["Coat Weight"].is_linked:
+                        n.inputs["Coat Weight"].default_value = 0.8 * wet
+                        n.inputs["Coat Roughness"].default_value = 0.05
+    print("WEATHER", wx["state"], "sun", s_sun, "ambient", s_amb, "haze", s_haze, "wet", wet)
+
+
+leaf_look()
+apply_weather(sc, sidecar)
 # --view outdoor[:AZ[:DIST]]: the outdoor scene alone (the house hidden), a camera on the terrain at eye height DIST m (default 25)
 # from the house centre toward compass azimuth AZ (degrees, default 0 = +y), looking outward 4 deg down
-if args.view and args.view.startswith("outdoor"):
+if args.view and (args.view.startswith("outdoor") or args.view == "street"):
     import math
     from mathutils.bvhtree import BVHTree
     parts = (args.view.split(":") + ["0", "25"])[1:3]
     az, dist = math.radians(float(parts[0] or 0)), float(parts[1] or 25)
     for o in bpy.data.objects:
         # (only the house's own objects: the instanced tree collections are not linked into the scene)
-        if o.type in ("MESH", "CURVES") and o.users_scene and not o.name.startswith("outdoor"): o.hide_render = True
+        # (the house exteriors -- this house's and the neighbours', exterior_* -- stay: the street around it; the street view
+        # keeps the whole house: its windows show the rooms, not the sky through an empty shell)
+        if args.view == "street": break
+        if o.type in ("MESH", "CURVES") and o.users_scene and not o.name.startswith(("outdoor", "exterior_")): o.hide_render = True
     for o in bpy.data.objects:
         if o.type == "LIGHT" and not o.data.type == "SUN": o.hide_render = True
     flo = [o for o in bpy.data.objects if o.type == "MESH" and ".floor" in o.name]
@@ -1070,6 +1150,13 @@ if args.view and args.view.startswith("outdoor"):
     co.location = (x, y, z + 1.7)
     co.rotation_euler = (math.radians(86), 0, -az)
     print("OUTCAM", round(x, 1), round(y, 1), round(z + 1.7, 2), "az", parts[0])
+    if args.view == "street":
+        # the generator's street camera (crates/ig_outdoor/src/site.rs Site::record): across the road, looking at the house
+        _st = ((sidecar.get("outdoor") or {}).get("site") or {}).get("street_cam")
+        assert _st, "no outdoor.site.street_cam in the sidecar (site off?)"
+        _eye, _tgt = mathutils.Vector(_st["eye"]), mathutils.Vector(_st["target"])
+        co.location = _eye; co.rotation_euler = (_tgt - _eye).to_track_quat("-Z", "Y").to_euler()
+        print("STREETCAM", [round(v, 1) for v in _eye], "->", [round(v, 1) for v in _tgt])
     # photographic tone: AgX with more contrast (the default look left outdoor views flat and milky)
     try:
         sc.view_settings.view_transform = "AgX"

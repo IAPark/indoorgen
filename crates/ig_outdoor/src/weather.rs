@@ -23,8 +23,9 @@ impl Weather {
         let (cover, sun, ambient, haze, wet) = match state {
             State::Clear => (r.uniform(0.0, 0.12), 1.0, 1.0, 1.0, 0.0),
             State::PartlyCloudy => (r.uniform(0.3, 0.6), r.uniform(0.8, 1.0), 1.1, 1.2, 0.0),
-            State::Overcast => (r.uniform(0.88, 1.0), r.uniform(0.15, 0.3), 1.6, 2.0, r.uniform(0.0, 0.3)),
-            State::Rain => (1.0, r.uniform(0.05, 0.15), 1.4, 3.5, 1.0),
+            // (overcast light is nearly all diffuse: the sun's share is a few per cent -- 0.15-0.3 still cast hard shadows in Cycles)
+            State::Overcast => (r.uniform(0.88, 1.0), r.uniform(0.02, 0.06), 1.6, 2.0, r.uniform(0.0, 0.3)),
+            State::Rain => (1.0, r.uniform(0.0, 0.02), 1.4, 3.5, 1.0),
         };
         Weather { state, cover, sun, ambient, haze, wet }
     }

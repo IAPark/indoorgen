@@ -409,6 +409,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters:
     lap("tree builds", &mut times);
     log.push(format!("times {:.2}s: {}", t_all.elapsed().as_secs_f64(), times.iter().map(|(k, v)| format!("{k} {v:.2}")).collect::<Vec<_>>().join(", ")));
     let rec = json!({"terrain": {"ground_material": gcls, "mountain_material": mcls, "mountain_height": m_height, "coverage": coverage, "pad_z": t.pad_z},
-        "props": props, "tree_variants": cfg.tree_variants, "bush_variants": cfg.bush_variants, "weather": wx.record()});
+        "props": props, "tree_variants": cfg.tree_variants, "bush_variants": cfg.bush_variants, "weather": wx.record(),
+        "site": t.site.as_ref().map(|s| s.record())});
     (rec, log)
 }
