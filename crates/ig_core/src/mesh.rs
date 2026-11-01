@@ -712,8 +712,11 @@ impl Scene {
                     "doubleSided": true});
                 if let Some(ti) = tex_of[mi] {
                     j["pbrMetallicRoughness"]["baseColorTexture"] = json!({"index": ti});
-                    j["alphaMode"] = json!("MASK");
-                    j["alphaCutoff"] = json!(m.alpha_cutoff);
+                    // (alpha_cutoff 0: an opaque texture -- roof shingles; leaf cards keep the mask)
+                    if m.alpha_cutoff > 0.0 {
+                        j["alphaMode"] = json!("MASK");
+                        j["alphaCutoff"] = json!(m.alpha_cutoff);
+                    }
                 }
                 if m.emissive_strength > 0.0 {
                     j["emissiveFactor"] = json!(m.emissive);

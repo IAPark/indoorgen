@@ -32,6 +32,7 @@ pub mod ceiling_decor;
 pub mod soft_decor;
 pub mod gallery_wall;
 pub mod outdoor;
+pub mod exterior;
 pub mod bath_decor;
 pub mod top_dress;
 pub mod kitchen_window;

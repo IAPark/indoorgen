@@ -58,6 +58,8 @@ pub struct OutdoorCfg {
     /// Closest a tree trunk stands to a wall (m).
     #[schemars(range(min = 1.0, max = 30.0))]
     pub tree_wall_clearance: f64,
+    /// House exterior: siding, trim, foundation, steps and a pitched roof (src/exterior.rs).
+    pub exterior: bool,
     /// Tree source: "rust" (crates/ig_plants/src/rtree.rs, geometry in the scene) or "infinigen" (the renderer instances Infinigen's
     /// TreeFactory variants from its cache; Blender renders only).
     pub trees: String,
@@ -71,7 +73,7 @@ pub struct OutdoorCfg {
 impl Default for OutdoorCfg {
     fn default() -> Self {
         OutdoorCfg { on: true, near_extent: 70.0, near_spacing: 1.0, far_radius: 2500.0, ground_scale: 4.0, mountain_height: None, mountain_coverage: None, pad_depth: 0.45, pad_blend: 18.0,
-            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into() }
+            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into(), exterior: true }
     }
 }
 
@@ -221,7 +223,7 @@ fn spec(name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> Material {
 }
 
 /// Adds the terrain to `scene`; returns the sidecar `outdoor` record (terrain settings + vegetation spots) and a log.
-pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64, floor_z: f64, wall_t: f64, cfg: &OutdoorCfg) -> (Value, Vec<String>) {
+pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], cutters: &[crate::rooms::solidify::Cutter], wall_top: f64, seed: u64, floor_z: f64, wall_t: f64, cfg: &OutdoorCfg) -> (Value, Vec<String>) {
     let mut log = vec![];
     let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "outdoor"]));
     let polys: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| g.clone()).collect();
@@ -302,6 +304,13 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
     }
     // (shared vertices: smooth shading; per-quad vertices shaded the ridges as facets)
     for m in [&mut near, &mut far_g, &mut far_m] { m.weld(1e-6); }
+    // the house's exterior (own stream: the outdoor draws above and below are unchanged)
+    if cfg.exterior {
+        let mut er = Rng::seeded(crate::int_hash(&[&seed.to_string(), "exterior"]));
+        let st = crate::exterior::Style::draw(&mut er);
+        let nf = crate::exterior::add_house(scene, "main", &crate::shp::exterior(&house), cutters, wall_t, floor_z, wall_top, t.pad_z, &st, er.next_u64());
+        log.push(format!("exterior: {nf} faces, siding {:?} exposure {:.2}, roof {} {:.0} deg", st.siding, st.exposure, if st.hip { "hip" } else { "gable" }, st.pitch_deg));
+    }
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);
     scene.add("outdoor_terrain_far#0", "OutdoorTerrain", far_g, gm);
     if !far_m.is_empty() { scene.add("outdoor_terrain_far#1", "OutdoorTerrain", far_m, mm); }

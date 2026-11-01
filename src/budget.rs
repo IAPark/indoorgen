@@ -101,7 +101,7 @@ pub fn apply(scene: &mut Scene, geo: &crate::config::Geometry) -> (usize, usize,
         let ntri: usize = n.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum();
         // (outdoor trees / terrain: merged meshes of hundreds of pieces, already built to their level of detail -- the per-node budget
         // crushed whole groves into spikes)
-        if n.class == "Person" || n.class == "room" || n.class == "OutdoorTree" || n.class == "OutdoorTerrain" || keep.contains(&n.name) {
+        if n.class == "Person" || n.class == "room" || n.class == "OutdoorTree" || n.class == "OutdoorTerrain" || n.class == "OutdoorHouse" || keep.contains(&n.name) {
             return (ntri, ntri, None);
         }
         let (lo, hi) = n.mesh.bounds();

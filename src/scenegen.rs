@@ -801,7 +801,7 @@ pub fn build_scene(p: &Params) -> Built {
     }
     // terrain and vegetation outside (after the invariants: the terrain is not furniture)
     let outdoor = if cfg.program.outdoor.on && !orig_prog {
-        let (rec, log) = crate::outdoor::add(&mut scene, &g.room_polys, seed, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.outdoor);
+        let (rec, log) = crate::outdoor::add(&mut scene, &g.room_polys, &g.cutters, g.c.wall_height, seed, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.outdoor);
         for l in log { eprintln!("OUTDOOR {l}"); }
         lap("outdoor");
         Some(rec)
