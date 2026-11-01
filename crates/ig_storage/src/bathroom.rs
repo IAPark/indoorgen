@@ -308,6 +308,18 @@ impl Factory for Bathtub {
         let ceramic = spec_material("tub_ceramic", serde_json::json!({"cls": "ceramic.Ceramic", "kwargs": {}, "seed": self.seed}), [0.92, 0.92, 0.92]);
         let metal = spec_material("tub_metal", serde_json::json!({"cls": "metal.MetalBasic", "kwargs": {}, "seed": self.seed + 1}), [0.7, 0.7, 0.72]);
         let mut r = inst_rng(self.fseed, i);
+        // the browser build has no OpenSubdiv (the exact tub chains subdivide): a tub of boards there, walls and a floor in the
+        // placeholder's box (it panicked the generation on every bathtub)
+        if cfg!(target_arch = "wasm32") {
+            let mut a = Asset::default();
+            let (x0, y1, h) = (-self.size, self.width, self.depth);
+            let t = 0.07;
+            for (lo, hi) in [([x0, 0.0, 0.0], [0.0, t, h]), ([x0, y1 - t, 0.0], [0.0, y1, h]), ([x0, t, 0.0], [x0 + t, y1 - t, h]), ([-t, t, 0.0], [0.0, y1 - t, h]), ([x0 + t, t, 0.0], [-t, y1 - t, 0.08])] {
+                let m = Mesh::cuboid(lo, hi); let b = m.bounds(); a.mesh(m, &ceramic, Some(b));
+            }
+            let _ = metal;
+            return a;
+        }
         let b = super::bathtub::build(self, &mut r);
         let mut a = Asset::default();
         a.mesh(b.body, &ceramic, None);

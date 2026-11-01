@@ -92,7 +92,7 @@ pub fn build(s: &Sink, r: &mut Rng) -> SinkBuilt {
         let (rt, lab) = bathfree::remove_top_uv(&bowl, &lab, p.depth);
         let (sol, lab) = bathfree::solidify_exact(&rt, &lab, t.thickness, -1.0);
         dump("solid", &sol);
-        let fin = super::uvlab::subsurf_uv(&sol, &lab, 2, false, None).expect("osd").0;
+        let fin = super::uvlab::subsurf_uv(&sol, &lab, 2, false, None).map_or_else(|| sol.clone(), |r| r.0); // (no OpenSubdiv in wasm: the cage)
         dump("side", &fin);
         fin
     };

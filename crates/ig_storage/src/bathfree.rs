@@ -62,9 +62,10 @@ pub fn make_bowl_uv(p: &BowlParams) -> (Mesh, super::uvlab::Labels) {
     }
     let (faces, lab) = super::uvlab::cylinder_bpy(n);
     m.faces = faces;
-    let (m, lab) = super::uvlab::subsurf_uv(&m, &lab, p.alcove_levels, true, None).expect("osd");
+    // (no OpenSubdiv in the wasm build: the cage unsubdivided there, the browser panicked on every freestanding tub)
+    let Some((m, lab)) = super::uvlab::subsurf_uv(&m, &lab, p.alcove_levels, true, None) else { return (m, lab) };
     let lv = p.levels - p.alcove_levels - p.side_levels;
-    super::uvlab::subsurf_uv(&m, &lab, lv, false, None).expect("osd")
+    match super::uvlab::subsurf_uv(&m, &lab, lv, false, None) { Some(r) => r, None => (m, lab) }
 }
 
 /// `remove_top` keeping the UV labels

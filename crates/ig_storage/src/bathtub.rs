@@ -360,8 +360,9 @@ pub fn alcove_body(t: &Bathtub, stages: &mut Vec<(String, String, Mesh)>) -> Mes
     // the bpy cylinder carries a UV map: Blender subdivides it with a face-varying channel, which decides the last float32 bits (uvlab.rs)
     let (cf, cl) = super::uvlab::cylinder_bpy(n);
     cage.faces = cf;
-    let (cage, cl) = super::uvlab::subsurf_uv(&cage, &cl, t.alcove_levels, true, None).expect("osd");
-    let (cutter, _) = super::uvlab::subsurf_uv(&cage, &cl, 5 - t.alcove_levels, false, None).expect("osd");
+    // (no OpenSubdiv in the wasm build: the unsubdivided cage there)
+    let (cage, cl) = super::uvlab::subsurf_uv(&cage, &cl, t.alcove_levels, true, None).unwrap_or_else(|| (cage.clone(), cl.clone()));
+    let (cutter, _) = super::uvlab::subsurf_uv(&cage, &cl, 5 - t.alcove_levels, false, None).unwrap_or_else(|| (cage.clone(), cl.clone()));
     // cavity = cutter faces below the box top, normals into the cavity
     let tol = 1e-6;
     let keep: Vec<bool> = cutter.faces.iter().map(|f| f.iter().all(|&v| cutter.pos[v as usize][2] <= d + tol)).collect();
