@@ -533,6 +533,33 @@ pub fn build_scene(p: &Params) -> Built {
             eprintln!("THROUGHWALL removed {k} (+{} on it)", gone.len().saturating_sub(1));
         }
     }
+    // kitchen sinks (and storage) out of the wall: the tap at the back of a sink set into a run against the wall reached 2.2 cm into it; the sink shifts
+    // by its overshoot along whichever horizontal axis brings every corner of its built box inside the wall face (up to 6 cm)
+    {
+        let wt = g.c.wall_thickness;
+        let inner: std::collections::HashMap<String, indoorgen::shp::G> = g.room_polys.iter().map(|(n, p)| (n.clone(), indoorgen::shp::buffer_mitre(p, -wt / 2.0 - 0.005))).collect();
+        let mut moves: Vec<(String, [f64; 2])> = vec![];
+        for (k, o) in &g.state.objs {
+            // (and free-standing storage a few cm into the wall: a cell shelf by 2.1 cm; the net above takes what is past 4 cm)
+            if o.generator.as_ref().map_or(true, |gg| !matches!(gg.class.as_str(), "SinkFactory" | "CellShelfFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "SingleCabinetFactory" | "TVStandFactory" | "SideTableFactory" | "WardrobeFactory")) { continue }
+            let (Some(a), Some(room)) = (visuals.get(k), indoorgen::furn::layout2d::room_of(&g.state, k)) else { continue };
+            let Some(poly) = inner.get(&room) else { continue };
+            let (lo, hi) = a.bounds();
+            let pts: Vec<[f64; 2]> = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]].iter().map(|c| { let p = o.pose.apply([c[0], c[1], hi[2]]); [p[0], p[1]] }).collect();
+            let edge = indoorgen::shp::boundary(poly);
+            let over = pts.iter().filter(|p| !indoorgen::shp::contains_pt(poly, **p)).map(|p| indoorgen::shp::distance(&edge, &indoorgen::shp::point(p[0], p[1]))).fold(0.0f64, f64::max);
+            // (flush pieces read a few mm past the face: only what is more than 1.5 cm in moves)
+            if over <= 0.015 || over > 0.06 { continue }
+            let d = over + 0.005;
+            if let Some(sh) = [[d, 0.0], [-d, 0.0], [0.0, d], [0.0, -d]].into_iter().find(|sh| pts.iter().all(|p| indoorgen::shp::contains_pt(poly, [p[0] + sh[0], p[1] + sh[1]]))) { moves.push((k.clone(), sh)); }
+        }
+        for (k, sh) in moves {
+            let o = g.state.objs.get_mut(&k).unwrap();
+            let t = o.pose.t;
+            o.pose.set_loc([t[0] + sh[0], t[1] + sh[1], t[2]]);
+            eprintln!("OUTOFWALL {k}: moved {:.3} m", sh[0].abs() + sh[1].abs());
+        }
+    }
     // fridges flush with their counter run: a fridge shallower than the run, its back to the wall, stood 11-15 cm behind the counter
     // fronts (seeds 301, 318, ...); it moves forward to the run's front when nothing stands in the way (the invariants' appliance_flush)
     {
