@@ -1,0 +1,17 @@
+[package]
+name = "ig_outdoor"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# the outdoor stage (terrain, plant community, Rust trees, house exterior): its own crate so an edit here rebuilds only this
+# small crate, not the root crate (re-exported there as indoorgen::outdoor / indoorgen::exterior)
+[dependencies]
+ig_core = { path = "../ig_core" }
+ig_rooms = { path = "../ig_rooms" }
+ig_plants = { path = "../ig_plants" }
+web-time = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { version = "0.8", features = ["preserve_order"] }
+geos = { workspace = true }

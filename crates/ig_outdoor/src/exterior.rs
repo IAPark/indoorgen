@@ -7,9 +7,9 @@
 //!              or hip roof over eaves of `overhang` -- overlapping rectangles give the cross gables of real L / T houses --
 //!              fascia boards and a procedural shingle texture
 //! Classes "OutdoorHouse" (budget-exempt like the terrain); names "exterior_<house>.<part>".
-use crate::mesh::{encode_png, Material, Mesh, Scene};
-use crate::rng::Rng;
-use crate::rooms::solidify::{CutKind, Cutter};
+use ig_core::mesh::{encode_png, Material, Mesh, Scene};
+use ig_core::rng::Rng;
+use ig_rooms::solidify::{CutKind, Cutter};
 use std::sync::Arc;
 
 type V3 = [f64; 3];

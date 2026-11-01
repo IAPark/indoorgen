@@ -13,14 +13,15 @@
 //! canopy shell for the distant forest; Rust trees go in as geometry, or (trees = "infinigen") the spots go to the sidecar
 //! `outdoor.props` and the renderer instances Infinigen's TreeFactory / BushFactory variants (tools/render/tree_cache.py).
 //! Stream: int_hash(seed, "outdoor").
-use crate::mesh::{Mat4, Material, Mesh, Scene};
-use crate::rng::Rng;
+use ig_core::mesh::{Mat4, Material, Mesh, Scene};
+use ig_core::rng::Rng;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod trees;
 mod veg;
+pub mod exterior;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -183,7 +184,7 @@ struct Terrain {
     m_ramp: (f64, f64),
     m_slope_scale: f64,
     centre: [f64; 2],
-    house: crate::shp::G,
+    house: ig_core::shp::G,
     pad_z: f64,
     pad_blend: f64,
     level: f64,
@@ -210,7 +211,7 @@ impl Terrain {
         self.pad_z * (1.0 - b) + (self.pad_z + free) * b
     }
     fn dist(&self, x: f64, y: f64) -> f64 {
-        if crate::shp::contains_pt(&self.house, [x, y]) { 0.0 } else { crate::shp::distance(&self.house, &crate::shp::point(x, y)) }
+        if ig_core::shp::contains_pt(&self.house, [x, y]) { 0.0 } else { ig_core::shp::distance(&self.house, &ig_core::shp::point(x, y)) }
     }
 }
 
@@ -226,17 +227,17 @@ fn spec(name: &str, cls: &str, seed: u64, rgb: [f32; 3]) -> Material {
 }
 
 /// Adds the terrain to `scene`; returns the sidecar `outdoor` record (terrain settings + vegetation spots) and a log.
-pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], cutters: &[crate::rooms::solidify::Cutter], wall_top: f64, seed: u64, floor_z: f64, wall_t: f64, cfg: &OutdoorCfg) -> (Value, Vec<String>) {
+pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters: &[ig_rooms::solidify::Cutter], wall_top: f64, seed: u64, floor_z: f64, wall_t: f64, cfg: &OutdoorCfg) -> (Value, Vec<String>) {
     let mut log = vec![];
     // phase timings for the OUTDOOR log (iteration-speed work)
     let t_all = web_time::Instant::now();
     let mut t_ph = web_time::Instant::now();
     let mut times: Vec<(&str, f64)> = vec![];
     let mut lap = |name: &'static str, times: &mut Vec<(&str, f64)>| { times.push((name, t_ph.elapsed().as_secs_f64())); t_ph = web_time::Instant::now(); };
-    let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "outdoor"]));
-    let polys: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| g.clone()).collect();
-    let house = crate::shp::buffer_mitre(&crate::shp::union_all(&polys), wall_t / 2.0);
-    let (x0, y0, x1, y1) = crate::shp::bounds(&house);
+    let mut r = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "outdoor"]));
+    let polys: Vec<ig_core::shp::G> = room_polys.iter().map(|(_, g)| g.clone()).collect();
+    let house = ig_core::shp::buffer_mitre(&ig_core::shp::union_all(&polys), wall_t / 2.0);
+    let (x0, y0, x1, y1) = ig_core::shp::bounds(&house);
     let centre = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
     // Infinigen's draws, in its order: ground seed, then the mountains' seed and parameters
     let seed_g = r.next_u64() as u32;
@@ -315,9 +316,9 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], cutters: &
     for m in [&mut near, &mut far_g, &mut far_m] { m.weld(1e-6); }
     // the house's exterior (own stream: the outdoor draws above and below are unchanged)
     if cfg.exterior {
-        let mut er = Rng::seeded(crate::int_hash(&[&seed.to_string(), "exterior"]));
+        let mut er = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "exterior"]));
         let st = crate::exterior::Style::draw(&mut er);
-        let nf = crate::exterior::add_house(scene, "main", &crate::shp::exterior(&house), cutters, wall_t, floor_z, wall_top, t.pad_z, &st, er.next_u64());
+        let nf = crate::exterior::add_house(scene, "main", &ig_core::shp::exterior(&house), cutters, wall_t, floor_z, wall_top, t.pad_z, &st, er.next_u64());
         log.push(format!("exterior: {nf} faces, siding {:?} exposure {:.2}, roof {} {:.0} deg", st.siding, st.exposure, if st.hip { "hip" } else { "gable" }, st.pitch_deg));
     }
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);

@@ -1,12 +1,12 @@
 //! Rust trees (crates/ig_plants/src/rtree.rs) as scene geometry for the outdoor stage's tree spots (its own module: an edit here
 //! recompiles only this file's code).
-use crate::mesh::{Mat4, Mesh, Scene};
+use ig_core::mesh::{Mat4, Mesh, Scene};
 use serde_json::Value;
 
 /// Build the tree spots in `props` as geometry: oak / maple near the house one by one among their neighbours, the rest instances of
 /// shared builds. Empties `props` (the sidecar's spots are for trees = "infinigen"); returns the log line.
 pub fn build(scene: &mut Scene, props: &mut Vec<Value>, seed: u64, centre: [f64; 2], e: f64) -> String {
-    use crate::assets::rtree::{self, Lod};
+    use ig_plants::rtree::{self, Lod};
     let species = rtree::ALL;
     let mut built: std::collections::HashMap<(u8, u64), (Mesh, Mesh, Vec<[f64; 3]>)> = Default::default();
     let mut mats: std::collections::HashMap<u8, (usize, usize)> = Default::default();

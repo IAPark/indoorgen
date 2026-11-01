@@ -148,7 +148,7 @@ pub(super) fn plant_community(t: &Terrain, cfg: &OutdoorCfg, r: &mut Rng, centre
     log.push(format!("plant community: {n_seeded} seeds, {} trees survive ({n_near} in the fine grid; {n_thinned} thinned, {n_old} died of age; oak/maple/birch/pine/willow {:?}), {} shrubs (to {far:.0} m)",
         trees.len(), by_sp, shrubs.len()));
     // props: trees (crown radius -> scale against the species' nominal crown) and shrubs
-    let crown = |s: usize| crate::assets::rtree::crown_radius(crate::assets::rtree::ALL[s]);
+    let crown = |s: usize| ig_plants::rtree::crown_radius(ig_plants::rtree::ALL[s]);
     let ground_z = |x: f64, y: f64| {
         let d = if (x - centre[0]).abs() < e && (y - centre[1]).abs() < e { t.dist(x, y) } else { (x - centre[0]).hypot(y - centre[1]) };
         t.height(x, y, d) - 0.05
