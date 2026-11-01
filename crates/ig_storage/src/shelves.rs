@@ -273,6 +273,12 @@ impl LargeShelf {
 /// the box depth minus the drawn depth (screw heads / attach gadgets stand proud; measured)
 const LS_DEPTH_EXTRA: f64 = 0.002;
 
+impl LargeShelf {
+    fn has_doors(&self, inst: u64) -> bool {
+        std::env::var_os("NO_SHELF_DOORS").is_none() && crate::int_hash(&["large_shelf_doors", &self.fseed.to_string(), &inst.to_string()]) % 100 < 35
+    }
+}
+
 impl Factory for LargeShelf {
     fn natural_size(&self, inst: u64) -> Option<[f64; 3]> {
         let (dims, side_t, _, div_t) = self.size_draws(&mut inst_rng(self.fseed, inst));
@@ -281,9 +287,34 @@ impl Factory for LargeShelf {
     fn asset(&self, inst: u64) -> Asset {
         // large_shelf.py get_material_func: frame_material = shader_shelves_<kind>[_z] (z texture), board_material = the plain variant
         let (p, kind) = self.params(inst);
-        cabnodes::shelf_frame(&p, &plywood(kind, true, 0), &plywood(kind, false, 0))
+        let frame = plywood(kind, true, 0);
+        let mut a = cabnodes::shelf_frame(&p, &frame, &plywood(kind, false, 0));
+        // 35 % closed below: flush doors over every column's bottom cell, a finger groove along their top (own stream; its board takes
+        // no books: they stood behind the doors). NO_SHELF_DOORS=1: off
+        if self.has_doors(inst) && p.div_z.len() >= 2 {
+            let (d, dt) = (p.shelf_depth, p.div_t);
+            let (zl, zh) = (p.div_z[0] + dt * 0.5 + 0.003, p.div_z[1] - dt * 0.5 - 0.003);
+            let groove = Material::diffuse("shelf_door_groove", [0.05, 0.05, 0.05], 0.6);
+            let mut doors = Asset::default();
+            for i in 0..p.cell_w.len() {
+                let (xc, w) = (p.div_x[i], p.cell_w[i]);
+                let n = if w > 0.6 { 2 } else { 1 };
+                for k in 0..n {
+                    let (x0, x1) = (xc - w / 2.0 + w * k as f64 / n as f64 + 0.0015, xc - w / 2.0 + w * (k + 1) as f64 / n as f64 - 0.0015);
+                    let m = Mesh::cuboid([x0, d * 0.5 - 0.016, zl], [x1, d * 0.5, zh]); let b = m.bounds(); doors.mesh(m, &frame, Some(b));
+                    let g = Mesh::cuboid([x0 + (x1 - x0) * 0.2, d * 0.5 - 0.002, zh - 0.026], [x1 - (x1 - x0) * 0.2, d * 0.5 + 0.0005, zh - 0.018]); let b = g.bounds(); doors.mesh(g, &groove, Some(b));
+                }
+            }
+            doors.transform(&Mat4::rot_z(-std::f64::consts::FRAC_PI_2));
+            a.parts.extend(doors.parts);
+            let zcut = p.div_z[0] + dt;
+            a.supports.retain(|s| s.1[2] > zcut);
+        }
+        a
     }
     fn exact(&self, inst: u64) -> Option<cabnodes::ExactMesh> {
+        // (a unit with doors renders its own asset: the exact mesh would drop them)
+        if self.has_doors(inst) { return None }
         let (p, _) = self.params(inst);
         Some(cabnodes::shelf_gmesh(&p, true).to_exact())
     }
