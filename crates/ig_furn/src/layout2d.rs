@@ -472,6 +472,15 @@ pub fn walk_status_f(state: &State, room: &str, keep: &dyn Fn(&str) -> bool, ski
     let hits: Vec<Vec<usize>> = doors.iter().map(|d| { let p = shp::point(d[0], d[1]); comps.iter().enumerate().filter(|(_, c)| shp::distance(c, &p) < 0.35).map(|(i, _)| i).collect() }).collect();
     let common: Vec<usize> = (0..comps.len()).filter(|i| hits.iter().all(|h| h.contains(i))).collect();
     let connected = !common.is_empty();
+    if std::env::var_os("WALKDBG").is_some() && !connected {
+        let fb: Vec<shp::G> = pieces.iter().filter(|p| p.0.contains("Feature")).flat_map(|p| p.1.clone()).collect();
+        let ff = if fb.is_empty() { (*floor).clone() } else { shp::difference(&floor, &shp::union_all(&fb)) };
+        let fw = shp::buffer_mitre(&ff, -0.3);
+        let fc: Vec<shp::G> = if shp::is_empty(&fw) { vec![] } else { shp::parts(&fw) };
+        let fh: Vec<Vec<usize>> = doors.iter().map(|d| { let p = shp::point(d[0], d[1]); fc.iter().enumerate().filter(|(_, c)| shp::distance(c, &p) < 0.35).map(|(i, _)| i).collect() }).collect();
+        eprintln!("WALKDBG {room}: features only: comps {} hits {:?}", fc.len(), fh);
+    }
+    if std::env::var_os("WALKDBG").is_some() && !connected { eprintln!("WALKDBG {room}: pieces {:?} comps {} doors {:?} hits {:?} comp areas {:?}", pieces.iter().map(|p| p.0.clone()).collect::<Vec<_>>(), comps.len(), doors, hits, comps.iter().map(|c| (shp::area(c) * 100.0).round() / 100.0).collect::<Vec<_>>()); }
     // reach: walkable floor without the chair-like pieces, the components touching a door
     // (no chair-like pieces: the same walkable floor as above)
     let comps2: Vec<shp::G> = if reach_blocks.len() == blocks.len() { comps.clone() } else {
@@ -740,26 +749,38 @@ pub fn repair(state: &mut State) -> Vec<String> {
         // living room cut its doors apart)
         let mut cur = score(state);
         if cur != (0, 0) {
-            let mut sec: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "TVStandFactory" | "SofaFactory" | "TableDiningFactory" | "ArmChairFactory") && room_of(state, k).as_deref() == Some(room.as_str()))
-                .map(|(k, _)| (prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone())).collect();
+            // (with the other movable pieces: a room can need a shelf and a sofa out together)
+            // (built-ins last of all -- alcove shelves, a bookshelf wall, a window seat, a fireplace: a fireplace and a bookshelf wall cut a
+            // five-door living room in two)
+            let fixed = |c: &str| ["Bed", "KitchenSpace", "KitchenIsland", "Toilet", "StandingSink", "BathroomSink", "Bathtub", "Shower", "Fridge", "Oven", "Dishwasher", "Sink", "Chair"].iter().any(|a| c.starts_with(a));
+            let mut sec: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| o.generator.is_some() && !is_room(o) && !fixed(class_of(o)) && !no_block(class_of(o)) && floor_foot(state, k).is_some() && room_of(state, k).as_deref() == Some(room.as_str()))
+                .map(|(k, o)| { let c = class_of(o); let last = if k.contains("alcove") { 1000.0 } else if c == "BookshelfWallFeature" { 2000.0 } else if c == "WindowSeatFeature" { 3000.0 } else if c.ends_with("Feature") { 4000.0 } else { 0.0 };
+                    (last + prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone()) }).collect();
             sec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            for (_, k) in sec {
-                if !state.objs.contains_key(&k) { continue }
-                let mut trial = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
-                remove_tree(&mut trial, &k);
-                // (a dining table's chairs go with it: they are related to the room, not the table)
-                if class_of(&state.objs[&k]) == "TableDiningFactory" {
-                    let chairs: Vec<String> = trial.objs.iter().filter(|(ck, co)| class_of(co).starts_with("Chair") && dist(&trial, ck, ck).is_finite() && state.objs.get(&k).map_or(false, |_| dist(state, ck, &k) < 0.3)).map(|(ck, _)| ck.clone()).collect();
-                    for ck in chairs { remove_tree(&mut trial, &ck); }
+            // cumulatively, smallest first, until the room improves; then the ones the improvement does not need go back
+            let mut trial = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
+            let mut removed: Vec<String> = vec![];
+            let mut s2 = cur;
+            for (_, k) in &sec {
+                if !trial.objs.contains_key(k) { continue }
+                remove_tree(&mut trial, k);
+                removed.push(k.clone());
+                s2 = score(&trial);
+                if s2 == (0, 0) { break }
+            }
+            if s2 < cur {
+                let mut keep_out = removed.clone();
+                for k in removed.iter().rev() {
+                    let mut t2 = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
+                    for r in keep_out.iter().filter(|r| *r != k) { if t2.objs.contains_key(r) { remove_tree(&mut t2, r); } }
+                    if score(&t2) <= s2 { keep_out.retain(|r| r != k); }
                 }
-                let s2 = score(&trial);
-                if s2 < cur {
-                    let gone: Vec<String> = state.objs.keys().filter(|x| !trial.objs.contains_key(*x)).cloned().collect();
-                    for x in &gone { if state.objs.contains_key(x) { remove_tree(state, x); } }
+                for k in &keep_out {
+                    if !state.objs.contains_key(k) { continue }
+                    let gone = remove_tree(state, k);
                     log.push(format!("{room}: removed {k} and {} more (last resort)", gone.len().saturating_sub(1)));
-                    cur = score(state);
-                    if cur == (0, 0) { break }
                 }
+                cur = score(state);
             }
         }
         // and a bed (never removed) slid along its headboard wall, with what is related to it (nightstands, what stands on them), to the

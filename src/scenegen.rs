@@ -240,6 +240,8 @@ pub fn build_scene(p: &Params) -> Built {
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
         for l in indoorgen::furn::layout2d::repair(&mut g.state) { eprintln!("WALKWAY {l}"); }
+        // (a built-in the repair took out is not built)
+        g.features.retain(|pf| g.state.objs.contains_key(&pf.key));
     }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
