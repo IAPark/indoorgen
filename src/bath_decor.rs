@@ -93,8 +93,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         // (within the room: a toilet in a corner had its shelf run on into the side wall)
                         let inside = |w: f64| floor.as_ref().map_or(true, |f| [[wall_x + sd, yc - w / 2.0 - 0.03], [wall_x + sd, yc + w / 2.0 + 0.03], [wall_x + 0.01, yc - w / 2.0 - 0.03], [wall_x + 0.01, yc + w / 2.0 + 0.03]].iter().all(|q| { let p = o.pose.apply([q[0], q[1], 0.0]); crate::shp::contains_pt(f, [p[0], p[1]]) }));
                         while sw > 0.35 && !inside(sw) { sw -= 0.05; }
-                        // (not over a towel rail or holder on the same wall: the shelf rested on one)
-                        let rail_under = state.objs.iter().any(|(hk, ho)| ho.generator.as_ref().map_or(false, |g| g.class == "HardwareFactory") && {
+                        // (not over a towel rail or holder on the same wall: the shelf rested on one; nor into the mirror's frame)
+                        let rail_under = state.objs.iter().any(|(hk, ho)| ho.generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "HardwareFactory" | "MirrorFactory" | "WallArtFactory")) && {
                             let b = wbox(&ho.pose, ho.geom.lo, ho.geom.hi);
                             let s0 = o.pose.apply([wall_x, yc - sw / 2.0 - 0.05, sz - 0.35]); let s1 = o.pose.apply([wall_x + sd + 0.05, yc + sw / 2.0 + 0.05, sz + 0.45]);
                             let (l, h) = ([s0[0].min(s1[0]), s0[1].min(s1[1]), s0[2].min(s1[2])], [s0[0].max(s1[0]), s0[1].max(s1[1]), s0[2].max(s1[2])]);

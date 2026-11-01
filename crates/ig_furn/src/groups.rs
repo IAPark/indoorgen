@@ -2395,10 +2395,17 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let a = [mlo[0], (mlo[1] + mhi[1]) / 2.0, (mlo[2] + mhi[2]) / 2.0];
                 let ra = [c_ * a[0] - s_ * a[1], s_ * a[0] + c_ * a[1]];
                 let old = state.objs[&m].pose;
-                state.set_pose(&m, super::geom::Pose::from_euler([back[0] - ra[0], back[1] - ra[1], zc - a[2]], [0.0, 0.0, ys]));
-                state.touch(&m);
-                let (lo, hi) = wbox(state, &m);
-                let clash = openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..3).all(|d| lo[d] < wh[d] + 0.02 && wl[d] - 0.02 < hi[d]) });
+                // centred over the basin, else slid along the wall (to the side away from a corner or a curve of the wall: the mirror
+                // wider than the flat run behind the basin hung past it, through the wall)
+                let w = mhi[1] - mlo[1];
+                let mut clash = true;
+                for t in [0.0, 0.05, -0.05, 0.1, -0.1, 0.15, -0.15, 0.2, -0.2, 0.3, -0.3].iter().map(|f| f * w.max(0.4)) {
+                    state.set_pose(&m, super::geom::Pose::from_euler([back[0] - ra[0] - s_ * t, back[1] - ra[1] + c_ * t, zc - a[2]], [0.0, 0.0, ys]));
+                    state.touch(&m);
+                    let (lo, hi) = wbox(state, &m);
+                    clash = openings.iter().any(|w| { let (wl, wh) = wbox(state, w); (0..3).all(|d| lo[d] < wh[d] + 0.02 && wl[d] - 0.02 < hi[d]) }) || layout2d::outside_room_depth(state, &m, &room) > 0.01;
+                    if !clash { break }
+                }
                 // (no spot over the basin: the mirror goes -- left where the solver hung it, it was over the toilet)
                 if clash { state.set_pose(&m, old); state.touch(&m); layout2d::remove_tree(state, &m); log.push(format!("{room}: removed mirror {m} (no wall over the washbasin)")); } else { log.push(format!("{room}: mirror {m} over the washbasin")); }
             } else if let Some(m) = in_room(state, "MirrorFactory").first().cloned() {
@@ -2425,6 +2432,22 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                     log.push(format!("{room}: {} {k} moved {dz:+.2} m", if long { "towel rail" } else { "fitting" }));
                 }
             }
+        }
+    }
+    log
+}
+
+/// wall fittings (towel rails, holders) inside a fixture's box: the fixture passes run after the wall hangings, and a washbasin moved
+/// under a towel rail had its tap through the rail (the tap stands above the basin's box: 0.3 m clear over a basin)
+pub fn fittings_clear(state: &mut State) -> Vec<String> {
+    let mut log = vec![];
+    let fixtures: Vec<String> = state.objs.iter().filter(|(_, o)| matches!(class_of(o), "StandingSinkFactory" | "BathroomSinkFactory" | "ToiletFactory" | "BathtubFactory" | "ShowerFactory")).map(|(k, _)| k.clone()).collect();
+    let fits: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "HardwareFactory").map(|(k, _)| k.clone()).collect();
+    for k in fits {
+        let (lo, hi) = layout2d::lohi_world(state, &k);
+        if let Some(f) = fixtures.iter().find(|f| { let (fl, fh) = layout2d::lohi_world(state, f); (0..2).all(|d| lo[d] < fh[d] + 0.02 && fl[d] - 0.02 < hi[d]) && lo[2] < fh[2] + if class_of(&state.objs[f.as_str()]).contains("Sink") { 0.3 } else { 0.02 } && fl[2] < hi[2] }) {
+            log.push(format!("removed fitting {k} (in {f})"));
+            layout2d::remove_tree(state, &k);
         }
     }
     log
