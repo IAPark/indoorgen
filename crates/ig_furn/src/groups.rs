@@ -48,6 +48,11 @@ pub fn free_ok(state: &State, name: &str) -> bool {
         if matches!(class_of(b), "WallArtFactory" | "MirrorFactory") {
             continue;
         }
+        // a door's cutter box reaches 1 m into each room (2 m deep: it cuts the walls); the door clearances (doorclear/..., from the
+        // wall face, the opening's width) say what a door needs -- the cutter took a 1.5 x 1.5 m WC's whole floor from the toilet
+        if b.tags.contains(Tag::sem("Cutter")) && !b.tags.contains(win) && (k.starts_with("door") || k.starts_with("entrance")) {
+            continue;
+        }
         // another room's door clearance and feature keep-outs stop at its walls (a bedroom's built-in shelves kept the living
         // room's sofa off the far side of the wall)
         if k.starts_with("doorclear/") || b.tags.contains(Tag::sem("FeatureKeepout")) || class_of(b).ends_with("Feature") {
@@ -1672,6 +1677,26 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                     }
                 }
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
+            }
+        }
+        // a bathroom the solver left without a toilet (a 1.5 x 1.5 m room): one on the wall farthest from the door, the shelving and
+        // plants that crowd the room giving way if no wall takes it
+        if rt == "bathroom" && !has(state, "ToiletFactory") {
+            let name = format!("{room}_toilet").replace('/', "_");
+            if new_piece(ctx, state, rng, "ToiletFactory", &room, &name) {
+                let dd = door_d.clone();
+                let score = move |_: &State, c: [f64; 2], _t: f64, _len: f64, _n: [f64; 2]| dd(c);
+                let mut ok = place_on_wall(state, &name, &room, &score);
+                if !ok {
+                    let crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "LargePlantContainerFactory" | "LargeShelfFactory" | "SingleCabinetFactory" | "HardwareFactory" | "WallArtFactory" | "MirrorFactory")
+                        && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+                    for k in crowd {
+                        layout2d::remove_tree(state, &k);
+                        ok = place_on_wall(state, &name, &room, &score);
+                        if ok { break; }
+                    }
+                }
+                if ok { log.push(format!("{room}: added a toilet")); } else { state.objs.shift_remove(&name); }
             }
         }
         if rt == "bathroom" && !has(state, "BathtubFactory") && !has(state, "ShowerFactory") {

@@ -349,6 +349,10 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         for room in &ct.rooms {
             let Some((_, poly)) = room_polys.iter().find(|(k, _)| k == room) else { continue };
             let Some(s) = [1.0, -1.0].into_iter().find(|s| crate::shp::contains_pt(poly, [ct.loc[0] + s * n[0] * 0.5, ct.loc[1] + s * n[1] * 0.5])) else { continue };
+            // (a hinged door sweeps only the room it opens into -- openings::swing_sign, the same rule the built door follows: the other
+            // side keeps walking room, 0.5 m; a small WC whose door opens out has its floor back)
+            let hinged = matches!((ct.kind, ct.style), (CutKind::Door, DoorStyle::Swing));
+            let depth = if hinged && (s > 0.0) != (crate::openings::swing_sign(ct, &room_polys) > 0.0) { 0.5f64.min(depth) } else { depth };
             let off = c.wall_thickness / 2.0 + depth / 2.0 + 0.01;
             let centre = [ct.loc[0] + s * n[0] * off, ct.loc[1] + s * n[1] * off, 1.0];
             let name = format!("doorclear/{room}/{i}");

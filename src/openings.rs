@@ -183,11 +183,7 @@ fn doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::shp::G)
                 polys.iter().find(|(_, g)| crate::shp::contains(g, &p)).map(|(n, _)| (n, rank(crate::rooms::state::room_type(n))))
             };
             let (sp, sm) = (side(1.0), side(-1.0));
-            let swing = match (&sp, &sm) {
-                (Some(a), Some(b)) => if b.1 > a.1 { -1.0 } else { 1.0 },
-                (None, Some(_)) => -1.0,
-                _ => 1.0,
-            };
+            let swing = swing_sign(ct, polys);
             let room = (if swing > 0.0 { sp } else { sm }).map(|x| x.0.clone()).unwrap_or_default();
             // leaf bounding box (factory frame: x thickness, y width, z up)
             let mut lb = Mesh::new();
@@ -333,7 +329,7 @@ fn styled_doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::
             polys.iter().find(|(_, g)| crate::shp::contains(g, &p)).map(|(n, _)| (n, rank(crate::rooms::state::room_type(n))))
         };
         let (sp, sm) = (side(1.0), side(-1.0));
-        let swing = match (&sp, &sm) { (Some(a), Some(b)) => if b.1 > a.1 { -1.0 } else { 1.0 }, (None, Some(_)) => -1.0, _ => 1.0 };
+        let swing = swing_sign(ct, polys);
         let room = (if swing > 0.0 { sp } else { sm }).map(|x| x.0.clone()).unwrap_or_default();
         let name = format!("door{ci}");
         match ct.style {
@@ -613,5 +609,26 @@ pub fn settle_doors(
             "DOOR ci={} at=({:.2},{:.2}) room={} desired={:.0}deg final={:.0}deg limiter={} thickness={:.1}cm",
             d.ci, ct.loc[0], ct.loc[1], d.room, d.desired.to_degrees(), d.angle.to_degrees(), d.limiter, d.t * 100.0
         );
+    }
+}
+
+/// the local-y side a door opens toward: the room that ranks higher (bathroom / bedroom beat hall / living), ties and exterior local +y
+/// -- except into a room under 3 m2 when there is a room on the other side: a small WC's door opens out (one swinging into a 1.5 x 1.5 m
+/// bathroom left no wall for the toilet)
+pub fn swing_sign(ct: &Cutter, polys: &[(String, crate::shp::G)]) -> f64 {
+    let dn = (-ct.rot_z.sin(), ct.rot_z.cos());
+    let side = |sg: f64| -> Option<(i32, f64)> {
+        let p = crate::shp::point(ct.loc[0] + sg * 0.5 * dn.0, ct.loc[1] + sg * 0.5 * dn.1);
+        polys.iter().find(|(_, g)| crate::shp::contains(g, &p)).map(|(n, g)| (rank(crate::rooms::state::room_type(n)), crate::shp::area(g)))
+    };
+    match (side(1.0), side(-1.0)) {
+        (Some(a), Some(b)) => {
+            let into_b = b.0 > a.0;
+            let (tgt, other) = if into_b { (b, a) } else { (a, b) };
+            let flip = tgt.1 < 3.0 && other.1 >= 3.0;
+            if into_b != flip { -1.0 } else { 1.0 }
+        }
+        (None, Some(_)) => -1.0,
+        _ => 1.0,
     }
 }
