@@ -31,6 +31,8 @@ pub struct Site {
     /// the house centre and the front's outward normal (toward the road)
     pub house_c: P2,
     pub front_n: P2,
+    /// the front yard: from the house centre out to the road along front_n (depth), +-half wide along the front
+    pub yard: (f64, f64),
     grid: HashMap<(i32, i32), Vec<usize>>,
 }
 
@@ -111,6 +113,13 @@ impl Site {
     pub fn blocked(&self, x: f64, y: f64, yard: f64) -> bool {
         if let Some((d, _)) = self.road_near(x, y) { if d < self.half + 3.5 { return true } }
         for w in self.drive.windows(2) { if seg_dist([x, y], w[0], w[1]).0 < self.drive_half + 1.5 { return true } }
+        // (trees only: shrubs may edge the front yard)
+        if yard > 5.0 {
+            let (dx, dy) = (x - self.house_c[0], y - self.house_c[1]);
+            let s = dx * self.front_n[0] + dy * self.front_n[1];
+            let l = (dx * -self.front_n[1] + dy * self.front_n[0]).abs();
+            if s > 0.0 && s < self.yard.0 && l < self.yard.1 { return true }
+        }
         self.neighbours.iter().any(|nb| (x - nb.centre[0]).hypot(y - nb.centre[1]) < nb.radius + yard)
     }
 }
@@ -184,7 +193,11 @@ pub fn plan(seed: u64, ring: &[P2], cutters: &[Cutter], wall_t: f64, nat: &dyn F
     let drive_end = [door[0] + nn[0] * (front_off + setback + half - half), door[1] + nn[1] * (front_off + setback + half - half)];
     let drive = vec![[door[0] + nn[0] * 0.8, door[1] + nn[1] * 0.8], drive_end];
     let hc0 = ring.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n as f64, a[1] + p[1] / n as f64]);
-    let mut site = Site { layout, road, half, bulb, drive, drive_half, neighbours: vec![], house_c: hc0, front_n: nn, grid };
+    // front yard: the house's width plus 5 m each side, from its centre to the road (kept free of trees: the woodland grew across a
+    // rural front lawn and stood between the road and the house)
+    let yard_half = ring.iter().map(|p| ((p[0] - hc0[0]) * u[0] + (p[1] - hc0[1]) * u[1]).abs()).fold(0.0, f64::max) + 5.0;
+    let yard_depth = (base[0] - hc0[0]) * nn[0] + (base[1] - hc0[1]) * nn[1];
+    let mut site = Site { layout, road, half, bulb, drive, drive_half, neighbours: vec![], house_c: hc0, front_n: nn, yard: (yard_depth, yard_half), grid };
     // neighbour lots: along both sides of the road (suburban), a few far apart (rural), around the turning circle (cul-de-sac)
     let mut spots: Vec<(P2, P2)> = vec![]; // (house centre, unit vector toward the road)
     match layout {
