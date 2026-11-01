@@ -2195,9 +2195,24 @@ pub fn square_up(state: &mut State) -> Vec<String> {
         let segs = wall_segments(state, &room);
         if !segs.iter().any(|s| straight_ok(s.2)) { continue }
         let start = state.objs[&k].pose;
-        if place_on_wall(state, &k, &room, &move |_st: &State, c: [f64; 2], _t, _len, n: [f64; 2]| if straight_ok(n) { -((c[0] - p0[0]).powi(2) + (c[1] - p0[1]).powi(2)).sqrt() } else { -1e6 }) {
+        // (and room in front of it to open / use it: a wardrobe moved to a straight wall had its doors flush against a bed's side)
+        let (lo, hi) = lohi(state, &k);
+        let (dep, wid) = (hi[0] - lo[0], hi[1] - lo[1]);
+        let reach = if class_of(&state.objs[&k]) == "WardrobeFactory" { 0.6 } else { 0.5 };
+        let kk = k.clone();
+        let front_free = move |st: &State, c: [f64; 2], n: [f64; 2]| -> bool {
+            let u = [-n[1], n[0]];
+            let f0 = [c[0] + n[0] * dep / 2.0, c[1] + n[1] * dep / 2.0];
+            let strip = vec![[f0[0] - u[0] * wid / 2.0, f0[1] - u[1] * wid / 2.0], [f0[0] + u[0] * wid / 2.0, f0[1] + u[1] * wid / 2.0],
+                [f0[0] + u[0] * wid / 2.0 + n[0] * reach, f0[1] + u[1] * wid / 2.0 + n[1] * reach], [f0[0] - u[0] * wid / 2.0 + n[0] * reach, f0[1] - u[1] * wid / 2.0 + n[1] * reach]];
+            !st.objs.iter().any(|(o, b)| o != &kk && b.generator.is_some() && !layout2d::is_room(b) && !matches!(class_of(b), "RugFactory" | "WallArtFactory" | "MirrorFactory" | "CeilingLightFactory") && layout2d::floor_foot(st, o).is_some()
+                && layout2d::prisms(st, o).iter().any(|p| p.z[0] < 1.0 && layout2d::poly_dist(&strip, &p.poly) <= 0.0))
+        };
+        let ff = &front_free;
+        if place_on_wall(state, &k, &room, &move |st: &State, c: [f64; 2], _t, _len, n: [f64; 2]| if straight_ok(n) && ff(st, c, n) { -((c[0] - p0[0]).powi(2) + (c[1] - p0[1]).powi(2)).sqrt() } else { -1e6 }) {
             let y2 = yaw(&state.objs[&k].pose).to_degrees().rem_euclid(90.0);
-            if y2.min(90.0 - y2) < 3.0 {
+            let (c2, n2) = { let p = state.objs[&k].pose; let n = [p.r[0][0], p.r[1][0]]; ([p.t[0] + n[0] * (lo[0] + hi[0]) / 2.0, p.t[1] + n[1] * (lo[0] + hi[0]) / 2.0], n) };
+            if y2.min(90.0 - y2) < 3.0 && front_free(state, c2, n2) {
                 log.push(format!("{} {k}: moved to a straight wall", class_of(&state.objs[&k])));
             } else {
                 // only angled spots were free: it stays where it was

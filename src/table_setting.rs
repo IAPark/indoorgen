@@ -72,7 +72,8 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let right = [-nw[1], nw[0]];
             let side = UTENSILS.iter().find(|u| u.0 == uc.as_str()).unwrap().1;
             // (6 cm between neighbours: at 3.6 cm a knife lay on the spoon's bowl)
-            let off = side.signum() * (pr + 0.035) + (side - side.signum()) * 0.1;
+            // (5 cm past the plate's box: at 3.5 cm a knife lay on a plate's rim)
+            let off = side.signum() * (pr + 0.05) + (side - side.signum()) * 0.1;
             let u = &state.objs[uk];
             let (ul, uh) = (u.geom.lo, u.geom.hi);
             let long_x = uh[0] - ul[0] >= uh[1] - ul[1];
