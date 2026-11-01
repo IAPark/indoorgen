@@ -649,6 +649,8 @@ pub fn sofa_geometry_gn_lvl(p: &SofaParams, cap: Option<i64>) -> Option<(Mesh, V
 // ------------------------------------------------------------------------------------------ factory
 pub struct Sofa {
     params: SofaParams,
+    /// the node group's outline (its un-subdivided cage: the subdivided sofa lies within it), measured when the sofa is made
+    outline: Option<(V3, V3)>,
     seed: u64,
 }
 
@@ -682,7 +684,8 @@ impl Sofa {
             params.seat[0] = params.dims[0];
             params.arm[0] = params.dims[0];
         }
-        Sofa { params, seed: r.randint(0, 1_000_000) as u64 }
+        let outline = sofa_geometry_gn_lvl(&params, Some(0)).map(|(m, _)| m.bounds());
+        Sofa { params, outline, seed: r.randint(0, 1_000_000) as u64 }
     }
 }
 
@@ -713,6 +716,11 @@ impl Factory for Sofa {
             return None;
         }
         sofa_geometry_gn_lvl(&self.params, Some(0)).map(|(m, _)| m.bounds())
+    }
+    /// collision: the outline measured when it was made, one box
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.outline?;
+        Some(vec![crate::piece::Volume::hard([lo[0] - 0.002, lo[1] - 0.002, lo[2] - 0.002], [hi[0] + 0.002, hi[1] + 0.002, hi[2] + 0.002])])
     }
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);

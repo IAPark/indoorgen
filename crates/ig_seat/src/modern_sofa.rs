@@ -306,4 +306,21 @@ impl Factory for ModernSofa {
     fn asset(&self, _i: u64) -> Asset {
         self.build()
     }
+    /// collision: one box (a sofa is solid to the floor, nothing tucks under it) -- rolled arms overhang 3 cm a side, the seat front and
+    /// cushion bulge 1 cm (a skirt 1.4 cm) -- and the seat cushions' tops as the support
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let (hw, lh) = (self.width / 2.0, self.leg_h);
+        let roll: f64 = if self.arm == Arm::Rolled { 0.03 } else { 0.0 };
+        let sk: f64 = if self.legs == Legs::Skirt { 0.012 } else { 0.0 };
+        let front = self.depth + if self.legs == Legs::Skirt { 0.014 } else { 0.01 };
+        let (iy0, iy1) = (-hw + self.arm_w, hw - self.arm_w);
+        let cx0 = 0.12 + self.back_t * 0.55;
+        Some(vec![
+            // (the back cushions puff up to 3 mm over their top edge mid-cushion)
+            // (a skirt's puffed panels stand 1 cm out at the sides, 4 mm behind)
+            Volume::hard([-sk * 0.6, -hw - roll.max(sk), -lh - 0.002], [front, hw + roll.max(sk), self.top_z() - lh + 0.006]),
+            Volume::support([cx0, iy0, self.seat_h - lh], [self.depth, iy1, self.seat_h - lh + 0.001]),
+        ])
+    }
 }
