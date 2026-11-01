@@ -137,6 +137,7 @@ type CacheKey = (String, u64, u64, String, Option<Vec<u64>>);
 fn cache_key(class: &str, fs: u64, inst: u64, what: &str) -> CacheKey {
     let what = match ig_kit::api::size_hint() { Some(h) => format!("{what}|size {:?}", h.map(|x| x.to_bits())), None => what.to_string() };
     let what = if ig_kit::api::round_hint() { format!("{what}|round") } else { what };
+    let what = if ig_kit::api::closed_hint() { format!("{what}|closed") } else { what };
     let what = match ig_kit::api::kitchen_join() { Some(j) => format!("{what}|join {:?}", j.map(|x| x.to_bits())), None => what };
     (class.to_string(), fs, inst, what, unseeded().map(|v| v.iter().map(|x| x.to_bits()).collect()))
 }

@@ -445,64 +445,118 @@ pub fn build_scene(p: &Params) -> Built {
     }
     // build the final assets of all generated objects in parallel (each build is independent and deterministic; results are consumed in
     // the original order below)
+    // one object's visual: built to its size / fitted to its layout box, the geometry budget applied (the parallel build below and
+    // the closed-door rebuild of wardrobes)
+    let build_visual = |k: &String, gen: &indoorgen::furn::state::GenRef, round: bool| -> indoorgen::assets::Asset {
+            ig_kit::api::set_round_hint(round);
+            indoorgen::assets::set_unseeded(gen.unseeded.clone());
+            // the size the solver chose (furn::sizes): 'exact' classes build to it, the others are fitted to the box
+            let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact) || (gen.class == "RugFactory" && gen.size.is_some());
+            if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
+            ig_kit::api::set_kitchen_join(gen.join);
+            let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
+            ig_kit::api::set_kitchen_join(None);
+            ig_kit::api::set_round_hint(false);
+            // SIZEDBG: a class built to a size must come out at it (extents [width (y), depth (x), height (z)] against the hint)
+            if exact && std::env::var_os("SIZEDBG").is_some() {
+                if let Some(h) = indoorgen::furn::solver::cur_size(gen) {
+                    let (lo, hi) = a.bounds();
+                    let e = [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]];
+                    let err = [0, 1, 2].map(|k| (e[k] - h[k]).abs());
+                    let bad = err.iter().any(|v| *v > 0.02);
+                    eprintln!("SIZEDBG {k} {} fs {} inst {} round {} hint [{:.3}, {:.3}, {:.3}] built [{:.3}, {:.3}, {:.3}] err [{:.3}, {:.3}, {:.3}]{}", gen.class, gen.factory_seed, gen.inst_seed, round, h[0], h[1], h[2], e[0], e[1], e[2], err[0], err[1], err[2], if bad { " OFF" } else { "" });
+                }
+            }
+            if exact { ig_kit::api::set_size_hint(None); }
+            // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
+            if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {
+                let (lo, hi) = a.bounds();
+                // (an L leg's wall cabinet reaching on into the corner widens the model toward that end: kitchen_plan.rs)
+                let reach = gen.join.map_or(0.0, |j| if j[2].abs() > 1.5 { 0.0 } else { j[2] * j[3] / 2.0 });
+                let off = [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 + reach - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]];
+                if off.iter().any(|v| v.abs() > 1e-6) { a.transform(&indoorgen::mesh::Mat4::translation(off)); }
+            }
+            if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
+                let (lo, hi) = a.bounds();
+                if std::env::var_os("FITDBG").is_some() { eprintln!("FITDBG {k} {} asset {:.2?}..{:.2?} box {:.2?}..{:.2?}", gen.class, lo, hi, tlo, thi); }
+                let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
+                let mut mt = indoorgen::mesh::Mat4::scale(s);
+                for k in 0..3 { mt.0[k][3] = off[k]; }
+                a.transform(&mt);
+                for c in a.cols.iter_mut() { let (p, q) = (mt.apply(c.0), mt.apply(c.1)); *c = (p, q); }
+            }
+            if ig_core::envx::var_os("BUDGETLOG").is_some() {
+                let tc = |a: &indoorgen::assets::Asset| a.parts.iter().map(|p| p.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
+                let t0 = web_time::Instant::now();
+                let before = tc(&a);
+                indoorgen::budget::apply_asset(&mut a, &cfg.geometry);
+                eprintln!("BUDGETLOG {} tris {} -> {} {:.3}s", gen.class, before, tc(&a), t0.elapsed().as_secs_f64());
+            } else {
+                indoorgen::budget::apply_asset(&mut a, &cfg.geometry);
+            }
+            indoorgen::assets::set_unseeded(None);
+        a
+    };
     let mut visuals: std::collections::HashMap<String, indoorgen::assets::Asset> = {
         use rayon::prelude::*;
         let items: Vec<(&String, &indoorgen::furn::state::GenRef, bool)> = g.state.objs.iter().filter(|(k, _)| !g.features.iter().any(|f| &f.key == *k)).filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen, o.tags.contains(indoorgen::furn::tags::Tag::sem("RoundTable"))))).collect();
         items
             .par_iter()
-            .map(|(k, gen, round)| {
-                ig_kit::api::set_round_hint(*round);
-                indoorgen::assets::set_unseeded(gen.unseeded.clone());
-                // the size the solver chose (furn::sizes): 'exact' classes build to it, the others are fitted to the box
-                let exact = indoorgen::furn::sizes::model(&gen.class).map_or(false, |m| m.exact) || (gen.class == "RugFactory" && gen.size.is_some());
-                if exact { ig_kit::api::set_size_hint(indoorgen::furn::solver::cur_size(gen)); }
-                ig_kit::api::set_kitchen_join(gen.join);
-                let mut a = assets.visual(&gen.class, gen.factory_seed, gen.inst_seed);
-                ig_kit::api::set_kitchen_join(None);
-                ig_kit::api::set_round_hint(false);
-                // SIZEDBG: a class built to a size must come out at it (extents [width (y), depth (x), height (z)] against the hint)
-                if exact && std::env::var_os("SIZEDBG").is_some() {
-                    if let Some(h) = indoorgen::furn::solver::cur_size(gen) {
-                        let (lo, hi) = a.bounds();
-                        let e = [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]];
-                        let err = [0, 1, 2].map(|k| (e[k] - h[k]).abs());
-                        let bad = err.iter().any(|v| *v > 0.02);
-                        eprintln!("SIZEDBG {k} {} fs {} inst {} round {} hint [{:.3}, {:.3}, {:.3}] built [{:.3}, {:.3}, {:.3}] err [{:.3}, {:.3}, {:.3}]{}", gen.class, gen.factory_seed, gen.inst_seed, round, h[0], h[1], h[2], e[0], e[1], e[2], err[0], err[1], err[2], if bad { " OFF" } else { "" });
-                    }
-                }
-                if exact { ig_kit::api::set_size_hint(None); }
-                // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
-                if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {
-                    let (lo, hi) = a.bounds();
-                    // (an L leg's wall cabinet reaching on into the corner widens the model toward that end: kitchen_plan.rs)
-                    let reach = gen.join.map_or(0.0, |j| if j[2].abs() > 1.5 { 0.0 } else { j[2] * j[3] / 2.0 });
-                    let off = [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 + reach - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]];
-                    if off.iter().any(|v| v.abs() > 1e-6) { a.transform(&indoorgen::mesh::Mat4::translation(off)); }
-                }
-                if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
-                    let (lo, hi) = a.bounds();
-                    if std::env::var_os("FITDBG").is_some() { eprintln!("FITDBG {k} {} asset {:.2?}..{:.2?} box {:.2?}..{:.2?}", gen.class, lo, hi, tlo, thi); }
-                    let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
-                    let mut mt = indoorgen::mesh::Mat4::scale(s);
-                    for k in 0..3 { mt.0[k][3] = off[k]; }
-                    a.transform(&mt);
-                    for c in a.cols.iter_mut() { let (p, q) = (mt.apply(c.0), mt.apply(c.1)); *c = (p, q); }
-                }
-                if ig_core::envx::var_os("BUDGETLOG").is_some() {
-                    let tc = |a: &indoorgen::assets::Asset| a.parts.iter().map(|p| p.mesh.faces.iter().map(|f| f.len().saturating_sub(2)).sum::<usize>()).sum::<usize>();
-                    let t0 = web_time::Instant::now();
-                    let before = tc(&a);
-                    indoorgen::budget::apply_asset(&mut a, &cfg.geometry);
-                    eprintln!("BUDGETLOG {} tris {} -> {} {:.3}s", gen.class, before, tc(&a), t0.elapsed().as_secs_f64());
-                } else {
-                    indoorgen::budget::apply_asset(&mut a, &cfg.geometry);
-                }
-                indoorgen::assets::set_unseeded(None);
-                ((*k).clone(), a)
-            })
+            .map(|(k, gen, round)| ((*k).clone(), build_visual(k, gen, *round)))
             .collect()
     };
     lap("visuals built");
+    // an open wardrobe door (wardrobe.rs: a quarter of hinged wardrobes stand with one bay open) whose swing would cut into a
+    // neighbour is closed: the solver places against the closed box (seed 312: a door swung through the side table in front)
+    {
+        let wb = |o: &indoorgen::furn::state::ObjState, lo: [f64; 3], hi: [f64; 3]| -> ([f64; 3], [f64; 3]) {
+            let (mut a, mut b) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for i in 0..8 { let p = o.pose.apply([if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]); for d in 0..3 { a[d] = a[d].min(p[d]); b[d] = b[d].max(p[d]); } }
+            (a, b)
+        };
+        let mut reclose: Vec<String> = vec![];
+        for (k, o) in &g.state.objs {
+            let Some(gen) = &o.generator else { continue };
+            if gen.class != "WardrobeFactory" { continue }
+            let Some(a) = visuals.get(k) else { continue };
+            // the carcass depth: the first part (the cabinet body); anything past it in +x is an open door
+            let Some(body) = a.parts.first() else { continue };
+            let (bl, bh) = body.mesh.bounds();
+            let (al, ah) = a.bounds();
+            if ah[0] < bh[0] + 0.1 { continue }
+            let (sl, sh) = wb(o, [bh[0] + 0.03, al[1], bl[2] + 0.05], [ah[0], ah[1], ah[2]]);
+            // (and the openings: a window's zone 0.15 m into the room over the glass height, a door's 0.6 m passage)
+            let hit_open = g.cutters.iter().any(|ct| {
+                let (hw, depth, z0, z1) = match ct.kind {
+                    indoorgen::rooms::solidify::CutKind::Window => (ct.dims[0] / 2.0, 0.15 + g.c.wall_thickness / 2.0, ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0),
+                    indoorgen::rooms::solidify::CutKind::Passage => return false,
+                    _ => (ct.dims[0] / 2.0, 0.6, ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0),
+                };
+                // the swing box's corners in the opening's frame (x along the wall, y through it)
+                let (c, sn) = (ct.rot_z.cos(), ct.rot_z.sin());
+                let pts = [[sl[0], sl[1]], [sh[0], sl[1]], [sh[0], sh[1]], [sl[0], sh[1]]].map(|p| { let (dx, dy) = (p[0] - ct.loc[0], p[1] - ct.loc[1]); [dx * c + dy * sn, -dx * sn + dy * c] });
+                let (lx0, lx1) = (pts.iter().map(|p| p[0]).fold(f64::MAX, f64::min), pts.iter().map(|p| p[0]).fold(f64::MIN, f64::max));
+                let (ly0, ly1) = (pts.iter().map(|p| p[1]).fold(f64::MAX, f64::min), pts.iter().map(|p| p[1]).fold(f64::MIN, f64::max));
+                lx0 < hw && lx1 > -hw && ly0 < depth && ly1 > -depth && sl[2] < z1 && sh[2] > z0
+            });
+            let hit = hit_open || g.state.objs.iter().any(|(k2, o2)| {
+                if k2 == k || o2.generator.as_ref().map_or(true, |g2| g2.class.contains("Rug") || g2.class.contains("CeilingLight")) { return false }
+                let Some(a2) = visuals.get(k2) else { return false };
+                let (l2, h2) = a2.bounds();
+                let (ol, oh) = wb(o2, l2, h2);
+                (0..3).all(|d| ol[d] < sh[d] && oh[d] > sl[d])
+            });
+            if hit { reclose.push(k.clone()); }
+        }
+        for k in reclose {
+            let gen = g.state.objs[&k].generator.clone().unwrap();
+            ig_kit::api::set_closed_hint(true);
+            let a = build_visual(&k, &gen, false);
+            ig_kit::api::set_closed_hint(false);
+            eprintln!("WARDROBE {k}: open door would hit a neighbour or an opening's zone -- closed");
+            visuals.insert(k, a);
+        }
+    }
     // room features: their built meshes (span frame, posed by the state object) are visuals from here on, so the snap passes see mantels,
     // hearths and shelves as the surfaces their children rest on; the features themselves are on every skip list (never moved / removed)
     for pf in &g.features { visuals.insert(pf.key.clone(), pf.asset.clone()); }

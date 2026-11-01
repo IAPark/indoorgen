@@ -771,6 +771,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     "StandingSinkFactory" => Some(hi[2] + 0.35),
                     // (a window over a bed: its sill clear of the headboard)
                     "BedFactory" => Some(hi[2] + 0.05),
+                    // (over a sofa or an armchair: clear of its back -- an armchair's back stood 11 cm into the glass)
+                    "SofaFactory" | "ArmChairFactory" => Some(hi[2] + 0.05),
                     // (over a TV stand: clear of the TV on it -- a room's one outside wall held the TV)
                     "TVStandFactory" => Some(state.objs.iter().filter(|(_, c)| c.generator.as_ref().map_or(false, |cg| cg.class == "TVFactory") && c.relations.iter().any(|r| &r.target == k)).map(|(ck, _)| wb(state, ck).1[2]).fold(hi[2] + 0.8, f64::max) + 0.05),
                     // (low storage -- a sideboard, a low bookcase -- takes a window over it, its sill above its top)

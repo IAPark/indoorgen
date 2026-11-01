@@ -122,12 +122,15 @@ impl ModernSofa {
         // styles beyond the first three arm / leg kinds, from their own stream (the draws above keep their values): back style, a
         // bench seat, tuxedo / armless arms, bun / skirted / hairpin bases
         let mut q = Rng::seeded(seed ^ 0x5eed_50fa);
-        let back = [Back::Pillow, Back::Tight, Back::Channel, Back::Tufted][q.choice_p(&[0.5, 0.15, 0.2, 0.15])];
-        let bench = q.f64() < 0.3;
+        // (NO_SOFA_STYLES=1: the original pillow back / three arms / three leg kinds only)
+        let plain = std::env::var_os("NO_SOFA_STYLES").is_some();
+        let back = if plain { Back::Pillow } else { [Back::Pillow, Back::Tight, Back::Channel, Back::Tufted][q.choice_p(&[0.5, 0.15, 0.2, 0.15])] };
+        let bench = !plain && q.f64() < 0.3;
         let ua = q.f64();
-        let (arm, arm_w) = if ua < 0.14 { (Arm::Tuxedo, q.uniform(0.12, 0.2)) } else if ua < 0.2 { (Arm::None, 0.0) } else { (arm, arm_w) };
+        // (tuxedo arms on sofas only: an armchair beside a window raised its arm into the window's zone)
+        let (arm, arm_w) = if plain { (arm, arm_w) } else if ua < 0.14 && !armchair { (Arm::Tuxedo, q.uniform(0.12, 0.2)) } else if ua < 0.2 { (Arm::None, 0.0) } else { (arm, arm_w) };
         let ul = q.f64();
-        let legs = if ul < 0.12 { Legs::Bun } else if ul < 0.22 { Legs::Skirt } else if ul < 0.3 { Legs::Hairpin } else { legs };
+        let legs = if plain { legs } else if ul < 0.12 { Legs::Bun } else if ul < 0.22 { Legs::Skirt } else if ul < 0.3 { Legs::Hairpin } else { legs };
         let leg_h = if legs == Legs::Skirt { leg_h.min(0.08) } else { leg_h };
         let mut width = width;
         // built to the layout box [width (y), depth (x), height]: the overall extents are the box's (rolled arms overhang, the seat

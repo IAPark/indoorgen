@@ -81,7 +81,7 @@ impl Wardrobe {
         let dw0 = w / self.doors as f64;
         let open_bay = {
             let hsh = crate::int_hash(&["wardrobe_open", &self.seed.to_string()]);
-            if !self.sliding && std::env::var_os("NO_WARDROBE_OPEN").is_none() && hsh % 4 == 0 { Some((hsh / 4) as usize % self.doors) } else { None }
+            if !self.sliding && std::env::var_os("NO_WARDROBE_OPEN").is_none() && !crate::api::closed_hint() && hsh % 4 == 0 { Some((hsh / 4) as usize % self.doors) } else { None }
         };
         let mut cab = Mesh::new();
         match open_bay {

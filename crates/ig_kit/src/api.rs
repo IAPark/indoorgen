@@ -564,6 +564,16 @@ pub fn size_hint() -> Option<[f64; 3]> {
     SIZE_HINT.with(|c| c.get())
 }
 thread_local! {
+    static CLOSED_HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// the next factory construction keeps its doors closed (a wardrobe whose open door would swing into a neighbour: scenegen)
+pub fn set_closed_hint(on: bool) {
+    CLOSED_HINT.with(|c| c.set(on));
+}
+pub fn closed_hint() -> bool {
+    CLOSED_HINT.with(|c| c.get())
+}
+thread_local! {
     static ROUND_HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 /// the next factory construction builds a round variant (dining tables the layout made round: furn::groups, tag RoundTable)
