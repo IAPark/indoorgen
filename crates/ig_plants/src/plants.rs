@@ -445,6 +445,17 @@ impl Factory for PlantContainer {
         Some(a)
     }
 
+    /// collision: the pot (round, its rim r_expand wide, its wall outside), the plant -- fitted into side x side x top over the soil --
+    /// as foliage
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let s = self.pot.scale;
+        let r = self.pot.r_expand.max(self.pot.r_mid) * s + self.pot.thickness * s * 1.4 + 0.002;
+        let (h, m) = (self.pot.depth * s, 0.002);
+        let dirt_z = self.dirt_ratio * h;
+        let w = self.side_size + m;
+        Some(vec![Volume::hard([-r, -r, -self.pot.thickness * s * 1.4 - m], [r, r, h + m]), Volume::soft([-w, -w, dirt_z - 0.02 - m], [w, w, dirt_z + self.top_size + m])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut a = Asset::default();
         let pot_mesh = self.pot.mesh();
@@ -470,6 +481,7 @@ impl Factory for PlantContainer {
             let mesh = Mesh { pos: v.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]).collect(), faces: m.f.clone(), uv: vec![] };
             let b = mesh.bounds();
             a.mesh(mesh, &pm("leaf", "plant_factory.factory.material", [0.1, 0.3, 0.1]), Some(b));
+            a.soft.push(a.parts.len() - 1);
             return a;
         }
         match self.kind {
@@ -512,6 +524,7 @@ impl Factory for PlantContainer {
         plant.transform(&Mat4::translation([0.0, 0.0, dirt_z]).mul(&Mat4::scale([scale; 3])).mul(&Mat4::translation([0.0, 0.0, -lo[2]])));
         let (plo, phi) = plant.bounds();
         a.mesh(plant, &leaf_mat, Some((plo, phi)));
+        a.soft.push(a.parts.len() - 1);
         let _ = self.large;
         a
     }

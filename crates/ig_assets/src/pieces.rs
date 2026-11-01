@@ -7,9 +7,8 @@ use ig_kit::piece::{Piece, Volume, Collide, Build};
 use ig_kit::api::Asset;
 use ig_core::rng::Rng;
 
-/// classes kept on the solver's old path for now (counter runs and kitchen cabinets: real per-cabinet placeholders, kitchen plans; a
-/// large plant: 1.5 s a build until its collision is ported)
-const NOT_YET: &[&str] = &["KitchenSpaceFactory", "KitchenCabinetFactory", "KitchenIslandFactory", "LargePlantContainerFactory"];
+/// classes kept on the solver's old path for now (counter runs and kitchen cabinets: real per-cabinet placeholders, kitchen plans)
+const NOT_YET: &[&str] = &["KitchenSpaceFactory", "KitchenCabinetFactory", "KitchenIslandFactory"];
 
 /// install the registry (once per process: gen2, the wasm entry, tools)
 pub fn install_pieces() {

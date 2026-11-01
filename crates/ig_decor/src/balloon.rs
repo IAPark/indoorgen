@@ -586,6 +586,15 @@ impl Factory for Balloon {
         a.mesh(m, &mat("ph", [0.5; 3], 0.5), Some(b));
         Some(a)
     }
+    /// collision (soft: the cloth): the letters' row (balloon.py's placeholder box: 0.8 of the scale per letter, 0.8 high) with the
+    /// shell -- solidified thickness about its middle -- and the inflation's 2.2 cm bulge scaled, the displacement round it
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.bounds(inst);
+        let (rs, d) = (self.rel_scale, self.displace + 0.003);
+        let b = 0.022 * rs;
+        // (the font's tails -- Q, J -- reach 0.35 of the scale under the baseline and 0.1 before the first letter)
+        Some(vec![crate::piece::Volume::soft([-(0.5 * self.thickness * rs + b) - d, lo[1] - 0.1 * rs - b - d, lo[2] - 0.35 * rs - b - d], [(self.thickness * rs + b) + d, hi[1] + b + d, hi[2] + b + d])])
+    }
     fn asset(&self, inst: u64) -> Asset {
         let (pre, rm) = self.pre_cloth(inst);
         let m = post_cloth(&inflate(&pre, &rm), self.rel_scale, self.displace);
