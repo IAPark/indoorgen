@@ -164,9 +164,6 @@ pub fn reset_caches() { PH_CACHE.with(|c| c.borrow_mut().clear()); }
 /// sampled placeholder instead of building a new asset (up to 1 s for sofas / armchairs) per rejected candidate.
 pub fn set_placeholder_reuse(on: bool) { PH_REUSE.store(on, std::sync::atomic::Ordering::Relaxed); }
 
-/// drop the reused placeholder of `class`: the next sample draws a new one (a bed redrawn to fit a small room got the same king 8 times)
-pub fn forget_placeholder(class: &str) { PH_CACHE.with(|m| { m.borrow_mut().remove(class); }); }
-
 pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
     if PH_REUSE.load(std::sync::atomic::Ordering::Relaxed) {
         let hit = PH_CACHE.with(|m| {

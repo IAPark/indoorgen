@@ -1670,20 +1670,6 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                         if ok { break; }
                     }
                 }
-                // (then another draw of the bed, up to eight, taking only the narrower ones: a 3 x 3 m room took no 2.1 m wide king even with
-                // its wardrobe gone, and stayed empty; beds have no size model to shrink one to)
-                if !ok {
-                    for _ in 0..16 {
-                        state.objs.shift_remove(&name);
-                        super::solver::forget_placeholder("BedFactory");
-                        if !new_piece(ctx, state, rng, "BedFactory", &room, &name) { break }
-                        let bw = { let g = &state.objs[&name].geom; g.hi[1] - g.lo[1] };
-                        if bw > 1.65 { continue }
-                        ok = place_on_wall(state, &name, &room, &score);
-                        if ok { log.push(format!("{room}: bed redrawn {bw:.2} m wide to fit")); break }
-                    }
-                    if !state.objs.contains_key(&name) { continue }
-                }
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
             }
         }
