@@ -365,7 +365,8 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                         let tilt = nrm[2].clamp(-1.0, 1.0).acos().to_degrees();
                         if is_tableware(&o.class) && bad_support(sc) {
                             issues.push(format!("implausible support {} on {}", o.class, sc));
-                        } else if tilt > 25.0 && gap.abs() < 0.01 && 2 * touch.1 > touch.0 {
+                        // (cookware on a range rests on rounded grate bars: steep normals at nearly every contact; the sunk check covers it)
+                        } else if tilt > 25.0 && gap.abs() < 0.01 && 2 * touch.1 > touch.0 && !(sc.contains("Oven") && (o.class.contains("Pot") || o.class.contains("Pan"))) {
                             issues.push(format!("resting on a {:.0} deg slope of {}", tilt, sc));
                         }
                     }

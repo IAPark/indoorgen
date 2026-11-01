@@ -203,15 +203,32 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             let ly = r.uniform(0.0, std::f64::consts::TAU);
             let (cy, sy) = (ly.cos(), ly.sin());
             let ilo = item.bounds().0[2];
+            // (about the item's box centre, as place() sets it on (x, y): a pan's handle moves that 9 cm off its body, and the lift
+            // probed the hob where the pan was not -- seeds 310, 615: 1-2 cm into the pan supports)
+            let (icx, icy) = { let (l, h) = item.bounds(); ((l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0) };
             let mut zt = zt;
             let mut seen: std::collections::HashSet<(i64, i64)> = Default::default();
             for p in item.parts.iter().flat_map(|p| p.mesh.pos.iter()) {
                 if p[2] > ilo + 0.012 { continue }
-                let (px, py) = (x + sc * (p[0] * cy - p[1] * sy), y + sc * (p[0] * sy + p[1] * cy));
+                let (qx, qy) = (p[0] - icx, p[1] - icy);
+                let (px, py) = (x + sc * (qx * cy - qy * sy), y + sc * (qx * sy + qy * cy));
                 if !seen.insert(((px / 0.01).floor() as i64, (py / 0.01).floor() as i64)) { continue }
                 let lift = sc * (p[2] - ilo);
-                for z in heights(&tris, px, py) { if z - lift > zt && z <= band.1 + 0.04 { zt = z - lift; } }
+                for z in heights(&tris, px, py) { if z - lift > zt && z <= band.1 + 0.12 { zt = z - lift; } }
             }
+            // (and across the whole base disc on a 1 cm grid: a pan's base is a centre and a rim ring of vertices, and the pan supports
+            // standing between them went 1-2 cm up into it -- seeds 310, 615)
+            let low: Vec<[f64; 2]> = item.parts.iter().flat_map(|p| p.mesh.pos.iter()).filter(|p| p[2] <= ilo + 0.012).map(|p| [p[0] - icx, p[1] - icy]).collect();
+            let n_low = low.len().max(1) as f64;
+            let (mx, my) = (low.iter().map(|p| p[0]).sum::<f64>() / n_low, low.iter().map(|p| p[1]).sum::<f64>() / n_low);
+            let br = low.iter().map(|p| ((p[0] - mx).powi(2) + (p[1] - my).powi(2)).sqrt()).fold(0.0f64, f64::max) * sc;
+            let (bcx, bcy) = (x + sc * (mx * cy - my * sy), y + sc * (mx * sy + my * cy));
+            let steps = (br / 0.01).ceil() as i64;
+            for i in -steps..=steps { for j in -steps..=steps {
+                let (gx, gy) = (i as f64 * 0.01, j as f64 * 0.01);
+                if gx * gx + gy * gy > br * br * 0.8 { continue }
+                for z in heights(&tris, bcx + gx, bcy + gy) { if z > zt && z <= band.1 + 0.12 { zt = z; } }
+            }}
             let at = o.pose.apply([x, y, zt]);
             let yaw = o.pose.r[1][0].atan2(o.pose.r[0][0]) + ly;
             let b = box_at(&item, at, yaw, sc);
