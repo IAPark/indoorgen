@@ -58,7 +58,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 mesh.append(&bx([x1 - t, yc - w / 2.0, zt - drop * r.uniform(0.6, 0.95)], [x1, yc + w / 2.0, zt], &o.pose));
                 // (a towel hanging into the basin or the cistern below the rail: none)
                 let (ml, mh) = mesh.bounds();
-                if state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "BathtubFactory" | "ShowerFactory" | "ToiletFactory" | "StandingSinkFactory")) && {
+                // (nor over another fitting lower on the wall)
+                if state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.as_ref().map_or(false, |gg| matches!(gg.class.as_str(), "BathtubFactory" | "ShowerFactory" | "ToiletFactory" | "StandingSinkFactory" | "HardwareFactory")) && {
                     // (over a basin 0.3 m clear: its tap stands above the box)
                     let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); let up = |d: usize| if d == 2 && oo.generator.as_ref().map_or(false, |gg| gg.class.contains("Sink")) { 0.3 } else { 0.02 };
                     (0..3).all(|d| ml[d] < b.1[d] + up(d) && b.0[d] - 0.02 < mh[d]) }) { continue }

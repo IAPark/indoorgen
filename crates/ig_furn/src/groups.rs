@@ -2490,6 +2490,20 @@ pub fn orphans(state: &mut State) -> Vec<String> {
         let (tl, th) = layout2d::lohi_world(state, &tv);
         let d = [(sl[0] + sh[0] - tl[0] - th[0]) / 2.0, (sl[1] + sh[1] - tl[1] - th[1]) / 2.0];
         if d[0].abs() + d[1].abs() > 0.005 { let mut p = state.objs[&tv].pose; p.translate([d[0], d[1], 0.0]); state.set_pose(&tv, p); state.touch(&tv); }
+        // what else stands on the stand: slid along it clear of the centred TV, else off (a lamp's shade went into the screen)
+        let (tl, th) = layout2d::lohi_world(state, &tv);
+        let kids: Vec<String> = state.objs.iter().filter(|(k, o)| **k != tv && o.relations.iter().any(|r| r.target == st)).map(|(k, _)| k.clone()).collect();
+        for k in kids {
+            let (kl, kh) = layout2d::lohi_world(state, &k);
+            if !(0..2).all(|i| kl[i] < th[i] + 0.02 && tl[i] - 0.02 < kh[i]) { continue }
+            // the stand's long axis in world xy, and the shifts that put the piece just past either side of the TV
+            let ax = if sh[0] - sl[0] >= sh[1] - sl[1] { 0 } else { 1 };
+            let cands = [th[ax] + 0.03 - kl[ax], tl[ax] - 0.03 - kh[ax]];
+            let fit = cands.iter().cloned().filter(|s| kl[ax] + s >= sl[ax] && kh[ax] + s <= sh[ax]).min_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap());
+            if let Some(sv) = fit {
+                let mut p = state.objs[&k].pose; let mut t = [0.0; 3]; t[ax] = sv; p.translate(t); state.set_pose(&k, p); state.touch(&k);
+            } else { layout2d::remove_tree(state, &k); }
+        }
     }
     // pictures and mirrors a piece moved in front of after they were hung (wardrobes grow to their alcove afterwards)
     let hung: Vec<String> = state.objs.iter().filter(|(_, o)| matches!(class_of(o), "WallArtFactory" | "MirrorFactory")).map(|(k, _)| k.clone()).collect();
