@@ -603,7 +603,8 @@ pub fn build_scene(p: &Params) -> Built {
                 if ok { moves.push((k.clone(), d)); } else { shallow.push((k.clone(), df)); }
                 continue;
             }
-            if df > -0.03 || oven { continue }
+            // (and a recessed range or dishwasher comes forward too: one stood 8 cm behind its run's front, 1019)
+            if df > -0.03 { continue }
             let shift = -df;
             let mut d = [0.0; 3]; d[ax] = sgn * shift;
             let (nl, nh) = ([al[0] + d[0], al[1] + d[1], al[2]], [ah[0] + d[0], ah[1] + d[1], ah[2]]);
@@ -744,6 +745,17 @@ pub fn build_scene(p: &Params) -> Built {
     }
     if cfg.post.snap {
         for (k, s) in indoorgen::snap::untuck_chairs(&mut g.state, &visuals) { eprintln!("UNTUCK {k} drawn back {:.1} cm (arms under the table top)", s * 100.0); }
+        let fboxes: Vec<([f64; 3], [f64; 3])> = g.features.iter().map(|pf| {
+            let p = pf.pose();
+            let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for part in &pf.asset.parts { for q in &part.mesh.pos { let w = [0, 1, 2].map(|i| p.r[i][0] * q[0] + p.r[i][1] * q[1] + p.r[i][2] * q[2] + p.t[i]); for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); } } }
+            (lo, hi)
+        }).collect();
+        let wt = g.c.wall_thickness;
+        let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();
+        for (k, m) in indoorgen::snap::clear_ceiling_lights(&mut g.state, &visuals, &fboxes, &inner) {
+            match m { Some(d) => eprintln!("CEILLIGHT {k} moved ({:+.2}, {:+.2}) clear of a tall piece", d[0], d[1]), None => eprintln!("CEILLIGHT {k} removed (over a tall piece, no room to move)") }
+        }
     }
     if cfg.post.snap && cfg.post.wall_push {
         let wt = g.c.wall_thickness;

@@ -626,3 +626,45 @@ pub fn untuck_chairs(state: &mut State, visuals: &HashMap<String, crate::assets:
     }
     out
 }
+
+/// Ceiling lights (solver-placed against the room's ceiling) clear of what reaches the ceiling below them: a built-in bookshelf wall's
+/// cornice stood 6.5 cm into a light's shade (1024). A light whose box overlaps a piece's (or a feature's, `extra`) slides sideways out
+/// of it along the shorter way, up to 0.5 m and inside its room (`rooms`: inner outlines); when it cannot, it goes.
+pub fn clear_ceiling_lights(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, extra: &[([f64; 3], [f64; 3])], rooms: &[Vec<[f64; 2]>]) -> Vec<(String, Option<[f64; 2]>)> {
+    let to_world = |p: &Pose, q: [f64; 3]| -> [f64; 3] { let r = &p.r; [0, 1, 2].map(|i| r[i][0] * q[0] + r[i][1] * q[1] + r[i][2] * q[2] + p.t[i]) };
+    let wbox = |p: &Pose, a: &crate::assets::Asset| -> ([f64; 3], [f64; 3]) {
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for part in &a.parts { for q in &part.mesh.pos { let w = to_world(p, *q); for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); } } }
+        (lo, hi)
+    };
+    let in_poly = |p: [f64; 2], poly: &[[f64; 2]]| -> bool {
+        let (mut c, n) = (false, poly.len());
+        let mut j = n - 1;
+        for i in 0..n { let (a, b) = (poly[i], poly[j]); if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] { c = !c; } j = i; }
+        c
+    };
+    let is_light = |o: &crate::furn::state::ObjState| o.generator.as_ref().map_or(false, |g| g.class.starts_with("CeilingLight") || g.class.starts_with("CeilingClassic"));
+    let mut obst: Vec<([f64; 3], [f64; 3])> = extra.to_vec();
+    for (k, o) in &state.objs {
+        let Some(g) = &o.generator else { continue };
+        if is_light(o) || g.class.contains("Rug") || g.class.contains("Curtain") || g.class.contains("Door") || g.class.contains("Window") { continue }
+        if let Some(a) = visuals.get(k) { obst.push(wbox(&o.pose, a)); }
+    }
+    let lights: Vec<String> = state.objs.iter().filter(|(k, o)| is_light(o) && visuals.contains_key(*k)).map(|(k, _)| k.clone()).collect();
+    let mut out = vec![];
+    for k in lights {
+        let p = state.objs[&k].pose;
+        let (lo, hi) = wbox(&p, &visuals[&k]);
+        let hit = |dx: f64, dy: f64| obst.iter().any(|(ol, oh)| ol[0] < hi[0] + dx && oh[0] > lo[0] + dx && ol[1] < hi[1] + dy && oh[1] > lo[1] + dy && ol[2] < hi[2] && oh[2] > lo[2]);
+        if !hit(0.0, 0.0) { continue }
+        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        let Some(room) = rooms.iter().find(|r| r.len() > 2 && in_poly(c, r)) else { continue };
+        let inside = |dx: f64, dy: f64| [[lo[0] + dx, lo[1] + dy], [hi[0] + dx, lo[1] + dy], [hi[0] + dx, hi[1] + dy], [lo[0] + dx, hi[1] + dy]].iter().all(|q| in_poly(*q, room));
+        let mv = (1..=25).map(|i| i as f64 * 0.02).find_map(|s| [(s, 0.0), (-s, 0.0), (0.0, s), (0.0, -s)].into_iter().find(|&(dx, dy)| !hit(dx, dy) && inside(dx, dy)));
+        match mv {
+            Some((dx, dy)) => { let mut np = p; np.translate([dx, dy, 0.0]); state.set_pose(&k, np); state.touch(&k); out.push((k, Some([dx, dy]))); }
+            None => { state.objs.shift_remove(&k); out.push((k, None)); }
+        }
+    }
+    out
+}
