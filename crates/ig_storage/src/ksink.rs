@@ -108,6 +108,22 @@ impl Factory for KSink {
         a.mesh(tm, &tap_m, None);
         a
     }
+    /// collision: the rim over the counter (the top protrude high), the basin sunk into the counter below it, the tap at
+    /// (-Depth / 2, 0, Upper Height)
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let (lo, hi) = self.geo_bounds();
+        let m = 0.002;
+        let zc = hi[2] - self.protrude;
+        let (tlo, thi) = super::taps::tap_bounds(self.fseed, i);
+        let tx = -self.depth / 2.0;
+        Some(vec![
+            Volume::hard([lo[0] - m, lo[1] - m, zc], [hi[0] + m, hi[1] + m, hi[2] + m]),
+            // (the drain dips Lower Height and its 1 cm spout below the bowl)
+            Volume::inset([lo[0] - m, lo[1] - m, lo[2] - self.lower - 0.012], [hi[0] + m, hi[1] + m, zc]),
+            Volume::hard([tx + tlo[0], tlo[1], self.upper + tlo[2]], [tx + thi[0], thi[1], self.upper + thi[2]]),
+        ])
+    }
 }
 
 pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {

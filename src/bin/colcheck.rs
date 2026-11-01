@@ -64,8 +64,8 @@ fn main() {
 /// (worst rigid overshoot, worst soft overshoot, leaves holding no mesh part, loose sides description)
 fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String) {
     // (a rigid part may also lie in an opening: a door shown standing open lies in its swing)
-    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_))).map(Prepared::new).collect();
-    let softp: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Soft | Role::Opening(_))).map(Prepared::new).collect();
+    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_) | Role::Inset)).map(Prepared::new).collect();
+    let softp: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Soft | Role::Opening(_) | Role::Inset)).map(Prepared::new).collect();
     let out = |set: &[Prepared], p: [f64; 3]| -> f64 { set.iter().map(|v| v.outside(p)).fold(f64::INFINITY, f64::min) };
     let (mut ro, mut so) = (0.0f64, 0.0f64);
     let (mut mlo, mut mhi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -103,7 +103,7 @@ fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String
 /// --detail: per rigid mesh part, how far it pokes out of the rigid volumes on each side (cm, + = outside), and the collision's
 /// rigid bounds against the rigid mesh's
 fn sides(class: &str, seed: u64, vols: &[Volume], mesh: &ig_kit::api::Asset) {
-    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_))).map(Prepared::new).collect();
+    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_) | Role::Inset)).map(Prepared::new).collect();
     let (clo, chi) = rigid_bounds(vols);
     let (mut mlo, mut mhi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     let softp: Vec<Prepared> = vols.iter().filter(|v| !matches!(v.role, Role::Opening(_)) || true).map(Prepared::new).collect();

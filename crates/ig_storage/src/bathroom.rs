@@ -171,6 +171,20 @@ impl Factory for Toilet {
         a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
         a
     }
+    /// collision, in the build's frame (y front to back, z = 0 at the seat) turned by pi/2 as the build is: the bowl's rim (its outline
+    /// grown by the wall and the seat's lip) to the tank's cap at the back, the stand to the floor, the tank's top or the cover tipped up
+    /// about its hinge, and a flush handle on the tank's side
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (a, mo, t, e) = (self.size_mid * self.size, self.mid_offset(), self.thickness, self.extrude_height);
+        let front = a + t + e + 0.01;
+        let back = mo + self.back_size + self.tank_cap_extrude + 0.004;
+        let mut half = (self.width / 2.0 + t + 0.01).max(self.tank_width / 2.0 + self.tank_cap_extrude + 0.004);
+        if self.handle && !self.hw_side { half = half.max(self.tank_width / 2.0 + self.hw_length + self.hw_cap + 0.01) }
+        // the cover: the whole seat plane (front to the hinge), turned up by -cover_rotation about the hinge 1.5 e over the seat
+        let cover = (front + mo + self.seat_size) * (-self.cover_rotation).sin() + 2.5 * e + 0.004;
+        let top = (self.tank_height + self.tank_cap_height / 2.0 + 0.004).max(cover);
+        Some(vec![crate::piece::Volume::hard([-back, -half, -self.height - 0.006], [front, half, top])])
+    }
 }
 
 fn rounded(m: Mesh, _r: f64) -> Mesh {
@@ -326,15 +340,54 @@ impl Factory for Bathtub {
         a.mesh(b.hole, &metal, None);
         if !self.alcove {
             a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
-            // a freestanding tub built to a size: its legs and curves came out up to 0.17 m over it, scaled back (about its corner)
-            if crate::api::size_hint().is_some() {
-                let (lo, hi) = a.bounds();
-                let want = [self.size, self.width, self.depth];
-                let s = [want[0] / (hi[0] - lo[0]).max(1e-6), want[1] / (hi[1] - lo[1]).max(1e-6), want[2] / (hi[2] - lo[2]).max(1e-6)];
-                for p in a.parts.iter_mut() { for q in p.mesh.pos.iter_mut() { for d in 0..3 { q[d] = lo[d] + (q[d] - lo[d]) * s[d]; } } }
-            }
         }
         a
+    }
+    /// collision: an alcove tub fills its box; a freestanding one is its bowl's cage (the contour, wider at the top when curved, cut at
+    /// the rim height), the rim's lip, then the two simple deforms (taper, bend) taken on the cage box's corners (their scale factors
+    /// are bilinear in x and y/z, the bend's x^2 term extreme at the ends or x = 0), the feet stepping out along the bowl's normals, all
+    /// turned by pi/2 as the build is
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        if self.alcove {
+            return Some(vec![Volume::hard([-self.size - 0.002, -0.002, -0.002], [0.002, self.width + 0.002, self.depth + 0.004]), Volume::support([-self.size + 0.02, 0.02, self.depth], [-0.02, self.width - 0.02, self.depth + 0.001])]);
+        }
+        let (w, sz, t) = (self.width, self.size, self.thickness);
+        let (dx, dy) = if self.has_curve { (self.disp_x, self.disp_y) } else { ([0.0; 2], 0.0) };
+        let deform = |p: [f64; 3], taper: bool, f: f64, range: f64| -> [f64; 3] {
+            let sf = f / range.max(1e-6);
+            if taper { let sc = 1.0 + p[0] * sf; [p[0], p[1] * sc, p[2] * sc] } else { let sc = p[0] * p[0] * sf - sf + 1.0; [p[0] * (1.0 + sf), p[1] * sc, p[2] * sc] }
+        };
+        // the cage's x range (the rim's lip included) sets both deforms' ranges
+        let (x0, x1) = (-dx[0] - t * 1.05, w + dx[1] + t * 1.05);
+        let r0 = x1 - x0;
+        let r1 = { let a = deform([x0, 0.0, 0.0], true, self.taper, r0)[0]; let b = deform([x1, 0.0, 0.0], true, self.taper, r0)[0]; (b - a).abs() };
+        // a box of the cage (y about the middle) through the deforms, as bounds in the built frame
+        let warp = |lo: [f64; 3], hi: [f64; 3]| -> ([f64; 3], [f64; 3]) {
+            let (mut a, mut b) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for x in [lo[0], 0.0f64.clamp(lo[0], hi[0]), hi[0]] { for y in [lo[1], hi[1]] { for z in [lo[2], hi[2]] {
+                let q = deform(deform([x, y - sz / 2.0, z], true, self.taper, r0), false, self.taper, r1);
+                for k in 0..3 { a[k] = a[k].min(q[k]); b[k] = b[k].max(q[k]); }
+            } } }
+            a[1] += sz / 2.0; b[1] += sz / 2.0;
+            (a, b)
+        };
+        // the bowl: the cage at the top (z = 2 depth) is the widest, the rim's lip grows its loop by t in x, t / 2 in y, and stands up to t
+        let (mut lo, mut hi) = warp([x0, -dy - t * 0.55, 0.0], [x1, sz + dy + t * 0.55, self.depth + t]);
+        // (the deformed bowl is lifted to the floor)
+        let shift = (-lo[2]).max(0.0);
+        lo[2] = 0.0; hi[2] += shift;
+        let m = 0.004;
+        let turn = |lo: [f64; 3], hi: [f64; 3]| Volume::hard([-hi[1] - m, lo[0] - m, lo[2] - m], [-lo[1] + m, hi[0] + m, hi[2] + m]);
+        let mut v = vec![turn(lo, hi)];
+        if self.has_legs {
+            // the feet: from the bowl's lowest band (the cage's bottom, narrower when curved), out along its normals by leg_side (y by
+            // leg_y_scale), down to the floor
+            let (gx, gy) = (self.leg_side + self.leg_radius * 1.2, self.leg_side * self.leg_y_scale + self.leg_radius * 1.2);
+            let (a, b) = warp([dx[0] - gx, dy - gy, 0.0], [w - dx[1] + gx, sz - dy + gy, self.leg_height + self.leg_radius]);
+            v.push(turn([a[0], a[1], 0.0], [b[0], b[1], b[2] + shift]));
+        }
+        Some(v)
     }
 }
 
@@ -424,6 +477,26 @@ impl Factory for Sink {
             a.mesh(t, &metal, None);
         }
         a
+    }
+    /// collision: the basin is fitted to its box (bathroom_sink.py scales it to [width, size, depth], the deck extruded back by
+    /// size_extrude, the pedestal below); the tap stands on the deck at the back, its lowest x at the deck's back edge plus tap_offset
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let x0 = -(if self.has_extrude { self.size_extrude } else { 0.0 } + 1.0) * self.size;
+        let z0 = if self.has_stand { -self.stand_height } else { 0.0 };
+        let m = 0.002;
+        let mut v = vec![Volume::hard([x0 - m, -m, z0 - m], [m, self.width + m, self.depth + m])];
+        if self.has_extrude {
+            // the build's draws before the tap's seed: the pedestal's cuts, a free basin's drain spot
+            let mut r = inst_rng(self.fseed, i);
+            if self.has_stand { r.randint(3, 6); }
+            if !self.alcove { r.uniform(0.35, 0.4); }
+            let seed = r.randint(0, 10_000_000) as u64;
+            let (lo, hi) = super::taps::tap_bounds(self.fseed, seed);
+            let tx = (-1.0 - self.size_extrude + self.tap_offset) * self.size;
+            v.push(Volume::hard([tx, self.width / 2.0 + lo[1], self.depth + lo[2]], [tx + hi[0] - lo[0], self.width / 2.0 + hi[1], self.depth + hi[2]]));
+        }
+        Some(v)
     }
 }
 
@@ -541,6 +614,26 @@ impl Factory for Hardware {
         let _ = self.circular;
         a.transform(&Mat4::rot_z(std::f64::consts::FRAC_PI_2));
         a
+    }
+    /// collision: the wall plate and stem, then the hook, the holder or the bar (with its second plate) or the ring, in the python
+    /// frame (wall normal -y) turned by pi/2
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let _ = i;
+        let y = -self.depth;
+        let (mut lo, mut hi) = ([-self.ar.max(self.r), -self.depth, -self.ar.max(self.r)], [self.ar.max(self.r), 0.0, self.ar.max(self.r)]);
+        let mut add = |l: [f64; 3], h: [f64; 3]| for k in 0..3 { lo[k] = lo[k].min(l[k]); hi[k] = hi[k].max(h[k]); };
+        match self.ty {
+            0 => add([-self.r, y - self.r, -self.hook_length / 2.0], [self.r, y + self.r, self.hook_length / 2.0]),
+            1 => add([-self.ext, y - self.r, -self.r], [self.holder_length, y + self.r, self.r]),
+            2 => add([-self.ext, y - self.r, -self.ar.max(self.r)], [self.bar_length + self.ext.max(self.ar), y + self.r, self.ar.max(self.r)]),
+            _ => {
+                // (the ring's tube: at most 0.7 r)
+                let (rr, minor, yc) = (self.ring_radius, self.r * 0.7, self.ad - self.depth);
+                add([-rr - minor, yc - minor, -2.0 * rr - minor], [rr + minor, yc + minor, minor]);
+            }
+        }
+        let m = 0.002;
+        Some(vec![crate::piece::Volume::hard([-hi[1] - m, lo[0] - m, lo[2] - m], [-lo[1] + m, hi[0] + m, hi[2] + m])])
     }
 }
 

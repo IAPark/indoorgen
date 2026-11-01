@@ -127,6 +127,21 @@ impl Factory for Shower {
     fn asset(&self, _i: u64) -> Asset {
         self.build()
     }
+    /// collision: the enclosure as one box (the ajar door's tip and its handle in front, posts and the top rail over the screens), the
+    /// tray as the support, and the glass door's swing about its hinge on the middle post
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let (d, w, h, th) = (self.depth, self.width, self.height, self.tray_h);
+        let front_x = d - 0.01;
+        let split = w * 0.5;
+        let dw = w - split - 0.03;
+        // the door stands open 0.04 rad: its tip sin(0.04) * dw out, the handle bar 1 cm round 1 cm before it
+        let fx = front_x + 0.04f64.sin() * dw + 0.025;
+        let mut v = vec![Volume::hard([-0.002, -0.004, -0.002], [fx.max(d + 0.004), w + 0.004, h + 0.014]), Volume::support([0.05, 0.05, th], [d - 0.05, w - 0.05, th + 0.001])];
+        let panel = ([front_x - 0.006, split, th + 0.015], [front_x + 0.006, w - 0.03, h - 0.01]);
+        v.push(Volume::opening(Leaf::Hinged { panel, hinge: [front_x, split, th], axis: [0.0, 0.0, -1.0], max_angle: std::f64::consts::FRAC_PI_2 }));
+        Some(v)
+    }
 }
 
 pub fn make(_c: &str, rng: &mut Rng, _fseed: u64) -> Option<Box<dyn Factory>> {

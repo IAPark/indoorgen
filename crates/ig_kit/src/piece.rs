@@ -37,6 +37,8 @@ pub enum Role {
     Soft,
     /// a door's swing or a drawer's pull-out (the volume's shape is the leaf's sweep)
     Opening(Leaf),
+    /// rigid, sunk into what it stands on (a sink's basin under the counter's top): hard against everything but that object
+    Inset,
 }
 
 #[derive(Clone, Debug)]
@@ -49,10 +51,12 @@ impl Volume {
     pub fn hard(lo: V3, hi: V3) -> Volume { Volume { shape: Shape::Box { lo, hi }, role: Role::Hard } }
     pub fn support(lo: V3, hi: V3) -> Volume { Volume { shape: Shape::Box { lo, hi }, role: Role::Support } }
     pub fn soft(lo: V3, hi: V3) -> Volume { Volume { shape: Shape::Box { lo, hi }, role: Role::Soft } }
+    pub fn inset(lo: V3, hi: V3) -> Volume { Volume { shape: Shape::Box { lo, hi }, role: Role::Inset } }
     pub fn hard_hull(pts: Vec<V3>) -> Volume { Volume { shape: Shape::Hull(pts), role: Role::Hard } }
     /// the opening volume of a leaf: the panel swept from closed to fully open
     pub fn opening(leaf: Leaf) -> Volume { Volume { shape: Shape::Hull(sweep(&leaf, 9)), role: Role::Opening(leaf) } }
 
+    /// (an inset volume is rigid too, but below what the piece stands on: not in its bounds, its relation faces or its size)
     pub fn is_rigid(&self) -> bool { matches!(self.role, Role::Hard | Role::Support) }
     pub fn points(&self) -> Vec<V3> {
         match &self.shape {
@@ -199,10 +203,10 @@ pub fn solver_geom(vols: &[Volume], max_rigid: usize) -> ObjGeom {
                     if cross(sub(t.v[1], t.v[0]), sub(t.v[2], t.v[0]))[2] > 1e-12 { t.tags = SUPPORT; tris.push(t); }
                 }
             }
-            Role::Soft | Role::Opening(_) => {
+            Role::Soft | Role::Opening(_) | Role::Inset => {
                 let p = match &v.shape { Shape::Box { lo: a, hi: b } => Proxy::Box { center: [0, 1, 2].map(|k| (a[k] + b[k]) / 2.0), half: [0, 1, 2].map(|k| ((b[k] - a[k]) / 2.0).max(1e-6)) }, Shape::Hull(pts) => Proxy::Hull(pts.clone()) };
                 proxies.push((p, u32::MAX));
-                roles.push(if matches!(v.role, Role::Soft) { ROLE_SOFT } else { ROLE_OPEN });
+                roles.push(match v.role { Role::Soft => ROLE_SOFT, Role::Inset => ROLE_INSET, _ => ROLE_OPEN });
             }
             Role::Hard => {}
         }

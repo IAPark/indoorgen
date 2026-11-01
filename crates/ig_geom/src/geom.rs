@@ -80,6 +80,8 @@ pub struct ObjGeom {
 pub const ROLE_HARD: u8 = 0;
 pub const ROLE_SOFT: u8 = 1;
 pub const ROLE_OPEN: u8 = 2;
+/// sunk into the object it stands on: hard against everything else
+pub const ROLE_INSET: u8 = 3;
 
 impl ObjGeom {
     /// the role of proxy `i`
