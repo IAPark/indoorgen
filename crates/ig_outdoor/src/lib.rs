@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 mod trees;
 mod veg;
 pub mod exterior;
+pub mod site;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -64,6 +65,10 @@ pub struct OutdoorCfg {
     pub tree_wall_clearance: f64,
     /// House exterior: siding, trim, foundation, steps and a pitched roof (src/exterior.rs).
     pub exterior: bool,
+    /// Road, driveway and neighbour houses (src/site.rs).
+    pub site: bool,
+    /// Site layout: "suburban", "rural", "culdesac" (null: drawn per seed).
+    pub layout: Option<String>,
     /// Tree source: "rust" (crates/ig_plants/src/rtree.rs, geometry in the scene) or "infinigen" (the renderer instances Infinigen's
     /// TreeFactory variants from its cache; Blender renders only).
     pub trees: String,
@@ -77,7 +82,7 @@ pub struct OutdoorCfg {
 impl Default for OutdoorCfg {
     fn default() -> Self {
         OutdoorCfg { on: true, near_extent: 70.0, near_spacing: 1.0, far_radius: 2500.0, ground_scale: 4.0, mountain_height: None, mountain_coverage: None, pad_depth: 0.45, pad_blend: 18.0,
-            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into(), exterior: true }
+            tree_density: 4.0, bush_density: 3.0, tree_far: 400.0, tree_wall_clearance: 5.0, tree_variants: 5, bush_variants: 4, trees: "rust".into(), exterior: true, site: true, layout: None }
     }
 }
 
@@ -188,6 +193,8 @@ struct Terrain {
     pad_z: f64,
     pad_blend: f64,
     level: f64,
+    /// road, driveway and neighbour pads shape the terrain (src/site.rs)
+    site: Option<site::Site>,
 }
 
 impl Terrain {
@@ -208,7 +215,8 @@ impl Terrain {
         let far = smooth(300.0, 1200.0, r);
         let free = self.ground(x, y) - self.level + self.mountains(x, y) * far;
         let b = smooth(1.5, 1.5 + self.pad_blend, d);
-        self.pad_z * (1.0 - b) + (self.pad_z + free) * b
+        let h = self.pad_z * (1.0 - b) + (self.pad_z + free) * b;
+        match &self.site { Some(s) => s.shape(x, y, h), None => h }
     }
     fn dist(&self, x: f64, y: f64) -> f64 {
         if ig_core::shp::contains_pt(&self.house, [x, y]) { 0.0 } else { ig_core::shp::distance(&self.house, &ig_core::shp::point(x, y)) }
@@ -247,10 +255,18 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters:
     let mut t = Terrain {
         seed_g, ground_scale: cfg.ground_scale, m_seed, m_min_freq: 0.0012, m_max_freq: 0.004, m_scale: m_height * 2.0, m_mask_freq: 0.0012,
         m_ramp: (-1.1 - coverage * 2.0 + 1.6, -0.9 - coverage * 2.0 + 1.6), m_slope_scale: m_height * 0.15,
-        centre, house: house.clone(), pad_z: floor_z - cfg.pad_depth, pad_blend: cfg.pad_blend, level: 0.0,
+        centre, house: house.clone(), pad_z: floor_z - cfg.pad_depth, pad_blend: cfg.pad_blend, level: 0.0, site: None,
     };
     // the free terrain's level at the house: the pad joins it without a step
     t.level = t.ground(centre[0], centre[1]);
+    // the site (road, driveway, neighbours) from its own stream, planned on the unshaped terrain, then shaping it
+    if cfg.site {
+        let layout = cfg.layout.as_deref().map(|l| match l { "rural" => site::Layout::Rural, "culdesac" => site::Layout::CulDeSac, _ => site::Layout::Suburban });
+        let ring = ig_core::shp::exterior(&house);
+        let s = site::plan(seed, &ring, cutters, wall_t, &|x, y| t.height(x, y, t.dist(x, y)), t.pad_z, layout);
+        log.push(format!("site: {:?}, road half width {:.1} m, {} neighbours", s.layout, s.half, s.neighbours.len()));
+        t.site = Some(s);
+    }
     // materials (Infinigen's ground weights; ridges in mountain stone)
     // (Infinigen's ground weights without mud and sand: mud's puddles mirrored the sky -- a flooded field -- without grass on it)
     let ground_cls = ["terrain.Dirt", "terrain.Dirt", "terrain.Soil", "terrain.Soil", "terrain.CobbleStone", "terrain.CrackedGround", "terrain.Stone"];
@@ -318,8 +334,12 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters:
     if cfg.exterior {
         let mut er = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "exterior"]));
         let st = crate::exterior::Style::draw(&mut er);
-        let nf = crate::exterior::add_house(scene, "main", &ig_core::shp::exterior(&house), cutters, wall_t, floor_z, wall_top, t.pad_z, &st, er.next_u64());
+        let nf = crate::exterior::add_house(scene, "main", &ig_core::shp::exterior(&house), cutters, wall_t, floor_z, wall_top, t.pad_z, &st, er.next_u64(), false);
         log.push(format!("exterior: {nf} faces, siding {:?} exposure {:.2}, roof {} {:.0} deg", st.siding, st.exposure, if st.hip { "hip" } else { "gable" }, st.pitch_deg));
+    }
+    if let Some(st) = &t.site {
+        let nf = site::add_meshes(scene, st, &|x, y| t.height(x, y, t.dist(x, y)), seed);
+        log.push(format!("site meshes: {nf} faces"));
     }
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);
     scene.add("outdoor_terrain_far#0", "OutdoorTerrain", far_g, gm);

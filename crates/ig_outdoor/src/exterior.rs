@@ -274,13 +274,15 @@ fn fascia(m: &mut Mesh, a: V3, b: V3) {
 
 /// Add one house's exterior to the scene. `outer`: the footprint's outer face (a closed ring, metres), `cutters`: the house's
 /// openings (only those on the outer boundary are used), `wall_top` the walls' top, `ground_z` the ground at the walls.
-pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cutter], wall_t: f64, floor_z: f64, wall_top: f64, ground_z: f64, st: &Style, seed: u64) -> usize {
+/// `fill`: put dark glass and door panels in the openings (a neighbour's shell has no windows or doors of its own)
+pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cutter], wall_t: f64, floor_z: f64, wall_top: f64, ground_z: f64, st: &Style, seed: u64, fill: bool) -> usize {
     let mut ring: Vec<[f64; 2]> = outer.to_vec();
     if ring.len() > 1 && (ring[0][0] - ring[ring.len() - 1][0]).abs() < 1e-9 && (ring[0][1] - ring[ring.len() - 1][1]).abs() < 1e-9 { ring.pop(); }
     if ring.len() < 3 { return 0 }
     let area2: f64 = (0..ring.len()).map(|k| { let (a, b) = (ring[k], ring[(k + 1) % ring.len()]); a[0] * b[1] - b[0] * a[1] }).sum();
     let ccw = area2 > 0.0;
     let mut p = Parts { siding: Mesh::new(), trim: Mesh::new(), roof: Mesh::new(), concrete: Mesh::new() };
+    let (mut glass, mut doors) = (Mesh::new(), Mesh::new());
     let ze = wall_top + 0.05;
     let zs = floor_z + 0.1; // siding starts above the foundation band
     for k in 0..ring.len() {
@@ -308,6 +310,21 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
         let turn = dp[0] * d[1] - dp[1] * d[0];
         if (turn > 0.0) == ccw { wbox(&mut p.trim, a, u, n, (-0.05, 0.11), (0.0, SIDING_OUT + 0.015), (zs - 0.02, ze)); }
         for h in &holes {
+            if fill {
+                // the opening's back: dark glass (a window, with a muntin cross) or a door leaf, a little behind the wall face
+                if h.door { wbox(&mut doors, a, u, n, (h.a0, h.a1), (-0.06, -0.03), (h.z0, h.z1)); }
+                else {
+                    glass.add_quad(wp(a, u, n, h.a0, -0.05, h.z0), wp(a, u, n, h.a1, -0.05, h.z0), wp(a, u, n, h.a1, -0.05, h.z1), wp(a, u, n, h.a0, -0.05, h.z1));
+                    let (am, zm) = (0.5 * (h.a0 + h.a1), 0.5 * (h.z0 + h.z1));
+                    wbox(&mut p.trim, a, u, n, (am - 0.02, am + 0.02), (-0.05, -0.02), (h.z0, h.z1));
+                    wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (-0.05, -0.02), (zm - 0.02, zm + 0.02));
+                }
+                // reveals: the opening's sides back to the glass
+                wbox(&mut p.trim, a, u, n, (h.a0 - 0.01, h.a0), (-0.06, SIDING_OUT), (h.z0, h.z1));
+                wbox(&mut p.trim, a, u, n, (h.a1, h.a1 + 0.01), (-0.06, SIDING_OUT), (h.z0, h.z1));
+                wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (-0.06, SIDING_OUT), (h.z1, h.z1 + 0.01));
+                if !h.door { wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (-0.06, SIDING_OUT), (h.z0 - 0.01, h.z0)); }
+            }
             let dd = (SIDING_OUT, SIDING_OUT + 0.02);
             wbox(&mut p.trim, a, u, n, (h.a0 - TRIM_W, h.a0), dd, (h.z0 - if h.door { 0.0 } else { TRIM_W }, h.z1 + TRIM_W));
             wbox(&mut p.trim, a, u, n, (h.a1, h.a1 + TRIM_W), dd, (h.z0 - if h.door { 0.0 } else { TRIM_W }, h.z1 + TRIM_W));
@@ -349,8 +366,11 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
     rm.texture = Some(shingle_texture(st.roof, r.next_u64()));
     rm.alpha_cutoff = 0.0;
     let rmi = scene.material(rm);
+    let gm = scene.material(Material::diffuse("ext_window_glass", [0.015, 0.02, 0.025], 0.06));
+    let dcols: [[f32; 3]; 5] = [[0.25, 0.04, 0.03], [0.05, 0.08, 0.14], [0.06, 0.06, 0.06], [0.30, 0.18, 0.08], [0.75, 0.74, 0.70]];
+    let dm = scene.material(Material::diffuse(&format!("ext_door:{tag}"), dcols[r.randint(0, 5) as usize], 0.4));
     let mut n = 0;
-    for (part, m, mi) in [("siding", p.siding, sm), ("trim", p.trim, tm), ("foundation", p.concrete, cm), ("roof", p.roof, rmi)] {
+    for (part, m, mi) in [("siding", p.siding, sm), ("trim", p.trim, tm), ("foundation", p.concrete, cm), ("roof", p.roof, rmi), ("windows", glass, gm), ("door", doors, dm)] {
         if m.is_empty() { continue }
         n += m.faces.len();
         scene.add(&format!("exterior_{tag}.{part}"), "OutdoorHouse", m, mi);
