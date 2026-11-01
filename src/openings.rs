@@ -486,6 +486,11 @@ pub fn settle_doors(
         if let Some(v) = std::env::var("DOORDESIRED").ok().and_then(|v| v.parse::<f64>().ok()) {
             d.desired = v.to_radians(); // testing: force the desired angle
         }
+        // a door into a cramped room (under 9 m2) opens back against the wall: half open it stood in the middle of a small
+        // bathroom and filled every view of it (the sweep below stops it at the first wall or piece)
+        if let Some((_, g)) = polys.iter().find(|(n, _)| *n == d.room) {
+            if crate::shp::area(g) < 9.0 { d.desired = d.desired.max(100f64.to_radians()); }
+        }
         let ct = &cutters[d.ci];
         let m0 = d.full_pose(ct, 0.0);
         let pv = m0.apply([d.xh, d.swing * d.t / 2.0, 0.0]);
