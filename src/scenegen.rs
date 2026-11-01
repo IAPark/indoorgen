@@ -533,6 +533,59 @@ pub fn build_scene(p: &Params) -> Built {
             eprintln!("THROUGHWALL removed {k} (+{} on it)", gone.len().saturating_sub(1));
         }
     }
+    // fridges flush with their counter run: a fridge shallower than the run, its back to the wall, stood 11-15 cm behind the counter
+    // fronts (seeds 301, 318, ...); it moves forward to the run's front when nothing stands in the way (the invariants' appliance_flush)
+    {
+        let wb = |o: &indoorgen::furn::state::ObjState, lo: [f64; 3], hi: [f64; 3]| -> ([f64; 3], [f64; 3]) {
+            let (mut a, mut b) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for i in 0..8 { let p = o.pose.apply([if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]); for d in 0..3 { a[d] = a[d].min(p[d]); b[d] = b[d].max(p[d]); } }
+            (a, b)
+        };
+        let boxes: std::collections::HashMap<String, ([f64; 3], [f64; 3])> = g.state.objs.iter().filter_map(|(k, o)| { let a = visuals.get(k)?; let (l, h) = a.bounds(); Some((k.clone(), wb(o, l, h))) }).collect();
+        let mut moves: Vec<(String, [f64; 3])> = vec![];
+        for (k, o) in &g.state.objs {
+            if o.generator.as_ref().map_or(true, |gg| gg.class != "FridgeFactory") { continue }
+            let Some(&(al, ah)) = boxes.get(k) else { continue };
+            let fa = [o.pose.r[0][0], o.pose.r[1][0]];
+            let ax = if fa[0].abs() > fa[1].abs() { 0 } else { 1 };
+            let sgn = if fa[ax] > 0.0 { 1.0 } else { -1.0 };
+            let side = 1 - ax;
+            // the run beside it: a counter run facing the same way, touching it sideways (gap < 5 cm)
+            let mut best: Option<f64> = None;
+            for (rk, ro) in &g.state.objs {
+                if ro.generator.as_ref().map_or(true, |gg| gg.class != "KitchenSpaceFactory") { continue }
+                let fr = [ro.pose.r[0][0], ro.pose.r[1][0]];
+                if fr[0] * fa[0] + fr[1] * fa[1] < 0.9 { continue }
+                let Some(&(rl, rh)) = boxes.get(rk) else { continue };
+                let gap = (rl[side] - ah[side]).max(al[side] - rh[side]);
+                if gap > 0.05 { continue }
+                let df = if sgn > 0.0 { ah[ax] - rh[ax] } else { rl[ax] - al[ax] };
+                if best.map_or(true, |b| df.abs() < b.abs()) { best = Some(df); }
+            }
+            let Some(df) = best else { continue };
+            if df > -0.03 { continue }
+            let shift = -df;
+            let mut d = [0.0; 3]; d[ax] = sgn * shift;
+            let (nl, nh) = ([al[0] + d[0], al[1] + d[1], al[2]], [ah[0] + d[0], ah[1] + d[1], ah[2]]);
+            // the space the fridge moves into is clear (runs beside it excepted: they touch it by design)
+            let clear = boxes.iter().all(|(ok, &(ol, oh))| {
+                if ok == k { return true }
+                if g.state.objs.get(ok).and_then(|x| x.generator.as_ref()).map_or(false, |gg| matches!(gg.class.as_str(), "KitchenSpaceFactory" | "RugFactory" | "CeilingLightFactory")) { return true }
+                // what touched it before the move (on it, beside it) stays a non-issue
+                let before = (0..3).all(|i| ol[i] < ah[i] && oh[i] > al[i]);
+                before || !(0..3).all(|i| ol[i] < nh[i] - 0.005 && oh[i] > nl[i] + 0.005)
+            });
+            if clear { moves.push((k.clone(), d)); }
+        }
+        for (k, d) in moves {
+            let shift = d[0].abs() + d[1].abs();
+            // (moved, not built deeper: the fridge is built to its layout size)
+            let o = g.state.objs.get_mut(&k).unwrap();
+            let t = o.pose.t;
+            o.pose.set_loc([t[0] + d[0], t[1] + d[1], t[2]]);
+            eprintln!("FRIDGE {k}: forward {shift:.2} m to the run's front");
+        }
+    }
     // an open wardrobe door (wardrobe.rs: a quarter of hinged wardrobes stand with one bay open) whose swing would cut into a
     // neighbour is closed: the solver places against the closed box (seed 312: a door swung through the side table in front)
     {
