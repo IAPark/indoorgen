@@ -175,6 +175,28 @@ impl Factory for Fridge {
     fn asset(&self, _i: u64) -> Asset {
         self.build()
     }
+    /// collision: the body (handles included), the top, a swing per hinged door (hinged away from its handle) and a pull-out for a
+    /// bottom freezer drawer (bottom-freezer and french-door fridges)
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let (d, w, h, t, k) = (self.depth, self.width, self.height, self.door_t, self.kick);
+        let x0 = d - t;
+        let xf = d + HANDLE_PROUD;
+        let mut v = vec![Volume::hard([0.0, 0.0, -0.001], [xf + 0.001, w, h + 0.001]), Volume::support([0.0, 0.0, h - 0.001], [x0, w, h])];
+        let zs = k + (h - k) * self.split;
+        let door = |v: &mut Vec<Volume>, y0: f64, y1: f64, z0: f64, z1: f64, hinge_hi: bool| {
+            let (hy, axis) = if hinge_hi { (y1, [0.0, 0.0, 1.0]) } else { (y0, [0.0, 0.0, -1.0]) };
+            v.push(Volume::opening(Leaf::Hinged { panel: ([x0, y0, z0], [xf, y1, z1]), hinge: [d, hy, z0], axis, max_angle: 100f64.to_radians() }));
+        };
+        let drawer = |v: &mut Vec<Volume>, z0: f64, z1: f64| v.push(Volume::opening(Leaf::Drawer { panel: ([0.05, 0.0, z0], [xf, w, z1]), dir: [1.0, 0.0, 0.0], travel: 0.6 * d }));
+        match self.style {
+            Style::TopFreezer => { door(&mut v, 0.0, w, k, zs, true); door(&mut v, 0.0, w, zs, h, true); }
+            Style::BottomFreezer => { drawer(&mut v, k, zs); door(&mut v, 0.0, w, zs, h, true); }
+            Style::SideBySide => { let ys = w * self.split; door(&mut v, 0.0, ys, k, h, false); door(&mut v, ys, w, k, h, true); }
+            Style::French => { drawer(&mut v, k, zs); door(&mut v, 0.0, w / 2.0, zs, h, false); door(&mut v, w / 2.0, w, zs, h, true); }
+        }
+        Some(v)
+    }
 }
 
 pub fn make(_c: &str, rng: &mut Rng, _fseed: u64) -> Option<Box<dyn Factory>> {

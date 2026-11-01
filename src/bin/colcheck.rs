@@ -86,7 +86,9 @@ fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String
             // (or a part lies wholly in the sweep: the door shown standing open)
             let pv = Prepared::new(v);
             let holds = mesh.parts.iter().any(|pt| { let (a, b) = pt.mesh.bounds(); (0..3).all(|k| a[k] >= panel.0[k] - 0.01 && b[k] <= panel.1[k] + 0.01) })
-                || mesh.parts.iter().any(|pt| !pt.mesh.pos.is_empty() && pt.mesh.pos.iter().all(|p| pv.contains(*p, 0.002)) && { let (a, b) = pt.mesh.bounds(); (0..3).filter(|&k| b[k] - a[k] > 0.3).count() >= 1 });
+                || mesh.parts.iter().any(|pt| !pt.mesh.pos.is_empty() && pt.mesh.pos.iter().all(|p| pv.contains(*p, 0.002)) && { let (a, b) = pt.mesh.bounds(); (0..3).filter(|&k| b[k] - a[k] > 0.3).count() >= 1 })
+                // (or a part covers the panel's middle: a node-graph build's door merged into its body)
+                || { let c = [0, 1, 2].map(|k| (panel.0[k] + panel.1[k]) / 2.0); mesh.parts.iter().any(|pt| { let (a, b) = pt.mesh.bounds(); (0..3).all(|k| a[k] <= c[k] && c[k] <= b[k]) }) };
             if !holds { bad += 1; }
         }
     }

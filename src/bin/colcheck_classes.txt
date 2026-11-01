@@ -85,3 +85,4 @@ VoluteFactory
 WallArtFactory
 WardrobeFactory
 WineglassFactory
+RoundRugFactory

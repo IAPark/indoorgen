@@ -2094,7 +2094,15 @@ pub fn rugs(state: &mut State) -> Vec<String> {
             let o = state.objs.get_mut(&rug).unwrap();
             o.geom = std::sync::Arc::new(super::geom::ObjGeom::cuboid([-d / 2.0, -w / 2.0, lo[2]], [d / 2.0, w / 2.0, lo[2] + t], 0));
             if let Some(g) = o.generator.as_mut() { g.size = Some([w, d, t]); g.fit_box = None; }
-            // (a piece: resized to the rug's size, its own geometry)
+            // (a piece: resized to the rug's size, its own geometry; a round one -- under a round table -- is a round rug, its own asset)
+            if round > 0.5 && o.generator.as_ref().map_or(false, |g| g.piece.is_some()) {
+                let fs = o.generator.as_ref().unwrap().factory_seed;
+                if let Some(p) = crate::piece::make_piece("RoundRugFactory", fs) {
+                    let g = o.generator.as_mut().unwrap();
+                    g.class = "RoundRugFactory".to_string();
+                    g.piece = Some(super::state::PieceRef::new(p));
+                }
+            }
             if let Some(np) = o.generator.as_ref().and_then(|g| g.piece.as_ref()).and_then(|p| p.resize([w, d, t])) {
                 o.geom = std::sync::Arc::new(super::solver::piece_geom(&np).0);
                 let ps = np.size();

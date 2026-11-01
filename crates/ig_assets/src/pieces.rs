@@ -71,7 +71,12 @@ pub struct FactoryPiece {
 fn hash(tag: &str, seed: u64) -> u64 { crate::int_hash(&[tag, &seed.to_string()]) }
 
 /// the class builds to a size it is given (its size model is 'exact')
-fn builds_to_size(class: &str) -> bool { sizes::model(class).map_or(false, |m| m.exact) }
+fn builds_to_size(class: &str) -> bool {
+    // (a microwave keeps its node graph's own size: its sizing went through the old appliance's formula, which the node graph's build does
+    // not follow -- the turntable stood through the back of a shallow one)
+    if class == "MicrowaveFactory" { return false }
+    sizes::model(class).map_or(false, |m| m.exact) || matches!(class, "RugFactory" | "RoundRugFactory")
+}
 
 impl FactoryPiece {
     fn new(class: &str, seed: u64, size: Option<[f64; 3]>) -> FactoryPiece {

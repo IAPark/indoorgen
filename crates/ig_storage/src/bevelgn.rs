@@ -220,6 +220,53 @@ impl BevFactory {
 }
 
 impl Factory for BevFactory {
+    /// collision from the sampled parameters (python's own placeholder formulas: appliances.rs): the body with its door and handle, the
+    /// top (an oven: its cooktop, and the control panel turned back over it as its own box), and the door -- dropping down about its bottom
+    /// edge (dishwasher, oven) or swinging on its side (beverage fridge, microwave: over the door, not the control panel)
+    fn volumes(&self, _inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let mut s = (self.sample)(&self.rng);
+        if let Some(h) = self.hint { for (k, v) in appliances::microwave_dims(&self.rng, h) { num(&mut s, k, v); } }
+        let n = |k: &str| s.nums.get(k).map(|v| v[0]);
+        let (d, w, h, dt) = (n("Depth")?, n("Width")?, n("Height")?, n("DoorThickness")?);
+        let g = 0.004;
+        let drop = |front: f64, top: f64| Volume::opening(Leaf::Hinged { panel: ([d - 0.01, 0.0, 0.0], [front, w, top]), hinge: [d, 0.0, 0.0], axis: [0.0, 1.0, 0.0], max_angle: std::f64::consts::FRAC_PI_2 });
+        let side = |front: f64, y1: f64, top: f64| Volume::opening(Leaf::Hinged { panel: ([d - 0.01, 0.0, 0.0], [front, y1, top]), hinge: [d, 0.0, 0.0], axis: [0.0, 0.0, -1.0], max_angle: 100f64.to_radians() });
+        if s.nums.contains_key("Grids") {
+            // an oven: python's placeholder bounds, the turned control panel apart so its cooktop stays free
+            let (body_hi, pl, pu) = appliances::oven_bounds(d, w, h, dt, n("PanelThickness")?, n("BottonThickness")?, n("BottonRadius")?, n("PanelHeight")?, n("BottonAmount")? as usize);
+            let front = body_hi[0] + g;
+            // (burner caps stand ~1 cm over the cooktop, a gas range's grates their thickness and a few cm more)
+            let over = if s.variant == 1 { n("GrateThickness").unwrap_or(0.03) + 0.04 } else { 0.012 };
+            return Some(vec![
+                Volume::hard([-g, -g, -g], [front, w + g, body_hi[2] + over + g]),
+                Volume::hard([pl[0] - g, pl[1] - g, pl[2] - g], [pu[0] + g, pu[1] + g, pu[2] + g]),
+                Volume::support([pu[0] + 0.01, 0.0, h + dt - 0.001], [d, w, h + dt]),
+                drop(front, h + dt),
+            ]);
+        }
+        if let (Some(brand), true) = (s.strs.get("BrandName"), s.nums.contains_key("PanelWidth")) {
+            // a microwave: the brand text centred over the window part of the door may run past the sides
+            let (pw, mz) = (n("PanelWidth")?, n("MarginZ")?);
+            let add = (w - pw) + mz * 0.5;
+            let cell = w / 9.0;
+            let a = add / cell;
+            let kmax = (((a + 0.5).ceil() - 1.0).max(a.ceil() - 1.0)).clamp(0.0, 9.0);
+            let yc = kmax * cell / 2.0;
+            let (t0, t1) = appliances::text_x_bounds(brand);
+            // and the "12:01" clock (size 0.05) centred on the control panel
+            // (measured as "12001": the metrics have no colon, a digit is wider)
+            let (c0, c1) = appliances::text_x_bounds("12001");
+            let yk = w - pw / 2.0;
+            let (y0, y1) = ((yc + 0.03 * t0).min(yk + 0.05 * c0).min(0.0), (yc + 0.03 * t1).max(yk + 0.05 * c1).max(w));
+            let front = d + dt + 0.005 + g;
+            return Some(vec![Volume::hard([-g, y0 - g, -g], [front, y1 + g, h + g]), Volume::support([0.0, 0.0, h - 0.001], [d, w, h]), side(front, w - pw, h)]);
+        }
+        // a dishwasher or a beverage fridge: door slab and a handle 7.5 % of the width on the front
+        let front = d + dt + 0.075 * w + g;
+        let door = if s.nums.contains_key("RackDAmount") { side(front, w, h + dt) } else { drop(front, h + dt) };
+        Some(vec![Volume::hard([-g, -g, -g], [front, w + g, h + dt + g]), Volume::support([0.0, 0.0, h + dt - 0.001], [d, w, h + dt]), door])
+    }
     fn asset(&self, inst: u64) -> Asset {
         if (self.sample)(&self.rng).variant != 0 && !self.supports_variants {
             return self.inner.asset(inst);
@@ -413,10 +460,12 @@ fn microwave_params(rng: &Rng) -> Sampled {
 /// same, also returning the generator after the draws (material choices continue the FixedSeed stream)
 fn microwave_params_r(mut r: Rng) -> (Sampled, Rng) {
     let mut s = Sampled::default();
-    num(&mut s, "Depth", r.uniform(0.5, 0.7));
-    num(&mut s, "Width", r.uniform(0.6, 1.0));
-    num(&mut s, "Height", r.uniform(0.35, 0.45));
-    num(&mut s, "PanelWidth", r.uniform(0.2, 0.4));
+    let (depth, width, height, panel_w) = (r.uniform(0.5, 0.7), r.uniform(0.6, 1.0), r.uniform(0.35, 0.45), r.uniform(0.2, 0.4));
+    num(&mut s, "Depth", depth);
+    // (the window part at least 0.46 m wide: the turntable, ~0.2 m round, stood through the side of a narrower one)
+    num(&mut s, "Width", width.max(panel_w + 0.46));
+    num(&mut s, "Height", height);
+    num(&mut s, "PanelWidth", panel_w);
     num(&mut s, "MarginZ", r.uniform(0.05, 0.1));
     num(&mut s, "DoorThickness", r.uniform(0.02, 0.04));
     num(&mut s, "DoorMargin", r.uniform(0.03, 0.1));

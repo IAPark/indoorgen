@@ -38,6 +38,8 @@ pub fn text_x_bounds(s: &str) -> (f64, f64) {
 
 /// size parameters (depth, width, height, panel width, door margin) of a microwave built to the layout box `h` [width (y), depth (x), height] (the factory stream `rng`)
 pub fn microwave_dims(rng: &Rng, h: [f64; 3]) -> [(&'static str, f64); 5] {
+    // (sizes the node graph's cavity holds its turntable at: a 0.3 m deep box put the plate through the back)
+    let h = [h[0].max(0.5), h[1].max(0.42), h[2].max(0.28)];
     let saved = crate::api::size_hint();
     crate::api::set_size_hint(Some(h));
     let a = Appliance::new("MicrowaveFactory", &mut rng.clone());
@@ -46,7 +48,7 @@ pub fn microwave_dims(rng: &Rng, h: [f64; 3]) -> [(&'static str, f64); 5] {
 }
 
 pub fn handles(c: &str) -> bool {
-    matches!(c, "DishwasherFactory" | "BeverageFridgeFactory" | "MicrowaveFactory" | "OvenFactory" | "RugFactory")
+    matches!(c, "DishwasherFactory" | "BeverageFridgeFactory" | "MicrowaveFactory" | "OvenFactory" | "RugFactory" | "RoundRugFactory")
 }
 
 const METALS: Weighted = &[("metal.MetalBasic", 3.0), ("metal.BrushedMetal", 2.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 0.7), ("metal.BrushedBlackMetal", 0.3)];
@@ -188,6 +190,8 @@ impl Appliance {
                     a.depth = h[1];
                     a.shape = if crate::api::round_hint() { 1 } else { 0 };
                 }
+                // a round rug (under a round table: the layout asks for one) is its own asset
+                if c == "RoundRugFactory" { a.shape = 1; }
             }
         }
         a.seed = r.randint(0, 1_000_000) as u64;
@@ -391,6 +395,81 @@ impl Appliance {
     }
 }
 
+/// oven.py create_placeholder's bounds: the body with its door and handle, and the control panel (buttons, labels) turned back by 10
+/// degrees about the body's top back edge -- (body hi corner, panel lo, panel hi); the body's lo corner is the origin
+pub fn oven_bounds(d: f64, w: f64, h: f64, dt: f64, pt: f64, bt: f64, rr: f64, ph: f64, buttons: usize) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    // oven.py create_placeholder: bbox of [door, racks, heater, body] + bbox of the control panel rotated by -0.1745 about (0,0,H)
+    let hw = 0.05 * w;
+    let handle_x = d + dt + hw + hw * 0.5;
+    let body_hi = [handle_x.max(d + dt), w, h + dt];
+    // control panel bbox (pre-rotation): cube + buttons + text glyph boxes (StringToCurves bounds at size 1: [xmin, ymin, xmax, ymax])
+    let bamount = buttons.max(1);
+    let z0 = h + dt;
+    let zc = z0 + ph / 2.0; // bbox centre of the panel cube
+    let (mut plo, mut phi): ([f64; 3], [f64; 3]) = ([0.0, 0.0, z0], [pt, w, z0 + ph]);
+    let mut ext = |lo: [f64; 3], hi: [f64; 3]| {
+        for k in 0..3 {
+            plo[k] = plo[k].min(lo[k]);
+            phi[k] = phi[k].max(hi[k]);
+        }
+    };
+    // text: translation T, glyph box g (size 1), size sz, extrude off: world (x, y, z) = (local z, local x, local y)
+    let text = |t: [f64; 3], g: [f64; 4], sz: f64, off: f64| -> ([f64; 3], [f64; 3]) { ([t[0], t[1] + sz * g[0], t[2] + sz * g[1]], [t[0] + off, t[1] + sz * g[2], t[2] + sz * g[3]]) };
+    const G_1201: [f64; 4] = [-0.9075, -0.009, 0.9095, 0.691];
+    const G_OFF: [f64; 4] = [-0.6165, -0.009, 0.7075, 0.6914074];
+    const G_HIGH: [f64; 4] = [-0.8625, -0.23, 0.8765, 0.682];
+    const G_LOW: [f64; 4] = [-0.8065, -0.009, 0.8805, 0.682];
+    const G_1: [f64; 4] = [-0.048, 0.0, 0.05, 0.682];
+    let (tl, th) = text([pt, w / 2.0, zc], G_1201, 0.2 * ph, 0.002);
+    ext(tl, th);
+    let nd = bamount + 2;
+    for idx in 0..nd {
+        let fi = idx as f64;
+        let half = nd as f64 * 0.5;
+        if fi > half - 1.01 && fi < half + 0.99 {
+            continue;
+        }
+        let y = (fi + 1.0) * (w / (nd as f64 + 1.0));
+        // button disc and ring (axis along x)
+        ext([pt, y - rr - 0.008, zc - rr - 0.008], [pt + bt, y + rr + 0.008, zc + rr + 0.008]);
+        let sz = 0.25 * rr;
+        let (l, h2) = text([pt, y, zc + rr + 0.05 * ph], G_OFF, sz, 0.002);
+        ext(l, h2);
+        let (l, h2) = text([pt, y + rr * 0.7 + 0.05 * ph, zc + rr * 0.7 + 0.05 * ph], G_HIGH, sz, 0.002);
+        ext(l, h2);
+        let (l, h2) = text([pt, y + rr * -0.7 + -0.05 * ph, zc + rr * 0.7 + 0.05 * ph], G_LOW, sz, 0.002);
+        ext(l, h2);
+        let (l, h2) = text([pt + bt, y, zc], G_1, rr, 0.1 * bt);
+        ext(l, h2);
+    }
+    let th = 0.1745f64;
+    let (c, s) = (th.cos(), th.sin());
+    let mut lo: [f64; 3] = [0.0, 0.0, 0.0];
+    let mut hi = body_hi;
+    for x in [plo[0], phi[0]] {
+        for z in [plo[2], phi[2]] {
+            let (xr, zr) = (x * c - (z - h) * s, x * s + (z - h) * c + h);
+            lo[0] = lo[0].min(xr);
+            hi[0] = hi[0].max(xr);
+            hi[2] = hi[2].max(zr);
+            lo[2] = lo[2].min(zr);
+        }
+    }
+    lo[1] = lo[1].min(plo[1]);
+    hi[1] = hi[1].max(phi[1]);
+    // the turned panel alone
+    let (mut pl, mut pu) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for x in [plo[0], phi[0]] {
+        for z in [plo[2], phi[2]] {
+            let (xr, zr) = (x * c - (z - h) * s, x * s + (z - h) * c + h);
+            pl[0] = pl[0].min(xr); pu[0] = pu[0].max(xr); pl[2] = pl[2].min(zr); pu[2] = pu[2].max(zr);
+        }
+    }
+    pl[1] = plo[1]; pu[1] = phi[1];
+    let _ = (lo, hi);
+    (body_hi, pl, pu)
+}
+
 impl Factory for Appliance {
     fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
         if self.k != K::Micro { return None; }
@@ -422,6 +501,12 @@ impl Factory for Appliance {
     }
     fn asset(&self, _i: u64) -> Asset {
         self.build()
+    }
+    /// collision: a rug's slab (the appliances themselves are the node-graph ports, bevelgn.rs)
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        if self.k != K::Rug { return None }
+        let (d, w, g) = (self.depth, self.width, 0.001);
+        Some(vec![crate::piece::Volume::hard([-d / 2.0 - g, -w / 2.0 - g, -g], [d / 2.0 + g, w / 2.0 + g, self.thickness + g])])
     }
     fn exact(&self, _i: u64) -> Option<cabnodes::ExactMesh> {
         if self.k != K::Rug {
@@ -466,66 +551,9 @@ impl Factory for Appliance {
     }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         if self.k == K::Oven {
-            // oven.py create_placeholder: bbox of [door, racks, heater, body] + bbox of the control panel rotated by -0.1745 about (0,0,H)
-            let (d, w, h, dt) = (self.depth, self.width, self.height, self.door_t);
-            let hw = 0.05 * w;
-            let handle_x = d + dt + hw + hw * 0.5;
-            let body_hi = [handle_x.max(d + dt), w, h + dt];
-            // control panel bbox (pre-rotation): cube + buttons + text glyph boxes (StringToCurves bounds at size 1: [xmin, ymin, xmax, ymax])
-            let (pt, bt, rr, ph, bamount) = (self.panel_t, self.button_t, self.button_r, self.panel_h, self.buttons.max(1));
-            let z0 = h + dt;
-            let zc = z0 + ph / 2.0; // bbox centre of the panel cube
-            let (mut plo, mut phi): ([f64; 3], [f64; 3]) = ([0.0, 0.0, z0], [pt, w, z0 + ph]);
-            let mut ext = |lo: [f64; 3], hi: [f64; 3]| {
-                for k in 0..3 {
-                    plo[k] = plo[k].min(lo[k]);
-                    phi[k] = phi[k].max(hi[k]);
-                }
-            };
-            // text: translation T, glyph box g (size 1), size sz, extrude off: world (x, y, z) = (local z, local x, local y)
-            let text = |t: [f64; 3], g: [f64; 4], sz: f64, off: f64| -> ([f64; 3], [f64; 3]) { ([t[0], t[1] + sz * g[0], t[2] + sz * g[1]], [t[0] + off, t[1] + sz * g[2], t[2] + sz * g[3]]) };
-            const G_1201: [f64; 4] = [-0.9075, -0.009, 0.9095, 0.691];
-            const G_OFF: [f64; 4] = [-0.6165, -0.009, 0.7075, 0.6914074];
-            const G_HIGH: [f64; 4] = [-0.8625, -0.23, 0.8765, 0.682];
-            const G_LOW: [f64; 4] = [-0.8065, -0.009, 0.8805, 0.682];
-            const G_1: [f64; 4] = [-0.048, 0.0, 0.05, 0.682];
-            let (tl, th) = text([pt, w / 2.0, zc], G_1201, 0.2 * ph, 0.002);
-            ext(tl, th);
-            let nd = bamount + 2;
-            for idx in 0..nd {
-                let fi = idx as f64;
-                let half = nd as f64 * 0.5;
-                if fi > half - 1.01 && fi < half + 0.99 {
-                    continue;
-                }
-                let y = (fi + 1.0) * (w / (nd as f64 + 1.0));
-                // button disc and ring (axis along x)
-                ext([pt, y - rr - 0.008, zc - rr - 0.008], [pt + bt, y + rr + 0.008, zc + rr + 0.008]);
-                let sz = 0.25 * rr;
-                let (l, h2) = text([pt, y, zc + rr + 0.05 * ph], G_OFF, sz, 0.002);
-                ext(l, h2);
-                let (l, h2) = text([pt, y + rr * 0.7 + 0.05 * ph, zc + rr * 0.7 + 0.05 * ph], G_HIGH, sz, 0.002);
-                ext(l, h2);
-                let (l, h2) = text([pt, y + rr * -0.7 + -0.05 * ph, zc + rr * 0.7 + 0.05 * ph], G_LOW, sz, 0.002);
-                ext(l, h2);
-                let (l, h2) = text([pt + bt, y, zc], G_1, rr, 0.1 * bt);
-                ext(l, h2);
-            }
-            let th = 0.1745f64;
-            let (c, s) = (th.cos(), th.sin());
-            let mut lo: [f64; 3] = [0.0, 0.0, 0.0];
-            let mut hi = body_hi;
-            for x in [plo[0], phi[0]] {
-                for z in [plo[2], phi[2]] {
-                    let (xr, zr) = (x * c - (z - h) * s, x * s + (z - h) * c + h);
-                    lo[0] = lo[0].min(xr);
-                    hi[0] = hi[0].max(xr);
-                    hi[2] = hi[2].max(zr);
-                    lo[2] = lo[2].min(zr);
-                }
-            }
-            lo[1] = lo[1].min(plo[1]);
-            hi[1] = hi[1].max(phi[1]);
+            let (body_hi, pl, pu) = oven_bounds(self.depth, self.width, self.height, self.door_t, self.panel_t, self.button_t, self.button_r, self.panel_h, self.buttons);
+            let lo = [pl[0].min(0.0), pl[1].min(0.0), pl[2].min(0.0)];
+            let hi = [body_hi[0].max(pu[0]), body_hi[1].max(pu[1]), body_hi[2].max(pu[2])];
             let mut a = Asset::default();
             a.cuboid(lo, hi, &Material::diffuse("oven_ph", [0.5; 3], 0.5));
             return Some(a);
