@@ -1034,8 +1034,27 @@ if DS:
     sc.cycles.film_exposure = args.exposure
     sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = _DEVICE; sc.cycles.use_denoising = True; sc.cycles.use_adaptive_sampling = True
     _r = dscap.run(sc, sidecar, DS); print("DSRESULT", json.dumps(_r)); sys.exit(0)
+def _rust_corner(glb, room, view):
+    """cornerA / cornerB from the Rust picker (tools/bevy_preview/src/viewpick.rs, the one the fast loop tunes: tools/views16.sh):
+    the previewer dumps the camera as json; None when it is not built (then viewcam.py picks). PY_VIEWCAM=1 forces viewcam.py."""
+    import os, subprocess, tempfile, glob as _glob
+    bp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bevy_preview", "target", "release", "bevy_preview")
+    if os.environ.get("PY_VIEWCAM") or not os.path.exists(bp): return None
+    d = tempfile.mkdtemp(prefix="rustcam")
+    r = subprocess.run([bp, glb, "--corner", "%s:%s" % (room, view[-1]), "--dump-cams", d, "--res", "64x36", "--ss", "1", "-o", os.path.join(d, "x.png")], capture_output=True, text=True)
+    js = sorted(_glob.glob(os.path.join(d, "*.json")))
+    print("RUSTCAM", [l for l in r.stderr.splitlines() if l.startswith("VIEWCAM")], js[:1])
+    return json.load(open(js[0])) if js else None
+
+
 if args.view in ("cornerA", "cornerB"):
-    import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import viewcam; viewcam.view_camera(sc, args.room, args.view); co = sc.camera; cam = co.data
+    import os, sys
+    _rc = _rust_corner(args.glb, args.room, args.view)
+    if _rc is not None:
+        cam = bpy.data.cameras.new("vc"); co = bpy.data.objects.new("vc", cam); sc.collection.objects.link(co); sc.camera = co
+        co.matrix_world = mathutils.Matrix(_rc["matrix"]); cam.lens = _rc.get("lens", 18); cam.sensor_width = _rc.get("sensor_width", 36)
+    else:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import viewcam; viewcam.view_camera(sc, args.room, args.view); co = sc.camera; cam = co.data
 elif args.view and args.view.startswith("cam"):
   _cj = {c["name"]: c for c in sidecar.get("cameras", [])}
   assert args.view in _cj, "camera %s not in sidecar (have %s)" % (args.view, list(_cj))
