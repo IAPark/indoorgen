@@ -127,8 +127,27 @@ pub fn painted_material(name: &str, seed: u64, fallback_rgb: [f32; 3]) -> Materi
 
 /// as `painted_material`, from the `FURNITURE_PAINT` entries listed (kitchens: no terracotta, mustard or blush)
 pub fn painted_from(name: &str, seed: u64, fallback_rgb: [f32; 3], pick: &[usize]) -> Material {
-    let c = FURNITURE_PAINT[pick[(crate::int_hash(&["paint", &seed.to_string()]) % pick.len() as u64) as usize]];
+    // a random colour per seed (any hue, mostly muted, near-black to off-white); the restricted lists (kitchens, chairs) stay muted.
+    // PAINT_PALETTE=1: the ten fixed colours
+    let c = if std::env::var_os("PAINT_PALETTE").is_some() { FURNITURE_PAINT[pick[(crate::int_hash(&["paint", &seed.to_string()]) % pick.len() as u64) as usize]] }
+        else { random_paint(seed, if pick.len() < FURNITURE_PAINT.len() { 0.3 } else { 0.65 }) };
     spec_material(name, serde_json::json!({"cls": "wood.WhitePlywood", "kwargs": {}, "seed": seed, "paint": {"rgb": c, "amount": 0.9}}), fallback_rgb)
+}
+
+/// a furniture paint colour (Blender linear base colour) drawn from `seed`: any hue; saturation mostly 0.05-0.35, a sixth bolder up to
+/// `max_sat`; lightness spread from near-black to off-white (paint charts: muted mid tones, some darks and creams)
+pub fn random_paint(seed: u64, max_sat: f64) -> [f32; 3] {
+    let mut r = Rng::seeded(crate::int_hash(&["paint_hsv", &seed.to_string()]));
+    let h = r.uniform(0.0, 1.0);
+    let s = if r.f64() < 0.85 { r.uniform(0.05, 0.35f64.min(max_sat)) } else { r.uniform(0.35f64.min(max_sat), max_sat) };
+    let v = match r.f64() { x if x < 0.15 => r.uniform(0.1, 0.22), x if x < 0.3 => r.uniform(0.85, 0.95), _ => r.uniform(0.3, 0.82) };
+    // hsv -> sRGB -> linear
+    let i = (h * 6.0).floor();
+    let f = h * 6.0 - i;
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    let (rr, gg, bb) = match i as i32 % 6 { 0 => (v, t, p), 1 => (q, v, p), 2 => (p, v, t), 3 => (p, q, v), 4 => (t, p, v), _ => (v, p, q) };
+    let lin = |c: f64| (if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }) as f32;
+    [lin(rr), lin(gg), lin(bb)]
 }
 
 /// How a wall gets its second material (decorate.room_walls, room_wall_alternative_fns)
