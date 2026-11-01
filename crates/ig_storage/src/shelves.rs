@@ -766,6 +766,19 @@ impl Factory for SimpleDesk {
         let p = self.params(i);
         Some(cabnodes::desk_gmesh(p.d, p.w, p.h, p.leg_r, p.leg_dist, p.t).to_exact())
     }
+    /// collision: the top (its support) and the four legs
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let p = self.params(i);
+        let (d, w, h, t, r, ld) = (p.d, p.w, p.h, p.t, p.leg_r + 0.001, p.leg_dist);
+        let g = 0.001;
+        let mut v = vec![Volume::hard([-d / 2.0 - g, -w / 2.0 - g, h - t - g], [d / 2.0 + g, w / 2.0 + g, h + g]), Volume::support([-d / 2.0, -w / 2.0, h - 0.001], [d / 2.0, w / 2.0, h])];
+        for sx in [-1.0, 1.0] { for sy in [-1.0, 1.0] {
+            let (x, y) = (sx * (d / 2.0 - ld), sy * (w / 2.0 - ld));
+            v.push(Volume::hard([x - r, y - r, -g], [x + r, y + r, h - t + g]));
+        }}
+        Some(v)
+    }
     fn asset(&self, i: u64) -> Asset {
         let p = self.params(i);
         let (d, w, h, t, leg_r, leg_dist) = (p.d, p.w, p.h, p.t, p.leg_r, p.leg_dist);
@@ -812,27 +825,76 @@ impl SingleCabinet {
     }
     /// the dims the frame is drawn with: with a size hint, dims whose overall extents (boards, doors and knobs included) are the box's.
     /// The board thicknesses are the first instance draws, the door depth is measured on the mesh.
-    fn dims_for(&self, inst: u64) -> ([f64; 3], Option<usize>) {
-        let Some(h) = self.hint else { return (self.dims, None) };
-        if let Some((i, d, n)) = *self.sized.borrow() { if i == inst { return (d, Some(n)); } }
+    /// the instance's draws that shape the frame and the doors, replayed in the exact build's order (cabdoor::single_cabinet_core):
+    /// (side board t, division t, door frame t, ramp, knob radius, knob length, doors short of the top)
+    fn draws(&self, inst: u64, nh: usize) -> (f64, f64, f64, f64, f64, f64) {
         let mut r = inst_rng(self.fseed, inst);
         let side_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
         let _ = r.uniform(0.01, 0.05);
         let div_t = clip(r.normal(0.02, 0.002), 0.015, 0.025);
-        let nh = (((h[2] - 0.083 - 2.0 * div_t) / 0.3) as usize).max(1);
-        let mut dims = [h[1] - 0.045, h[0] - 2.0 * side_t - 0.002, h[2] - (nh as f64 + 1.0) * div_t];
-        for _ in 0..2 {
-            let e = self.extents(dims, inst, Some(nh));
-            dims[0] += h[1] - e[1];
-            dims[1] += h[0] - e[0];
-            dims[2] += h[2] - e[2];
-        }
-        *self.sized.borrow_mut() = Some((inst, dims, nh));
+        for (lo, hi) in [(0.001, 0.004), (0.001, 0.004), (0.0, 0.02), (0.025, 0.06), (0.05, 0.1), (0.01, 0.025), (0.002, 0.005), (0.0, 0.05)] { r.uniform(lo, hi); }
+        if nh + 1 > 5 { let _ = r.choice_p(&[0.5, 0.5]); }
+        let e1 = r.uniform(0.01, 0.018);
+        let _ew = r.uniform(0.03, 0.05);
+        let e2 = r.uniform(0.005, 0.008);
+        let _ang = r.uniform(0.6, 0.8);
+        let kr = cabdoor::knob_r(r.uniform(0.003, 0.006));
+        let kl = r.uniform(0.018, 0.035);
+        (side_t, div_t, e1, e2, kr, kl)
+    }
+    /// how far the doors (hinge offset, frame, knob) stand in front of the frame's front edge
+    fn door_proud(width: f64, side_t: f64, e1: f64, e2: f64, kr: f64, kl: f64) -> f64 {
+        let off = if width + 2.0 * side_t < 0.55 { 0.0025 } else { 0.008 };
+        // (the knob runs along the door: its length does not stand out)
+        let _ = kl;
+        off + e1 + e2 + 2.0 * kr + 0.012
+    }
+    /// the dims the frame is drawn with: with a size hint, dims whose overall extents (boards, doors and knobs included) are the box's --
+    /// from the draws, no mesh built
+    fn dims_for(&self, inst: u64) -> ([f64; 3], Option<usize>) {
+        let Some(h) = self.hint else { return (self.dims, None) };
+        let div_t0 = { let mut r = inst_rng(self.fseed, inst); let _ = r.normal(0.02, 0.002); let _ = r.uniform(0.01, 0.05); clip(r.normal(0.02, 0.002), 0.015, 0.025) };
+        let nh = (((h[2] - 0.083 - 2.0 * div_t0) / 0.3) as usize).max(1);
+        let (side_t, div_t, e1, e2, kr, kl) = self.draws(inst, nh);
+        let width = h[0] - 2.0 * side_t;
+        // depth: back board + the frame + the doors' proud front; the frame's front edge stands 2 mm past the boards
+        let proud = Self::door_proud(width, side_t, e1, e2, kr, kl);
+        let depth = h[1] - 0.01 - proud.max(0.002);
+        let dims = [depth + 0.01, width, h[2] - (nh as f64 + 1.0) * div_t - 0.002];
         (dims, Some(nh))
+    }
+
+    /// collision: the frame's boards (cabnodes::shelf_frame_volumes) and the doors (a hard box with their knobs, a swing each about its
+    /// outer edge); no supports inside (the doors close it)
+    fn vols(&self, inst: u64) -> Vec<crate::piece::Volume> {
+        use crate::piece::{Leaf, Volume};
+        let (dims, nh) = self.dims_for(inst);
+        let num_h = nh.unwrap_or((((dims[2] - 0.083) / 0.3) as usize).max(1));
+        let (side_t, div_t, e1, e2, kr, kl) = self.draws(inst, num_h);
+        let depth = dims[0] - 0.01;
+        let mut sp = cabnodes::ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap: 0.03, bottom_h: 0.083, div_t, screw_depth: 0.004, screw_r: 0.004, screw_wgap: 0.0, cell_w: vec![dims[1]], cell_h: vec![(dims[2] - 0.083) / num_h as f64; num_h], ..Default::default() };
+        sp.derive();
+        // the frame, its top a support (the boards inside are behind the doors)
+        let mut v: Vec<Volume> = cabnodes::shelf_frame_volumes(&sp, f64::INFINITY);
+        let top = sp.div_z[sp.div_z.len() - 1] + div_t / 2.0;
+        let sw = sp.shelf_width + 2.0 * side_t;
+        v.push(Volume::support([-depth / 2.0, -sw / 2.0, top - 0.001], [depth / 2.0, sw / 2.0, top]));
+        let proud = Self::door_proud(dims[1], side_t, e1, e2, kr, kl);
+        let (z0, z1) = (0.083 - 0.002, top + 0.002);
+        let x0 = depth / 2.0;
+        let doors: Vec<(f64, f64, f64, [f64; 3])> = if sw < 0.55 { vec![(-sw / 2.0, sw / 2.0, -sw / 2.0, [0.0, 0.0, -1.0])] } else { vec![(-sw / 2.0, 0.0, -sw / 2.0, [0.0, 0.0, -1.0]), (0.0, sw / 2.0, sw / 2.0, [0.0, 0.0, 1.0])] };
+        for (ya, yb, hy, axis) in doors {
+            // (a door's frame overhangs the cabinet's side by a few mm)
+            let (lo, hi) = ([x0, ya - 0.006, z0], [x0 + proud, yb + 0.006, z1]);
+            v.push(Volume::hard(lo, hi));
+            v.push(Volume::opening(Leaf::Hinged { panel: (lo, hi), hinge: [x0, hy, z0], axis, max_angle: 100f64.to_radians() }));
+        }
+        v
     }
 }
 
 impl Factory for SingleCabinet {
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> { Some(self.vols(inst)) }
     fn natural_size(&self, inst: u64) -> Option<[f64; 3]> {
         Some(self.extents(self.dims, inst, None))
     }
