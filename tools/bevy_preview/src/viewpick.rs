@@ -217,6 +217,7 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         let (mut furn, mut near, mut leaf, mut wall, mut nr) = (0usize, 0usize, 0usize, 0usize, 0usize);
         let mut cols: HashMap<String, (usize, usize)> = HashMap::new();
         let mut close: HashMap<String, (usize, usize)> = HashMap::new();
+        let mut slab: HashMap<String, usize> = HashMap::new();
         for i in 0..24 {
             for j in 0..14 {
                 let d = (fwd + right * (((i as f32 + 0.5) / 24.0) * 2.0 - 1.0) + up * ((((j as f32 + 0.5) / 14.0) * 2.0 - 1.0) * 0.5625)).normalize();
@@ -229,6 +230,7 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
                 if t < 1.3 { let e = close.entry(key(nm)).or_insert((i, i)); e.0 = e.0.min(i); e.1 = e.1.max(i); }
                 // (a furniture side or an open wardrobe door close by fills the frame like a bare wall)
                 if t < 1.8 && nrm.z.abs() < 0.5 { wall += 1; }
+                if t < 3.0 && nrm.z.abs() < 0.3 { *slab.entry(key(nm)).or_insert(0) += 1; }
                 if t <= 5.0 {
                     furn += 1;
                     let e = cols.entry(key(nm)).or_insert((i, i)); e.0 = e.0.min(i); e.1 = e.1.max(i);
@@ -240,7 +242,9 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         // foreground clutter: a small piece (8 columns or fewer) within 1.3 m of the lens -- a utensil crock filling a kitchen
         // view's corner
         let clutter = close.values().filter(|(a, b)| b - a < 8).count() as f64;
-        2.0 * (cols.len() as f64 - cut) + 30.0 * furn as f64 / n - 50.0 * near as f64 / n - 60.0 * leaf as f64 / n - 3.0 * cut - 4.0 * clutter - 25.0 * wall as f64 / n
+        // one piece's flat vertical side over 18 % of the frame (an open wardrobe door, a fridge flank): it walls the view off
+        let slabs: f64 = slab.values().map(|&c| (c as f64 / nr as f64 - 0.18).max(0.0)).sum();
+        2.0 * (cols.len() as f64 - cut) + 30.0 * furn as f64 / n - 50.0 * near as f64 / n - 60.0 * leaf as f64 / n - 3.0 * cut - 4.0 * clutter - 40.0 * slabs - 25.0 * wall as f64 / n
     };
     let mut views: Vec<(f64, f64, P2)> = spots.iter().map(|&q| {
         let (sv, yaw) = (-16..=16).map(|k| { let y = (2.5 * k as f64).to_radians(); (view_score(q, y), y) })
