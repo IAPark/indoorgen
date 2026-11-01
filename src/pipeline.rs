@@ -843,10 +843,19 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         }
         let Some((mut score, mut nc)) = best else { continue };
         // no clear stretch, but one behind alcove shelves: the shelves go (with their keep-outs and what stands on them)
-        // a bathroom window with only a spot behind something tall (the shower) is left out: windowless bathrooms are common
+        // a bathroom window with only a spot behind something tall (the shower): a small high window over it (a bathroom's frosted
+        // strip; leaving it out gave the street side a long blank wall), or none when the wall is too low for one
         if best_tall > 0.02 && crate::rooms::state::room_type(room) == "bathroom" && best_free.as_ref().map_or(true, |b| b.0 < -5.0) {
-            if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window left out (only behind a tall piece)"); }
-            continue;
+            let (sill, head) = ((c.wall_height - 0.7).max(2.05), c.wall_height - c.wall_thickness / 2.0 - 0.2);
+            if head - sill < 0.35 {
+                if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window left out (only behind a tall piece)"); }
+                continue;
+            }
+            nc.dims[0] = nc.dims[0].min(0.9);
+            nc.dims[2] = head - sill;
+            nc.loc[2] = (sill + head) / 2.0;
+            score = -1.0;
+            if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: high window over a tall piece, sill {sill:.2} m"); }
         }
         if let Some((fs, fnc, keys)) = best_free {
             if score < -5.0 && fs >= -5.0 {
