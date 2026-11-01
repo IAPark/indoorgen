@@ -135,7 +135,9 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let (l, h) = a.bounds();
         // (an L leg's wall cabinet reaching into the corner: kitchen_plan.rs)
         // (not when its wall cabinets came off under a window: the reach went with them)
+        // (or a window cut the corner's wall cabinet short: any width from the run alone to the run plus its full reach)
         let reach = if h[2] - l[2] > 1.5 { g.join.map_or(0.0, |j| j[3] * j[2].abs()) } else { 0.0 };
+        let reach = (h[1] - l[1] - sz[0]).clamp(0.0, reach);
         let e = [h[1] - l[1] - reach, h[0] - l[0], h[2] - l[2]];
         // (a counter run under a window loses its wall cabinets there: its height is not held to the size)
         let dims = if g.class == "KitchenSpaceFactory" { 2 } else { 3 };
