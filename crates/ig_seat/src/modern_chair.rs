@@ -1,5 +1,7 @@
-//! ModernChair (not in infinigen): dining chairs built from real parts -- four tapered legs with stretchers, a seat (wooden board or
-//! upholstered pad), and a back that is upholstered, slatted (3-5 vertical slats) or a curved top rail with spindles; optional arms.
+//! Dining chairs as one piece, built from real parts: four tapered legs with stretchers, a seat (wooden board or upholstered pad), and a
+//! back that is upholstered, slatted (3-5 vertical slats) or a curved top rail with spindles, optional arms; or a molded shell chair (one
+//! thin seat-and-back shell on four splayed rods). Its collision is written from these parameters: the seat block (legs, apron, seat:
+//! what tucks under a table top), the back, the arms.
 //! Frame as infinigen's ChairFactory: x = depth (back legs near x = 0, front toward +x), y centred, z = 0 at the seat top, the floor at
 //! z = -seat_h. Wood parts use the vertical-grain wood shader along their length; upholstery gets box uvs.
 use super::sofa::{box_uv, pad};
@@ -16,6 +18,8 @@ enum Back {
     Upholstered,
     Slats,
     Spindles,
+    /// a molded seat-and-back shell on four splayed rods
+    Shell,
 }
 
 pub struct ModernChair {
@@ -34,7 +38,7 @@ pub struct ModernChair {
 
 impl ModernChair {
     pub fn new(r: &mut Rng) -> ModernChair {
-        let back = [Back::Upholstered, Back::Slats, Back::Spindles][r.choice_p(&[0.4, 0.35, 0.25])];
+        let back = [Back::Upholstered, Back::Slats, Back::Spindles, Back::Shell][r.choice_p(&[0.32, 0.28, 0.2, 0.2])];
         ModernChair {
             w: r.uniform(0.42, 0.5),
             d: r.uniform(0.44, 0.52),
@@ -42,7 +46,7 @@ impl ModernChair {
             back_h: r.uniform(0.36, 0.48),
             back,
             padded_seat: back == Back::Upholstered || r.f64() < 0.5,
-            arms: r.f64() < 0.12,
+            arms: back != Back::Shell && r.f64() < 0.12,
             leg_r: r.uniform(0.016, 0.022),
             n_slats: r.randint(3, 6) as usize,
             back_tilt: r.uniform(0.08, 0.16),
@@ -70,6 +74,7 @@ impl ModernChair {
         let mut a = Asset::default();
         let tilt = self.back_tilt;
         let back_x = |z: f64| -z * tilt; // back posts lean back with height
+        if self.back == Back::Shell { return self.build_shell(&mut r); }
         // legs: back legs continue up into the back posts; front legs taper
         let ins = lr + 0.01;
         for y in [-hw + ins, hw - ins] {
@@ -153,6 +158,7 @@ impl ModernChair {
                     a.mesh(m, &frame, None);
                 }
             }
+            Back::Shell => unreachable!("built by build_shell"),
         }
         if self.arms {
             for y in [-hw + ins, hw - ins] {
@@ -161,6 +167,72 @@ impl ModernChair {
             }
         }
         a
+    }
+}
+
+impl ModernChair {
+    /// the shell's thickness, the rods' splay (outward at the feet)
+    const SHELL_T: f64 = 0.012;
+    const SPLAY: f64 = 0.025;
+
+    /// a molded shell chair: one thin seat-and-back shell (seat, a rounded bend, the back leaning back) on four splayed metal rods
+    fn build_shell(&self, r: &mut Rng) -> Asset {
+        let shell_m = spec_material(&format!("chair_shell:{}", self.seed), json!({"cls": "plastic.PlasticRough", "kwargs": {}, "seed": self.seed + 2}), [0.85, 0.84, 0.8]);
+        let shell_m = if r.f64() < 0.6 { painted_from(&format!("chair_shell_paint:{}", self.seed), self.seed, [0.85, 0.84, 0.8], &[0, 1, 2, 3, 4, 5, 6, 7]) } else { shell_m };
+        let rod = spec_material(&format!("chair_rod:{}", self.seed), json!({"cls": "metal.BrushedBlackMetal", "kwargs": {}, "seed": self.seed + 3}), [0.1, 0.1, 0.1]);
+        let (w, d, sh, bh, tilt) = (self.w, self.d, self.seat_h, self.back_h, self.back_tilt);
+        let (hw, t) = (w / 2.0, Self::SHELL_T);
+        let mut a = Asset::default();
+        // seat
+        let mut seat = Mesh::cuboid([0.03, -hw, -t], [d, hw, 0.0]).smoothed(0.004, 1, 1);
+        box_uv(&mut seat);
+        a.mesh(seat, &shell_m, None);
+        // back: from the bend up, leaning back
+        let mut back = Mesh::cuboid([0.0, -hw + 0.01, 0.04], [t, hw - 0.01, bh]).smoothed(0.004, 1, 1);
+        for p in back.pos.iter_mut() { p[0] -= p[2] * tilt; }
+        box_uv(&mut back);
+        a.mesh(back, &shell_m, None);
+        // the bend: a rounded block joining them
+        a.mesh(pad([0.0, -hw + 0.005, -t], [0.06, hw - 0.005, 0.05], 0.02, 1), &shell_m, None);
+        // rods from under the seat to the floor, splayed out
+        let s = Self::SPLAY;
+        for (x, y) in [(0.07, -hw + 0.05), (0.07, hw - 0.05), (d - 0.05, -hw + 0.05), (d - 0.05, hw - 0.05)] {
+            let (sx, sy) = (if x < d / 2.0 { -s } else { s }, if y < 0.0 { -s } else { s });
+            a.mesh(limb([x, y, -t], [x + sx, y + sy, -sh], 0.009, 0.007, true), &rod, None);
+        }
+        a.supports.push(([0.08, -hw + 0.05, 0.0], [d - 0.03, hw - 0.05, 0.001]));
+        a
+    }
+
+    /// collision: the seat block (legs, apron, stretchers, seat), the back, the arms; the seat as the support
+    fn vols(&self) -> Vec<crate::piece::Volume> {
+        use crate::piece::Volume;
+        let (w, d, sh, bh, tilt) = (self.w, self.d, self.seat_h, self.back_h, self.back_tilt);
+        let hw = w / 2.0;
+        let lr = self.leg_r;
+        let ins = lr + 0.01;
+        if self.back == Back::Shell {
+            // (the rods' feet: 2.5 cm out from under the seat, 9 mm thick; the front ones end inside the seat's edge)
+            let s = Self::SPLAY + 0.01;
+            return vec![
+                Volume::hard([(0.07 - s).min(0.0), -hw - 0.001, -sh - 0.002], [d + 0.002, hw + 0.001, 0.003]),
+                Volume::hard([-bh * tilt - 0.004, -hw, -Self::SHELL_T], [0.065, hw, bh + 0.004]),
+                Volume::support([0.08, -hw + 0.05, 0.0], [d - 0.03, hw - 0.05, 0.001]),
+            ];
+        }
+        // the padded seat puffs a little over its board
+        let mut v = vec![Volume::hard([0.0, -hw - 0.002, -sh - 0.002], [d + 0.002, hw + 0.002, 0.004])];
+        // the back: posts and the back style (the spindle rail bows 4 cm back, 3 cm round, and reaches 1 cm past the posts)
+        let xb = ins - bh * tilt;
+        let back_lo = match self.back { Back::Spindles => xb - 0.075, Back::Upholstered => xb - 0.04, _ => xb - 0.02 };
+        let side = if self.back == Back::Spindles { 0.015 } else { 0.003 };
+        v.push(Volume::hard([back_lo, -hw - side, -0.01], [ins + 0.04, hw + side, bh + 0.012]));
+        if self.arms {
+            let (xa, xf) = (ins - 0.22 * tilt - lr, d - ins + 0.01 + lr);
+            v.push(Volume::hard([xa, -hw + ins - lr - 0.002, -0.035], [xf, hw - ins + lr + 0.002, 0.22 + lr + 0.002]));
+        }
+        v.push(Volume::support([0.05, -hw + 0.05, 0.0], [d - 0.03, hw - 0.05, 0.001]));
+        v
     }
 }
 
@@ -180,4 +252,5 @@ impl Factory for ModernChair {
     fn asset(&self, _i: u64) -> Asset {
         self.build()
     }
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> { Some(self.vols()) }
 }
