@@ -688,7 +688,8 @@ if DS:
 if args.top:
     for o in list(bpy.data.objects):
         n = o.name.lower()
-        if "ceiling" in n or "light" in n and "ceilinglight" in n: o.hide_render = True
+        # (and the roofs, cloud layer and rain: they cover the plan)
+        if "ceiling" in n or "light" in n and "ceilinglight" in n or n.endswith(".roof") or n.startswith(("outdoor_sky", "outdoor_rain")): o.hide_render = True
     meshes = [o for o in bpy.data.objects if o.type == "MESH" and not o.hide_render]
     pts = [o.matrix_world @ mathutils.Vector(c) for o in meshes if "floor" in o.name.lower() for c in o.bound_box] or [o.matrix_world @ mathutils.Vector(c) for o in meshes for c in o.bound_box]
     x0 = min(p.x for p in pts); x1 = max(p.x for p in pts); y0 = min(p.y for p in pts); y1 = max(p.y for p in pts)
@@ -1105,7 +1106,8 @@ def apply_weather(sc, side):
     if wet > 0:
         done = set()
         for o in bpy.data.objects:
-            if o.type != "MESH" or not o.name.startswith(("outdoor_terrain", "outdoor_road", "exterior_")): continue
+            # (roads, paving and house exteriors; not the terrain: a coat on the lawn read as patches of snow)
+            if o.type != "MESH" or not o.name.startswith(("outdoor_road", "exterior_")): continue
             for sl in o.material_slots:
                 m = sl.material
                 if m is None or not m.use_nodes or m.name in done: continue
@@ -1121,7 +1123,7 @@ leaf_look()
 apply_weather(sc, sidecar)
 # --view outdoor[:AZ[:DIST]]: the outdoor scene alone (the house hidden), a camera on the terrain at eye height DIST m (default 25)
 # from the house centre toward compass azimuth AZ (degrees, default 0 = +y), looking outward 4 deg down
-if args.view and (args.view.startswith("outdoor") or args.view == "street"):
+if args.view and (args.view.startswith("outdoor") or args.view in ("street", "neighbour")):
     import math
     from mathutils.bvhtree import BVHTree
     parts = (args.view.split(":") + ["0", "25"])[1:3]
@@ -1130,7 +1132,7 @@ if args.view and (args.view.startswith("outdoor") or args.view == "street"):
         # (only the house's own objects: the instanced tree collections are not linked into the scene)
         # (the house exteriors -- this house's and the neighbours', exterior_* -- stay: the street around it; the street view
         # keeps the whole house: its windows show the rooms, not the sky through an empty shell)
-        if args.view == "street": break
+        if args.view in ("street", "neighbour"): break
         if o.type in ("MESH", "CURVES") and o.users_scene and not o.name.startswith(("outdoor", "exterior_")): o.hide_render = True
     for o in bpy.data.objects:
         if o.type == "LIGHT" and not o.data.type == "SUN": o.hide_render = True
@@ -1150,10 +1152,11 @@ if args.view and (args.view.startswith("outdoor") or args.view == "street"):
     co.location = (x, y, z + 1.7)
     co.rotation_euler = (math.radians(86), 0, -az)
     print("OUTCAM", round(x, 1), round(y, 1), round(z + 1.7, 2), "az", parts[0])
-    if args.view == "street":
-        # the generator's street camera (crates/ig_outdoor/src/site.rs Site::record): across the road, looking at the house
-        _st = ((sidecar.get("outdoor") or {}).get("site") or {}).get("street_cam")
-        assert _st, "no outdoor.site.street_cam in the sidecar (site off?)"
+    if args.view in ("street", "neighbour"):
+        # the generator's site cameras (crates/ig_outdoor/src/site.rs Site::record): street = from the road side of the front
+        # lawn looking at the house, neighbour = from the road at the nearest neighbour house
+        _st = ((sidecar.get("outdoor") or {}).get("site") or {}).get(args.view + "_cam")
+        assert _st, "no outdoor.site.%s_cam in the sidecar (site off?)" % args.view
         _eye, _tgt = mathutils.Vector(_st["eye"]), mathutils.Vector(_st["target"])
         co.location = _eye; co.rotation_euler = (_tgt - _eye).to_track_quat("-Z", "Y").to_euler()
         print("STREETCAM", [round(v, 1) for v in _eye], "->", [round(v, 1) for v in _tgt])

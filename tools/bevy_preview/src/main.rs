@@ -65,7 +65,7 @@ fn parse_args(a: Vec<String>) -> Opts {
             "--view" => o.cams.push(CamSpec::Named(val())),
             "--at" => { let v = nf(&val()); assert!(v.len() >= 6, "--at ex,ey,ez,tx,ty,tz[,lens]"); o.cams.push(CamSpec::At([v[0], v[1], v[2], v[3], v[4], v[5]], *v.get(6).unwrap_or(&18.0))) }
             "--person" => o.cams.push(CamSpec::Person(val().parse().unwrap())),
-            "--top" => o.cams.push(CamSpec::Top),
+            "--top" => { o.cams.push(CamSpec::Top); o.no_ceiling = true; }
             "--sheet" => o.sheet = true,
             "--res" => { let v = val(); let (w, h) = v.split_once('x').expect("WxH"); o.res = (w.parse().unwrap(), h.parse().unwrap()) }
             "--ss" => o.ss = val().parse::<u32>().unwrap().max(1),
@@ -221,7 +221,7 @@ fn parse_scene(path: &Path, o: &Opts) -> Parsed {
         let lname = n.name.to_lowercase();
         for pi in 0..n.prims.len() {
             let u = *uidx.entry((n.mesh, pi)).or_insert_with(|| { uniq.push((ni, pi)); uniq.len() - 1 });
-            plist.push(P { node: ni, prim: pi, cls: cls.clone(), tex: tex.clone(), ceil: lname.contains("ceiling"), glass: lname.ends_with(".glass") && !lname.contains("wineglass"), u });
+            plist.push(P { node: ni, prim: pi, cls: cls.clone(), tex: tex.clone(), ceil: lname.contains("ceiling") || lname.ends_with(".roof") || lname.starts_with("outdoor_sky") || lname.starts_with("outdoor_rain"), glass: lname.ends_with(".glass") && !lname.contains("wineglass"), u });
         }
     }
     let show = |p: &P| !(o.no_ceiling && p.ceil);

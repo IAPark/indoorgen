@@ -80,14 +80,30 @@ impl Site {
 
     /// the sidecar's `outdoor.site`: the layout and a street camera -- on the far side of the road (the sidewalk), 10 m along
     /// from the driveway, eye height, looking at the house (tools/render/render_rust.py --view street)
-    pub fn record(&self) -> serde_json::Value {
+    pub fn record(&self, house_z: f64) -> serde_json::Value {
+        // street camera: on the house's side of the road (where the driveway meets it), 6 m along, eye height, aimed at the house
+        // a little above its eaves (from across the road the street sat ~1.5 m below the house and the roof was a thin band)
         let e = self.drive.last().copied().unwrap_or(self.house_c);
         let along = [-self.front_n[1], self.front_n[0]];
-        let off = if self.layout == Layout::Rural { self.half + 1.5 } else { self.half + 2.75 };
-        let eye = [e[0] + self.front_n[0] * (self.half + off) + along[0] * 10.0, e[1] + self.front_n[1] * (self.half + off) + along[1] * 10.0];
-        let ez = self.road_near(eye[0], eye[1]).map_or(0.0, |r| r.1) + 1.65;
-        serde_json::json!({"layout": format!("{:?}", self.layout), "neighbours": self.neighbours.len(),
-            "street_cam": {"eye": [eye[0], eye[1], ez], "target": [self.house_c[0], self.house_c[1], ez + 0.4]}})
+        let eye = [e[0] - self.front_n[0] * 1.0 + along[0] * 6.0, e[1] - self.front_n[1] * 1.0 + along[1] * 6.0];
+        let ez = self.road_near(eye[0], eye[1]).map_or(house_z, |r| r.1) + 1.7;
+        let mut rec = serde_json::json!({"layout": format!("{:?}", self.layout), "neighbours": self.neighbours.len(),
+            "street_cam": {"eye": [eye[0], eye[1], ez], "target": [self.house_c[0], self.house_c[1], house_z + 2.2]}});
+        // neighbour camera: from the road in front of the neighbour nearest the house, aimed at it
+        if let Some(nb) = self.neighbours.iter().min_by(|a, b| {
+            let da = (a.centre[0] - self.house_c[0]).hypot(a.centre[1] - self.house_c[1]);
+            let db = (b.centre[0] - self.house_c[0]).hypot(b.centre[1] - self.house_c[1]);
+            da.partial_cmp(&db).unwrap()
+        }) {
+            // the road point nearest the neighbour, then 3 m toward it and 5 m along
+            let mut best = (f64::MAX, [0.0, 0.0, 0.0]);
+            for p in &self.road { let d = (p[0] - nb.centre[0]).hypot(p[1] - nb.centre[1]); if d < best.0 { best = (d, *p); } }
+            let p = best.1;
+            let to = [(nb.centre[0] - p[0]) / best.0.max(1e-6), (nb.centre[1] - p[1]) / best.0.max(1e-6)];
+            let eye = [p[0] + to[0] * (self.half + 1.0) + to[1] * 5.0, p[1] + to[1] * (self.half + 1.0) - to[0] * 5.0];
+            rec["neighbour_cam"] = serde_json::json!({"eye": [eye[0], eye[1], p[2] + 1.7], "target": [nb.centre[0], nb.centre[1], nb.pad_z + 2.4]});
+        }
+        rec
     }
 
     /// nothing grows here: the road and its verges, the driveway, the neighbours' houses and `yard` m around them (a tree's
