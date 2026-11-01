@@ -217,17 +217,29 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         log.push(format!("wall shelf ({n} items) over {k}"));
     }
     // ---- laundry basket beside a nightstand (one per bedroom), 50 %
+    // (one per room: every nightstand drew its own and a bed had one each side; and against the wall beside the nightstand, the spot
+    // nearest a wall: the first free side was often its front, the basket blocking the drawers)
+    let mut basket_rooms: Vec<String> = vec![];
     for (i, st) in side_tables.iter().enumerate() {
         let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "basket", &i.to_string()]));
         if r.f64() >= 0.5 { continue }
         let (rad, hgt) = (r.uniform(0.18, 0.23), r.uniform(0.45, 0.6));
         let cx = [(st.0[0] + st.1[0]) / 2.0, (st.0[1] + st.1[1]) / 2.0];
+        let Some((rk, rp)) = room_polys.iter().find(|(_, g)| crate::shp::contains_pt(g, cx)) else { continue };
+        if basket_rooms.contains(rk) { continue }
+        let edge = crate::shp::boundary(rp);
+        // its back: the direction (of the four) toward the nearest wall; the basket goes to either side of that, never in front
+        let dirs = [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]];
+        let back = dirs.iter().cloned().min_by(|a, b| { let d = |v: [f64; 2]| crate::shp::distance(&edge, &crate::shp::point(cx[0] + v[0] * 0.3, cx[1] + v[1] * 0.3)); d(*a).partial_cmp(&d(*b)).unwrap() }).unwrap();
+        let mut cands: Vec<(f64, [f64; 2])> = [(st.1[0] - cx[0] + rad + 0.08, 0.0), (-(cx[0] - st.0[0]) - rad - 0.08, 0.0), (0.0, st.1[1] - cx[1] + rad + 0.08), (0.0, -(cx[1] - st.0[1]) - rad - 0.08)]
+            .iter().filter(|(dx, dy)| (dx * back[0] + dy * back[1]).abs() < 1e-9)
+            .map(|(dx, dy)| { let c = [cx[0] + dx, cx[1] + dy]; (crate::shp::distance(&edge, &crate::shp::point(c[0], c[1])), c) }).collect();
+        cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let mut placed = false;
-        for (dx, dy) in [(st.1[0] - cx[0] + rad + 0.08, 0.0), (-(cx[0] - st.0[0]) - rad - 0.08, 0.0), (0.0, st.1[1] - cx[1] + rad + 0.08), (0.0, -(cx[1] - st.0[1]) - rad - 0.08)] {
-            let c = [cx[0] + dx, cx[1] + dy];
+        for (_, c) in cands {
             let fz = st.0[2];
             let wb: Box3 = ([c[0] - rad, c[1] - rad, fz], [c[0] + rad, c[1] + rad, fz + hgt]);
-            if !fits(&taken, &wb) { continue }
+            if !crate::shp::contains_pt(rp, c) || !fits(&taken, &wb) { continue }
             let wicker = scene.material({ let mut m = Material::diffuse(&format!("basket:{i}"), [0.62, 0.5, 0.33], 0.85); m.spec = Some(json!({"cls": "fabric.CoarseKnitFabric", "kwargs": {}, "seed": r.next_u64() % 1_000_000})); m });
             let mut m = limb([c[0], c[1], fz], [c[0], c[1], fz + hgt], rad * 0.9, rad, true);
             m.append(&limb([c[0], c[1], fz + hgt - 0.02], [c[0], c[1], fz + hgt + 0.01], rad + 0.01, rad + 0.01, true));
@@ -236,7 +248,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             placed = true;
             break;
         }
-        if placed { log.push(format!("basket by side table {i}")) }
+        if placed { basket_rooms.push(rk.clone()); log.push(format!("basket by side table {i}")) }
     }
     log
 }
