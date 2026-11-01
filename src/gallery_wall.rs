@@ -84,6 +84,15 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             let u = -width / 2.0 + cell_w * (ci as f64 + 0.5) + r.uniform(-0.04, 0.04);
             let zc = z0 + cell_h * (ri_ as f64 + 0.5) + r.uniform(-0.04, 0.04);
             // frame box: 2.5 cm deep, its back on the wall face
+            // (each frame on the wall behind its own spot, marched to from the sofa's back line: one wall point for the whole cluster ran
+            // the end frames of a sofa set a little askew 3 cm into the wall)
+            let wq = {
+                let b = [wq[0] - dir[0] * 0.3 + along[0] * u, wq[1] - dir[1] * 0.3 + along[1] * u];
+                let mut w = None;
+                for s in 0..60 { let q = [b[0] + dir[0] * s as f64 * 0.01, b[1] + dir[1] * s as f64 * 0.01]; if !crate::shp::contains_pt(&inner[ri], q) { w = Some([q[0] - along[0] * u, q[1] - along[1] * u]); break } }
+                let Some(w) = w else { continue };
+                w
+            };
             let centre = [wq[0] - dir[0] * 0.0125 + along[0] * u, wq[1] - dir[1] * 0.0125 + along[1] * u];
             let fbox = {
                 let c0 = [centre[0] - along[0] * fw / 2.0, centre[1] - along[1] * fw / 2.0];
@@ -92,8 +101,12 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 ([c0[0].min(c1[0]) - 0.05 - pad, c0[1].min(c1[1]) - 0.05 - pad, zc - fh / 2.0 - pad], [c0[0].max(c1[0]) + 0.05 + pad, c0[1].max(c1[1]) + 0.05 + pad, zc + fh / 2.0 + pad])
             };
             // (inside the room: a gallery as wide as a sofa by a corner ran its end frame into the side wall)
-            let ends = [[centre[0] - along[0] * (fw / 2.0 + 0.03) - dir[0] * 0.03, centre[1] - along[1] * (fw / 2.0 + 0.03) - dir[1] * 0.03], [centre[0] + along[0] * (fw / 2.0 + 0.03) - dir[0] * 0.03, centre[1] + along[1] * (fw / 2.0 + 0.03) - dir[1] * 0.03]];
+            // (past the frame's 5 cm border: the end check at 3 cm let a border into the side wall)
+            let ends = [[centre[0] - along[0] * (fw / 2.0 + 0.06) - dir[0] * 0.03, centre[1] - along[1] * (fw / 2.0 + 0.06) - dir[1] * 0.03], [centre[0] + along[0] * (fw / 2.0 + 0.06) - dir[0] * 0.03, centre[1] + along[1] * (fw / 2.0 + 0.06) - dir[1] * 0.03]];
             if !ends.iter().all(|q| crate::shp::contains_pt(&inner[ri], *q)) { continue }
+            // (and the whole back edge, every 5 cm, 1.5 cm in from it: a jog in the wall took a frame's corner 2.8 cm in)
+            let n_s = (fw / 0.05).ceil() as usize;
+            if !(0..=n_s).all(|j| { let t = -fw / 2.0 + fw * j as f64 / n_s as f64; crate::shp::contains_pt(&inner[ri], [centre[0] + along[0] * t - dir[0] * 0.0025, centre[1] + along[1] * t - dir[1] * 0.0025]) }) { continue }
             let me = world_box(o);
             if occupied.iter().any(|b| !(b.0 == me.0 && b.1 == me.1) && (0..3).all(|d| fbox.0[d] < b.1[d] && b.0[d] < fbox.1[d])) { continue }
             occupied.push(fbox);
