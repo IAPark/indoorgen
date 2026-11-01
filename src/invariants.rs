@@ -109,7 +109,9 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
             // the run's front includes its counter overhang; the appliance front (door handle) may sit a few cm past it
             let front_app = if s > 0.0 { ah[ax] } else { -al[ax] };
             let df = front_app - front_run;
-            if df.abs() > 0.08 { add("appliance_flush", format!("{k} {} [{}]: front {df:+.2} m off run {r}", g.class, room_of(k))); }
+            // (a fridge may stand proud of the counters: a full-depth one does, 10-20 cm, against counter-depth cabinets)
+            let proud_ok = if g.class == "FridgeFactory" { 0.16 } else { 0.08 };
+            if df > proud_ok || df < -0.08 { add("appliance_flush", format!("{k} {} [{}]: front {df:+.2} m off run {r}", g.class, room_of(k))); }
             if g.class != "FridgeFactory" && top.is_finite() {
                 // body top: the appliance's highest part below the back guard (parts ending under top + 0.1)
                 let body = inp.scene.nodes.iter().filter(|n| n.name.split_once('#').map_or(false, |(kk, _)| kk == k.as_str()) && !n.mesh.is_empty())
