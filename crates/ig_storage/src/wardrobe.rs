@@ -67,8 +67,15 @@ impl Wardrobe {
     fn build(&self) -> Asset {
         let mut a = Asset::default();
         let mut r = Rng::seeded(self.seed);
-        let (d, w, h, p) = (self.depth, self.width, self.height, self.plinth);
+        let (d, w, p) = (self.depth, self.width, self.plinth);
         let s = self.seed;
+        // base and top from their own stream: 30 % stand on tapered legs (the carcass raised to at least 11 cm), 25 % have a stepped
+        // cornice over the doors, proud at the front only (the width stays the layout box's); NO_WARDROBE_STYLES=1: neither
+        let mut sb = Rng::seeded(crate::int_hash(&["wardrobe_base", &self.seed.to_string()]));
+        let styled = std::env::var_os("NO_WARDROBE_STYLES").is_none();
+        let legs = styled && sb.f64() < 0.3;
+        let cornice_p = sb.f64() < 0.25;
+        let p = if legs { p.max(0.11) } else { p };
         let body_cls = weighted(&mut r, BODY);
         let door_cls = if self.contrast_doors { weighted(&mut r, BODY) } else { body_cls };
         let body = spec("wardrobe_body", body_cls, s);
@@ -83,6 +90,8 @@ impl Wardrobe {
             let hsh = crate::int_hash(&["wardrobe_open", &self.seed.to_string()]);
             if !self.sliding && std::env::var_os("NO_WARDROBE_OPEN").is_none() && !crate::api::closed_hint() && hsh % 4 == 0 { Some((hsh / 4) as usize % self.doors) } else { None }
         };
+        let cornice = styled && cornice_p && open_bay.is_none() && !self.sliding;
+        let (h, h_full) = (if cornice { self.height - 0.065 } else { self.height }, self.height);
         let mut cab = Mesh::new();
         match open_bay {
             Some(bi) => {
@@ -93,11 +102,24 @@ impl Wardrobe {
             }
             None => cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, w, h])),
         }
-        // recessed plinth
-        cab.append(&Mesh::cuboid([0.0, 0.02, 0.0], [x0 - 0.04, w - 0.02, p]));
+        // recessed plinth, or legs set in from the corners (a middle pair under a wide one)
+        if legs {
+            let mut ys = vec![0.05, w - 0.05];
+            if w > 1.4 { ys.push(w / 2.0); }
+            for y in ys { for x in [0.05, x0 - 0.05] {
+                let sx = if x > x0 / 2.0 { 0.012 } else { -0.012 };
+                let m = limb([x, y, p], [x + sx, y, 0.0], 0.022, 0.014, true); let b = m.bounds(); a.mesh(m, &body, Some(b));
+            }}
+        } else {
+            cab.append(&Mesh::cuboid([0.0, 0.02, 0.0], [x0 - 0.04, w - 0.02, p]));
+        }
+        if cornice {
+            cab.append(&Mesh::cuboid([0.0, 0.0, h], [d + 0.012, w, h + 0.025]));
+            cab.append(&Mesh::cuboid([0.0, 0.0, h + 0.025], [d + 0.03, w, h_full]));
+        }
         let cb = cab.bounds();
         a.mesh(cab, &body, Some(cb));
-        a.supports.push(([0.0, 0.0, h], [d, w, h + 0.001]));
+        a.supports.push(([0.0, 0.0, h_full], [d, w, h_full + 0.001]));
         // door style from its own stream (the draws above keep their values): flat slabs 50 %, shaker (a frame proud of the panel) 30 %,
         // a mirror on every other tall door 20 %; NO_WARDROBE_STYLES=1: flat
         let mut sq = Rng::seeded(crate::int_hash(&["wardrobe_style", &self.seed.to_string()]));
