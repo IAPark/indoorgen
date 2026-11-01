@@ -243,9 +243,16 @@ def view_camera(sc, room, view):
     order = sorted(range(len(views)), key=lambda i: -views[i][0])
     pick = order[0]
     if view == "cornerB":
-        # the best view from another spot, 1.5 m or more from cornerA's
+        # the best view from another spot, 1.2 m or more from cornerA's (1.5 m pushed small kitchens / bathrooms onto a far worse
+        # spot: a fridge filling the foreground, a blank bathroom wall)
+        # (or 0.6 m and a heading 35 deg or more apart: a small room's other good spots stand just over a metre from A, looking elsewhere)
         qa = views[order[0]][3]
-        pick = next((i for i in order[1:] if math.hypot(views[i][3][0] - qa[0], views[i][3][1] - qa[1]) >= 1.5), order[min(1, len(order) - 1)])
+        def _head(v): return math.atan2(cen[1] - v[3][1], cen[0] - v[3][0]) + v[1]
+        def _ok(i):
+            d = math.hypot(views[i][3][0] - qa[0], views[i][3][1] - qa[1])
+            dh = abs(_head(views[i]) - _head(views[order[0]])) % (2 * math.pi); dh = min(dh, 2 * math.pi - dh)
+            return d >= 1.2 or (d >= 0.6 and dh >= math.radians(35))
+        pick = next((i for i in order[1:] if _ok(i)), order[min(1, len(order) - 1)])
     sv, yaw, _, q = views[pick]
     fx, fy = cen[0] - q[0], cen[1] - q[1]; L = math.hypot(fx, fy) or 1.0
     ux, uy = (fx * math.cos(yaw) - fy * math.sin(yaw)) / L, (fx * math.sin(yaw) + fy * math.cos(yaw)) / L

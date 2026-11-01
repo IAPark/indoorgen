@@ -216,6 +216,7 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         let right = fwd.cross(Vec3::Z).normalize(); let up = right.cross(fwd);
         let (mut furn, mut near, mut leaf, mut wall, mut nr) = (0usize, 0usize, 0usize, 0usize, 0usize);
         let mut cols: HashMap<String, (usize, usize)> = HashMap::new();
+        let mut close: HashMap<String, (usize, usize)> = HashMap::new();
         for i in 0..24 {
             for j in 0..14 {
                 let d = (fwd + right * (((i as f32 + 0.5) / 24.0) * 2.0 - 1.0) + up * ((((j as f32 + 0.5) / 14.0) * 2.0 - 1.0) * 0.5625)).normalize();
@@ -223,8 +224,11 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
                 let Some((t, nrm, di)) = bvh.cast(o, d, 8.0) else { continue };
                 let nm = name(di); let nl = nm.to_lowercase();
                 if leaf_re(nm) { leaf += 1; continue }
-                if t < 1.4 { near += 1; }
+                if t < 1.8 { near += 1; }
                 if fixed.iter().any(|k| nl.contains(k)) { if t < 1.8 && nrm.z.abs() < 0.5 { wall += 1; } continue }
+                if t < 1.3 { let e = close.entry(key(nm)).or_insert((i, i)); e.0 = e.0.min(i); e.1 = e.1.max(i); }
+                // (a furniture side or an open wardrobe door close by fills the frame like a bare wall)
+                if t < 1.8 && nrm.z.abs() < 0.5 { wall += 1; }
                 if t <= 5.0 {
                     furn += 1;
                     let e = cols.entry(key(nm)).or_insert((i, i)); e.0 = e.0.min(i); e.1 = e.1.max(i);
@@ -233,7 +237,10 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         }
         let n = nr as f64;
         let cut = cols.values().filter(|(a, b)| (*a == 0 || *b == 23) && b - a < 6).count() as f64;
-        2.0 * (cols.len() as f64 - cut) + 30.0 * furn as f64 / n - 50.0 * near as f64 / n - 60.0 * leaf as f64 / n - 3.0 * cut - 25.0 * wall as f64 / n
+        // foreground clutter: a small piece (8 columns or fewer) within 1.3 m of the lens -- a utensil crock filling a kitchen
+        // view's corner
+        let clutter = close.values().filter(|(a, b)| b - a < 8).count() as f64;
+        2.0 * (cols.len() as f64 - cut) + 30.0 * furn as f64 / n - 50.0 * near as f64 / n - 60.0 * leaf as f64 / n - 3.0 * cut - 4.0 * clutter - 25.0 * wall as f64 / n
     };
     let mut views: Vec<(f64, f64, P2)> = spots.iter().map(|&q| {
         let (sv, yaw) = (-16..=16).map(|k| { let y = (2.5 * k as f64).to_radians(); (view_score(q, y), y) })
@@ -245,8 +252,17 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
     let order: Vec<usize> = { let mut o: Vec<usize> = (0..views.len()).collect(); o.sort_by(|&a, &b| views[b].0.partial_cmp(&views[a].0).unwrap()); o };
     let mut pick = order[0];
     if which == 1 {
-        let qa = views[order[0]].2;
-        pick = order.iter().skip(1).copied().find(|&i| (views[i].2 .0 - qa.0).hypot(views[i].2 .1 - qa.1) >= 1.5).unwrap_or(order[1.min(order.len() - 1)]);
+        // another viewpoint: 1.2 m or more from cornerA's spot, or 0.6 m and a heading 35 deg or more apart (a small room's other
+        // good spots stood just over a metre from A, looking elsewhere; the 1.2 m rule took a wardrobe door instead)
+        let head = |v: &(f64, f64, P2)| { let (fx, fy) = (cen.0 - v.2 .0, cen.1 - v.2 .1); fy.atan2(fx) + v.1 };
+        let a = &views[order[0]];
+        let ok = |i: usize| {
+            let b = &views[i];
+            let d = (b.2 .0 - a.2 .0).hypot(b.2 .1 - a.2 .1);
+            let mut dh = (head(b) - head(a)).abs() % std::f64::consts::TAU; if dh > std::f64::consts::PI { dh = std::f64::consts::TAU - dh; }
+            d >= 1.2 || (d >= 0.6 && dh >= 35f64.to_radians())
+        };
+        pick = order.iter().skip(1).copied().find(|&i| ok(i)).unwrap_or(order[1.min(order.len() - 1)]);
     }
     let (sv, yaw, q) = views.swap_remove(pick);
     let (fx, fy) = (cen.0 - q.0, cen.1 - q.1); let l = fx.hypot(fy).max(1e-9);
