@@ -506,6 +506,33 @@ pub fn build_scene(p: &Params) -> Built {
             .collect()
     };
     lap("visuals built");
+    // through-wall safety net: a floor piece whose built footprint reaches more than 4 cm past its room's wall face (into the wall or the
+    // next room) is removed with what stands on it -- rare solver failures at the inside corner of an L room (seeds 322, 323: a
+    // cabinet 15-20 cm through the wall, its items outside every room). Wall-mounted, ceiling and rug pieces are not checked
+    {
+        let wt = g.c.wall_thickness;
+        let inner: std::collections::HashMap<String, indoorgen::shp::G> = g.room_polys.iter().map(|(n, p)| (n.clone(), indoorgen::shp::buffer_mitre(p, -wt / 2.0 + 0.04))).collect();
+        let mut bad: Vec<String> = vec![];
+        for (k, o) in &g.state.objs {
+            let Some(gen) = &o.generator else { continue };
+            if g.features.iter().any(|f| &f.key == k) { continue }
+            if ["WallArt", "Mirror", "CeilingLight", "Rug", "Window", "Door", "Hardware", "Curtain", "Shelf", "Kitchen"].iter().any(|c| gen.class.contains(c)) && gen.class != "LargeShelfFactory" { continue }
+            let Some(a) = visuals.get(k) else { continue };
+            let Some(room) = indoorgen::furn::layout2d::room_of(&g.state, k) else { continue };
+            let Some(poly) = inner.get(&room) else { continue };
+            let (lo, hi) = a.bounds();
+            // only pieces standing on the floor (the bottom within 15 cm of it)
+            if o.pose.apply([0.0, 0.0, lo[2]])[2] > wt / 2.0 + 0.15 { continue }
+            let corners = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]];
+            let out = corners.iter().any(|c| { let p = o.pose.apply([c[0], c[1], lo[2]]); !indoorgen::shp::contains_pt(poly, [p[0], p[1]]) });
+            if out { bad.push(k.clone()); }
+        }
+        for k in bad {
+            let gone = indoorgen::furn::layout2d::remove_tree(&mut g.state, &k);
+            for x in &gone { visuals.remove(x); }
+            eprintln!("THROUGHWALL removed {k} (+{} on it)", gone.len().saturating_sub(1));
+        }
+    }
     // an open wardrobe door (wardrobe.rs: a quarter of hinged wardrobes stand with one bay open) whose swing would cut into a
     // neighbour is closed: the solver places against the closed box (seed 312: a door swung through the side table in front)
     {
