@@ -803,6 +803,14 @@ pub fn bedroom_and_desk(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<
             // the usual gap, then tighter, then a narrow nightstand (0.35 m): one side of the bed hard against a wall or wardrobe
             // left beds with a single nightstand
             let mut placed_here = false;
+            // (a nightstand no deeper than 0.5 m: an oblong side table stood 0.9 m along the bed's side, reaching past its middle)
+            if let Some(cs) = state.objs[&name].generator.as_ref().and_then(super::solver::cur_size) {
+                if cs[1] > 0.55 {
+                    let base = state.objs[&name].clone();
+                    let _ = super::solver::set_size(ctx, state, &name, &base, [cs[0].min(0.6), 0.45, cs[2]], 1.0);
+                    if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUPDBG nightstand {name}: {cs:.2?} -> depth 0.45"); }
+                }
+            }
             // (and looser: a bed whose frame flares past its box blocked the tight slot on one side)
             for (shrink, gap) in [(false, 0.04), (false, 0.02), (false, 0.08), (false, 0.12), (true, 0.02), (true, 0.08)] {
                 if shrink {
