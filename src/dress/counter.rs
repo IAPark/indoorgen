@@ -122,7 +122,8 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
         // a long run (2.4 m and up) holds more: a microwave at the back half the time, and a bowl or a box of food
         if u1 - u0 >= 2.4 {
             let mid = |r: &mut Rng| clampu((u0 + u1) / 2.0 + r.uniform(-0.5, 0.5));
-            if r.f64() < 0.5 { let u = mid(&mut r); plan.push((u, 0.05, assets.visual("MicrowaveFactory", r.next_u64() % 1_000_000, 0), 1.0, "MicrowaveFactory")); }
+            // (countertop size: at most 0.52 m across and 0.32 m tall -- the factory's built-in sizes stood 0.75 m deep on a 0.6 m counter)
+            if r.f64() < 0.5 { let u = mid(&mut r); let a = assets.visual("MicrowaveFactory", r.next_u64() % 1_000_000, 0); let (dx, dy, dz) = dims(&a); let sc = (0.52 / dx.max(dy).max(0.05)).min(0.32 / dz.max(0.05)).min(1.0); plan.push((u, 0.05, a, sc, "MicrowaveFactory")); }
             let cls = ["BowlFactory", "FoodBoxFactory"][r.choice_idx(2)];
             let u = mid(&mut r);
             let a = assets.visual(cls, r.next_u64() % 1_000_000, 0);
