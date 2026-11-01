@@ -618,13 +618,29 @@ pub fn build_scene(p: &Params) -> Built {
         }
     }
     let mut counts = std::collections::BTreeMap::new();
+    // rooms without daylight (no window, no glazed door) and the small service rooms (bathrooms, closets, hallways, utility -- one small
+    // window lets in next to nothing on an overcast day): one of their ceiling lights stays on whatever the lights-off draw says
+    // (a bathroom with its lamps drawn off rendered murky at the auto exposure's limit; interiors are photographed with those lit)
+    let lit_rooms: std::collections::HashSet<String> = g.cutters.iter()
+        .filter(|ct| ct.kind == indoorgen::rooms::solidify::CutKind::Window || (ct.kind == indoorgen::rooms::solidify::CutKind::Entrance && ct.style == indoorgen::rooms::solidify::DoorStyle::SlidingGlass))
+        .flat_map(|ct| ct.rooms.iter().cloned()).collect();
+    let room_at = |p: [f64; 3]| g.room_polys.iter().find(|(_, poly)| indoorgen::shp::contains_pt(poly, [p[0], p[1]])).map(|(n, _)| n.clone());
+    let mut forced_on: std::collections::HashSet<String> = Default::default();
     for (k, o) in &g.state.objs {
         let Some(gen) = &o.generator else { continue };
         *counts.entry(gen.class.clone()).or_insert(0) += 1;
         {
             // python's lights_off outcome is the default; variation.lighting decides otherwise. The bulb draws below are pure functions of the
             // factory seed, so computing them for lamps that stay off changes nothing.
-            let on = var.lighting.lamp_on(seed, k, &gen.class, !lights_off, night);
+            let mut on = var.lighting.lamp_on(seed, k, &gen.class, !lights_off, night);
+            if matches!(gen.class.as_str(), "CeilingLightFactory" | "CeilingClassicLampFactory") {
+                if let Some(rm) = room_at(o.pose.t) {
+                    let service = ["bathroom", "closet", "hallway", "utility"].iter().any(|t| rm.starts_with(t));
+                    if service || !lit_rooms.contains(&rm) {
+                        if on { forced_on.insert(rm); } else if forced_on.insert(rm) { on = true; }
+                    }
+                }
+            }
             let local = match gen.class.as_str() {
                 "CeilingLightFactory" => Some([0.0, 0.0, -0.03]),
                 "CeilingClassicLampFactory" => Some([0.0, 0.0, o.geom.lo[2] - 0.03]),
