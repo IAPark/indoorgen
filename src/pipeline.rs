@@ -902,7 +902,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         let others = (0..out.len()).any(|j| j != i && out[j].rooms.first() == room && (scores[j] >= -5.0 || scores[j] > scores[i])) || fixed.iter().any(|o| o.kind == CutKind::Window && o.rooms.first() == room);
         // (or when it is a utility room, a closet or a garage: none is better than one behind a shelf unit)
         let service = room.map_or(false, |r| matches!(crate::rooms::state::room_type(r), "utility" | "closet" | "garage"));
-        let k = !(scores[i] < -5.0 && (others || service));
+        // (a service room's window goes sooner: -2.5 is about the narrowing alone plus a tall piece's edge)
+        let k = !(scores[i] < -5.0 && others) && !(service && scores[i] < -2.5);
         if !k && std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {:?}: window left out (score {:.2}, the room has another)", room, scores[i]); }
         k
     }).collect();
