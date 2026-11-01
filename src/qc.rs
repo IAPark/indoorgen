@@ -441,6 +441,11 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     if parent.as_deref() == Some(q.key.as_str()) || children_of.contains(&(o.key.clone(), q.key.clone())) || parent_of.get(&q.key) == Some(&o.key) || cut_keys.contains(&o.key) || cut_keys.contains(&q.key) {
                         continue;
                     }
+                    // (book rows side by side on one unit: on a unit set at an angle their world boxes overlap 7-10 cm while the books do not
+                    // -- the mesh penetration test above still holds them)
+                    if o.class == "BookColumnFactory" && q.class == "BookColumnFactory" && parent.is_some() && parent == parent_of.get(&q.key).cloned() {
+                        continue;
+                    }
                     for &a in &o.nodes {
                         for &b in &q.nodes {
                             let ov: Vec<f64> = (0..3).map(|d| bb[a].1[d].min(bb[b].1[d]) - bb[a].0[d].max(bb[b].0[d])).collect();
