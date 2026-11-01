@@ -570,8 +570,10 @@ pub fn build_scene(p: &Params) -> Built {
         };
         let boxes: std::collections::HashMap<String, ([f64; 3], [f64; 3])> = g.state.objs.iter().filter_map(|(k, o)| { let a = visuals.get(k)?; let (l, h) = a.bounds(); Some((k.clone(), wb(o, l, h))) }).collect();
         let mut moves: Vec<(String, [f64; 3])> = vec![];
+        let mut shallow: Vec<(String, f64)> = vec![];
         for (k, o) in &g.state.objs {
-            if o.generator.as_ref().map_or(true, |gg| gg.class != "FridgeFactory") { continue }
+            if o.generator.as_ref().map_or(true, |gg| !matches!(gg.class.as_str(), "FridgeFactory" | "OvenFactory")) { continue }
+            let oven = o.generator.as_ref().map_or(false, |gg| gg.class == "OvenFactory");
             let Some(&(al, ah)) = boxes.get(k) else { continue };
             let fa = [o.pose.r[0][0], o.pose.r[1][0]];
             let ax = if fa[0].abs() > fa[1].abs() { 0 } else { 1 };
@@ -590,7 +592,16 @@ pub fn build_scene(p: &Params) -> Built {
                 if best.map_or(true, |b| df.abs() < b.abs()) { best = Some(df); }
             }
             let Some(df) = best else { continue };
-            if df > -0.03 { continue }
+            // (a range more than 6 cm proud of the run moves back when the room has the space behind it: one stood 10 cm out)
+            if oven && df > 0.06 {
+                let mut d = [0.0; 3]; d[ax] = -sgn * df;
+                let room = indoorgen::furn::layout2d::room_of(&g.state, k);
+                let inner = room.and_then(|r| g.room_polys.iter().find(|(n, _)| *n == r).map(|(_, p)| indoorgen::shp::buffer_mitre(p, -g.c.wall_thickness / 2.0 + 0.005)));
+                let ok = inner.map_or(false, |pg| [[al[0] + d[0], al[1] + d[1]], [ah[0] + d[0], al[1] + d[1]], [ah[0] + d[0], ah[1] + d[1]], [al[0] + d[0], ah[1] + d[1]]].iter().all(|q| indoorgen::shp::contains_pt(&pg, *q)));
+                if ok { moves.push((k.clone(), d)); } else { shallow.push((k.clone(), df)); }
+                continue;
+            }
+            if df > -0.03 || oven { continue }
             let shift = -df;
             let mut d = [0.0; 3]; d[ax] = sgn * shift;
             let (nl, nh) = ([al[0] + d[0], al[1] + d[1], al[2]], [ah[0] + d[0], ah[1] + d[1], ah[2]]);
@@ -604,13 +615,25 @@ pub fn build_scene(p: &Params) -> Built {
             });
             if clear { moves.push((k.clone(), d)); }
         }
+        // (against the wall, no space behind: built that much shallower, about its back -- ovens are fitted to their box, not sized)
+        for (k, df) in shallow {
+            let Some(a) = visuals.get_mut(&k) else { continue };
+            let (lo, hi) = a.bounds();
+            let depth = hi[0] - lo[0];
+            if depth < 0.3 || df > 0.25 * depth { continue }
+            let f = (depth - df) / depth;
+            let mut m = indoorgen::mesh::Mat4::scale([f, 1.0, 1.0]);
+            m.0[0][3] = lo[0] * (1.0 - f);
+            a.transform(&m);
+            eprintln!("FLUSH {k}: built {df:.2} m shallower to the run's front");
+        }
         for (k, d) in moves {
             let shift = d[0].abs() + d[1].abs();
             // (moved, not built deeper: the fridge is built to its layout size)
             let o = g.state.objs.get_mut(&k).unwrap();
             let t = o.pose.t;
             o.pose.set_loc([t[0] + d[0], t[1] + d[1], t[2]]);
-            eprintln!("FRIDGE {k}: forward {shift:.2} m to the run's front");
+            eprintln!("FLUSH {k}: moved {shift:.2} m to the run's front");
         }
     }
     // an open wardrobe door (wardrobe.rs: a quarter of hinged wardrobes stand with one bay open) whose swing would cut into a
