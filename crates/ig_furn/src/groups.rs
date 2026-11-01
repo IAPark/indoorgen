@@ -1963,14 +1963,14 @@ pub fn room_extras(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: O
                 // in a corner, away from the doors, not hard against another piece (a plant squeezed beside the sofa reads as clutter)
                 let near = st.objs.iter().filter(|(k, o)| k.as_str() != nm && o.generator.is_some() && !layout2d::is_room(o) && !matches!(class_of(o), "RugFactory" | "WallArtFactory" | "MirrorFactory" | "CeilingLightFactory"))
                     .map(|(k, _)| layout2d::dist(st, k, &nm)).fold(9.0f64, f64::min);
-                // (and 10 cm clear at least: the leaves spread past the pot's box, into a nightstand beside it)
-                if near < 0.1 { return -100.0 }
+                // (and 25 cm clear at least: the leaves spread 20-25 cm past the pot's box, into a nightstand beside it)
+                if near < 0.25 { return -100.0 }
                 -t.min(len - t) * 2.0 + dd(c).min(1.5) + near.min(0.6)
             });
             // (every spot too tight: none)
             let near = state.objs.iter().filter(|(k, o)| k.as_str() != name && o.generator.is_some() && !layout2d::is_room(o) && !matches!(class_of(o), "RugFactory" | "WallArtFactory" | "MirrorFactory" | "CeilingLightFactory"))
                 .map(|(k, _)| layout2d::dist(state, k, &name)).fold(9.0f64, f64::min);
-            if ok && near >= 0.1 { log.push(format!("{room}: plant in a corner")); } else { state.objs.shift_remove(&name); break }
+            if ok && near >= 0.25 { log.push(format!("{room}: plant in a corner")); } else { state.objs.shift_remove(&name); break }
         }
     }
     log
