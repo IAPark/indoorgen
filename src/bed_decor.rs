@@ -34,6 +34,12 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     let mut log = vec![];
     let inner: Vec<crate::shp::G> = room_polys.iter().map(|(_, g)| crate::shp::buffer_mitre(g, -0.18)).collect();
     let mut taken: Vec<Box3> = state.objs.values().filter(|o| o.generator.is_some()).map(|o| world_box(o, o.geom.lo, o.geom.hi)).collect();
+    // (and the wardrobes as built: an open door stands outside the solver box, and a bench at the bed's foot went into one)
+    for (k, o) in &state.objs {
+        if o.generator.as_ref().map_or(true, |g| g.class != "WardrobeFactory") { continue }
+        let pre = format!("{k}#");
+        taken.extend(scene.nodes.iter().filter(|n| n.name.starts_with(&pre) && !n.mesh.is_empty()).map(|n| n.mesh.bounds()));
+    }
     // (and the gallery frames already hung: scene-only, a wall shelf went up into one)
     // (grown 3 cm: the shelf's probe is shrunk 2 cm for touching furniture, and a frame is only 2.5 cm deep)
     taken.extend(scene.nodes.iter().filter(|n| n.name.starts_with("gallery_") && !n.mesh.is_empty()).map(|n| { let (l, h) = n.mesh.bounds(); ([l[0] - 0.03, l[1] - 0.03, l[2] - 0.03], [h[0] + 0.03, h[1] + 0.03, h[2] + 0.03]) }));

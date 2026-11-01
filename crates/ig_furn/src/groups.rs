@@ -1660,9 +1660,10 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                 let mut ok = place_on_wall(state, &name, &room, &score);
                 if !ok {
                     // (plants and pictures first: a spot blocked only by a corner plant or a picture over it left the room bedless)
-                    let mut crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory" | "WardrobeFactory" | "LargeShelfFactory" | "SimpleDeskFactory" | "SingleCabinetFactory")
+                    let mut crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory" | "WardrobeFactory" | "LargeShelfFactory" | "SimpleDeskFactory" | "SingleCabinetFactory" | "WindowSeatFeature" | "BookshelfWallFeature")
                         && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
-                    crowd.sort_by_key(|k| if matches!(class_of(&state.objs[k.as_str()]), "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory") { 0 } else { 1 });
+                    // (built-ins last: a window seat on the one wall the doors left)
+                    crowd.sort_by_key(|k| match class_of(&state.objs[k.as_str()]) { "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory" => 0, "WindowSeatFeature" | "BookshelfWallFeature" => 2, _ => 1 });
                     for k in crowd {
                         layout2d::remove_tree(state, &k);
                         log.push(format!("{room}: removed {k} to fit a bed"));

@@ -116,14 +116,22 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
                     for p in &pf.asset.parts { for f in &p.mesh.faces {
                         let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]);
                         for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } }
-                        if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt && u[2] < h.1[2] + 0.03 { zt = u[2]; }
+                        if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt && u[2] < h.1[2] + 0.06 { zt = u[2]; }
                     }}
                     spots.push([sx, sy, zt]);
                 }
             }
             // floor beside the breast, against the wall-side of the room
             let fxp = if left { breast[0] - rad - 0.06 } else { breast[1] + rad + 0.06 };
-            spots.push([fxp, rad + 0.1, 0.0]);
+            // (on what is really there: the hearth slab runs on past the breast, and a log basket stood 2 cm into it)
+            let fy = rad + 0.1;
+            let mut fz = 0.0f64;
+            for p in &pf.asset.parts { for f in &p.mesh.faces {
+                let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]);
+                for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } }
+                if l[0] < fxp + rad && u[0] > fxp - rad && l[1] < fy + rad && u[1] > fy - rad && u[2] > fz && u[2] < 0.06 { fz = u[2]; }
+            }}
+            spots.push([fxp, fy, fz]);
             for (j, s) in spots.iter().enumerate() {
                 let at = w(*s);
                 let yaw_i = yaw + if k == 1 { std::f64::consts::FRAC_PI_2 * if r.f64() < 0.5 { 0.0 } else { 1.0 } } else { 0.0 };
