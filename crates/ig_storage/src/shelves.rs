@@ -312,6 +312,32 @@ impl Factory for LargeShelf {
         }
         a
     }
+    /// collision: the frame's boards (cabnodes::shelf_frame_volumes); a unit with doors: no supports in its closed bottom row (the
+    /// doors stand within the frame's depth)
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let (p, _) = self.params(inst);
+        let doors = self.has_doors(inst) && p.div_z.len() >= 2;
+        let above = if doors { p.div_z[0] + p.div_t } else { f64::NEG_INFINITY };
+        let mut v = cabnodes::shelf_frame_volumes(&p, above);
+        if doors {
+            // the bottom row's flush doors (as built, before the frame's quarter turn: (x, y) -> (y, -x)), each hinged on its outer edge
+            let (d, dt) = (p.shelf_depth, p.div_t);
+            let (zl, zh) = (p.div_z[0] + dt * 0.5 + 0.003, p.div_z[1] - dt * 0.5 - 0.003);
+            for i in 0..p.cell_w.len() {
+                let (xc, w) = (p.div_x[i], p.cell_w[i]);
+                let n = if w > 0.6 { 2 } else { 1 };
+                for k in 0..n {
+                    let (x0, x1) = (xc - w / 2.0 + w * k as f64 / n as f64 + 0.0015, xc - w / 2.0 + w * (k + 1) as f64 / n as f64 - 0.0015);
+                    let (lo, hi) = ([d * 0.5 - 0.016, -x1, zl], [d * 0.5 + 0.001, -x0, zh]);
+                    v.push(Volume::hard(lo, hi));
+                    let (hy, axis) = if k == 0 { (-x0, [0.0, 0.0, 1.0]) } else { (-x1, [0.0, 0.0, -1.0]) };
+                    v.push(Volume::opening(Leaf::Hinged { panel: (lo, hi), hinge: [d * 0.5, hy, zl], axis, max_angle: 100f64.to_radians() }));
+                }
+            }
+        }
+        Some(v)
+    }
     fn exact(&self, inst: u64) -> Option<cabnodes::ExactMesh> {
         // (a unit with doors renders its own asset: the exact mesh would drop them)
         if self.has_doors(inst) { return None }
@@ -375,6 +401,47 @@ impl Factory for SimpleBookcase {
         let bt = r.uniform(0.01, 0.02);
         let screw_depth = r.uniform(0.002, 0.008);
         Some([dims[1] + screw_depth, dims[0] - 0.015 + bt, dims[2]])
+    }
+    /// collision: the boards (sides with their screw heads, division boards as supports, the back), the attach brackets under the top,
+    /// and a case with doors: its doors (pull included) hinged on their outer edges; built before the quarter turn, as `asset`
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let b = self.params(i);
+        let (d, w, h, st, dt) = (b.d, b.w, b.h, b.st, b.dt);
+        let g = 0.0015;
+        let turn = |lo: [f64; 3], hi: [f64; 3]| -> ([f64; 3], [f64; 3]) { ([lo[1] - g, -hi[0] - g, lo[2] - g], [hi[1] + g, -lo[0] + g, hi[2] + g]) };
+        let mut v = vec![];
+        let mut hard = |v: &mut Vec<Volume>, lo: [f64; 3], hi: [f64; 3]| { let (a, c) = turn(lo, hi); v.push(Volume::hard(a, c)); };
+        // sides, the screw heads standing half their length out of them (and over the top when wider than half the top board)
+        let sd = b.screw_depth * 0.5;
+        let st_top = h + (b.screw_r - dt * 0.5).max(0.0);
+        hard(&mut v, [-w / 2.0 - sd, -d / 2.0, 0.0], [-w / 2.0 + st, d / 2.0, st_top]);
+        hard(&mut v, [w / 2.0 - st, -d / 2.0, 0.0], [w / 2.0 + sd, d / 2.0, st_top]);
+        let zs = [b.gap + dt * 0.5, (h - dt * 0.5 + b.gap + dt * 0.5) * 0.5, h - dt * 0.5];
+        for z in zs {
+            hard(&mut v, [-w / 2.0 + st, -d / 2.0, z - dt / 2.0], [w / 2.0 - st, d / 2.0, z + dt / 2.0]);
+            let (a, c) = turn([-w / 2.0 + st, -d / 2.0, z + dt / 2.0 - 0.001], [w / 2.0 - st, d / 2.0, z + dt / 2.0]);
+            v.push(Volume::support(a, c));
+        }
+        hard(&mut v, [-w / 2.0, -d / 2.0 - b.bt, 0.0], [w / 2.0, -d / 2.0, h]);
+        // attach brackets: a plate under the top board, a strap down the back
+        let zt = h - dt;
+        hard(&mut v, [-b.aw / 2.0, -d / 2.0, zt - b.at / 2.0], [b.aw / 2.0, -d / 2.0 + b.atl, zt + b.at / 2.0]);
+        hard(&mut v, [-b.aw / 2.0, -d / 2.0 - b.at / 2.0, zt - b.abl], [b.aw / 2.0, -d / 2.0 + b.at / 2.0, zt]);
+        if self.has_doors(i) {
+            let (zl, zh) = (zs[0] + dt * 0.5 + 0.003, zs[1] - dt * 0.5 - 0.003);
+            let xi = w * 0.5 - st - 0.002;
+            let n = if w > 0.55 { 2 } else { 1 };
+            let dw = 2.0 * xi / n as f64;
+            for k in 0..n {
+                let (x0, x1) = (-xi + dw * k as f64 + 0.0015, -xi + dw * (k + 1) as f64 - 0.0015);
+                let (lo, hi) = turn([x0, d * 0.5 - 0.016, zl], [x1, d * 0.5 + 0.001, zh]);
+                v.push(Volume::hard(lo, hi));
+                let (hy, axis) = if k == 0 { (-x0, [0.0, 0.0, 1.0]) } else { (-x1, [0.0, 0.0, -1.0]) };
+                v.push(Volume::opening(Leaf::Hinged { panel: (lo, hi), hinge: [d * 0.5, hy, zl], axis, max_angle: 100f64.to_radians() }));
+            }
+        }
+        Some(v)
     }
     fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
         // (a case with doors renders its own asset: the exact mesh is infinigen's open case and would drop them)

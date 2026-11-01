@@ -72,6 +72,44 @@ impl ShelfParams {
 }
 
 /// geometry_nodes() of large_shelf.py with the final rotation. Returns an Asset (frame parts + division boards with support tags).
+/// the collision of `shelf_frame` from its parameters (no mesh built): one hard box per board -- the sides, the back, the bottom boards,
+/// the division boards (screw heads in them) -- so the cells stay open for what stands in them, and each division board's top as a support;
+/// in the frame `shelf_frame` turns to (a quarter turn: depth along x, width along y). `support_above`: supports only above this z (a
+/// unit with doors over its bottom row)
+pub fn shelf_frame_volumes(p: &ShelfParams, support_above: f64) -> Vec<crate::piece::Volume> {
+    use crate::piece::Volume;
+    let d = p.shelf_depth;
+    let h = p.shelf_height;
+    let g = 0.0005;
+    // (x, y) -> (y, -x): the quarter turn
+    let turn = |lo: [f64; 3], hi: [f64; 3]| -> ([f64; 3], [f64; 3]) { ([lo[1] - g, -hi[0] - g, lo[2] - g], [hi[1] + g, -lo[0] + g, hi[2] + g]) };
+    let mut v = vec![];
+    for &x in &p.side_x {
+        let (lo, hi) = turn([x - p.side_t / 2.0, -(d + 0.004) / 2.0, 0.0], [x + p.side_t / 2.0, (d + 0.004) / 2.0, h + 0.002]);
+        v.push(Volume::hard(lo, hi));
+    }
+    let w = p.shelf_width + p.side_t * 2.0;
+    let (lo, hi) = turn([-w / 2.0, -d / 2.0 - p.back_t, 0.0], [w / 2.0, -d / 2.0, h - 0.001]);
+    v.push(Volume::hard(lo, hi));
+    for i in 0..p.cell_w.len() {
+        let (lo, hi) = turn([p.div_x[i] - p.cell_w[i] / 2.0, d / 2.0 - p.y_gap - p.side_t / 2.0, 0.0], [p.div_x[i] + p.cell_w[i] / 2.0, d / 2.0 - p.y_gap + p.side_t / 2.0, p.bottom_h]);
+        v.push(Volume::hard(lo, hi));
+        for &z in &p.div_z {
+            let (x0, x1) = (p.div_x[i] - p.cell_w[i] / 2.0, p.div_x[i] + p.cell_w[i] / 2.0);
+            // (the screw heads stand under the board by their depth, and past its edges when set in less than their radius)
+            let e = (p.screw_r - p.screw_wgap).max(0.0);
+            let (lo, hi) = turn([x0 - e, -d / 2.0 - e, z - p.div_t / 2.0 - p.screw_depth], [x1 + e, d / 2.0 + e, z + p.div_t / 2.0]);
+            v.push(Volume::hard(lo, hi));
+            let top = z + p.div_t / 2.0;
+            if top > support_above {
+                let (lo, hi) = turn([x0, -d / 2.0, top - 0.001], [x1, d / 2.0, top]);
+                v.push(Volume::support(lo, hi));
+            }
+        }
+    }
+    v
+}
+
 pub fn shelf_frame(p: &ShelfParams, frame: &Material, board: &Material) -> Asset {
     let mut a = Asset::default();
     let d = p.shelf_depth;
