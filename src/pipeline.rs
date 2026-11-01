@@ -846,7 +846,13 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         // a bathroom window with only a spot behind something tall (the shower): a small high window over it (a bathroom's frosted
         // strip; leaving it out gave the street side a long blank wall), or none when the wall is too low for one
         if best_tall > 0.02 && crate::rooms::state::room_type(room) == "bathroom" && best_free.as_ref().map_or(true, |b| b.0 < -5.0) {
-            let (sill, head) = ((c.wall_height - 0.7).max(2.05), c.wall_height - c.wall_thickness / 2.0 - 0.2);
+            // the sill clears the tops of the tall pieces in front of it (a cabinet nearly to the ceiling hid the window inside)
+            let half = nc.dims[0].min(0.9) / 2.0 + 0.1;
+            let top = state.objs.iter().filter(|(k, o)| o.generator.is_some() && crate::furn::layout2d::room_of(state, k).as_deref() == Some(room.as_str()))
+                .map(|(k, _)| wb(state, k)).filter(|(lo, hi)| {
+                    nc.loc[0] + half > lo[0] - 0.6 && nc.loc[0] - half < hi[0] + 0.6 && nc.loc[1] + half > lo[1] - 0.6 && nc.loc[1] - half < hi[1] + 0.6
+                }).map(|(_, hi)| hi[2]).fold(0.0f64, f64::max);
+            let (sill, head) = ((c.wall_height - 0.7).max(2.05).max(top + 0.08), c.wall_height - c.wall_thickness / 2.0 - 0.2);
             if head - sill < 0.35 {
                 if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window left out (only behind a tall piece)"); }
                 continue;
