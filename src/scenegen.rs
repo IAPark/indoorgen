@@ -637,6 +637,19 @@ pub fn build_scene(p: &Params) -> Built {
             visuals.insert(k, a);
         }
     }
+    // painted kitchens: 18 % of kitchens have every cabinet (runs, wall cabinets, the island) in one paint colour over the frame and fronts
+    // (materials "shelf_*"; worktops, knobs and appliances keep theirs). Per room, its own stream (NO_PAINT=1: off; Blender only)
+    if std::env::var_os("NO_PAINT").is_none() {
+        for (k, o) in &g.state.objs {
+            let Some(gen) = &o.generator else { continue };
+            if !matches!(gen.class.as_str(), "KitchenSpaceFactory" | "KitchenCabinetFactory" | "KitchenIslandFactory") { continue }
+            let Some(room) = indoorgen::furn::layout2d::room_of(&g.state, k) else { continue };
+            let hs = indoorgen::int_hash(&["kitchen_paint", &seed.to_string(), &room]);
+            if hs % 100 >= 18 { continue }
+            let m = indoorgen::materials::painted_from(&format!("kitchen_paint:{room}"), hs, [0.85, 0.85, 0.85], &[0, 1, 2, 3, 5, 6, 7]);
+            if let Some(a) = visuals.get_mut(k) { for p in a.parts.iter_mut() { if p.mat.name.starts_with("shelf_") { p.mat = m.clone(); } } }
+        }
+    }
     // room features: their built meshes (span frame, posed by the state object) are visuals from here on, so the snap passes see mantels,
     // hearths and shelves as the surfaces their children rest on; the features themselves are on every skip list (never moved / removed)
     for pf in &g.features { visuals.insert(pf.key.clone(), pf.asset.clone()); }

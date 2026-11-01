@@ -122,7 +122,12 @@ pub const FURNITURE_PAINT: [[f32; 3]; 10] = [[0.30, 0.38, 0.28], [0.03, 0.06, 0.
 /// a painted finish (plywood under 90 % paint, a trace of its grain left) in a colour of `FURNITURE_PAINT` picked by `seed`; the
 /// preview keeps `fallback_rgb`
 pub fn painted_material(name: &str, seed: u64, fallback_rgb: [f32; 3]) -> Material {
-    let c = FURNITURE_PAINT[(crate::int_hash(&["paint", &seed.to_string()]) % FURNITURE_PAINT.len() as u64) as usize];
+    painted_from(name, seed, fallback_rgb, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+}
+
+/// as `painted_material`, from the `FURNITURE_PAINT` entries listed (kitchens: no terracotta, mustard or blush)
+pub fn painted_from(name: &str, seed: u64, fallback_rgb: [f32; 3], pick: &[usize]) -> Material {
+    let c = FURNITURE_PAINT[pick[(crate::int_hash(&["paint", &seed.to_string()]) % pick.len() as u64) as usize]];
     spec_material(name, serde_json::json!({"cls": "wood.WhitePlywood", "kwargs": {}, "seed": seed, "paint": {"rgb": c, "amount": 0.9}}), fallback_rgb)
 }
 
