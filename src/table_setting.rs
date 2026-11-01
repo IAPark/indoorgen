@@ -282,7 +282,8 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                     'w: for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
                         let (keep, drop): (Vec<&(String, crate::furn::geom::Pose)>, Vec<&(String, crate::furn::geom::Pose)>) = saved[1..].iter().partition(|(_, p)| (p.t[0] - tc[0]) * dx + (p.t[1] - tc[1]) * dy < 0.1);
                         if std::env::var_os("CHAIR_DEBUG").is_some() { eprintln!("CHAIRDBG wall try ({dx},{dy}): keep {} drop {}", keep.len(), drop.len()); }
-                        if keep.len() < 2 || drop.is_empty() { continue }
+                        // (a set of two keeps one: a small table for one against the wall is better than an empty dining room)
+                        if keep.len() < 2.min(saved.len() - 2) || keep.is_empty() || drop.is_empty() { continue }
                         let taken: Vec<(usize, String, crate::furn::state::ObjState)> = drop.iter().map(|(k, _)| { let i = state.objs.get_index_of(k).unwrap(); (i, k.clone(), state.objs[k.as_str()].clone()) }).collect();
                         for (_, k, _) in &taken { state.objs.shift_remove(k); }
                         let sub: Vec<String> = std::iter::once(tk.clone()).chain(keep.iter().map(|(k, _)| k.clone())).collect();
