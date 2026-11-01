@@ -53,6 +53,9 @@ pub fn arrange(state: &mut State) -> Vec<String> {
         let (lo, hi) = (t.geom.lo, t.geom.hi);
         let mut used: std::collections::HashSet<(usize, String)> = Default::default();
         let mut n_set = 0;
+        // (cutlery not yet set still stands where the solver left it: only the ones already set count as obstacles)
+        let ukeys: std::collections::HashSet<String> = utensils.iter().map(|u| u.0.clone()).collect();
+        let mut placed: std::collections::HashSet<String> = Default::default();
         for (i, (uk, uc)) in utensils.iter().enumerate() {
             // the plate with this kind still free, starting round-robin
             let Some(pi) = (0..plates.len()).map(|j| (i + j) % plates.len()).find(|j| !used.contains(&(*j, uc.clone()))) else { remove.push(uk.clone()); continue };
@@ -68,7 +71,8 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             // diner faces -n: their left is along (n.y, -n.x) ... rotate n by +90 deg gives the diner's right
             let right = [-nw[1], nw[0]];
             let side = UTENSILS.iter().find(|u| u.0 == uc.as_str()).unwrap().1;
-            let off = side.signum() * (pr + 0.035) + (side - side.signum()) * 0.06;
+            // (6 cm between neighbours: at 3.6 cm a knife lay on the spoon's bowl)
+            let off = side.signum() * (pr + 0.035) + (side - side.signum()) * 0.1;
             let u = &state.objs[uk];
             let (ul, uh) = (u.geom.lo, u.geom.hi);
             let long_x = uh[0] - ul[0] >= uh[1] - ul[1];
@@ -77,6 +81,18 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let ll = to_local(pos);
             if ll[0] < lo[0] + 0.03 || ll[0] > hi[0] - 0.03 || ll[1] < lo[1] + 0.03 || ll[1] > hi[1] - 0.03 { remove.push(uk.clone()); continue }
             let yaw = nw[1].atan2(nw[0]) - if long_x { 0.0 } else { std::f64::consts::FRAC_PI_2 };
+            // clear of everything else on the table but its plate (a fork lay on a bowl's slope): the footprint after the turn, 1 cm margin
+            let (cy, sy) = (yaw.cos(), yaw.sin());
+            let half = [(uh[0] - ul[0]) / 2.0, (uh[1] - ul[1]) / 2.0];
+            let (ex, ey) = (half[0] * cy.abs() + half[1] * sy.abs() + 0.01, half[0] * sy.abs() + half[1] * cy.abs() + 0.01);
+            let clash = state.objs.iter().any(|(ok, oo)| {
+                if ok == uk || *ok == plates[pi] || !on(oo) || oo.pose.t[2] + oo.geom.lo[2] < top_z - 0.3 || (ukeys.contains(ok) && !placed.contains(ok)) || remove.contains(ok) { return false }
+                let (ol, oh) = (oo.geom.lo, oo.geom.hi);
+                let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
+                for i in 0..4 { let q = oo.pose.apply([if i & 1 == 0 { ol[0] } else { oh[0] }, if i & 2 == 0 { ol[1] } else { oh[1] }, 0.0]); for d in 0..2 { a[d] = a[d].min(q[d]); b[d] = b[d].max(q[d]); } }
+                a[0] < pos[0] + ex && b[0] > pos[0] - ex && a[1] < pos[1] + ey && b[1] > pos[1] - ey
+            });
+            if clash { remove.push(uk.clone()); continue }
             let u = state.objs.get_mut(uk).unwrap();
             let e = u.pose.o.eul;
             u.pose.set_euler([e[0] as f64, e[1] as f64, yaw]);
@@ -84,6 +100,7 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let c = [(ul[0] + uh[0]) / 2.0, (ul[1] + uh[1]) / 2.0, 0.0];
             let cw = u.pose.rot(c);
             u.pose.set_loc([pos[0] - cw[0], pos[1] - cw[1], pos[2]]);
+            placed.insert(uk.clone());
             n_set += 1;
         }
         log.push(format!("{n_set} utensils set beside {} plates on {tk}", plates.len()));
