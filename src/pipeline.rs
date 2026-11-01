@@ -739,7 +739,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 let Some(g) = &o.generator else { continue };
                 if crate::furn::layout2d::room_of(state, k).as_deref() != Some(room.as_str()) { continue }
                 let (lo, hi) = wb(state, k);
-                let corners = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]];
+                // (the footprint's own corners, posed: the world box of a piece by a diagonal wall has corners well past it, and a bed under
+                // a window there was never counted)
+                let corners: Vec<[f64; 2]> = { let (gl, gh) = (o.geom.lo, o.geom.hi); [[gl[0], gl[1]], [gh[0], gl[1]], [gh[0], gh[1]], [gl[0], gh[1]]].iter().map(|c| { let p = o.pose.apply([c[0], c[1], 0.0]); [p[0], p[1]] }).collect() };
                 if corners.iter().map(|q| off(*q)).fold(f64::INFINITY, f64::min) > 0.6 { continue }
                 let s0 = corners.iter().map(|q| along(*q)).fold(f64::INFINITY, f64::min);
                 let s1 = corners.iter().map(|q| along(*q)).fold(f64::NEG_INFINITY, f64::max);
