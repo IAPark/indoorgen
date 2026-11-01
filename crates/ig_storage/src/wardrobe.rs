@@ -14,6 +14,7 @@ const BODY: Weighted = &[("wood.Wood", 3.0), ("wood.WhitePlywood", 2.5), ("wood.
 const HANDLE_M: Weighted = &[("metal.BrushedMetal", 2.0), ("metal.MetalBasic", 1.0), ("metal.BrushedBlackMetal", 1.5), ("wood.Wood", 0.7)];
 
 pub struct Wardrobe {
+    /// overall depth (handles, shaker frames, cornice included), width, height
     depth: f64,
     width: f64,
     height: f64,
@@ -23,9 +24,14 @@ pub struct Wardrobe {
     knobs: bool,
     plinth: f64,
     contrast_doors: bool,
+    /// on tapered legs (the carcass raised to at least 11 cm); a stepped cornice over the doors
+    legs: bool,
+    cornice: bool,
+    /// door style: 0 flat, 1 shaker (frame proud of the panel), 2 a mirror on every other tall door
+    style: usize,
+    /// the bay standing open (its door swung out ~86 deg, a rail of clothes inside)
+    open_bay: Option<usize>,
     seed: u64,
-    /// built to the solver's size: handles, shaker frames and cornice keep inside its depth
-    hinted: bool,
 }
 
 const GAP: f64 = 0.003;
@@ -53,33 +59,85 @@ impl Wardrobe {
                 doors = ((width / 0.5).round() as usize).clamp(2, 6);
             }
         }
-        Wardrobe {
-            depth,
-            width,
-            height,
-            doors,
-            sliding,
-            drawers: !sliding && r.f64() < 0.35,
-            knobs: r.f64() < 0.35,
-            plinth: r.uniform(0.04, 0.1),
-            contrast_doors: r.f64() < 0.2,
-            seed: r.randint(0, 1_000_000) as u64,
-            hinted,
-        }
-    }
-
-    fn build(&self, d: f64) -> Asset {
-        let mut a = Asset::default();
-        let mut r = Rng::seeded(self.seed);
-        let (w, p) = (self.width, self.plinth);
-        let s = self.seed;
-        // base and top from their own stream: 30 % stand on tapered legs (the carcass raised to at least 11 cm), 25 % have a stepped
-        // cornice over the doors, proud at the front only (the width stays the layout box's); NO_WARDROBE_STYLES=1: neither
-        let mut sb = Rng::seeded(crate::int_hash(&["wardrobe_base", &self.seed.to_string()]));
+        let _ = hinted;
+        let drawers = !sliding && r.f64() < 0.35;
+        let knobs = r.f64() < 0.35;
+        let plinth = r.uniform(0.04, 0.1);
+        let contrast_doors = r.f64() < 0.2;
+        let seed = r.randint(0, 1_000_000) as u64;
+        // base, top and doors from their own streams: 30 % stand on tapered legs, 25 % have a stepped cornice over the doors (proud at
+        // the front only), doors flat 50 % / shaker 30 % / mirrored 20 %; 25 % of hinged wardrobes stand with one bay open;
+        // NO_WARDROBE_STYLES=1: plain, NO_WARDROBE_OPEN=1: closed
+        let mut sb = Rng::seeded(crate::int_hash(&["wardrobe_base", &seed.to_string()]));
         let styled = std::env::var_os("NO_WARDROBE_STYLES").is_none();
         let legs = styled && sb.f64() < 0.3;
         let cornice_p = sb.f64() < 0.25;
-        let p = if legs { p.max(0.11) } else { p };
+        let hsh = crate::int_hash(&["wardrobe_open", &seed.to_string()]);
+        let open_bay = if !sliding && std::env::var_os("NO_WARDROBE_OPEN").is_none() && !crate::api::closed_hint() && hsh % 4 == 0 { Some((hsh / 4) as usize % doors) } else { None };
+        let cornice = styled && cornice_p && open_bay.is_none() && !sliding;
+        let mut sq = Rng::seeded(crate::int_hash(&["wardrobe_style", &seed.to_string()]));
+        let style = if !styled { 0 } else { sq.choice_p(&[0.5, 0.3, 0.2]) };
+        // (WARDROBE_STYLE=0|1|2 forces one: debugging)
+        let style = std::env::var("WARDROBE_STYLE").ok().and_then(|v| v.parse().ok()).unwrap_or(style);
+        Wardrobe { depth, width, height, doors, sliding, drawers, knobs, plinth, contrast_doors, legs, cornice, style, open_bay, seed }
+    }
+
+    /// how far handles, shaker frames, mirrors and a cornice stand proud of the door fronts: the carcass is that much shallower than the
+    /// wardrobe's depth (a wardrobe's handles stood 1.6 cm into the bed beside it, 923)
+    fn proud(&self) -> f64 {
+        // (the outer door face: a sliding pair's front panel stands 19 mm out; frames and mirrors stand on it)
+        let face = if self.sliding { 0.019 } else { 0.0 };
+        let mut p: f64 = face + if self.sliding { 0.006 } else if self.knobs { 0.025 } else { 0.037 };
+        if self.style == 1 { p = p.max(face + 0.008); }
+        if self.style == 2 { p = p.max(face + 0.004); }
+        if self.cornice { p = p.max(0.03); }
+        p
+    }
+    /// the carcass's front (the door fronts' plane)
+    fn front(&self) -> f64 { self.depth - self.proud() }
+    fn base_h(&self) -> f64 { if self.legs { self.plinth.max(0.11) } else { self.plinth } }
+    /// the drawer row's top (the doors stand over it)
+    fn zd(&self) -> f64 { let (p, h) = (self.base_h(), self.door_top()); if self.drawers { p + (h - p) * 0.2 } else { p } }
+    fn door_top(&self) -> f64 { if self.cornice { self.height - 0.065 } else { self.height } }
+
+    /// collision: the body (carcass, base, cornice, handles: its whole depth), the top it carries things on, a swing per hinged door
+    /// (about its outer front edge, 100 deg) and a pull-out per drawer; sliding doors stay in the footprint
+    fn vols(&self) -> Vec<crate::piece::Volume> {
+        use crate::piece::{Leaf, Volume};
+        let (d, w, h) = (self.depth, self.width, self.height);
+        let f = self.front();
+        let t = 0.02;
+        let mut v = vec![Volume::hard([0.0, 0.0, -0.002], [d, w, h]), Volume::support([0.0, 0.0, h - 0.001], [f, w, h])];
+        if self.sliding { return v }
+        let (zd, hz) = (self.zd(), self.door_top());
+        let dw = w / self.doors as f64;
+        for i in 0..self.doors {
+            let (y0, y1) = (dw * i as f64, dw * (i + 1) as f64);
+            // the door's hinge: its outer edge (pairs open from the middle); turning out of the carcass, toward +x
+            let (hy, axis) = if i % 2 == 0 { (y0, [0.0, 0.0, -1.0]) } else { (y1, [0.0, 0.0, 1.0]) };
+            let panel = ([f - t, y0, zd], [d, y1, hz]);
+            v.push(Volume::opening(Leaf::Hinged { panel, hinge: [f, hy, zd], axis, max_angle: 100f64.to_radians() }));
+        }
+        if self.drawers {
+            let n = (self.doors / 2).max(1);
+            let p = self.base_h();
+            for i in 0..n {
+                let (y0, y1) = (w * i as f64 / n as f64, w * (i + 1) as f64 / n as f64);
+                let panel = ([(f - 0.45).max(0.02), y0, p], [d, y1, zd]);
+                v.push(Volume::opening(Leaf::Drawer { panel, dir: [1.0, 0.0, 0.0], travel: 0.75 * (f - 0.02).min(0.45) }));
+            }
+        }
+        v
+    }
+
+    fn build(&self) -> Asset {
+        let mut a = Asset::default();
+        let mut r = Rng::seeded(self.seed);
+        let d = self.front();
+        let w = self.width;
+        let s = self.seed;
+        let legs = self.legs;
+        let p = self.base_h();
         let body_cls = weighted(&mut r, BODY);
         let door_cls = if self.contrast_doors { weighted(&mut r, BODY) } else { body_cls };
         let body = spec("wardrobe_body", body_cls, s);
@@ -89,15 +147,12 @@ impl Wardrobe {
         let handle = spec("wardrobe_handle", weighted(&mut r, HANDLE_M), s + 2);
         let t = 0.02; // door thickness
         let x0 = d - t;
-        // 25 % of hinged wardrobes have one bay open (door swung out): a hollow compartment with a rail of hanging clothes and folded
-        // stacks on a shelf above (own stream); the cabinet body is built around it
+        // one bay open (door swung out): a hollow compartment with a rail of hanging clothes and folded stacks on a shelf above; the
+        // cabinet body is built around it
         let dw0 = w / self.doors as f64;
-        let open_bay = {
-            let hsh = crate::int_hash(&["wardrobe_open", &self.seed.to_string()]);
-            if !self.sliding && std::env::var_os("NO_WARDROBE_OPEN").is_none() && !crate::api::closed_hint() && hsh % 4 == 0 { Some((hsh / 4) as usize % self.doors) } else { None }
-        };
-        let cornice = styled && cornice_p && open_bay.is_none() && !self.sliding;
-        let (h, h_full) = (if cornice { self.height - 0.065 } else { self.height }, self.height);
+        let open_bay = self.open_bay;
+        let cornice = self.cornice;
+        let (h, h_full) = (self.door_top(), self.height);
         let mut cab = Mesh::new();
         match open_bay {
             Some(bi) => {
@@ -126,12 +181,7 @@ impl Wardrobe {
         let cb = cab.bounds();
         a.mesh(cab, &body, Some(cb));
         a.supports.push(([0.0, 0.0, h_full], [d, w, h_full + 0.001]));
-        // door style from its own stream (the draws above keep their values): flat slabs 50 %, shaker (a frame proud of the panel) 30 %,
-        // a mirror on every other tall door 20 %; NO_WARDROBE_STYLES=1: flat
-        let mut sq = Rng::seeded(crate::int_hash(&["wardrobe_style", &self.seed.to_string()]));
-        let style = if std::env::var_os("NO_WARDROBE_STYLES").is_some() { 0 } else { sq.choice_p(&[0.5, 0.3, 0.2]) };
-        // (WARDROBE_STYLE=0|1|2 forces one: debugging)
-        let style = std::env::var("WARDROBE_STYLE").ok().and_then(|v| v.parse().ok()).unwrap_or(style);
+        let style = self.style;
         let mirror_m = spec("wardrobe_mirror", "metal.Mirror", s + 7);
         let n_panel = std::cell::Cell::new(0usize);
         let panel = |a: &mut Asset, xa: f64, xb: f64, y0: f64, y1: f64, z0: f64, z1: f64| {
@@ -181,7 +231,7 @@ impl Wardrobe {
             }
             return a;
         }
-        let zd = if self.drawers { p + (h - p) * 0.2 } else { p };
+        let zd = self.zd();
         if self.drawers {
             let n = (self.doors / 2).max(1);
             for i in 0..n {
@@ -305,7 +355,8 @@ impl Wardrobe {
             for l in 0..layers {
                 let col = pal[r.randint(0, 10) as usize];
                 let tt = r.uniform(0.025, 0.045);
-                let (sw, sd) = (r.uniform(0.25, 0.3), r.uniform(0.25, 0.3).min(x0 - 0.05));
+                // (each stack within its share of the bay: two 0.3 m stacks in a 0.4 m bay stood through its side)
+                let (sw, sd) = (r.uniform(0.25, 0.3).min((y1 - y0 - 2.0 * wall) / ns as f64 - 0.02), r.uniform(0.25, 0.3).min(x0 - 0.05));
                 let jx = r.uniform(-0.01, 0.01);
                 let mut m = Mesh::cuboid([x0 - sd - 0.02 + jx, yc - sw / 2.0, z], [x0 - 0.02 + jx, yc + sw / 2.0, z + tt]).smoothed(tt * 0.4, 2, 1);
                 box_uv(&mut m);
@@ -321,14 +372,8 @@ impl Factory for Wardrobe {
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
         Some(([0.0, 0.0, 0.0], [self.depth + 0.045, self.width, self.height]))
     }
-    fn asset(&self, _i: u64) -> Asset {
-        let a = self.build(self.depth);
-        // to the solver's size: what stands proud of the doors (handles up to 4.5 cm, a cornice) went past the layout box, and a
-        // wardrobe's handles stood 1.6 cm into the bed beside it (923) -- the same wardrobe again, its carcass shallower by that much
-        // (only what lies within 10 cm of the front: an open bay's door swung out reaches half a metre past it)
-        let over = a.parts.iter().map(|p| p.mesh.bounds().1[0]).filter(|x| *x < self.depth + 0.1).fold(self.depth, f64::max) - self.depth;
-        if self.hinted && over > 0.002 { self.build(self.depth - over) } else { a }
-    }
+    fn asset(&self, _i: u64) -> Asset { self.build() }
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> { Some(self.vols()) }
 }
 
 pub fn make(_c: &str, rng: &mut Rng, _fseed: u64) -> Option<Box<dyn Factory>> {

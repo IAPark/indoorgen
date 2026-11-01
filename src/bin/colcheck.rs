@@ -63,8 +63,9 @@ fn main() {
 
 /// (worst rigid overshoot, worst soft overshoot, leaves holding no mesh part, loose sides description)
 fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String) {
-    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid()).map(Prepared::new).collect();
-    let softp: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Soft)).map(Prepared::new).collect();
+    // (a rigid part may also lie in an opening: a door shown standing open lies in its swing)
+    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_))).map(Prepared::new).collect();
+    let softp: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Soft | Role::Opening(_))).map(Prepared::new).collect();
     let out = |set: &[Prepared], p: [f64; 3]| -> f64 { set.iter().map(|v| v.outside(p)).fold(f64::INFINITY, f64::min) };
     let (mut ro, mut so) = (0.0f64, 0.0f64);
     let (mut mlo, mut mhi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
@@ -82,7 +83,10 @@ fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String
     for v in vols {
         if let Role::Opening(leaf) = &v.role {
             let panel = match leaf { ig_kit::piece::Leaf::Hinged { panel, .. } | ig_kit::piece::Leaf::Drawer { panel, .. } => *panel };
-            let holds = mesh.parts.iter().any(|pt| { let (a, b) = pt.mesh.bounds(); (0..3).all(|k| a[k] >= panel.0[k] - 0.01 && b[k] <= panel.1[k] + 0.01) });
+            // (or a part lies wholly in the sweep: the door shown standing open)
+            let pv = Prepared::new(v);
+            let holds = mesh.parts.iter().any(|pt| { let (a, b) = pt.mesh.bounds(); (0..3).all(|k| a[k] >= panel.0[k] - 0.01 && b[k] <= panel.1[k] + 0.01) })
+                || mesh.parts.iter().any(|pt| !pt.mesh.pos.is_empty() && pt.mesh.pos.iter().all(|p| pv.contains(*p, 0.002)) && { let (a, b) = pt.mesh.bounds(); (0..3).filter(|&k| b[k] - a[k] > 0.3).count() >= 1 });
             if !holds { bad += 1; }
         }
     }
@@ -97,7 +101,7 @@ fn check(vols: &[Volume], mesh: &ig_kit::api::Asset) -> (f64, f64, usize, String
 /// --detail: per rigid mesh part, how far it pokes out of the rigid volumes on each side (cm, + = outside), and the collision's
 /// rigid bounds against the rigid mesh's
 fn sides(class: &str, seed: u64, vols: &[Volume], mesh: &ig_kit::api::Asset) {
-    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid()).map(Prepared::new).collect();
+    let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_))).map(Prepared::new).collect();
     let (clo, chi) = rigid_bounds(vols);
     let (mut mlo, mut mhi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     for (i, part) in mesh.parts.iter().enumerate() {
@@ -105,7 +109,13 @@ fn sides(class: &str, seed: u64, vols: &[Volume], mesh: &ig_kit::api::Asset) {
         let worst = part.mesh.pos.iter().map(|p| (rigid.iter().map(|v| v.outside(*p)).fold(f64::INFINITY, f64::min), *p)).fold((0.0f64, [0.0; 3]), |a, b| if b.0 > a.0 { b } else { a });
         let (lo, hi) = part.mesh.bounds();
         for k in 0..3 { mlo[k] = mlo[k].min(lo[k]); mhi[k] = mhi[k].max(hi[k]); }
-        if worst.0 > 0.001 { println!("  {class} seed {seed} part {i}: {:.1} cm out at ({:.3}, {:.3}, {:.3}); part box {:.3?}..{:.3?}", worst.0 * 100.0, worst.1[0], worst.1[1], worst.1[2], lo, hi); }
+        if worst.0 > 0.001 {
+            println!("  {class} seed {seed} part {i}: {:.1} cm out at ({:.3}, {:.3}, {:.3}); part box {:.3?}..{:.3?}", worst.0 * 100.0, worst.1[0], worst.1[1], worst.1[2], lo, hi);
+            for v in vols.iter().filter(|v| matches!(v.role, Role::Opening(_))) {
+                let (a, b) = v.bounds();
+                println!("    opening bounds {:.3?}..{:.3?}: point {:.1} cm out", a, b, Prepared::new(v).outside(worst.1) * 100.0);
+            }
+        }
     }
     println!("  {class} seed {seed} gaps cm (collision past mesh) -x {:.1} -y {:.1} -z {:.1} +x {:.1} +y {:.1} +z {:.1}", (mlo[0] - clo[0]) * 100.0, (mlo[1] - clo[1]) * 100.0, (mlo[2] - clo[2]) * 100.0, (chi[0] - mhi[0]) * 100.0, (chi[1] - mhi[1]) * 100.0, (chi[2] - mhi[2]) * 100.0);
 }
