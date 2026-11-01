@@ -69,6 +69,9 @@ pub fn load(path: &Path) -> Glb {
     }).collect()).unwrap_or_default();
     let meshes = j["meshes"].as_array().unwrap();
     let nodes = j["nodes"].as_array().unwrap().iter().filter_map(|n| {
+        // (instanced nodes -- a matrix on a shared mesh, the outdoor trees -- are not drawn here: this previewer has no per-draw
+        // transforms; tools/bevy_preview draws them)
+        if n.get("matrix").is_some() { return None }
         let mi = n["mesh"].as_u64()? as usize;
         let prims = meshes[mi]["primitives"].as_array().unwrap().iter().filter_map(|p| {
             let at = &p["attributes"];

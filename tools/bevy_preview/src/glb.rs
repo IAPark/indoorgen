@@ -13,7 +13,8 @@ pub struct Prim {
     pub idx_u16: bool, pub icount: u32, pub vcount: u32, pub mat: usize,
     pub bmin: [f32; 3], pub bmax: [f32; 3],
 }
-pub struct Node { pub name: String, pub prims: Vec<Prim> }
+/// `mesh`: the glTF mesh index (instanced nodes share one); `xf`: the node's matrix (column-major, Z-up world) when it has one
+pub struct Node { pub name: String, pub prims: Vec<Prim>, pub mesh: usize, pub xf: Option<[f32; 16]> }
 /// `tex`: embedded base-colour image bytes (PNG/JPEG) when the material has a baseColorTexture; `mask`: alphaMode MASK cutoff
 pub struct Mat {
     pub name: String, pub color: [f32; 4], pub emissive: [f32; 3], pub tex: Option<Arc<Vec<u8>>>, pub mask: Option<f32>,
@@ -30,8 +31,13 @@ impl Glb {
     pub fn bytes(&self, v: &View) -> &[u8] { &self.data[v.off..v.off + v.len] }
 }
 
+/// glbs generated in this process (`bevy_preview gen`), by output path: `load` takes them instead of reading the file
+static MEM: std::sync::Mutex<Vec<(std::path::PathBuf, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+pub fn put_mem(path: &Path, bytes: Vec<u8>) { MEM.lock().unwrap().push((path.to_path_buf(), bytes)); }
+
 pub fn load(path: &Path) -> Glb {
-    let data = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mem = { let mut m = MEM.lock().unwrap(); m.iter().position(|(p, _)| p == path).map(|i| m.remove(i).1) };
+    let data = match mem { Some(d) => d, None => std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())) };
     assert!(&data[0..4] == b"glTF", "not a glb");
     let jl = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
     let j: Value = serde_json::from_slice(&data[20..20 + jl]).expect("glb json");
@@ -77,7 +83,8 @@ pub fn load(path: &Path) -> Glb {
                 mat: p["material"].as_u64().unwrap_or(0) as usize, bmin: f3(&acc[pa]["min"]), bmax: f3(&acc[pa]["max"]),
             })
         }).collect();
-        Some(Node { name: n["name"].as_str().unwrap_or("").to_string(), prims })
+        let xf = n["matrix"].as_array().filter(|a| a.len() == 16).map(|a| { let mut m = [0f32; 16]; for (i, x) in a.iter().enumerate() { m[i] = x.as_f64().unwrap_or(0.0) as f32; } m });
+        Some(Node { name: n["name"].as_str().unwrap_or("").to_string(), prims, mesh: mi, xf })
     }).collect();
     Glb { nodes, mats, data }
 }

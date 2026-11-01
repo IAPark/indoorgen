@@ -25,6 +25,8 @@ pub mod layout_dump;
 pub mod qc;
 pub mod invariants;
 pub mod scenegen;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gen2cli;
 pub mod realism;
 pub mod ceiling_decor;
 pub mod soft_decor;

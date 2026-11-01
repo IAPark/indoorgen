@@ -49,8 +49,7 @@ struct Opts {
     saturation: f32, dump_cams: Option<PathBuf>, indoor_ambient: f32,
 }
 
-fn parse_args() -> Opts {
-    let a: Vec<String> = std::env::args().skip(1).collect();
+fn parse_args(a: Vec<String>) -> Opts {
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
         sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.5, sun_i: 1.0, light_scale: 1.0,
         sidecar_lighting: false, tonemap: "agx".into(), shadow_dist: 400.0, fog: 1.0, point_shadows: 0, sun_strength: 4.0, saturation: 1.25, dump_cams: None, indoor_ambient: 0.4 };
@@ -197,9 +196,10 @@ fn build_mesh(g: &glb::Glb, p: &glb::Prim) -> Mesh {
 }
 
 /// one glb primitive to draw (+ per-node flags)
-struct P { node: usize, prim: usize, cls: String, tex: String, ceil: bool, glass: bool }
+/// (`u`: index of the node's (glTF mesh, primitive) in the unique list -- instanced nodes share one Bevy mesh)
+struct P { node: usize, prim: usize, cls: String, tex: String, ceil: bool, glass: bool, u: usize }
 /// CPU side of a scene load (no Bevy world access, so it can run on a thread while pipelines compile)
-struct Parsed { path: PathBuf, t: Instant, g: glb::Glb, side: Value, plist: Vec<P>, tex_keys: Vec<(String, Option<f32>)>, images: Vec<Option<Image>>, meshes: Vec<Option<Mesh>> }
+struct Parsed { path: PathBuf, t: Instant, g: glb::Glb, side: Value, plist: Vec<P>, tex_keys: Vec<(String, Option<f32>)>, images: Vec<Option<Image>>, meshes: Vec<Option<Mesh>>, uniq: Vec<(usize, usize)> }
 
 fn parse_scene(path: &Path, o: &Opts) -> Parsed {
     let t = Instant::now();
@@ -210,12 +210,17 @@ fn parse_scene(path: &Path, o: &Opts) -> Parsed {
     if let Some(ns) = side["nodes"].as_array() { for n in ns { if let Some(nm) = n["name"].as_str() { specs.insert(nm.to_string(), n.clone()); } } }
     // flat list of primitives
     let mut plist: Vec<P> = vec![];
+    let mut uniq: Vec<(usize, usize)> = vec![]; // (first node, prim) per distinct (glTF mesh, prim)
+    let mut uidx: HashMap<(usize, usize), usize> = HashMap::new();
     for (ni, n) in g.nodes.iter().enumerate() {
         let spec = specs.get(&n.name);
         let cls = spec.and_then(|s| s["spec"]["cls"].as_str()).unwrap_or("").to_string();
         let tex = if cls.starts_with("people.") { spec.and_then(|s| s["spec"]["kwargs"]["color"].as_str()).unwrap_or("").to_string() } else { String::new() };
         let lname = n.name.to_lowercase();
-        for pi in 0..n.prims.len() { plist.push(P { node: ni, prim: pi, cls: cls.clone(), tex: tex.clone(), ceil: lname.contains("ceiling"), glass: lname.ends_with(".glass") && !lname.contains("wineglass") }); }
+        for pi in 0..n.prims.len() {
+            let u = *uidx.entry((n.mesh, pi)).or_insert_with(|| { uniq.push((ni, pi)); uniq.len() - 1 });
+            plist.push(P { node: ni, prim: pi, cls: cls.clone(), tex: tex.clone(), ceil: lname.contains("ceiling"), glass: lname.ends_with(".glass") && !lname.contains("wineglass"), u });
+        }
     }
     let show = |p: &P| !(o.no_ceiling && p.ceil);
     // decode textures (people texture files + glb-embedded base colour images) and build meshes, all in parallel
@@ -227,9 +232,13 @@ fn parse_scene(path: &Path, o: &Opts) -> Parsed {
             let img = if let Some(mi) = k.strip_prefix("glb:") { image::load_from_memory(g.mats[mi.parse::<usize>().unwrap()].tex.as_ref().unwrap()).ok() } else { image::open(k).ok() };
             img.map(|i| make_image(i.to_rgba8(), *cut))
         }).collect(),
-        || plist.par_iter().map(|p| if show(p) { Some(build_mesh(&g, &g.nodes[p.node].prims[p.prim])) } else { None }).collect());
+        || {
+            let mut want = vec![false; uniq.len()];
+            for p in &plist { if show(p) { want[p.u] = true; } }
+            uniq.par_iter().enumerate().map(|(k, &(ni, pi))| if want[k] { Some(build_mesh(&g, &g.nodes[ni].prims[pi])) } else { None }).collect()
+        });
     if o.verbose { eprintln!("  meshes+textures built {:.2}s ({} prims, {} textures)", t.elapsed().as_secs_f32(), plist.len(), tex_keys.len()); }
-    Parsed { path: path.to_path_buf(), t, g, side, plist, tex_keys, images, meshes }
+    Parsed { path: path.to_path_buf(), t, g, side, plist, tex_keys, images, meshes, uniq }
 }
 
 /// StandardMaterial for a glb material; flags: 1 = alpha-masked (leaf cards, hair), 2 = glass
@@ -253,7 +262,10 @@ fn std_mat(m: Option<&glb::Mat>, flags: u32, tex: Option<Handle<Image>>) -> Stan
 }
 
 fn load_scene(world: &mut World, ps: Parsed, o: &Opts) -> Loaded {
-    let Parsed { path, t, g, side, plist, tex_keys, images, meshes } = ps;
+    let Parsed { path, t, g, side, plist, tex_keys, images, meshes, uniq } = ps;
+    let _ = &uniq;
+    // one Bevy mesh asset per distinct (glTF mesh, prim)
+    let mesh_h: Vec<Option<Handle<Mesh>>> = { let mut ma = world.resource_mut::<Assets<Mesh>>(); meshes.into_iter().map(|m| m.map(|m| ma.add(m))).collect() };
     let mut tex_h: HashMap<String, Handle<Image>> = HashMap::new();
     {
         let mut ia = world.resource_mut::<Assets<Image>>();
@@ -264,17 +276,21 @@ fn load_scene(world: &mut World, ps: Parsed, o: &Opts) -> Loaded {
     let mut draws = vec![]; let mut bmin = Vec3::splat(1e9); let mut bmax = Vec3::splat(-1e9);
     let (mut obmin, mut obmax) = (Vec3::splat(1e9), Vec3::splat(-1e9));
     let mut ents = vec![];
-    let mut spawn: Vec<(Mesh, Handle<StandardMaterial>, Aabb, bool)> = vec![];
-    for (p, mesh) in plist.iter().zip(meshes) {
+    let mut spawn: Vec<(Handle<Mesh>, Handle<StandardMaterial>, Aabb, bool, Transform)> = vec![];
+    for p in plist.iter() {
         let n = &g.nodes[p.node]; let pr = &n.prims[p.prim];
         let mi = pr.mat.min(g.mats.len().saturating_sub(1));
         let (lo, hi) = (Vec3::from(pr.bmin), Vec3::from(pr.bmax));
         let lname = n.name.to_lowercase();
-        if !p.ceil && !lname.starts_with("skirting_ceiling") {
-            if lname.starts_with("outdoor") { obmin = obmin.min(lo); obmax = obmax.max(hi); } else { bmin = bmin.min(lo); bmax = bmax.max(hi); }
+        // instanced nodes (local-frame mesh + matrix): outdoor trees; kept out of the bboxes and the camera probes (world-space data)
+        let xf = n.xf.map(|m| { let zm = zup_mat(); Transform::from_matrix(zm * Mat4::from_cols_array(&m) * zm.inverse()) });
+        if xf.is_none() {
+            if !p.ceil && !lname.starts_with("skirting_ceiling") {
+                if lname.starts_with("outdoor") { obmin = obmin.min(lo); obmax = obmax.max(hi); } else { bmin = bmin.min(lo); bmax = bmax.max(hi); }
+            }
+            draws.push(DrawInfo { node: p.node, pos: pr.pos, idx: pr.idx, u16: pr.idx_u16, icount: pr.icount, bmin: lo, bmax: hi });
         }
-        draws.push(DrawInfo { node: p.node, pos: pr.pos, idx: pr.idx, u16: pr.idx_u16, icount: pr.icount, bmin: lo, bmax: hi });
-        let Some(mesh) = mesh else { continue };
+        let Some(mesh) = mesh_h[p.u].clone() else { continue };
         let m = g.mats.get(mi);
         let tex = if m.map_or(false, |m| m.tex.is_some()) { format!("glb:{mi}") } else { p.tex.clone() };
         let flags = if p.cls == "people.hair" || m.map_or(false, |m| m.mask.is_some()) { 1u32 } else if p.glass { 2 } else { 0 };
@@ -284,11 +300,10 @@ fn load_scene(world: &mut World, ps: Parsed, o: &Opts) -> Loaded {
         }).clone();
         let (a, b) = (zup(pr.bmin), zup(pr.bmax));
         let aabb = Aabb::from_min_max(Vec3::new(a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])), Vec3::new(a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])));
-        spawn.push((mesh, mh, aabb, flags == 2));
+        spawn.push((mesh, mh, aabb, flags == 2, xf.unwrap_or(Transform::IDENTITY)));
     }
-    for (mesh, mh, aabb, glass) in spawn {
-        let h = world.resource_mut::<Assets<Mesh>>().add(mesh);
-        let mut e = world.spawn((Mesh3d(h), MeshMaterial3d(mh), Transform::IDENTITY, aabb));
+    for (h, mh, aabb, glass, tf) in spawn {
+        let mut e = world.spawn((Mesh3d(h), MeshMaterial3d(mh), tf, aabb));
         if glass { e.insert(NotShadowCaster); }
         ents.push(e.id());
     }
@@ -444,7 +459,22 @@ fn save_png(img: &image::RgbaImage, p: &Path) {
 
 fn main() {
     let t0 = Instant::now();
-    let o = parse_args();
+    // `bevy_preview gen SEED [ROOM] OUT.glb [gen2 flags...] -- [preview flags...]`: generate the house in this process (src/gen2cli.rs)
+    // and render it from memory -- no glb file, only the sidecar json next to OUT.glb
+    let mut argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(|s| s == "gen").unwrap_or(false) {
+        let cut = argv.iter().position(|x| x == "--").unwrap_or(argv.len());
+        let gen_args: Vec<String> = std::iter::once("gen2".to_string()).chain(argv[1..cut].iter().cloned()).collect();
+        let mut rest: Vec<String> = argv.get(cut + 1..).map(|r| r.to_vec()).unwrap_or_default();
+        let out = PathBuf::from(gen_args.get(3).expect("gen SEED ROOM OUT.glb"));
+        let tg = Instant::now();
+        let bytes = indoorgen::gen2cli::run(gen_args, true).expect("generation produced no scene");
+        eprintln!("generated {:.1}s ({:.0} MB glb in memory)", tg.elapsed().as_secs_f32(), bytes.len() as f32 / 1e6);
+        glb::put_mem(&out, bytes);
+        rest.push(out.to_string_lossy().to_string());
+        argv = rest;
+    }
+    let o = parse_args(argv);
     let mut app = make_app();
     let grab = Grab::default();
     app.get_sub_app_mut(RenderApp).unwrap().insert_resource(grab.clone()).add_systems(Render, grab_system.in_set(RenderSystems::Cleanup));

@@ -96,6 +96,11 @@ import math
 _poses = {n["name"]: n.get("pose") for n in json.load(open(args.glb.replace(".glb", ".json")))["nodes"]}
 for _o in list(bpy.data.objects):
     if _o.type != 'MESH': continue
+    # (instanced nodes -- glTF meshes shared by many nodes, the outdoor trees -- keep their object transform: baking it into the
+    # shared mesh would apply every instance's matrix to all of them)
+    if _o.data.users > 1:
+        _W = _o.matrix_world.copy(); _o.parent = None; _o.matrix_world = _W
+        continue
     _W = _o.matrix_world.copy()
     _pn = _o.name if _o.name in _poses else next((k for k in _poses if _o.name.startswith(k)), None)
     _P = mathutils.Matrix(_poses[_pn]) if _pn and _poses.get(_pn) else mathutils.Matrix.Identity(4)
@@ -715,8 +720,12 @@ if args.showcase:
 # tools/render/tree_cache.py under Blender 4.2 (TREE_CACHE dir, IG42_PYTHON interpreter) and instanced at every spot
 def add_outdoor(sc, side):
     import os, subprocess
+    if not side.get("outdoor") or os.environ.get("NO_OUTDOOR"): return
+    # (Rust trees are scene geometry and leave `props` empty: grass and the lawn tint still apply)
     props = (side.get("outdoor") or {}).get("props") or []
-    if not props or os.environ.get("NO_OUTDOOR"): return
+    if not props:
+        add_grass(side)
+        return
     cache = os.environ.get("TREE_CACHE", os.path.expanduser("~/work/bench/tree_cache")); os.makedirs(cache, exist_ok=True)
     py42 = os.environ.get("IG42_PYTHON", os.path.expanduser("~/work/infinigen-ref/.venv/bin/python"))
     src = os.environ.get("IG_REF_SRC", os.path.expanduser("~/work/infinigen-ref/src"))

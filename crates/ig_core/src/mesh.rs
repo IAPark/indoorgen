@@ -539,6 +539,9 @@ pub struct Node {
     /// foliage: a crown centre per mesh face; the exporter bends that face's vertex normals 75 % toward pointing away from it (leaf cards
     /// shade as a volume -- Décoret et al. / game foliage "crown normals" -- instead of as scattered flat quads)
     pub bend: Option<std::sync::Arc<Vec<V3>>>,
+    /// instancing: when non-empty the mesh is in a local frame and drawn once per transform (row-major 4x4, Z-up world) -- one
+    /// glTF mesh referenced by one node per transform (the outdoor trees: a few dozen builds placed thousands of times)
+    pub inst: Vec<[[f64; 4]; 4]>,
 }
 
 /// Fast deterministic hasher (FxHash) for lookup-only maps in the exporter whose iteration order never reaches the output.
@@ -585,19 +588,26 @@ impl Scene {
     }
     pub fn add(&mut self, name: &str, class: &str, mesh: Mesh, material: usize) {
         if !mesh.is_empty() {
-            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: None });
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: None, inst: vec![] });
         }
     }
     /// add a foliage node: `centres` = one crown centre per face of `mesh` (see Node::bend)
     pub fn add_bent(&mut self, name: &str, class: &str, mesh: Mesh, material: usize, centres: Vec<V3>) {
         if !mesh.is_empty() {
             debug_assert_eq!(centres.len(), mesh.faces.len());
-            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: Some(std::sync::Arc::new(centres)) });
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: Some(std::sync::Arc::new(centres)), inst: vec![] });
         }
     }
+    /// a mesh in its local frame drawn at every transform of `inst` (see Node::inst); `centres` as in add_bent (local frame)
+    pub fn add_instanced(&mut self, name: &str, class: &str, mesh: Mesh, material: usize, centres: Option<Vec<V3>>, inst: Vec<[[f64; 4]; 4]>) {
+        if !mesh.is_empty() && !inst.is_empty() {
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: None, bend: centres.map(std::sync::Arc::new), inst });
+        }
+    }
+    pub fn has_instances(&self) -> bool { self.nodes.iter().any(|n| !n.inst.is_empty()) }
     pub fn add_posed(&mut self, name: &str, class: &str, mesh: Mesh, material: usize, pose: [[f64; 4]; 4]) {
         if !mesh.is_empty() {
-            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: Some(pose), bend: None });
+            self.nodes.push(Node { name: name.into(), mesh, material, class: class.into(), pose: Some(pose), bend: None, inst: vec![] });
         }
     }
 
@@ -654,8 +664,17 @@ impl Scene {
             accessors.push(json!({"bufferView":bv,"componentType":5125,"count":bl.ntri*3,"type":"SCALAR"}));
             let iacc = accessors.len() - 1;
             meshes.push(json!({"name":n.name,"primitives":[{"attributes":attrs,"indices":iacc,"material":n.material}]}));
-            nodes.push(json!({"name":n.name,"mesh":ni,"extras":{"class":n.class}}));
-            child_ids.push(ni);
+            if n.inst.is_empty() {
+                child_ids.push(nodes.len());
+                nodes.push(json!({"name":n.name,"mesh":ni,"extras":{"class":n.class}}));
+            } else {
+                for (k, m) in n.inst.iter().enumerate() {
+                    // glTF matrices are column-major
+                    let cm: Vec<f64> = (0..16).map(|i| m[i % 4][i / 4]).collect();
+                    child_ids.push(nodes.len());
+                    nodes.push(json!({"name":format!("{}.i{k}", n.name),"mesh":ni,"matrix":cm,"extras":{"class":n.class}}));
+                }
+            }
         }
         let root = nodes.len();
         // Z-up -> Y-up: rotate -90deg about X

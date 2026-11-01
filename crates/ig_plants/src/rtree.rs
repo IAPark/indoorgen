@@ -89,7 +89,7 @@ fn params(sp: Species) -> Params {
             levels: vec![lv(1.0, 0.0, 0.0, 20.0, 6, 0, 0.0, 0.0, 0.0, 0.0), lv(0.4, 0.08, -20.0, 30.0, 6, 26, 50.0, 10.0, 140.0, 40.0), lv(0.9, 0.15, 30.0, 20.0, 8, 22, 30.0, 10.0, 120.0, 30.0)],
             leaves: 5, card: 0.42, sc: None, bark: [0.2, 0.17, 0.12], leaf: [0.2, 0.3, 0.1], leaf_kind: LeafKind::Lance, trunks: 1 },
         Shrub => Params { shape: 8, base_size: 0.0, scale: 1.6, scale_v: 0.5, ratio: 0.03, ratio_power: 1.3, flare: 0.0, attraction_up: 0.5,
-            levels: vec![lv(0.35, 0.1, 0.0, 30.0, 3, 0, 0.0, 0.0, 0.0, 0.0)], leaves: 5, card: 0.32, sc: Some((0.6, 0.85)),
+            levels: vec![lv(0.35, 0.1, 0.0, 30.0, 3, 0, 0.0, 0.0, 0.0, 0.0)], leaves: 5, card: 0.42, sc: Some((0.6, 0.85)),
             bark: [0.18, 0.14, 0.1], leaf: [0.15, 0.27, 0.07], leaf_kind: LeafKind::Small, trunks: 4 },
     }
 }
@@ -306,7 +306,9 @@ impl<'a> Builder<'a> {
             let thin = rad[i] < r0 * 3.5;
             if !thin { continue }
             let d = match nodes[i].1 { Some(p) => norm(sub(nodes[i].0, nodes[p].0)), None => [0.0, 0.0, 1.0] };
-            let n = if self.lod == Lod::Far { if self.r.f64() < 0.3 { 1 } else { 0 } } else if children[i].is_empty() { 6 } else { 4 };
+            // (shrubs: few cards -- ~11k cards in a 1.2 m bush let no light inside and rendered as black blobs)
+            let small = h < 3.0;
+            let n = if self.lod == Lod::Far { if self.r.f64() < 0.3 { 1 } else { 0 } } else if small { if children[i].is_empty() { 2 } else { usize::from(self.r.f64() < 0.4) } } else if children[i].is_empty() { 6 } else { 4 };
             for _ in 0..n { self.cards.push((nodes[i].0, d)); }
         }
     }

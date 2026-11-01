@@ -516,6 +516,7 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
         let mut mats: std::collections::HashMap<u8, (usize, usize)> = Default::default();
         let (mut bark_all, mut leaf_all): (std::collections::HashMap<u8, Mesh>, std::collections::HashMap<u8, Mesh>) = (Default::default(), Default::default());
         let mut cent_all: std::collections::HashMap<u8, Vec<[f64; 3]>> = Default::default();
+        let mut inst: std::collections::HashMap<(u8, u64), Vec<[[f64; 4]; 4]>> = Default::default();
         let tree_at: Vec<([f64; 2], f64)> = props.iter().filter(|p| p["kind"] == "tree")
             .map(|p| ([p["loc"][0].as_f64().unwrap(), p["loc"][1].as_f64().unwrap()], p["crown"].as_f64().unwrap())).collect();
         // the near trees' crowded builds, then the props in order (shared builds for the rest)
@@ -554,20 +555,23 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
             let d = (loc[0] - centre[0]).abs().max((loc[1] - centre[1]).abs());
             let lod = if d > e { Lod::Far } else { Lod::Near };
             let bseed = seed ^ (variant * 7919) ^ (si as u64) << 20;
-            let (b, l, lc) = if let Some(c) = &crowded[pi] { (&c.0, &c.1, &c.2) } else {
-                let key = (si as u8, variant * 2 + (lod == Lod::Far) as u64);
-                let v = built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], bseed, lod); (t.bark, t.leaves, t.leaf_centres) });
-                (&v.0, &v.1, &v.2)
-            };
             let m = Mat4::translation(loc).mul(&Mat4::rot_z(rot)).mul(&Mat4::scale([sc; 3]));
-            let (mut bb, mut ll) = (b.clone(), l.clone());
-            bb.transform(&m); ll.transform(&m);
-            bark_all.entry(si as u8).or_default().append(&bb);
-            let le = leaf_all.entry(si as u8).or_default();
-            if le.uv.len() != le.pos.len() { le.uv.resize(le.pos.len(), [0.0, 0.0]); }
-            le.append(&ll);
-            cent_all.entry(si as u8).or_default().extend(lc.iter().map(|c| m.apply(*c)));
             mats.entry(si as u8).or_insert_with(|| { let (bm, lm) = rtree::materials(species[si], 0.0); (scene.material(bm), scene.material(lm)) });
+            if let Some(c) = &crowded[pi] {
+                // a one-off build: merged into its species' mesh in world space
+                let (mut bb, mut ll) = (c.0.clone(), c.1.clone());
+                bb.transform(&m); ll.transform(&m);
+                bark_all.entry(si as u8).or_default().append(&bb);
+                let le = leaf_all.entry(si as u8).or_default();
+                if le.uv.len() != le.pos.len() { le.uv.resize(le.pos.len(), [0.0, 0.0]); }
+                le.append(&ll);
+                cent_all.entry(si as u8).or_default().extend(c.2.iter().map(|p| m.apply(*p)));
+            } else {
+                // a shared build: one more instance of it
+                let key = (si as u8, variant * 2 + (lod == Lod::Far) as u64);
+                built.entry(key).or_insert_with(|| { let t = rtree::build(species[si], bseed, lod); (t.bark, t.leaves, t.leaf_centres) });
+                inst.entry(key).or_default().push(m.0);
+            }
         }
         let mut keys: Vec<u8> = bark_all.keys().copied().collect(); keys.sort();
         for k in keys {
@@ -575,7 +579,19 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, crate::shp::G)], seed: u64,
             scene.add(&format!("outdoor_rtree_{:?}#0", species[k as usize]), "OutdoorTree", bark_all.remove(&k).unwrap(), bi);
             scene.add_bent(&format!("outdoor_rtree_{:?}#1", species[k as usize]), "OutdoorTree", leaf_all.remove(&k).unwrap(), li, cent_all.remove(&k).unwrap_or_default());
         }
-        log.push(format!("rust trees: {n_crowded} near trees built among neighbours, {} shared builds", built.len()));
+        // shared builds as instanced nodes (one mesh, a transform per tree), in key order
+        let mut bkeys: Vec<(u8, u64)> = built.keys().copied().collect(); bkeys.sort();
+        let n_shared = bkeys.len();
+        let n_inst: usize = inst.values().map(|v| v.len()).sum();
+        for k in bkeys {
+            let (b, l, lc) = built.remove(&k).unwrap();
+            let (bi, li) = mats[&k.0];
+            let xs = inst.remove(&k).unwrap_or_default();
+            let nm = format!("outdoor_rtree_{:?}_v{}", species[k.0 as usize], k.1);
+            scene.add_instanced(&format!("{nm}#0"), "OutdoorTree", b, bi, None, xs.clone());
+            scene.add_instanced(&format!("{nm}#1"), "OutdoorTree", l, li, Some(lc), xs);
+        }
+        log.push(format!("rust trees: {n_crowded} near trees built among neighbours, {n_shared} shared builds placed {n_inst} times"));
         props.clear();
     }
     log.push(format!("terrain {gcls} / {mcls}, mountains {m_height:.0} m coverage {coverage:.2}, pad {:.2} m below the floor", cfg.pad_depth));
