@@ -41,8 +41,9 @@ impl BedSpec {
         let r = &mut r;
         c.width = r.log_uniform(1.4, 2.4);
         c.size = r.uniform(2.0, 2.4);
-        if fseed % 4 == 0 && ig_core::envx::dense_env() {
-            // dense mode (not python-exact): a quarter of the beds are single beds (1.0-1.5 x 1.9-2.2 m) so small bedrooms always get one
+        // a quarter of the beds are single beds (1.0-1.5 x 1.9-2.2 m) so small bedrooms get one (dense mode only before: without it a
+        // 3 x 3 m bedroom took no 1.4-2.4 m bed and stayed empty); NO_SINGLE_BEDS=1: python's sizes outside dense mode
+        if fseed % 4 == 0 && (ig_core::envx::dense_env() || std::env::var_os("NO_SINGLE_BEDS").is_none()) {
             c.width = 1.0 + (c.width - 1.4) / 1.0 * 0.5;
             c.size = 1.9 + (c.size - 2.0) * 0.75;
         }
