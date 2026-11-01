@@ -354,10 +354,11 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
     let mut rp = Parts { siding: Mesh::new(), trim: Mesh::new(), roof: Mesh::new(), concrete: Mesh::new() };
     let mut gables = vec![];
     for rc in rectangles(&local) {
-        // a narrow strip (< 2 m across) between wings gets a low-slope hip roof under its neighbours' eaves (a steep gable over
-        // it read as a sawtooth of ridges; dropping it left the ceiling showing)
+        // a narrow strip (< 2 m across) between wings gets a lower hip roof (a steep gable over it read as a sawtooth of ridges;
+        // dropping it left the ceiling showing)
         if (rc[2] - rc[0]).min(rc[3] - rc[1]) < 2.0 {
-            let lo = Style { pitch_deg: 8.0, hip: true, overhang: 0.1, ..st.clone() };
+            // (a hip at 70 % of the main pitch, at most 25 deg: at 8 deg the bump-out read as a flat roof from the street)
+            let lo = Style { pitch_deg: (st.pitch_deg * 0.7).min(25.0), hip: true, overhang: 0.25, ..st.clone() };
             rect_roof(&mut rp, rc, ze, &lo, &mut gables);
         } else {
             rect_roof(&mut rp, rc, ze, st, &mut gables);
