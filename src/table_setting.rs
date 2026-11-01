@@ -260,8 +260,12 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 use crate::furn::layout2d as l2;
                 let group: Vec<String> = std::iter::once(tk.clone()).chain(far.iter().filter(|k| !unseated.contains(k) && state.objs.contains_key(k.as_str())).cloned()).collect();
                 let saved: Vec<(String, crate::furn::geom::Pose)> = group.iter().map(|k| (k.clone(), state.objs[k.as_str()].pose)).collect();
-                let clear = |st: &crate::furn::state::State| group.iter().all(|k| l2::outside_room_depth(st, k, &room) < 1e-3
-                    && st.objs.iter().all(|(o, b)| group.contains(o) || b.generator.is_none() && !o.starts_with("doorclear/") && !o.starts_with("door") || l2::is_room(b) || b.tags.contains(crate::furn::tags::Tag::sem("NoCollision")) || b.relations.iter().any(|r| group.contains(&r.target)) || l2::depth(st, k, o) <= 1e-4));
+                // (a door's cutter box runs 2 m into the room -- every slid set hit it, and the repair took the table, 923; the door's
+                // swing is its doorclear box, kept)
+                let cutter = crate::furn::tags::Tag::sem("Cutter");
+                let clear_of = |st: &crate::furn::state::State, group: &[String]| group.iter().all(|k| l2::outside_room_depth(st, k, &room) < 1e-3
+                    && st.objs.iter().all(|(o, b)| group.contains(o) || b.tags.contains(cutter) || b.generator.is_none() && !o.starts_with("doorclear/") && !o.starts_with("door") || l2::is_room(b) || b.tags.contains(crate::furn::tags::Tag::sem("NoCollision")) || b.relations.iter().any(|r| group.contains(&r.target)) || l2::depth(st, k, o) <= 1e-4));
+                let clear = |st: &crate::furn::state::State| clear_of(st, &group);
                 let mut found = false;
                 'o: for step in 1..=8 {
                     for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
@@ -271,6 +275,34 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                     }
                 }
                 if !found { for (k, p) in &saved { state.set_pose(k, *p); state.touch(k); } }
+                // then the table against a wall, the chairs on that side left out (a 3.5 m room with its doors in the middle of opposite
+                // walls: a table with chairs all round stood in the path whichever way it slid, and the repair took the table, 923)
+                if !found {
+                    let tc = saved[0].1.t;
+                    'w: for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                        let (keep, drop): (Vec<&(String, crate::furn::geom::Pose)>, Vec<&(String, crate::furn::geom::Pose)>) = saved[1..].iter().partition(|(_, p)| (p.t[0] - tc[0]) * dx + (p.t[1] - tc[1]) * dy < 0.1);
+                        if std::env::var_os("CHAIR_DEBUG").is_some() { eprintln!("CHAIRDBG wall try ({dx},{dy}): keep {} drop {}", keep.len(), drop.len()); }
+                        if keep.len() < 2 || drop.is_empty() { continue }
+                        let taken: Vec<(usize, String, crate::furn::state::ObjState)> = drop.iter().map(|(k, _)| { let i = state.objs.get_index_of(k).unwrap(); (i, k.clone(), state.objs[k.as_str()].clone()) }).collect();
+                        for (_, k, _) in &taken { state.objs.shift_remove(k); }
+                        let sub: Vec<String> = std::iter::once(tk.clone()).chain(keep.iter().map(|(k, _)| k.clone())).collect();
+                        for step in 1..=30 {
+                            let d = step as f64 * 0.05;
+                            for (k, p) in saved.iter().filter(|(k, _)| sub.contains(k)) { let mut q = *p; q.translate([dx * d, dy * d, 0.0]); state.set_pose(k, q); state.touch(k); }
+                            // (the set's walk out stops at the wall: past it nothing gets better)
+                            if l2::outside_room_depth(state, &tk, &room) > 1e-3 { break }
+                            if l2::walk_status(state, &room).0 && clear_of(state, &sub) {
+                                found = true;
+                                for (_, k, _) in &taken { remove.push(k.clone()); }
+                                log.push(format!("table set {tk} against the wall ({d:.2} m), {} chairs on that side left out", taken.len()));
+                                break 'w;
+                            }
+                        }
+                        for (k, p) in &saved { if state.objs.contains_key(k.as_str()) { state.set_pose(k, *p); state.touch(k); } }
+                        let mut taken = taken; taken.sort_by_key(|t| t.0);
+                        for (i, k, o) in taken { state.objs.shift_insert(i, k.clone(), o); state.touch(&k); }
+                    }
+                }
             }
             loop {
                 let (ok, _) = crate::furn::layout2d::walk_status(state, &room);

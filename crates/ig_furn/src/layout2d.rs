@@ -458,6 +458,7 @@ pub fn walk_status_f(state: &State, room: &str, keep: &dyn Fn(&str) -> bool, ski
             pieces.push((k.clone(), g.clone()));
             reach_blocks.extend(g.clone());
         }
+        if std::env::var_os("WALKDBG").is_some() { let b = g.iter().map(shp::bounds).fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))); eprintln!("WALKDBG {room}: block {k} {:.2?}", b); }
         blocks.extend(g);
     }
     let doors: Vec<[f64; 2]> = state.objs.iter().filter(|(k, _)| k.starts_with(&format!("doorclear/{room}/"))).filter_map(|(k, _)| {
