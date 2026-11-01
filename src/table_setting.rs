@@ -86,6 +86,16 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let (cy, sy) = (yaw.cos(), yaw.sin());
             let half = [(uh[0] - ul[0]) / 2.0, (uh[1] - ul[1]) / 2.0];
             let (ex, ey) = (half[0] * cy.abs() + half[1] * sy.abs() + 0.01, half[0] * sy.abs() + half[1] * cy.abs() + 0.01);
+            // (the whole footprint on the top, 4 cm in from the edge -- on a round or oval top inside its ellipse: a spoon's tip lay on a
+            // table's edge bevel)
+            let round = t.tags.contains(crate::furn::tags::Tag::sem("RoundTable"));
+            let (cx, cyy, rx, ry) = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (hi[0] - lo[0]) / 2.0 - 0.04, (hi[1] - lo[1]) / 2.0 - 0.04);
+            let off_top = [[-ex, -ey], [ex, -ey], [ex, ey], [-ex, ey]].iter().any(|d| {
+                let q = to_local([pos[0] + d[0], pos[1] + d[1], pos[2]]);
+                let (dx, dy) = (q[0] - cx, q[1] - cyy);
+                if round { (dx / rx.max(0.01)).powi(2) + (dy / ry.max(0.01)).powi(2) > 1.0 } else { dx.abs() > rx || dy.abs() > ry }
+            });
+            if off_top { remove.push(uk.clone()); continue }
             let clash = state.objs.iter().any(|(ok, oo)| {
                 if ok == uk || *ok == plates[pi] || !on(oo) || oo.pose.t[2] + oo.geom.lo[2] < top_z - 0.3 || (ukeys.contains(ok) && !placed.contains(ok)) || remove.contains(ok) { return false }
                 let (ol, oh) = (oo.geom.lo, oo.geom.hi);
