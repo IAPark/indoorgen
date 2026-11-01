@@ -2,7 +2,7 @@
 //! upholstered pad), and a back that is upholstered, slatted (3-5 vertical slats) or a curved top rail with spindles; optional arms.
 //! Frame as infinigen's ChairFactory: x = depth (back legs near x = 0, front toward +x), y centred, z = 0 at the seat top, the floor at
 //! z = -seat_h. Wood parts use the vertical-grain wood shader along their length; upholstery gets box uvs.
-use super::modern_sofa::{box_uv, pad};
+use super::sofa::{box_uv, pad};
 use super::*;
 use crate::materials::*;
 use ig_kit::geomkit::limb;

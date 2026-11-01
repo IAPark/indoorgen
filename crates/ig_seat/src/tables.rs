@@ -7,7 +7,7 @@
 use super::tableparts::*;
 use super::*;
 use crate::materials::*;
-use super::modern_sofa::box_uv;
+use super::sofa::box_uv;
 use crate::piece::Volume;
 use ig_kit::geomkit::limb;
 use serde_json::json;

@@ -2,7 +2,6 @@
 use super::curvekit::*;
 use super::doors::binomial as _unused_binomial;
 use super::matdraw::*;
-use super::sofa::mesh_cube;
 use super::solid::Solid;
 use crate::mesh::*;
 use crate::rng::Rng;
@@ -395,4 +394,88 @@ pub fn window_mesh(spec: &WindowSpec, a: &WinAsset) -> Mesh {
 
 pub fn unseeded_inst_rng(fseed: u64, inst: u64) -> Rng {
     super::inst_rng(fseed, inst)
+}
+
+/// GeometryNodeMeshCube with Blender's vertex / face order
+pub fn mesh_cube(size: V3, vx: usize, vy: usize, vz: usize) -> Mesh {
+    let (sx, sy, sz) = (size[0] as f32, size[1] as f32, size[2] as f32);
+    let xs = |i: usize| -> f64 { (-sx / 2.0 + i as f32 * (sx / (vx - 1) as f32)) as f64 };
+    let ys = |i: usize| -> f64 { (-sy / 2.0 + i as f32 * (sy / (vy - 1) as f32)) as f64 };
+    let zs = |i: usize| -> f64 { (-sz / 2.0 + i as f32 * (sz / (vz - 1) as f32)) as f64 };
+    let mut m = Mesh::new();
+    // bottom layer
+    for iy in 0..vy {
+        for ix in 0..vx {
+            m.pos.push([xs(ix), ys(iy), zs(0)]);
+        }
+    }
+    // middle rings
+    for iz in 1..vz - 1 {
+        for ix in 0..vx {
+            m.pos.push([xs(ix), ys(0), zs(iz)]);
+        }
+        for iy in 1..vy - 1 {
+            m.pos.push([xs(0), ys(iy), zs(iz)]);
+            m.pos.push([xs(vx - 1), ys(iy), zs(iz)]);
+        }
+        for ix in 0..vx {
+            m.pos.push([xs(ix), ys(vy - 1), zs(iz)]);
+        }
+    }
+    // top layer
+    for iy in 0..vy {
+        for ix in 0..vx {
+            m.pos.push([xs(ix), ys(iy), zs(vz - 1)]);
+        }
+    }
+    let ring = 2 * vx + 2 * (vy - 2);
+    let top_off = vx * vy + (vz - 2) * ring;
+    let v = |ix: usize, iy: usize, iz: usize| -> u32 {
+        (if iz == 0 {
+            iy * vx + ix
+        } else if iz == vz - 1 {
+            top_off + iy * vx + ix
+        } else {
+            let base = vx * vy + (iz - 1) * ring;
+            if iy == 0 {
+                base + ix
+            } else if iy == vy - 1 {
+                base + vx + 2 * (vy - 2) + ix
+            } else {
+                base + vx + 2 * (iy - 1) + if ix == vx - 1 { 1 } else { 0 }
+            }
+        }) as u32
+    };
+    for iy in 0..vy - 1 {
+        for ix in 0..vx - 1 {
+            m.faces.push(vec![v(ix, iy, 0), v(ix, iy + 1, 0), v(ix + 1, iy + 1, 0), v(ix + 1, iy, 0)]);
+        }
+    }
+    for iz in 0..vz - 1 {
+        for ix in 0..vx - 1 {
+            m.faces.push(vec![v(ix, 0, iz), v(ix + 1, 0, iz), v(ix + 1, 0, iz + 1), v(ix, 0, iz + 1)]);
+        }
+    }
+    let t = vz - 1;
+    for iy in 0..vy - 1 {
+        for ix in 0..vx - 1 {
+            m.faces.push(vec![v(ix, iy, t), v(ix + 1, iy, t), v(ix + 1, iy + 1, t), v(ix, iy + 1, t)]);
+        }
+    }
+    for iz in 0..vz - 1 {
+        for ix in 0..vx - 1 {
+            m.faces.push(vec![v(ix, vy - 1, iz), v(ix, vy - 1, iz + 1), v(ix + 1, vy - 1, iz + 1), v(ix + 1, vy - 1, iz)]);
+        }
+    }
+    for iz in 0..vz - 1 {
+        for iy in 0..vy - 1 {
+            m.faces.push(vec![v(0, iy, iz), v(0, iy, iz + 1), v(0, iy + 1, iz + 1), v(0, iy + 1, iz)]);
+        }
+    }
+    for iz in 0..vz - 1 {
+        for iy in 0..vy - 1 {
+            m.faces.push(vec![v(vx - 1, iy, iz), v(vx - 1, iy + 1, iz), v(vx - 1, iy + 1, iz + 1), v(vx - 1, iy, iz + 1)]);
+        }
+    }
+    m
 }

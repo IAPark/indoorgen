@@ -73,7 +73,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 let cls = ["fabric.SofaFabric", "fabric.Velvet", "fabric.Leather", "fabric.CoarseKnitFabric"][r.randint(0, 4) as usize];
                 let fm = fab(scene, &format!("bench:{key}"), cls, r.next_u64(), [0.55, 0.5, 0.45]);
                 let legm = fab(scene, &format!("bench_leg:{key}"), "wood.Wood", r.next_u64(), [0.35, 0.25, 0.15]);
-                let mut top = crate::assets::modern_sofa::pad([x0, yc - bw / 2.0, fz + bh - 0.12], [x1, yc + bw / 2.0, fz + bh], 0.035, 2);
+                let mut top = crate::assets::sofa::pad([x0, yc - bw / 2.0, fz + bh - 0.12], [x1, yc + bw / 2.0, fz + bh], 0.035, 2);
                 for q in top.pos.iter_mut() { *q = o.pose.apply(*q) }
                 scene.add(&format!("bench_{key}#0"), "BenchFactory", top, fm);
                 let mut legs = Mesh::new();
@@ -86,7 +86,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 let pal: [[f32; 3]; 6] = [[0.85, 0.82, 0.76], [0.4, 0.45, 0.55], [0.6, 0.55, 0.5], [0.3, 0.32, 0.3], [0.7, 0.6, 0.55], [0.5, 0.6, 0.55]];
                 let bm = fab(scene, &format!("blanket:{key}"), "fabric.CoarseKnitFabric", r.next_u64(), pal[r.randint(0, 6) as usize]);
                 let by = yc + bw * 0.22;
-                let mut bl = crate::assets::modern_sofa::pad([x0 + 0.03, by - 0.18, fz + bh], [x1 - 0.03, by + 0.18, fz + bh + 0.07], 0.025, 2);
+                let mut bl = crate::assets::sofa::pad([x0 + 0.03, by - 0.18, fz + bh], [x1 - 0.03, by + 0.18, fz + bh + 0.07], 0.025, 2);
                 for q in bl.pos.iter_mut() { *q = o.pose.apply(*q) }
                 scene.add(&format!("blanket_{key}#0"), "BlanketFactory", bl, bm);
                 taken.push(wb);
@@ -104,7 +104,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 let yaw = r.uniform(-0.4, 0.4);
                 let mut m = Mesh::new();
                 for dy in [-0.055, 0.055] {
-                    let mut s = crate::assets::modern_sofa::pad([-0.13, dy - 0.045, 0.0], [0.13, dy + 0.045, 0.055], 0.025, 2);
+                    let mut s = crate::assets::sofa::pad([-0.13, dy - 0.045, 0.0], [0.13, dy + 0.045, 0.055], 0.025, 2);
                     for q in s.pos.iter_mut() {
                         let (xx, yy) = (q[0] * yaw.cos() - q[1] * yaw.sin(), q[0] * yaw.sin() + q[1] * yaw.cos());
                         *q = o.pose.apply([x + xx, side + yy, fz + q[2]]);

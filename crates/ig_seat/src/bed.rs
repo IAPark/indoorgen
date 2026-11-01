@@ -720,7 +720,7 @@ impl Factory for Bed {
                     plo[thin] = c0 - t / 2.0; phi[thin] = c0 + t / 2.0;
                     plo[long] = lo[long] + ext[long] * k as f64 / n as f64 + 0.004;
                     phi[long] = lo[long] + ext[long] * (k + 1) as f64 / n as f64 - 0.004;
-                    keep.push(super::modern_sofa::pad(plo, phi, 0.04, 2));
+                    keep.push(super::sofa::pad(plo, phi, 0.04, 2));
                 }
                 panels = keep;
             }
