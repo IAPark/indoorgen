@@ -1575,6 +1575,12 @@ pub fn beds(state: &mut State) -> Vec<String> {
 /// a piece placed against a wall of `room`: every wall spot (0.2 m steps) where the placement is valid is scored by `score(centre,
 /// wall position t, wall length)` and the best one kept; false (and the piece back where it was) when none is valid
 fn place_on_wall(state: &mut State, name: &str, room: &str, score: &dyn Fn(&State, [f64; 2], f64, f64, [f64; 2]) -> f64) -> bool {
+    place_on_wall_step(state, name, room, score, 0.2)
+}
+
+/// `place_on_wall` trying spots every `step` along each wall (a single bed's 1.12 m slot between a door clearance and a diagonal wall
+/// fell between the 0.2 m spots)
+fn place_on_wall_step(state: &mut State, name: &str, room: &str, score: &dyn Fn(&State, [f64; 2], f64, f64, [f64; 2]) -> f64, step: f64) -> bool {
     let (lo, hi) = lohi(state, name);
     let w = hi[1] - lo[1];
     let start = state.objs[name].pose;
@@ -1585,7 +1591,7 @@ fn place_on_wall(state: &mut State, name: &str, room: &str, score: &dyn Fn(&Stat
         if len < w + 0.05 { continue }
         let u = [dx / len, dy / len];
         let yaw_ = n[1].atan2(n[0]);
-        let steps = ((len - w) / 0.2).floor() as usize;
+        let steps = ((len - w) / step).floor() as usize;
         for i in 0..=steps {
             let t = w / 2.0 + 0.01 + (len - w - 0.02) * if steps == 0 { 0.5 } else { i as f64 / steps as f64 };
             let at = [a[0] + u[0] * t + n[0] * 0.003, a[1] + u[1] * t + n[1] * 0.003, 0.0];
@@ -1704,7 +1710,8 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                         }
                         let bw = { let g = &state.objs[&name].geom; g.hi[1] - g.lo[1] };
                         if bw > 1.55 { continue }
-                        ok = place_on_wall(state, &name, &room, &score);
+                        ok = place_on_wall_step(state, &name, &room, &score, 0.05);
+                        if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUPDBG bedredraw {name}: {bw:.2} wide, placed {ok}"); }
                         if ok { log.push(format!("{room}: bed redrawn {bw:.2} m wide to fit")); break }
                     }
                     if !state.objs.contains_key(&name) { continue }
