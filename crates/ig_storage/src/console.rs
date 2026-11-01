@@ -53,6 +53,8 @@ impl MediaConsole {
         let mut r = Rng::seeded(self.seed);
         let bc = weighted(&mut r, BODY);
         let body = spec_material("console_body", json!({"cls": bc, "kwargs": {}, "seed": self.seed}), [0.45, 0.32, 0.2]);
+        // 25 % painted (own stream, NO_PAINT=1: off)
+        let body = if std::env::var_os("NO_PAINT").is_none() && crate::int_hash(&["console_paint", &self.seed.to_string()]) % 100 < 25 { painted_material(&format!("console_paint:{}", self.seed), self.seed, [0.45, 0.32, 0.2]) } else { body };
         let front = if self.contrast { spec_material("console_front", json!({"cls": weighted(&mut r, FRONT), "kwargs": {}, "seed": self.seed + 1}), [0.8, 0.78, 0.74]) } else { body.clone() };
         let metal = spec_material("console_metal", json!({"cls": weighted(&mut r, METAL), "kwargs": {}, "seed": self.seed + 2}), [0.1, 0.1, 0.1]);
         // the carcass depth: the total less what stands proud of the front (pulls, slats), so the piece keeps to its layout box

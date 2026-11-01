@@ -52,6 +52,8 @@ impl ModernDesk {
         let mut r = Rng::seeded(self.seed);
         let top = spec_material("desk_top", json!({"cls": weighted(&mut r, TOP), "kwargs": {}, "seed": self.seed}), [0.5, 0.36, 0.22]);
         let body = if r.f64() < 0.5 { top.clone() } else { spec_material("desk_body", json!({"cls": weighted(&mut r, BODY), "kwargs": {}, "seed": self.seed + 1}), [0.85, 0.84, 0.8]) };
+        // 20 % painted carcass and base under a wood top (own stream, NO_PAINT=1: off)
+        let body = if std::env::var_os("NO_PAINT").is_none() && crate::int_hash(&["desk_paint", &self.seed.to_string()]) % 100 < 20 { painted_material(&format!("desk_paint:{}", self.seed), self.seed, [0.85, 0.84, 0.8]) } else { body };
         let metal = spec_material("desk_metal", json!({"cls": weighted(&mut r, METAL), "kwargs": {}, "seed": self.seed + 2}), [0.1, 0.1, 0.1]);
         let pulls_metal = r.f64() < 0.6;
         let (d, w, h, t) = (self.d, self.w, self.h, self.t);

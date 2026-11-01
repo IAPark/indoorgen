@@ -80,6 +80,8 @@ impl Wardrobe {
         let door_cls = if self.contrast_doors { weighted(&mut r, BODY) } else { body_cls };
         let body = spec("wardrobe_body", body_cls, s);
         let door = spec("wardrobe_door", door_cls, s + 1);
+        // 20 % painted (carcass and doors one colour; own stream, NO_PAINT=1: off)
+        let (body, door) = if std::env::var_os("NO_PAINT").is_none() && crate::int_hash(&["wardrobe_paint", &self.seed.to_string()]) % 100 < 20 { let m = painted_material(&format!("wardrobe_paint:{s}"), s, [0.6, 0.6, 0.62]); (m.clone(), m) } else { (body, door) };
         let handle = spec("wardrobe_handle", weighted(&mut r, HANDLE_M), s + 2);
         let t = 0.02; // door thickness
         let x0 = d - t;

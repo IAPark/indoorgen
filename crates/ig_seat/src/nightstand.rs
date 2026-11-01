@@ -43,6 +43,8 @@ impl Nightstand {
         let mut r = Rng::seeded(self.seed);
         let bc = weighted(&mut r, BODY);
         let body = spec_material("nightstand_body", json!({"cls": bc, "kwargs": {}, "seed": self.seed}), [0.5, 0.36, 0.22]);
+        // 25 % painted (own stream, NO_PAINT=1: off)
+        let body = if std::env::var_os("NO_PAINT").is_none() && crate::int_hash(&["nightstand_paint", &self.seed.to_string()]) % 100 < 25 { painted_material(&format!("nightstand_paint:{}", self.seed), self.seed, [0.5, 0.36, 0.22]) } else { body };
         let front = if r.f64() < 0.3 { spec_material("nightstand_front", json!({"cls": weighted(&mut r, BODY), "kwargs": {}, "seed": self.seed + 1}), [0.85, 0.84, 0.8]) } else { body.clone() };
         let metal = spec_material("nightstand_metal", json!({"cls": weighted(&mut r, METAL), "kwargs": {}, "seed": self.seed + 2}), [0.6, 0.6, 0.6]);
         let (hx, hy, h) = (self.hx, self.hy, self.h);

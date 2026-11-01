@@ -114,6 +114,18 @@ pub fn spec_material(name: &str, spec: serde_json::Value, fallback_rgb: [f32; 3]
     m
 }
 
+/// painted furniture colours (Blender linear base colour): sage, navy, charcoal, cream, terracotta, dusty blue, forest green, warm
+/// grey, mustard, blush
+pub const FURNITURE_PAINT: [[f32; 3]; 10] = [[0.30, 0.38, 0.28], [0.03, 0.06, 0.13], [0.06, 0.065, 0.07], [0.74, 0.69, 0.57], [0.45, 0.17, 0.09],
+    [0.22, 0.33, 0.42], [0.05, 0.12, 0.07], [0.35, 0.33, 0.30], [0.55, 0.38, 0.07], [0.62, 0.40, 0.36]];
+
+/// a painted finish (plywood under 90 % paint, a trace of its grain left) in a colour of `FURNITURE_PAINT` picked by `seed`; the
+/// preview keeps `fallback_rgb`
+pub fn painted_material(name: &str, seed: u64, fallback_rgb: [f32; 3]) -> Material {
+    let c = FURNITURE_PAINT[(crate::int_hash(&["paint", &seed.to_string()]) % FURNITURE_PAINT.len() as u64) as usize];
+    spec_material(name, serde_json::json!({"cls": "wood.WhitePlywood", "kwargs": {}, "seed": seed, "paint": {"rgb": c, "amount": 0.9}}), fallback_rgb)
+}
+
 /// How a wall gets its second material (decorate.room_walls, room_wall_alternative_fns)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WallAlt {
