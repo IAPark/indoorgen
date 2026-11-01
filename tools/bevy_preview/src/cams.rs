@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub struct Cam { pub name: String, pub view: Mat4, pub fov_x: f32, pub ortho: Option<f32> }
 
 #[derive(Clone)]
-pub enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String) }
+pub enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String), Corner(String, usize) }
 
 pub struct DrawInfo { pub node: usize, pub pos: View, pub idx: View, pub u16: bool, pub icount: u32, pub bmin: Vec3, pub bmax: Vec3 }
 pub struct SceneInfo { pub glb: Glb, pub side: Value, pub draws: Vec<DrawInfo>, pub bmin: Vec3, pub bmax: Vec3 }
@@ -173,6 +173,7 @@ pub fn resolve_cams(s: &SceneInfo, specs: &[CamSpec], ncams: usize, res: (u32, u
                     let mut c = cam_look(eye, tgt, 24.0); c.name = format!("person{i}"); v.push(c);
                 } else { eprintln!("person {i} not found"); }
             }
+            CamSpec::Corner(room, which) => { if let Some(c) = crate::viewpick::corner_cam(s, &room, which, true) { v.push(c); } }
             CamSpec::Top => {
                 let c = (s.bmin + s.bmax) * 0.5; let ext = s.bmax - s.bmin;
                 let mut cm = cam_look(Vec3::new(c.x, c.y, s.bmax.z + 20.0), Vec3::new(c.x, c.y + 1e-3, c.z), 18.0);

@@ -6,6 +6,7 @@
 //! Units: everything is physical (lux / lumens / nits) using 683 lm/W, so Blender watts and W/m² map 1:1 and the
 //! camera exposure is a plain EV100 (Blender's exposure 0 is about EV100 9.15).
 mod cams;
+mod viewpick;
 mod glb;
 
 use bevy::asset::RenderAssetUsages;
@@ -66,6 +67,8 @@ fn parse_args(a: Vec<String>) -> Opts {
             "--at" => { let v = nf(&val()); assert!(v.len() >= 6, "--at ex,ey,ez,tx,ty,tz[,lens]"); o.cams.push(CamSpec::At([v[0], v[1], v[2], v[3], v[4], v[5]], *v.get(6).unwrap_or(&18.0))) }
             "--person" => o.cams.push(CamSpec::Person(val().parse().unwrap())),
             "--top" => { o.cams.push(CamSpec::Top); o.no_ceiling = true; }
+            // --corner ROOM:A|B: viewcam.py's cornerA / cornerB pick for ROOM (src/viewpick.rs)
+            "--corner" => { let v = val(); let (r, w) = v.rsplit_once(':').expect("--corner ROOM:A|B"); o.cams.push(CamSpec::Corner(r.to_string(), if w == "B" { 1 } else { 0 })); }
             "--sheet" => o.sheet = true,
             "--res" => { let v = val(); let (w, h) = v.split_once('x').expect("WxH"); o.res = (w.parse().unwrap(), h.parse().unwrap()) }
             "--ss" => o.ss = val().parse::<u32>().unwrap().max(1),

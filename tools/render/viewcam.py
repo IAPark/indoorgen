@@ -4,7 +4,7 @@ Uses only layout-level geometry so that two scenes with the same layout get the 
 the floor outline (convex hull of the floor vertices with tiny features such as door notches dropped), its area
 centroid, and world AABBs of the furniture (room shell, placeholders, windows and doors excluded).
 cornerA / cornerB = best / second-best outline corner (camera 0.45 m inside, 1.5 m high, looking at the centre)."""
-import math
+import math, os
 import re
 
 
@@ -209,7 +209,8 @@ def view_camera(sc, room, view):
         o = mathutils.Vector((q[0], q[1], 1.5))
         fwd = (mathutils.Vector((q[0] + ux * 3.0, q[1] + uy * 3.0, 0.75)) - o).normalized()
         right = fwd.cross(mathutils.Vector((0, 0, 1))).normalized(); up = right.cross(fwd)
-        seen, furn, near, leaf, wall, edge, n = set(), 0, 0, 0, 0, 0, 0
+        seen, furn, near, leaf, wall, n = set(), 0, 0, 0, 0, 0
+        cols = {}
         for i in range(24):
             for j in range(14):
                 d = (fwd + right * ((i + 0.5) / 24 * 2 - 1) + up * ((j + 0.5) / 14 * 2 - 1) * 0.5625).normalized()
@@ -224,13 +225,19 @@ def view_camera(sc, room, view):
                     if dist < 1.8 and abs(nrm.z) < 0.5: wall += 1
                     continue
                 if dist <= 5.0:
-                    furn += 1; seen.add(key(ob))
-                    # (a piece in the frame's outer columns is cut by its edge: a plant half out of a bedroom view)
-                    if i in (0, 23): edge += 1
-        return 2.0 * len(seen) + 30.0 * furn / n - 50.0 * near / n - 60.0 * leaf / n - 0.15 * edge - 25.0 * wall / n
+                    furn += 1; k_ = key(ob); seen.add(k_)
+                    cols.setdefault(k_, set()).add(i)
+        # pieces cut by the frame's edge: a small piece (6 columns or fewer of 24) touching the first / last column -- a plant half out
+        # of a bedroom view. Big pieces crossing the edge (a bed, a wardrobe) are normal framing (counting every edge ray instead
+        # penalised those too, and weighting it more spoilt other views)
+        cut = sum(1 for cs in cols.values() if (0 in cs or 23 in cs) and max(cs) - min(cs) < 6)
+        # (a cut piece earns no 'seen' bonus either: +2 seen -3 cut still favoured a plant half in the frame)
+        return 2.0 * (len(seen) - cut) + 30.0 * furn / n - 50.0 * near / n - 60.0 * leaf / n - 3.0 * cut - 25.0 * wall / n
     views = []
     for (_, _, cl, p, q, _, _) in scored:
-        sv, yaw = max(((view_score(q, math.radians(5 * k)), math.radians(5 * k)) for k in range(-8, 9)), key=lambda t: (t[0], -abs(t[1])))
+        # (2.5 deg steps: at 5 deg a bedside plant was either half in the frame or out of it -- no step landed between)
+        sv, yaw = max(((view_score(q, math.radians(2.5 * k)), math.radians(2.5 * k)) for k in range(-16, 17)), key=lambda t: (t[0], -abs(t[1])))
+        if os.environ.get("VIEWDBG"): print("VIEWDBG", round(q[0], 2), round(q[1], 2), [(2.5 * k, round(view_score(q, math.radians(2.5 * k)), 1)) for k in range(-16, 17)])
         views.append((sv, yaw, p, q))
     print("VIEWCAND", [(round(sv, 1), round(math.degrees(yaw)), round(q[0], 2), round(q[1], 2)) for sv, yaw, p, q in views])
     order = sorted(range(len(views)), key=lambda i: -views[i][0])

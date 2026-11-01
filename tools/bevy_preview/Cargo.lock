@@ -2474,6 +2474,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ig_outdoor"
+version = "0.1.0"
+dependencies = [
+ "geos",
+ "ig_core",
+ "ig_plants",
+ "ig_rooms",
+ "schemars",
+ "serde",
+ "serde_json",
+ "web-time",
+]
+
+[[package]]
 name = "ig_people"
 version = "0.1.0"
 dependencies = [
@@ -2686,6 +2700,7 @@ dependencies = [
  "ig_gn",
  "ig_kit",
  "ig_mess",
+ "ig_outdoor",
  "ig_people",
  "ig_rooms",
  "indexmap 2.14.2",
