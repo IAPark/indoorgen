@@ -103,7 +103,7 @@ fn try_place(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) -> bo
     if ig_core::env_on!("GROUPDBG") {
         let nc = Tag::sem("NoCollision");
         let hits: Vec<String> = state.objs.iter().filter(|(k, b)| k.as_str() != name && !b.tags.contains(nc) && !layout2d::is_room(b) && !b.relations.iter().any(|r| r.target == name) && layout2d::depth(state, name, k) > 1e-4).map(|(k, _)| k.clone()).collect();
-        eprintln!("GROUPDBG {name}: hits {hits:?} outside {:.3} layout {}", layout2d::outside_depth(state, name), layout2d::layout_ok(state, name));
+        eprintln!("GROUPDBG {name}: hits {hits:?} outside {:.3} own {:.3} zone {} layout {}", layout2d::outside_depth(state, name), layout2d::room_of(state, name).map_or(-1.0, |r| layout2d::outside_room_depth(state, name, &r)), super::kitchen_rules::zone_clash(state, name), layout2d::layout_ok(state, name));
     }
     state.set_pose(name, old);
     state.touch(name);

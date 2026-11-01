@@ -684,7 +684,8 @@ pub fn remove_tree(state: &mut State, k: &str) -> Vec<String> {
     let mut i = 0;
     while i < gone.len() {
         let t = gone[i].clone();
-        let kids: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == t)).map(|(c, _)| c.clone()).collect();
+        // (and a built-in's keep-out boxes, `<key>.keepout<n>`: they outlived a removed bookshelf wall and kept the bed off its wall)
+        let kids: Vec<String> = state.objs.iter().filter(|(c, o)| o.relations.iter().any(|r| r.target == t) || c.strip_prefix(t.as_str()).map_or(false, |r| r.starts_with(".keepout"))).map(|(c, _)| c.clone()).collect();
         for c in kids { if !gone.contains(&c) { gone.push(c); } }
         i += 1;
     }
