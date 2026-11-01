@@ -21,7 +21,6 @@ hr{border:0;border-top:1px solid #3a3e48;margin:10px 0}
 #info{color:#889;font-size:11px;white-space:pre-line}
 #help{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);color:#99a;font-size:11px;background:rgba(0,0,0,.4);padding:3px 10px;border-radius:10px;pointer-events:none}
 #cross{position:fixed;left:50%;top:50%;width:6px;height:6px;margin:-3px;border-radius:3px;background:rgba(255,255,255,.6);display:none;pointer-events:none}
-@media (max-width:600px){#panel{width:calc(100% - 44px)}}
 
 details#cfg{margin:8px 0;border:1px solid #3a3e48;border-radius:8px;padding:4px 8px}
 details#cfg summary{cursor:pointer;color:#bcd;padding:3px 0}
@@ -57,3 +56,23 @@ details.sec>summary{cursor:pointer;color:#9fb0c8;font-size:11px;text-transform:u
 #rules-editor .rtbl{table-layout:fixed}
 #rules-editor .rtbl th:nth-child(1){width:33%}#rules-editor .rtbl th:nth-child(2){width:25%}#rules-editor .rtbl th:nth-child(3),#rules-editor .rtbl th:nth-child(4){width:11%}#rules-editor .rtbl th:nth-child(5){width:16%}#rules-editor .rtbl th:nth-child(6){width:4%}
 #rules-editor .rtbl input[type=number]{width:100%}
+
+/* menu toggle: the panel hides (body.panel-hidden); remembered per browser */
+#view{touch-action:none}
+#menu{position:fixed;top:10px;left:10px;z-index:5;width:40px;height:40px;padding:0;font-size:18px;line-height:40px;border-radius:10px;background:rgba(24,26,32,.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#panel{top:58px;transition:transform .2s ease,opacity .2s ease}
+body.panel-hidden #panel{transform:translateX(calc(-100% - 20px));opacity:0;pointer-events:none}
+body.panel-hidden #help{display:none}
+/* phones: the panel is a bottom sheet over at most 55 % of the screen; inputs at 16 px (no iOS focus zoom), taller tap targets */
+@media (max-width:640px),(pointer:coarse) and (max-height:500px){
+  #panel,#panel:has(#rules-sec[open]){top:auto;left:0;right:0;bottom:0;width:auto;max-height:55vh;max-height:55dvh;border-radius:14px 14px 0 0;border-bottom:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom))}
+  body.panel-hidden #panel{transform:translateY(calc(100% + 10px))}
+  #menu{top:auto;left:auto;right:12px;bottom:calc(55vh + 10px);bottom:calc(55dvh + 10px);transition:bottom .2s ease}
+  body.panel-hidden #menu{bottom:calc(16px + env(safe-area-inset-bottom))}
+  input,select,button,.file{font-size:16px;min-height:40px;box-sizing:border-box}
+  input[type=checkbox]{min-height:0;width:22px;height:22px}
+  .row label{width:64px}
+  h1{display:none}
+  #help{display:none}
+  #status{min-height:1.4em}
+}

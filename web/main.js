@@ -303,9 +303,23 @@ async function startWorker() {
       wasm = b64ToBytes(EMBED.wasm).buffer;
     } else {
       w = new Worker('worker.js', { type: 'module' });
-      const r = await fetch('pkg/ig_wasm_bg.wasm');
-      if (!r.ok) throw new Error('pkg/ig_wasm_bg.wasm not found (wasm generator not built); use Load .glb');
-      wasm = await r.arrayBuffer();
+      // a gzipped module first (pkg/ig_wasm_gz.wasm, gzip bytes under a served extension: hosts with a per-file size limit; decompressed here unless the server already did), else the plain one
+      wasm = null;
+      try {
+        const rz = await fetch('pkg/ig_wasm_gz.wasm');
+        if (rz.ok) {
+          const raw = new Uint8Array(await rz.arrayBuffer());
+          if (raw[0] === 0x1f && raw[1] === 0x8b) {
+            setStatus('unpacking wasm...');
+            wasm = await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+          } else if (raw[0] === 0x00 && raw[1] === 0x61) wasm = raw.buffer;
+        }
+      } catch (_) { wasm = null; }
+      if (!wasm) {
+        const r = await fetch('pkg/ig_wasm_bg.wasm');
+        if (!r.ok) throw new Error('pkg/ig_wasm_bg.wasm not found (wasm generator not built); use Load .glb');
+        wasm = await r.arrayBuffer();
+      }
     }
     worker = w;
     w.onmessage = onWorker;
@@ -586,3 +600,27 @@ renderer.setAnimationLoop(() => {
 window.__ig = { scene, cam, renderer, applyPreset, topDown, setCeiling, setMode, get presets() { return presets; }, generate };
 loadFromQuery().catch((e) => setStatus('load failed: ' + e, true));
 if (!new URLSearchParams(location.search).has('glb')) startWorker();
+
+// menu toggle (index.html #menu): hides the panel; remembered per browser; M toggles it; on a phone the panel tucks away when a
+// generation finishes so the room shows
+(() => {
+  const btn = document.getElementById('menu');
+  if (!btn) return;
+  const phone = () => window.matchMedia('(max-width:640px),(pointer:coarse) and (max-height:500px)').matches;
+  const set = (hidden) => {
+    document.body.classList.toggle('panel-hidden', hidden);
+    btn.setAttribute('aria-expanded', String(!hidden));
+    btn.innerHTML = hidden ? '&#x2630;' : '&#x2715;';
+    try { localStorage.setItem('ig_panel_hidden', hidden ? '1' : '0'); } catch (_) {}
+    window.dispatchEvent(new Event('resize'));
+  };
+  let start = false;
+  try { start = localStorage.getItem('ig_panel_hidden') === '1'; } catch (_) {}
+  set(start);
+  btn.addEventListener('click', () => set(!document.body.classList.contains('panel-hidden')));
+  window.addEventListener('keydown', (e) => {
+    if ((e.key === 'm' || e.key === 'M') && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') && !document.pointerLockElement) set(!document.body.classList.contains('panel-hidden'));
+  });
+  const dl = document.getElementById('dl');
+  if (dl) new MutationObserver(() => { if (!dl.disabled && phone()) set(true); }).observe(dl, { attributes: true, attributeFilter: ['disabled'] });
+})();
