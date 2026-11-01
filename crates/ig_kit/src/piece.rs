@@ -145,32 +145,58 @@ pub fn sweep(leaf: &Leaf, steps: usize) -> Vec<V3> {
     out
 }
 
-/// the solver's geometry for a piece's volumes: a proxy (with its role) per volume; triangles of the rigid boxes with canonical tags
-/// (front / back / bottom ... faces over the rigid bounds, for the relations) and support tags on the support boxes' tops
-pub fn solver_geom(vols: &[Volume]) -> ObjGeom {
+/// the solver's geometry for a piece's volumes: the rigid volumes' boxes merged to at most `max_rigid` (the pair whose union adds the
+/// least empty space first: a shelf's boards fold into its carcass, a chair keeps seat, back and arms apart -- the solver's cost grows
+/// with the proxies), each a hard proxy with its triangles (canonical tags over the rigid bounds, for the relations); support surfaces
+/// as support-tagged top faces; soft and opening volumes as proxies with their role
+pub fn solver_geom(vols: &[Volume], max_rigid: usize) -> ObjGeom {
     let (lo, hi) = rigid_bounds(vols);
+    let mut boxes: Vec<(V3, V3)> = vols.iter().filter(|v| v.is_rigid()).map(|v| v.bounds()).collect();
+    let inside = |a: &(V3, V3), b: &(V3, V3)| (0..3).all(|k| a.0[k] >= b.0[k] - 1e-6 && a.1[k] <= b.1[k] + 1e-6);
+    let vol = |b: &(V3, V3)| (0..3).map(|k| (b.1[k] - b.0[k]).max(0.0)).product::<f64>();
+    let uni = |a: &(V3, V3), b: &(V3, V3)| -> (V3, V3) { ([0, 1, 2].map(|k| a.0[k].min(b.0[k])), [0, 1, 2].map(|k| a.1[k].max(b.1[k]))) };
+    // boxes inside another go (of identical ones, the first stays)
+    let dedup = |bs: &mut Vec<(V3, V3)>| {
+        let k = bs.clone();
+        let keep: Vec<bool> = (0..k.len()).map(|i| !(0..k.len()).any(|j| j != i && inside(&k[i], &k[j]) && (!inside(&k[j], &k[i]) || j < i))).collect();
+        let mut it = keep.iter();
+        bs.retain(|_| *it.next().unwrap());
+    };
+    dedup(&mut boxes);
+    while boxes.len() > max_rigid.max(1) {
+        let mut best = (f64::INFINITY, 0, 1);
+        for i in 0..boxes.len() { for j in i + 1..boxes.len() {
+            let c = vol(&uni(&boxes[i], &boxes[j])) - vol(&boxes[i]) - vol(&boxes[j]);
+            if c < best.0 { best = (c, i, j); }
+        }}
+        let u = uni(&boxes[best.1], &boxes[best.2]);
+        boxes.remove(best.2);
+        boxes[best.1] = u;
+        dedup(&mut boxes);
+    }
     let mut tris: Vec<Tri> = vec![];
     let mut proxies = vec![];
     let mut roles = vec![];
-    for v in vols {
-        let role = match v.role { Role::Hard | Role::Support => ROLE_HARD, Role::Soft => ROLE_SOFT, Role::Opening(_) => ROLE_OPEN };
-        match &v.shape {
-            Shape::Box { lo: a, hi: b } => {
-                if v.is_rigid() { tris.extend(box_tris(*a, *b, 0)); }
-                proxies.push((Proxy::Box { center: [0, 1, 2].map(|k| (a[k] + b[k]) / 2.0), half: [0, 1, 2].map(|k| ((b[k] - a[k]) / 2.0).max(1e-6)) }, u32::MAX));
-            }
-            Shape::Hull(p) => {
-                if v.is_rigid() { let (a, b) = bounds_of(p); tris.extend(box_tris(a, b, 0)); }
-                proxies.push((Proxy::Hull(p.clone()), u32::MAX));
-            }
-        }
-        roles.push(role);
+    for (a, b) in &boxes {
+        tris.extend(box_tris(*a, *b, 0));
+        proxies.push((Proxy::Box { center: [0, 1, 2].map(|k| (a[k] + b[k]) / 2.0), half: [0, 1, 2].map(|k| ((b[k] - a[k]) / 2.0).max(1e-6)) }, u32::MAX));
+        roles.push(ROLE_HARD);
     }
     canonical_tag(&mut tris, lo, hi);
-    for v in vols.iter().filter(|v| matches!(v.role, Role::Support)) {
-        let (a, b) = v.bounds();
-        for mut t in box_tris(a, b, 0) {
-            if cross(sub(t.v[1], t.v[0]), sub(t.v[2], t.v[0]))[2] > 1e-12 { t.tags = SUPPORT; tris.push(t); }
+    for v in vols {
+        match &v.role {
+            Role::Support => {
+                let (a, b) = v.bounds();
+                for mut t in box_tris(a, b, 0) {
+                    if cross(sub(t.v[1], t.v[0]), sub(t.v[2], t.v[0]))[2] > 1e-12 { t.tags = SUPPORT; tris.push(t); }
+                }
+            }
+            Role::Soft | Role::Opening(_) => {
+                let p = match &v.shape { Shape::Box { lo: a, hi: b } => Proxy::Box { center: [0, 1, 2].map(|k| (a[k] + b[k]) / 2.0), half: [0, 1, 2].map(|k| ((b[k] - a[k]) / 2.0).max(1e-6)) }, Shape::Hull(pts) => Proxy::Hull(pts.clone()) };
+                proxies.push((p, u32::MAX));
+                roles.push(if matches!(v.role, Role::Soft) { ROLE_SOFT } else { ROLE_OPEN });
+            }
+            Role::Hard => {}
         }
     }
     let mut g = ObjGeom::from_tris(tris, proxies);

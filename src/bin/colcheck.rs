@@ -26,7 +26,7 @@ fn main() {
         let mut loose_note = String::new();
         let mut panic_note = None;
         for s in 1..=seeds {
-            let Some(p0) = ig_kit::piece::make_piece(c, s * 7919 + 13) else { break };
+            let Some(p0) = indoorgen::assets::pieces::any_piece(c, s * 7919 + 13) else { break };
             native = Some(p0.native());
             // its own size, and the class size model's extremes when it resizes
             let mut pieces: Vec<Box<dyn ig_kit::piece::Piece>> = vec![];

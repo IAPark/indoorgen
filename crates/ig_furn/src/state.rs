@@ -32,6 +32,23 @@ pub struct GenRef {
     /// a counter run joined into an L (kitchen_plan.rs): [blind end (-1 / +1 local y, 0 none), blind width, joined end, wall-cabinet
     /// reach into the corner]; the generator builds the pair as one unit (ig_kit::api::set_kitchen_join)
     pub join: Option<[f64; 4]>,
+    /// the piece this object is (ig_kit::piece): it owns its collision and builds the final model; None: the old path (a box and a
+    /// factory rebuilt from the seeds)
+    pub piece: Option<PieceRef>,
+}
+
+/// a placed piece, shared by the object's copies (the annealer's backups): its decisions are kept in it; a resize makes a new one
+#[derive(Clone)]
+pub struct PieceRef(pub Arc<std::sync::Mutex<Box<dyn crate::piece::Piece>>>);
+impl std::fmt::Debug for PieceRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "PieceRef") }
+}
+impl PieceRef {
+    pub fn new(p: Box<dyn crate::piece::Piece>) -> PieceRef { PieceRef(Arc::new(std::sync::Mutex::new(p))) }
+    pub fn collision(&self) -> Vec<crate::piece::Volume> { self.0.lock().unwrap().collision() }
+    pub fn mesh(&self) -> crate::api::Asset { self.0.lock().unwrap().mesh() }
+    pub fn resize(&self, size: [f64; 3]) -> Option<PieceRef> { self.0.lock().unwrap().resize(size).map(PieceRef::new) }
+    pub fn size(&self) -> [f64; 3] { self.0.lock().unwrap().size() }
 }
 
 #[derive(Clone)]

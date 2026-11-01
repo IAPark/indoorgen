@@ -217,8 +217,26 @@ pub fn real_layout(ctx: &Ctx, gen: &super::state::GenRef) -> Option<ObjGeom> {
 }
 
 fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
-    let (geom, gen) = sample_rand_placeholder_box(ctx, rng, class)?;
+    let (geom, mut gen) = sample_rand_placeholder_box(ctx, rng, class)?;
+    // a class with a piece: its own collision, size and (later) mesh
+    if let Some(p) = crate::piece::make_piece(class, gen.factory_seed) {
+        let p = super::state::PieceRef::new(p);
+        let (geom, fb) = piece_geom(&p);
+        gen.size = Some(p.size());
+        gen.fit_box = Some(fb);
+        gen.piece = Some(p);
+        return Some((geom, gen));
+    }
     match real_layout(ctx, &gen) { Some(g) => Some((g, gen)), None => Some((geom, gen)) }
+}
+
+/// at most this many rigid boxes per piece in the solver (merged: its cost grows with the proxies)
+pub const PIECE_BOXES: usize = 6;
+
+/// a piece's solver geometry and its rigid bounds (the old fit box: what resizes keep an end of)
+pub fn piece_geom(p: &super::state::PieceRef) -> (ObjGeom, (V3, V3)) {
+    let vols = p.collision();
+    (crate::piece::solver_geom(&vols, PIECE_BOXES), crate::piece::rigid_bounds(&vols))
 }
 
 fn sample_rand_placeholder_box(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
@@ -325,10 +343,10 @@ fn sample_rand_placeholder_box(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
             let (lo, hi) = super::sizes::target_box(geom.lo, geom.hi, x);
             geom = crate::api::box_from_corners_geom(lo, hi);
             fit_box = Some((lo, hi));
-            if m.exact { return Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: None, fit_box, size: Some(x), join: None })); }
+            if m.exact { return Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: None, fit_box, size: Some(x), join: None, piece: None })); }
         }
     }
-    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box, size: exact_size, join: None }))
+    Some((geom, super::state::GenRef { class: class.to_string(), factory_seed: fac_seed, inst_seed, unseeded: if class == "BedFactory" { crate::ctor_draws::unseeded() } else { None }, fit_box, size: exact_size, join: None, piece: None }))
 }
 
 /// set a sized piece's width to `w_new` keeping one end fixed: `side` = +1 moves the +y end (local), -1 the -y end. Rebuilds the
@@ -353,7 +371,7 @@ pub fn set_size(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, x
         let (n, p) = state.plane_nd(name, i);
         Some((n, dot(n, p)))
     }).collect();
-    let Some((ng, fb)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
+    let Some((ng, fb, np)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
     let far_old = if side > 0.0 { lo[1] } else { hi[1] };
     let far_new = if side > 0.0 { fb.0[1] } else { fb.1[1] };
     let shift = far_old - far_new;
@@ -361,6 +379,7 @@ pub fn set_size(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, x
     *oo = base.clone();
     oo.geom = Arc::new(ng);
     oo.generator.as_mut().unwrap().fit_box = Some(fb);
+    if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
     if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
     let mut p = oo.pose;
     p.translate([base.pose.r[0][1] * shift, base.pose.r[1][1] * shift, base.pose.r[2][1] * shift]);
@@ -417,7 +436,7 @@ pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -
             let mut try_ext = |state: &mut State, ctx: &mut Ctx, e: f64| -> bool {
                 let g0 = base.generator.as_ref().unwrap();
                 let x = [w + e, cs[1], cs[2]];
-                let Some((ng, fb)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
+                let Some((ng, fb, np)) = sized_geom(ctx, &class, g0, m, lo, hi, x) else { return false };
                 // keep the far end: compare the new box's y range with the old one
                 let far_old = if side > 0.0 { lo[1] } else { hi[1] };
                 let far_new = if side > 0.0 { fb.0[1] } else { fb.1[1] };
@@ -426,6 +445,7 @@ pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -
                 *oo = base.clone();
                 oo.geom = Arc::new(ng);
                 oo.generator.as_mut().unwrap().fit_box = Some(fb);
+                if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
                 if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
                 let mut p = oo.pose;
                 p.translate([base.pose.r[0][1] * shift, base.pose.r[1][1] * shift, base.pose.r[2][1] * shift]);
@@ -476,8 +496,12 @@ pub fn cur_size(g: &super::state::GenRef) -> Option<[f64; 3]> {
 
 /// a sized piece's geometry at size `x` (furn::sizes): 'exact' classes rebuild the placeholder at that size, the others are a box placed
 /// like the current one. Returns (geometry, fit box).
-fn sized_geom(ctx: &mut Ctx, class: &str, g: &super::state::GenRef, m: &super::sizes::Model, lo: V3, hi: V3, x: [f64; 3]) -> Option<(ObjGeom, (V3, V3))> {
-    let _ = g;
+fn sized_geom(ctx: &mut Ctx, class: &str, g: &super::state::GenRef, m: &super::sizes::Model, lo: V3, hi: V3, x: [f64; 3]) -> Option<(ObjGeom, (V3, V3), Option<super::state::PieceRef>)> {
+    if let Some(p) = &g.piece {
+        let np = p.resize(x)?;
+        let (geom, fb) = piece_geom(&np);
+        return Some((geom, fb, Some(np)));
+    }
     if m.exact && ctx.usage.has_usage(class, "RealPlaceholder") {
         crate::api::set_size_hint(Some(x));
         let kind = if ctx.usage.has_usage(class, "RealPlaceholder") { PlaceholderKind::Real } else { PlaceholderKind::BboxOfAsset };
@@ -485,13 +509,13 @@ fn sized_geom(ctx: &mut Ctx, class: &str, g: &super::state::GenRef, m: &super::s
         crate::api::set_size_hint(None);
         let ng = ng?;
         let fb = (ng.lo, ng.hi);
-        Some((ng, fb))
+        Some((ng, fb, None))
     } else {
         let (nlo, nhi) = super::sizes::target_box(lo, hi, x);
         let mut g1 = g.clone();
         g1.fit_box = Some((nlo, nhi));
         if m.exact { g1.size = Some(x); }
-        Some((real_layout(ctx, &g1).unwrap_or_else(|| crate::api::box_from_corners_geom(nlo, nhi)), (nlo, nhi)))
+        Some((real_layout(ctx, &g1).unwrap_or_else(|| crate::api::box_from_corners_geom(nlo, nhi)), (nlo, nhi), None))
     }
 }
 
@@ -525,10 +549,11 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
                         let Some(mut x) = cur_size(&g0) else { break };
                         if x[0] <= m.min[0] + 1e-6 { break }
                         x[0] = (x[0] * 0.75).max(m.min[0]);
-                        let Some((ng, fb)) = sized_geom(ctx, class, &g0, m, lo, hi, x) else { break };
+                        let Some((ng, fb, np)) = sized_geom(ctx, class, &g0, m, lo, hi, x) else { break };
                         let oo = state.objs.get_mut(name.as_str()).unwrap();
                         oo.geom = Arc::new(ng);
                         oo.generator.as_mut().unwrap().fit_box = Some(fb);
+                        if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
                         if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
                         oo.pose = Pose::identity();
                         state.touch(name);
@@ -598,11 +623,14 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
                     let mut g1 = o.generator.clone().unwrap();
                     g1.fit_box = Some((nlo, nhi));
                     if m.exact { g1.size = Some(x); }
-                    let ng = real_layout(ctx, &g1).unwrap_or_else(|| crate::api::box_from_corners_geom(nlo, nhi));
+                    // (a piece: resized, its own geometry and bounds)
+                    let np = g1.piece.as_ref().and_then(|p| p.resize(x));
+                    let (ng, fb) = match &np { Some(p) => piece_geom(p), None => (real_layout(ctx, &g1).unwrap_or_else(|| crate::api::box_from_corners_geom(nlo, nhi)), (nlo, nhi)) };
                     *old = Some((o, b));
                     let oo = state.objs.get_mut(name.as_str()).unwrap();
                     oo.geom = Arc::new(ng);
-                    oo.generator.as_mut().unwrap().fit_box = Some((nlo, nhi));
+                    oo.generator.as_mut().unwrap().fit_box = Some(fb);
+                    if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
                     if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
                     state.touch(name);
                     return check_post_move_validity(state, name);

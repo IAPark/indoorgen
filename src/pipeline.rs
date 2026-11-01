@@ -288,7 +288,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         tags.insert(Tag::sem(pf.class));
         let mut o = ObjState::new(Arc::new(pf.asset.solver_geom()), pf.pose(), tags);
         o.relations.push(crate::furn::state::RelState { relation: crate::furn::relations::Relation::Traverse, target: pf.room.clone(), child_plane: 0, parent_plane: 0 });
-        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None, size: None, join: None });
+        o.generator = Some(GenRef { class: pf.class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: None, size: None, join: None, piece: None });
         o.active = true;
         state.objs.insert(pf.key.clone(), o);
         state.touch(&pf.key);
@@ -518,7 +518,10 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
             let w = Pose::from_o32(ob).o.matrix_world();
             ob.set_matrix_world(&w);
             o.pose = Pose::from_o32(ob);
-            if let Some(geom) = ctx.populated.get(&(g.class.clone(), g.factory_seed, g.inst_seed)) {
+            if let Some(p) = &g.piece {
+                // (a piece: its own volumes, unmerged -- items go on its boards)
+                o.geom = Arc::new(ig_kit::piece::solver_geom(&p.collision(), usize::MAX));
+            } else if let Some(geom) = ctx.populated.get(&(g.class.clone(), g.factory_seed, g.inst_seed)) {
                 o.geom = Arc::new(geom.clone());
             } else if let Some(geom) = {
                 // 'exact' classes (kitchen cabinets) build to the chosen size

@@ -130,7 +130,16 @@ fn obj_r(v: &Value) -> ObjState {
         fit_box: g["fit"].as_array().map(|a| (v3(&a[0]), v3(&a[1]))),
         size: g["size"].as_array().map(|_| v3(&g["size"])),
         join: g["join"].as_array().map(|a| [f(&a[0]), f(&a[1]), f(&a[2]), f(&a[3])]),
+        piece: None,
     });
+    // a piece again from its class and seed, at the size it was saved at
+    if let Some(g) = o.generator.as_mut() {
+        if let Some(p) = ig_kit::piece::make_piece(&g.class, g.factory_seed) {
+            let p = crate::furn::state::PieceRef::new(p);
+            let p = match g.size { Some(x) if (0..3).any(|k| (p.size()[k] - x[k]).abs() > 1e-6) => p.resize(x).unwrap_or(p), _ => p };
+            g.piece = Some(p);
+        }
+    }
     o.relations = v["rels"].as_array().unwrap().iter().map(|r| RelState { relation: rel_r(&r["rel"]), target: r["target"].as_str().unwrap().into(), child_plane: r["cp"].as_u64().unwrap() as usize, parent_plane: r["pp"].as_u64().unwrap() as usize }).collect();
     o.dof_t = v["dof_t"].as_array().map(|a| [v3(&a[0]), v3(&a[1]), v3(&a[2])]);
     o.dof_r = v["dof_r"].as_array().map(|_| v3(&v["dof_r"]));

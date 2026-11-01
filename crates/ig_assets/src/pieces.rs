@@ -18,10 +18,34 @@ pub fn install_pieces() {
     ig_kit::piece::install(make_piece);
 }
 
+/// classes the solver takes as pieces while the port runs: the ones already laid out by their real parts; the rest stay on the old
+/// path (a box and a rebuilt factory) until their collision is ported -- the wrapper's layout build per proposal is slow for small
+/// items. colcheck covers every class either way (`wrapped_piece`).
+const WRAPPED: &[&str] = &["SofaFactory", "ArmChairFactory", "ChairFactory", "BarChairFactory", "OfficeChairFactory", "TableDiningFactory", "CoffeeTableFactory",
+    "SideTableFactory", "TableCocktailFactory", "SimpleDeskFactory", "BedFactory", "WardrobeFactory", "SimpleBookcaseFactory", "LargeShelfFactory", "CellShelfFactory",
+    "TVStandFactory", "FridgeFactory", "ShowerFactory", "FloorLampFactory", "BookStackFactory"];
+
 pub fn make_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
+    if let Some(p) = native_piece(class, seed) { return Some(p) }
+    if !WRAPPED.contains(&class) { return None }
+    wrapped_piece(class, seed)
+}
+
+/// the natively ported classes (their own collision from parameters)
+fn native_piece(_class: &str, _seed: u64) -> Option<Box<dyn Piece>> {
+    None
+}
+
+/// any class with a factory as a wrapped piece (colcheck checks every class this way until it is ported)
+pub fn wrapped_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
     if NOT_YET.contains(&class) { return None }
     crate::make_factory(class, seed)?;
     Some(Box::new(FactoryPiece::new(class, seed, None)))
+}
+
+/// what colcheck checks: the class's native piece, else its wrapped one
+pub fn any_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
+    native_piece(class, seed).or_else(|| wrapped_piece(class, seed))
 }
 
 pub struct FactoryPiece {

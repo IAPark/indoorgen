@@ -2086,6 +2086,11 @@ pub fn rugs(state: &mut State) -> Vec<String> {
             let o = state.objs.get_mut(&rug).unwrap();
             o.geom = std::sync::Arc::new(super::geom::ObjGeom::cuboid([-d / 2.0, -w / 2.0, lo[2]], [d / 2.0, w / 2.0, lo[2] + t], 0));
             if let Some(g) = o.generator.as_mut() { g.size = Some([w, d, t]); g.fit_box = None; }
+            // (a piece: resized to the rug's size, its own geometry)
+            if let Some(np) = o.generator.as_ref().and_then(|g| g.piece.as_ref()).and_then(|p| p.resize([w, d, t])) {
+                o.geom = std::sync::Arc::new(super::solver::piece_geom(&np).0);
+                o.generator.as_mut().unwrap().piece = Some(np);
+            }
             if round > 0.5 { o.tags.insert(Tag::sem("RoundTable")); }
             state.touch(&rug);
             let (l2, h2) = lohi(state, &rug);
