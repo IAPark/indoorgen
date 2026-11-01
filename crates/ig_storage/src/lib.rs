@@ -26,6 +26,7 @@ pub mod bathtub;
 pub mod bevelgn;
 pub mod cabdoor;
 pub mod console;
+pub mod desk;
 pub mod cookware;
 pub mod fridge;
 pub mod gasgrate;

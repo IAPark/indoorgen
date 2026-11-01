@@ -1262,7 +1262,12 @@ pub fn make(c: &str, rng: &mut Rng, factory_seed: u64) -> Option<Box<dyn Factory
             let mut pick = Rng::seeded(crate::int_hash(&["media_console", &seed.to_string()]));
             if std::env::var_os("NO_CONSOLE").is_none() && pick.f64() < 0.6 { Box::new(super::console::MediaConsole::new(&mut rng.clone())) } else { Box::new(CellShelf::new(rng, true, seed)) }
         }
-        "SimpleDeskFactory" => Box::new(SimpleDesk::new(rng, false, factory_seed)),
+        // 55 % of desks are ModernDesk (pedestals, panel / trestle / A-frame / sled bases), the rest infinigen's; its own stream
+        // (NO_MODERN_DESK=1: off)
+        "SimpleDeskFactory" => {
+            let mut pick = Rng::seeded(crate::int_hash(&["modern_desk", &seed.to_string()]));
+            if std::env::var_os("NO_MODERN_DESK").is_none() && pick.f64() < 0.55 { Box::new(super::desk::ModernDesk::new(&mut rng.clone())) } else { Box::new(SimpleDesk::new(rng, false, factory_seed)) }
+        }
         "SidetableDeskFactory" => Box::new(SimpleDesk::new(rng, true, factory_seed)),
         "SingleCabinetFactory" => Box::new(SingleCabinet::new(rng, factory_seed)),
         "KitchenCabinetFactory" => Box::new(KitchenCabinet { fseed: Some(factory_seed), ..KitchenCabinet::with_dims(rng, None) }),

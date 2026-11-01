@@ -109,7 +109,17 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
                 // on the slab beside the opening, toward its outer end, clear of the breast face
                 let (zx0, zx1) = (h.0[0] + 0.03, h.1[0] - 0.03);
                 let (zy0, zy1) = (h.0[1].max(depth_b * 0.0), h.1[1]);
-                if zx1 - zx0 >= 2.0 * rad && zy1 - zy0 >= 2.0 * rad * 0.9 { spots.push([if left { zx0 + rad } else { zx1 - rad }, (zy0 + zy1) / 2.0, h.1[2]]); }
+                if zx1 - zx0 >= 2.0 * rad && zy1 - zy0 >= 2.0 * rad * 0.9 {
+                    let (sx, sy) = (if left { zx0 + rad } else { zx1 - rad }, (zy0 + zy1) / 2.0);
+                    // the slab's mesh top under the footprint (its support box lay 1 cm under a bevelled top: the stand's base sank)
+                    let mut zt = h.1[2];
+                    for p in &pf.asset.parts { for f in &p.mesh.faces {
+                        let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]);
+                        for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } }
+                        if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt && u[2] < h.1[2] + 0.03 { zt = u[2]; }
+                    }}
+                    spots.push([sx, sy, zt]);
+                }
             }
             // floor beside the breast, against the wall-side of the room
             let fxp = if left { breast[0] - rad - 0.06 } else { breast[1] + rad + 0.06 };
