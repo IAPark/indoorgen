@@ -342,7 +342,8 @@ pub fn coffee_tables(state: &mut State) -> Vec<String> {
         let mut cand = t.clone(); cand.pose = np;
         let b = wbox(&cand);
         let kids: Vec<String> = state.objs.iter().filter(|(_, o)| o.relations.iter().any(|x| x.target == tk)).map(|(k, _)| k.clone()).collect();
-        let blocked = state.objs.iter().any(|(k, o)| *k != tk && !kids.contains(k) && o.generator.is_some() && !cls(o).contains("Rug") && {
+        // (the door keep-outs too: a table set out from the sofa stood 19 cm into a doorway's passage)
+        let blocked = state.objs.iter().any(|(k, o)| *k != tk && !kids.contains(k) && (o.generator.is_some() || k.starts_with("doorclear/")) && !cls(o).contains("Rug") && {
             let ob = wbox(o); (0..2).all(|d| b.0[d] < ob.1[d] - 0.01 && ob.0[d] < b.1[d] - 0.01) && b.0[2] < ob.1[2] && ob.0[2] < b.1[2]
         });
         let inside = state.objs.get(&room).and_then(|r| r.polygon.clone()).map_or(true, |pg| [[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.0[0], b.1[1]], [b.1[0], b.1[1]]].iter().all(|q| crate::shp::contains_pt(&pg, *q)));
