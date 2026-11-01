@@ -28,6 +28,8 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             (z - 0.03, z + 0.02)
         };
         let mut occ = Occ::from_scene(scene, &[format!("{k}#")]);
+        // (clear of a window over the cistern: a spare roll stood 9 cm into the glass's zone)
+        occ.add_window_zones(scene);
         // items: (asset, scale)
         let toiletry = |r: &mut Rng| { let b = assets.visual("BottleFactory", r.next_u64() % 1_000_000, 0); let h = dims(&b).2.max(0.05); let s = (r.uniform(0.12, 0.22) / h).min(1.0); (b, s) };
         let items: Vec<(crate::assets::Asset, f64, &'static str)> = match kind {

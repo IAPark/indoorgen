@@ -703,7 +703,10 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         walls.sort_by(|x, y| (!runs_along(&x.1, &x.2), x.0).partial_cmp(&(!runs_along(&y.1, &y.2), y.0)).unwrap());
         let w0 = ct.dims[0];
         let sill = ct.loc[2] - ct.dims[2] / 2.0;
-        let margin = c.wall_thickness / 2.0 + 0.35;
+        // 35 cm of wall beside the frame, down to 15 cm at a cost (a bedroom's one outside wall, 3 m with a 2 m wardrobe on it, had
+        // 0.51 m clear: its window went behind the wardrobe)
+        let margin_pref = c.wall_thickness / 2.0 + 0.35;
+        let margin = c.wall_thickness / 2.0 + 0.15;
         // best over walls x widths x positions: penalty for what stands against the wall, a little for narrowing the window and for
         // leaving its own wall / spot
         let mut best: Option<(f64, Cutter)> = None;
@@ -821,7 +824,8 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                         // (0.45 m of glass over a headboard: a tall one left a small bedroom's window only the stretch behind its wardrobe)
                         let over_bed = beds.iter().any(|(s0, s1)| x0 < *s1 && *s0 < x1);
                         if head - need < if over_bed { 0.45 } else { 0.6 } { continue }
-                        let score = over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 } + street;
+                        let near_end = 4.0 * (margin_pref - x0.min(len - x1)).max(0.0);
+                        let score = -near_end + over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 } + street;
                         let over_alc: Vec<&(f64, f64, f64, String)> = alcs.iter().filter(|(s0, s1, _, _)| x0 < *s1 && *s0 < x1).collect();
                         let pen_alc: f64 = over_alc.iter().map(|(s0, s1, wt, _)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
                         let mut alc_keys: Vec<String> = over_alc.iter().map(|x| x.3.clone()).collect();
