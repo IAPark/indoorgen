@@ -24,6 +24,8 @@ pub struct Wardrobe {
     plinth: f64,
     contrast_doors: bool,
     seed: u64,
+    /// built to the solver's size: handles, shaker frames and cornice keep inside its depth
+    hinted: bool,
 }
 
 const GAP: f64 = 0.003;
@@ -44,6 +46,7 @@ impl Wardrobe {
         let mut depth = r.uniform(0.55, 0.63);
         let mut height = r.uniform(1.9, 2.25);
         // the solver's chosen size (furn::sizes 'exact', built-ins fill their wall span): door count follows the width
+        let hinted = crate::api::size_hint().is_some();
         if let Some(h) = crate::api::size_hint() {
             (width, depth, height) = (h[0], h[1], h[2]);
             if !sliding {
@@ -61,13 +64,14 @@ impl Wardrobe {
             plinth: r.uniform(0.04, 0.1),
             contrast_doors: r.f64() < 0.2,
             seed: r.randint(0, 1_000_000) as u64,
+            hinted,
         }
     }
 
-    fn build(&self) -> Asset {
+    fn build(&self, d: f64) -> Asset {
         let mut a = Asset::default();
         let mut r = Rng::seeded(self.seed);
-        let (d, w, p) = (self.depth, self.width, self.plinth);
+        let (w, p) = (self.width, self.plinth);
         let s = self.seed;
         // base and top from their own stream: 30 % stand on tapered legs (the carcass raised to at least 11 cm), 25 % have a stepped
         // cornice over the doors, proud at the front only (the width stays the layout box's); NO_WARDROBE_STYLES=1: neither
@@ -318,7 +322,12 @@ impl Factory for Wardrobe {
         Some(([0.0, 0.0, 0.0], [self.depth + 0.045, self.width, self.height]))
     }
     fn asset(&self, _i: u64) -> Asset {
-        self.build()
+        let a = self.build(self.depth);
+        // to the solver's size: what stands proud of the doors (handles up to 4.5 cm, a cornice) went past the layout box, and a
+        // wardrobe's handles stood 1.6 cm into the bed beside it (923) -- the same wardrobe again, its carcass shallower by that much
+        // (only what lies within 10 cm of the front: an open bay's door swung out reaches half a metre past it)
+        let over = a.parts.iter().map(|p| p.mesh.bounds().1[0]).filter(|x| *x < self.depth + 0.1).fold(self.depth, f64::max) - self.depth;
+        if self.hinted && over > 0.002 { self.build(self.depth - over) } else { a }
     }
 }
 
