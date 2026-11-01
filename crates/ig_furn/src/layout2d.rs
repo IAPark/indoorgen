@@ -9,6 +9,7 @@
 //!   * hallways: floor pieces at most 0.45 m deep.
 //! and `extra_loss` adds the living-room grouping terms (sofa facing the TV stand at 2-4 m, armchairs turned to the coffee table).
 use super::state::*;
+use super::geom::{ROLE_HARD, ROLE_OPEN};
 use super::tags::{Tag, TagSet};
 use crate::dhash::HashMap;
 use crate::shp;
@@ -79,6 +80,8 @@ pub struct Prism {
     pub poly: Vec<[f64; 2]>,
     pub z: [f64; 2],
     pub bb: [f64; 4],
+    /// ROLE_* of the proxy it projects
+    pub role: u8,
 }
 
 thread_local! {
@@ -145,7 +148,7 @@ pub fn prisms(state: &State, name: &str) -> Arc<Vec<Prism>> {
             continue;
         }
         let bb = bbox(&poly);
-        out.push(Prism { poly, z: [z0, z1], bb });
+        out.push(Prism { poly, z: [z0, z1], bb, role: px.role });
     }
     let arc = Arc::new(out);
     PRISMS.with(|c| c.borrow_mut().insert(name.to_string(), (o.version, arc.clone())));
@@ -226,6 +229,7 @@ pub fn depth(state: &State, a: &str, b: &str) -> f64 {
     let mut best = 0.0f64;
     for x in pa.iter() {
         for y in pb.iter() {
+            if (x.role | y.role) != ROLE_HARD && !super::col::roles_collide(state, a, x.role, b, y.role) { continue }
             best = best.max(prism_depth(x, y));
         }
     }
@@ -236,8 +240,9 @@ pub fn depth(state: &State, a: &str, b: &str) -> f64 {
 pub fn dist(state: &State, a: &str, b: &str) -> f64 {
     let (pa, pb) = (prisms(state, a), prisms(state, b));
     let mut best = f64::INFINITY;
-    for x in pa.iter() {
-        for y in pb.iter() {
+    // (the rigid parts: a drape or a door's swing is no part of where a piece stands)
+    for x in pa.iter().filter(|p| p.role == ROLE_HARD) {
+        for y in pb.iter().filter(|p| p.role == ROLE_HARD) {
             best = best.min(prism_dist(x, y));
         }
     }
@@ -418,7 +423,8 @@ pub fn floor_foot(state: &State, name: &str) -> Option<Vec<Vec<[f64; 2]>>> {
     if !(z0 < 0.25) {
         return None;
     }
-    Some(ps.iter().filter(|p| p.z[0] < 1.2).map(|p| p.poly.clone()).collect())
+    // (a door's swing is passable: walkways may cross it)
+    Some(ps.iter().filter(|p| p.z[0] < 1.2 && p.role != ROLE_OPEN).map(|p| p.poly.clone()).collect())
 }
 
 fn polys_g(ps: &[Vec<[f64; 2]>]) -> Vec<shp::G> {
@@ -652,7 +658,7 @@ pub fn prism_of(w: &[crate::mesh::V3]) -> Prism {
     let z1 = w.iter().map(|c| c[2]).fold(f64::NEG_INFINITY, f64::max);
     let poly = hull(w.iter().map(|c| [c[0], c[1]]).collect());
     let bb = bbox(&poly);
-    Prism { poly, z: [z0, z1], bb }
+    Prism { poly, z: [z0, z1], bb, role: ROLE_HARD }
 }
 
 /// prisms of an object outside a State (proxy boxes / hulls under its pose)

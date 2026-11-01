@@ -16,7 +16,28 @@ pub struct ProxyShape {
     pub aabb: Aabb,
     pub class: u32,
     pub corners: Vec<V3>, // world-space points (for containment tests)
+    /// ROLE_*
+    pub role: u8,
 }
+
+/// do proxy `ra` of object `a` and proxy `rb` of object `b` collide by their roles? Hard against hard always; a soft volume (drape,
+/// foliage) only against the room's structure (walls, doors, door clearances: objects without a generator); openings (door swings,
+/// drawer pull-outs, door clearances) never against each other, against hard parts unless one object stands on or in the other
+pub fn roles_collide(state: &State, a: &str, ra: u8, b: &str, rb: u8) -> bool {
+    // (a door clearance is an opening: a cabinet's door may swing over it)
+    let ra = if a.starts_with("doorclear/") { ROLE_OPEN } else { ra };
+    let rb = if b.starts_with("doorclear/") { ROLE_OPEN } else { rb };
+    match (ra, rb) {
+        (ROLE_HARD, ROLE_HARD) => true,
+        (ROLE_SOFT, _) => state.objs[b].generator.is_none(),
+        (_, ROLE_SOFT) => state.objs[a].generator.is_none(),
+        (ROLE_OPEN, ROLE_OPEN) => false,
+        _ => !(state.objs[a].relations.iter().any(|r| r.target == b) || state.objs[b].relations.iter().any(|r| r.target == a)),
+    }
+}
+
+/// the role of an object's proxy `i`
+pub fn proxy_role(_name: &str, o: &ObjState, i: usize) -> u8 { o.geom.role(i) }
 
 thread_local! {
     static CACHE: std::cell::RefCell<HashMap<String, (u64, Arc<Vec<ProxyShape>>)>> = std::cell::RefCell::new(HashMap::default());
@@ -30,7 +51,8 @@ pub fn proxies(state: &State, name: &str) -> Arc<Vec<ProxyShape>> {
         return p;
     }
     let mut out = vec![];
-    for (p, class) in &o.geom.proxies {
+    for (pi, (p, class)) in o.geom.proxies.iter().enumerate() {
+        let role = proxy_role(name, o, pi);
         let shape = parry_shape(p);
         let iso = proxy_pose(p, &o.pose);
         let aabb = shape.compute_aabb(&iso);
@@ -48,7 +70,7 @@ pub fn proxies(state: &State, name: &str) -> Arc<Vec<ProxyShape>> {
             }
             Proxy::Hull(pts) => pts.iter().map(|p| o.pose.apply(*p)).collect(),
         };
-        out.push(ProxyShape { shape, iso, aabb, class: *class, corners });
+        out.push(ProxyShape { shape, iso, aabb, class: *class, corners, role });
     }
     let arc = Arc::new(out);
     CACHE.with(|c| c.borrow_mut().insert(name.to_string(), (o.version, arc.clone())));
@@ -76,7 +98,7 @@ pub fn depth(state: &State, a: &str, b: &str) -> f64 {
     let mut best = 0.0f64;
     for x in pa.iter() {
         for y in pb.iter() {
-            if !x.aabb.intersects(&y.aabb) {
+            if !x.aabb.intersects(&y.aabb) || ((x.role | y.role) != ROLE_HARD && !roles_collide(state, a, x.role, b, y.role)) {
                 continue;
             }
             if let Ok(Some(c)) = query::contact(&x.iso, x.shape.as_ref(), &y.iso, y.shape.as_ref(), 0.0) {
