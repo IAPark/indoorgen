@@ -22,6 +22,7 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
         let mut skip = vec![format!("{k}#")];
         skip.extend(beds);
         let mut occ = Occ::from_scene(scene, &skip);
+        occ.add_window_zones(scene);
         let mut items: Vec<(&str, f64, f64)> = vec![];
         // local frame: the back is -x (the nightstand faces +x like the bed), across is y
         if !has_lamp { items.push(("DeskLampFactory", 0.35, if r.f64() < 0.5 { 0.35 } else { 0.65 })); }
@@ -33,13 +34,19 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             let top_w = (hi[0] - lo[0]).min(hi[1] - lo[1]);
             let sc = ((top_w * 0.45) / dx.max(dy).max(0.05)).min(1.0);
             let rad = 0.5 * dx.max(dy) * sc;
-            let (x, y) = (lo[0] + (hi[0] - lo[0]) * fx, lo[1] + (hi[1] - lo[1]) * fy);
             let dbg = std::env::var_os("DRESSDBG").is_some();
-            let Some(zt) = level_spot(&tris, x, y, rad.min(0.08), band, (dz * sc).min(0.6), None) else { if dbg { eprintln!("DRESSDBG nightstand {k} {cls}: no level spot (dims {dx:.2} {dy:.2} {dz:.2} sc {sc:.2})") } continue };
-            let at = o.pose.apply([x, y, zt]);
             let yaw = o.pose.r[1][0].atan2(o.pose.r[0][0]) + r.uniform(-0.4, 0.4);
-            let b = box_at(&item, at, yaw, sc);
-            if !occ.free(&b) { if dbg { eprintln!("DRESSDBG nightstand {k} {cls}: blocked (dims {dx:.2} {dy:.2} {dz:.2} sc {sc:.2})") } continue }
+            // the planned spot, then the other side and further forward (a window beside the bed takes the back corner on its side)
+            let tries = [(*fx, *fy), (*fx, 1.0 - fy), (fx + 0.2, *fy), (fx + 0.2, 1.0 - fy)];
+            let mut found = None;
+            for (tx, ty) in tries {
+                let (x, y) = (lo[0] + (hi[0] - lo[0]) * tx, lo[1] + (hi[1] - lo[1]) * ty);
+                let Some(zt) = level_spot(&tris, x, y, rad.min(0.08), band, (dz * sc).min(0.6), None) else { continue };
+                let at = o.pose.apply([x, y, zt]);
+                let b = box_at(&item, at, yaw, sc);
+                if occ.free(&b) { found = Some(at); break }
+            }
+            let Some(at) = found else { if dbg { eprintln!("DRESSDBG nightstand {k} {cls}: no free level spot (dims {dx:.2} {dy:.2} {dz:.2} sc {sc:.2})") } continue };
             let bb = place(scene, &format!("dress_nightstand_{}_{i}", k.replace('/', "_")), cls, &item, at, yaw, sc);
             occ.boxes.push(bb);
             n += 1;

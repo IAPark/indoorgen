@@ -14,4 +14,3 @@ web-time = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { version = "0.8", features = ["preserve_order"] }
-geos = { workspace = true }

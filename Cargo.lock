@@ -1244,7 +1244,6 @@ dependencies = [
 name = "ig_outdoor"
 version = "0.1.0"
 dependencies = [
- "geos",
  "ig_core",
  "ig_plants",
  "ig_rooms",

@@ -31,6 +31,7 @@ pub struct Built {
 }
 
 /// the outdoor stage's inputs as JSON (Built::house)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn house_record(seed: u64, polys: &[(String, indoorgen::shp::G)], cutters: &[indoorgen::rooms::solidify::Cutter], c: &indoorgen::rooms::consts::RoomConstants) -> serde_json::Value {
     use geos::Geom;
     serde_json::json!({
@@ -40,7 +41,12 @@ pub fn house_record(seed: u64, polys: &[(String, indoorgen::shp::G)], cutters: &
     })
 }
 
+/// (browser build: no WKT, the record is empty -- --outdoor-only is a native tool)
+#[cfg(target_arch = "wasm32")]
+pub fn house_record(_seed: u64, _polys: &[(String, indoorgen::shp::G)], _cutters: &[indoorgen::rooms::solidify::Cutter], _c: &indoorgen::rooms::consts::RoomConstants) -> serde_json::Value { serde_json::Value::Null }
+
 /// inverse of house_record: (seed, rooms, cutters, wall thickness, wall height)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn house_inputs(j: &serde_json::Value) -> (u64, Vec<(String, indoorgen::shp::G)>, Vec<indoorgen::rooms::solidify::Cutter>, f64, f64) {
     use indoorgen::rooms::solidify::{CutKind, Cutter, DoorStyle};
     let rooms = j["rooms"].as_array().map(|a| a.iter().filter_map(|r| Some((r[0].as_str()?.to_string(), geos::Geometry::new_from_wkt(r[1].as_str()?).ok()?))).collect()).unwrap_or_default();

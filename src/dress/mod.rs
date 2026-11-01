@@ -162,6 +162,19 @@ impl Occ {
         let ns: Vec<&crate::mesh::Node> = scene.nodes.iter().filter(|n| n.class != "room" && n.class != "Window" && !n.name.starts_with("skirting") && !n.mesh.is_empty() && !skip_prefix.iter().any(|p| n.name.starts_with(p.as_str()))).collect();
         Occ { boxes: ns.iter().map(|n| n.mesh.bounds()).collect(), names: ns.iter().map(|n| n.name.clone()).collect() }
     }
+    /// keep-outs in front of every window's glass (the QC's window zone: ~0.12 m into the room plus the wall's half thickness, over the
+    /// glass height) -- a bedside lamp on a nightstand by a window stood in it
+    pub fn add_window_zones(&mut self, scene: &Scene) {
+        for n in &scene.nodes {
+            if n.class != "Window" || !n.name.ends_with(".glass") || n.mesh.is_empty() { continue }
+            let (lo, hi) = n.mesh.bounds();
+            // the glass is thin across the wall: grow that axis by 0.2 m each way
+            let thin_x = hi[0] - lo[0] < hi[1] - lo[1];
+            let g = 0.2;
+            let (l, h) = if thin_x { ([lo[0] - g, lo[1], lo[2]], [hi[0] + g, hi[1], hi[2]]) } else { ([lo[0], lo[1] - g, lo[2]], [hi[0], hi[1] + g, hi[2]]) };
+            self.boxes.push((l, h)); self.names.push(format!("{} zone", n.name));
+        }
+    }
     pub fn free(&self, b: &Box3) -> bool {
         match self.boxes.iter().position(|o| overlaps(b, o)) {
             None => true,

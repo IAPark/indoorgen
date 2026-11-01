@@ -622,7 +622,10 @@ impl Scene {
     pub fn write_glb_usdc(&self, path: &std::path::Path, usdc: Option<&std::path::Path>) -> std::io::Result<()> {
         let blobs = self.node_blobs(&Default::default());
         let sidecar = self.write_glb_blobs(|| Ok(std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?)), &blobs)?;
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(u) = usdc { self.write_usdc_blobs(u, &blobs)?; }
+        #[cfg(target_arch = "wasm32")]
+        let _ = usdc;
         if let Some(sp) = path.parent() {
             let _ = std::fs::write(sp.join(format!("{}.json", path.file_stem().unwrap().to_string_lossy())), serde_json::to_vec_pretty(&sidecar).unwrap());
         }
