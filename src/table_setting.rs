@@ -177,7 +177,8 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
             }
         }
         if diag {
-            let (c, rad) = ([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], (hi[0] - lo[0]).min(hi[1] - lo[1]) / 2.0);
+            // (5 cm further out than the edge: a round table on four legs has them under the diagonals, and tucked chairs met them)
+            let (c, rad) = ([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], (hi[0] - lo[0]).min(hi[1] - lo[1]) / 2.0 + 0.05);
             slots = (0..4).map(|k| { let a = std::f64::consts::FRAC_PI_4 + k as f64 * std::f64::consts::FRAC_PI_2; ([c[0] + rad * a.cos(), c[1] + rad * a.sin()], [a.cos(), a.sin()]) }).collect();
             prio = (0..4).map(|k| (0, k % 2)).collect();
         }

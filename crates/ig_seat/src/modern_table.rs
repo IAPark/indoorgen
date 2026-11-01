@@ -27,6 +27,8 @@ pub struct ModernTable {
     leg_r: f64,
     square_legs: bool,
     shelf: bool,
+    /// the slab panels' distance in from the ends (a dining table's: chairs at the ends tucked into flush panels)
+    slab_inset: f64,
     seed: u64,
 }
 
@@ -91,7 +93,8 @@ impl ModernTable {
         let square_legs = r.f64() < 0.35;
         let shelf = !dining && matches!(base, Base::Legs | Base::Splayed) && r.f64() < 0.4;
         let top_t = if base == Base::Slab { r.uniform(0.035, 0.05) } else { r.uniform(0.022, 0.045) };
-        ModernTable { hx, hy, h, sq, top_t, base, leg_r, square_legs, shelf, seed: r.randint(0, 1_000_000) as u64 }
+        let slab_inset = if dining { (hy * 0.3).min(0.28) } else { 0.0 };
+        ModernTable { hx, hy, h, sq, top_t, base, leg_r, square_legs, shelf, slab_inset, seed: r.randint(0, 1_000_000) as u64 }
     }
 
     fn build(&self) -> Asset {
@@ -154,10 +157,12 @@ impl ModernTable {
                 legs.push(foot);
             }
             Base::Slab => {
-                // two solid side panels flush with the top's ends (a waterfall table)
-                let t = tt.max(0.035);
-                legs.push(bx([-hx, -hy, 0.0], [hx, -hy + t, ztop]));
-                legs.push(bx([-hx, hy - t, 0.0], [hx, hy, ztop]));
+                // two solid side panels flush with the top's ends (a waterfall table); a dining table's set in from the ends, where its
+                // end chairs tuck under the top
+                let (t, i) = (tt.max(0.035), self.slab_inset);
+                let px = if i > 0.0 { hx - 0.06 } else { hx };
+                legs.push(bx([-px, -hy + i, 0.0], [px, -hy + i + t, ztop]));
+                legs.push(bx([-px, hy - i - t, 0.0], [px, hy - i, ztop]));
             }
             Base::Drum => {
                 // a solid block / drum under the top, a little inset
