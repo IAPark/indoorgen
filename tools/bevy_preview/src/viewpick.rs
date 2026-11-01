@@ -206,6 +206,25 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
             spots.push(q);
         }
     }
+    // doorway spots: just inside each door of the room, looking in -- how a small bathroom is photographed (its corners stand
+    // against the fixtures: the toilet sliced by the frame's bottom). Only the spot itself must be on the floor (0.3 m back it is
+    // in the doorway)
+    let in_floor = |q: P2| ftris.iter().any(|t| in_tri(t, q));
+    for (di, d) in s.draws.iter().enumerate() {
+        let nm = name(di).to_lowercase();
+        let is_frame = nm.strip_prefix("door").map_or(false, |r| { let dg: String = r.chars().take_while(|c| c.is_ascii_digit()).collect(); !dg.is_empty() && r[dg.len()..].starts_with(".frame") });
+        if !is_frame { continue }
+        let c = (((d.bmin.x + d.bmax.x) / 2.0) as f64, ((d.bmin.y + d.bmax.y) / 2.0) as f64);
+        let n = outline.len();
+        let near_outline = (0..n).any(|i| { let (a, b) = (outline[(i + n - 1) % n], outline[i]); let (ex, ey) = (b.0 - a.0, b.1 - a.1); let l2 = ex * ex + ey * ey; if l2 < 1e-9 { return false } let t = (((c.0 - a.0) * ex + (c.1 - a.1) * ey) / l2).clamp(0.0, 1.0); (a.0 + ex * t - c.0).hypot(a.1 + ey * t - c.1) < 0.4 });
+        if !near_outline { continue }
+        let (dx, dy) = (cen.0 - c.0, cen.1 - c.1); let l = dx.hypot(dy).max(1e-9);
+        for inset in [0.45, 0.7] {
+            let q = (c.0 + dx / l * inset, c.1 + dy / l * inset);
+            if inset >= l - 0.3 || !in_floor(q) || !headroom(q) { continue }
+            spots.push(q);
+        }
+    }
     let fixed = ["wall", "floor", "ceiling", "skirting", "exterior", "entrance", "window", "portal", "door", "frame", "light", "outdoor"];
     let view_score = |q: P2, yaw: f64| -> f64 {
         let (fx, fy) = (cen.0 - q.0, cen.1 - q.1); let l = fx.hypot(fy).max(1e-9);
