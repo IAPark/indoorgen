@@ -58,6 +58,10 @@ impl ModernChair {
         } else {
             spec_material(&format!("chair_frame:{}", self.seed), json!({"cls": frame_cls, "kwargs": {}, "seed": self.seed}), [0.1, 0.1, 0.1])
         };
+        // a quarter of wooden frames painted (charcoal, cream, sage, navy, green, grey; own stream, NO_PAINT=1: off)
+        let frame = if frame_cls == "wood.Wood" && std::env::var_os("NO_PAINT").is_none() && crate::int_hash(&["chair_paint", &self.seed.to_string()]) % 100 < 25 {
+            painted_from(&format!("chair_paint:{}", self.seed), self.seed, [0.4, 0.28, 0.17], &[2, 3, 0, 1, 6, 7])
+        } else { frame };
         let fab = spec_material(&format!("chair_fabric:{}", self.seed), json!({"cls": weighted(&mut r, SEAT_FAB), "kwargs": {}, "seed": self.seed + 1}), [0.5, 0.48, 0.45]);
         let (w, d, sh, bh) = (self.w, self.d, self.seat_h, self.back_h);
         let hw = w / 2.0;
