@@ -75,6 +75,9 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             bulb.emissive_strength = 6.0;
             let bulb_m = scene.material(bulb);
             let on = night || r.f64() < 0.4;
+            // (not where a ceiling light hangs already: a pendant's canopy and shade went into a flush light over the table)
+            let spots: Vec<[f64; 2]> = (0..count).map(|i| { let f = (i as f64 + 0.5) / count as f64; let mut c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]; c[along] = lo[along] + len * (0.2 + 0.6 * f); c }).collect();
+            if spots.iter().any(|c| ceiling_lights.iter().any(|l| (l[0] - c[0]).hypot(l[1] - c[1]) < 0.4 + shade_r)) { continue }
             for i in 0..count {
                 let f = (i as f64 + 0.5) / count as f64;
                 let mut c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];

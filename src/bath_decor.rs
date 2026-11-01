@@ -104,7 +104,11 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                             let s0 = o.pose.apply([wall_x, yc - sw / 2.0 - 0.05, sz - 0.35]); let s1 = o.pose.apply([wall_x + sd + 0.05, yc + sw / 2.0 + 0.05, sz + 0.45]);
                             let (l, h) = ([s0[0].min(s1[0]), s0[1].min(s1[1]), s0[2].min(s1[2])], [s0[0].max(s1[0]), s0[1].max(s1[1]), s0[2].max(s1[2])]);
                             hk != k && (0..3).all(|d| b.0[d] < h[d] && l[d] < b.1[d]) });
-                        if rail_under || !inside(sw) { /* no shelf */ } else {
+                        // (nor over a doorway: a shelf over a cistern beside the door stood 44 cm into its passage)
+                        let in_door = { let s0 = o.pose.apply([wall_x, yc - sw / 2.0, sz]); let s1 = o.pose.apply([wall_x + sd, yc + sw / 2.0, sz + 0.25]);
+                            let (l, h) = ([s0[0].min(s1[0]), s0[1].min(s1[1])], [s0[0].max(s1[0]), s0[1].max(s1[1])]);
+                            state.objs.iter().any(|(dk, d)| dk.starts_with("doorclear/") && { let b = wbox(&d.pose, d.geom.lo, d.geom.hi); (0..2).all(|i| l[i] < b.1[i] && b.0[i] < h[i]) }) };
+                        if rail_under || in_door || !inside(sw) { /* no shelf */ } else {
                         let wood = scene.material(Material::diffuse(&format!("wc_shelf:{k}"), [0.85, 0.83, 0.8], 0.5));
                         scene.add(&format!("wcshelf_{}#0", k.replace('/', "_")), "WallShelfFactory", bx([wall_x, yc - sw / 2.0, sz], [wall_x + sd, yc + sw / 2.0, sz + 0.02], &o.pose), wood);
                         let n = r2.randint(2, 5) as usize;
@@ -134,7 +138,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                     let free = |side: f64| {
                         let wb = wbox(&o.pose, [x - 0.1, side - 0.06, lo[2]], [x + 0.1, side + 0.06, lo[2] + 0.62]);
                         let inside = floor.as_ref().map_or(true, |g| [[wb.0[0], wb.0[1]], [wb.1[0], wb.0[1]], [wb.1[0], wb.1[1]], [wb.0[0], wb.1[1]]].iter().all(|q| crate::shp::contains_pt(g, *q)));
-                        inside && !state.objs.iter().any(|(kk, oo)| kk != k && oo.generator.is_some() && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
+                        // (and clear of the door keep-outs: a stand stood 12 cm into a doorway)
+                        inside && !state.objs.iter().any(|(kk, oo)| kk != k && (oo.generator.is_some() || kk.starts_with("doorclear/")) && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
                     };
                     let mut sides = [lo[1] - 0.14, hi[1] + 0.14];
                     if r2.f64() < 0.5 { sides.swap(0, 1) }
