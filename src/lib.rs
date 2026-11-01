@@ -21,6 +21,8 @@ pub mod features;
 pub mod rules;
 pub mod openings;
 pub mod pipeline;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod snapshot;
 pub mod layout_dump;
 pub mod qc;
 pub mod invariants;

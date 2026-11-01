@@ -374,7 +374,17 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         }
     }
     let mut complaints = vec![];
-    if opt.whole_house {
+    #[cfg(not(target_arch = "wasm32"))]
+    let snap = crate::snapshot::mode();
+    #[cfg(target_arch = "wasm32")]
+    let snap: Option<()> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(crate::snapshot::Mode::Load(p)) = &snap {
+        complaints = crate::snapshot::load(p, &mut state);
+    }
+    let loaded = { #[cfg(not(target_arch = "wasm32"))] { matches!(snap, Some(crate::snapshot::Mode::Load(_))) } #[cfg(target_arch = "wasm32")] { false } };
+    if loaded {
+    } else if opt.whole_house {
         let ((tl, tm, ts), cs) = solve_whole_house(opt, assets, &prog, &usage, &stages, &mut state);
         complaints = cs;
         timings.push(("solve_large".into(), tl));
@@ -388,6 +398,8 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         timings.push(("solve_medium".into(), tm));
         timings.push(("solve_small".into(), ts));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(crate::snapshot::Mode::Save(p)) = &snap { crate::snapshot::save(p, &state, &complaints); }
     // features the room layer moved (a fireplace and its alcove shelves travel with the living-room group): the built asset follows its
     // solver object (span origin / yaw), with its footprint and keep-out boxes moved the same way
     let mut features = features;
