@@ -122,7 +122,18 @@ pub fn union_all(gs: &[G]) -> G {
         return Geometry::create_geometry_collection(vec![]).unwrap();
     }
     let coll = Geometry::create_geometry_collection(gs.to_vec()).unwrap();
-    coll.unary_union().unwrap()
+    if let Ok(u) = coll.unary_union() { return u }
+    // a TopologyException (near-coincident edges, "Ring edge missing"): each piece cleaned (zero buffer), then grown by a hair, then
+    // pairwise, skipping a piece that still will not union (a walkway check panicked on one)
+    for eps in [0.0, 1e-6] {
+        let clean: Vec<G> = gs.iter().filter_map(|g| g.buffer(eps, 8).ok()).collect();
+        if let Ok(c) = Geometry::create_geometry_collection(clean) { if let Ok(u) = c.unary_union() { return u } }
+    }
+    let mut acc = gs[0].buffer(0.0, 8).unwrap_or_else(|_| Clone::clone(&gs[0]));
+    for g in &gs[1..] {
+        if let Ok(u) = acc.union(g) { acc = u } else if let Ok(u) = g.buffer(1e-6, 8).and_then(|b| acc.union(&b)) { acc = u }
+    }
+    acc
 }
 
 pub fn boundary(g: &G) -> G {
