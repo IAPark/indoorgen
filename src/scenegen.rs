@@ -742,6 +742,9 @@ pub fn build_scene(p: &Params) -> Built {
         }
         for k in crate::features::prune_feature_children(&mut g.state, &visuals, &g.features) { eprintln!("FEATURE removed {k} (taller than its shelf)"); }
     }
+    if cfg.post.snap {
+        for (k, s) in indoorgen::snap::untuck_chairs(&mut g.state, &visuals) { eprintln!("UNTUCK {k} drawn back {:.1} cm (arms under the table top)", s * 100.0); }
+    }
     if cfg.post.snap && cfg.post.wall_push {
         let wt = g.c.wall_thickness;
         let inner: Vec<Vec<[f64; 2]>> = g.room_polys.iter().map(|(_, gg)| indoorgen::shp::exterior(&indoorgen::shp::buffer_mitre(gg, -wt / 2.0))).collect();

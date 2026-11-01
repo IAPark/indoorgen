@@ -576,3 +576,53 @@ pub fn push_out_of_walls(state: &mut State, visuals: &HashMap<String, crate::ass
     }
     out
 }
+
+/// Chairs tucked at a table (table_setting: the seat's front under the top) whose built mesh reaches above the top's underside -- arm
+/// rests, a tall seat -- stood with their arms in the table top (907: 1.3 cm; the solver's chair box knows no arms). Each such chair is
+/// drawn back along its own back direction, 5 mm at a time up to 8 cm, until nothing of it above the underside lies under the top.
+pub fn untuck_chairs(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>) -> Vec<(String, f64)> {
+    let is_table = |c: &str| c.contains("Table") && !c.contains("Coffee") && !c.contains("Side");
+    // the top of each table in its own frame: the parts reaching its highest point (xy box, underside z)
+    let local_box = |mesh: &crate::mesh::Mesh| -> ([f64; 3], [f64; 3]) {
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for q in &mesh.pos { for d in 0..3 { lo[d] = lo[d].min(q[d]); hi[d] = hi[d].max(q[d]); } }
+        (lo, hi)
+    };
+    let mut tops: Vec<(String, ([f64; 3], [f64; 3]))> = vec![];
+    for (k, o) in &state.objs {
+        let Some(g) = &o.generator else { continue };
+        if !is_table(&g.class) { continue }
+        let Some(a) = visuals.get(k) else { continue };
+        let boxes: Vec<([f64; 3], [f64; 3])> = a.parts.iter().filter(|p| !p.mesh.pos.is_empty()).map(|p| local_box(&p.mesh)).collect();
+        let zt = boxes.iter().map(|b| b.1[2]).fold(f64::MIN, f64::max);
+        let top: Vec<&([f64; 3], [f64; 3])> = boxes.iter().filter(|b| b.1[2] > zt - 0.005 && b.1[2] - b.0[2] < 0.12).collect();
+        if top.is_empty() { continue }
+        let mut b = ([f64::MAX; 3], [f64::MIN; 3]);
+        for t in top { for d in 0..3 { b.0[d] = b.0[d].min(t.0[d]); b.1[d] = b.1[d].max(t.1[d]); } }
+        tops.push((k.clone(), b));
+    }
+    let to_world = |p: &crate::furn::geom::Pose, q: [f64; 3]| -> [f64; 3] { let r = &p.r; [0, 1, 2].map(|i| r[i][0] * q[0] + r[i][1] * q[1] + r[i][2] * q[2] + p.t[i]) };
+    let to_local = |p: &crate::furn::geom::Pose, w: [f64; 3]| -> [f64; 3] { let r = &p.r; let d = [w[0] - p.t[0], w[1] - p.t[1], w[2] - p.t[2]]; [0, 1, 2].map(|i| r[0][i] * d[0] + r[1][i] * d[1] + r[2][i] * d[2]) };
+    let mut out = vec![];
+    let chairs: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |g| g.class == "ChairFactory") && visuals.contains_key(*k)).map(|(k, _)| k.clone()).collect();
+    for ck in chairs {
+        let cp = state.objs[&ck].pose;
+        let verts: Vec<[f64; 3]> = visuals[&ck].parts.iter().flat_map(|p| p.mesh.pos.iter().map(|q| to_world(&cp, *q))).collect();
+        let back = [-cp.r[0][0], -cp.r[1][0]];
+        let inside = |shift: f64| -> bool {
+            tops.iter().any(|(tk, b)| {
+                let tp = state.objs[tk].pose;
+                verts.iter().any(|v| {
+                    let l = to_local(&tp, [v[0] + back[0] * shift, v[1] + back[1] * shift, v[2]]);
+                    l[2] > b.0[2] + 0.002 && l[2] < b.1[2] && l[0] > b.0[0] + 0.002 && l[0] < b.1[0] - 0.002 && l[1] > b.0[1] + 0.002 && l[1] < b.1[1] - 0.002
+                })
+            })
+        };
+        if !inside(0.0) { continue }
+        let Some(s) = (1..=16).map(|i| i as f64 * 0.005).find(|s| !inside(*s)) else { continue };
+        let mut np = cp; np.translate([back[0] * s, back[1] * s, 0.0]);
+        state.set_pose(&ck, np); state.touch(&ck);
+        out.push((ck, s));
+    }
+    out
+}

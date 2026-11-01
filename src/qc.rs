@@ -416,6 +416,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                         if inside(&nodes[n].mesh, *s) {
                             let d = mesh_dist(&nodes[n].mesh, *s);
                             if d > 0.01 && worst.map_or(true, |w| d > w.0) {
+                                if std::env::var_os("QCDBG").is_some() { eprintln!("QCDBG {} point ({:.3},{:.3},{:.3}) {:.1}cm inside {} part {} box {:.3?}", o.key, s[0], s[1], s[2], d * 100.0, q.key, nodes[n].name, bb[n]); }
                                 worst = Some((d, other));
                             }
                         }
