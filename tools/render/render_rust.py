@@ -795,10 +795,17 @@ def add_haze():
     pts = [o.matrix_world @ mathutils.Vector(c) for o in flo for c in o.bound_box] or [mathutils.Vector((0, 0, 0))]
     cx = (min(p.x for p in pts) + max(p.x for p in pts)) / 2; cy = (min(p.y for p in pts) + max(p.y for p in pts)) / 2
     me = bpy.data.meshes.new("outdoor_haze"); import bmesh; bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=True, segments=64, radius1=2400.0, radius2=2400.0, depth=460.0)
+    # a flattened dome (ellipsoid 2.4 km x 450 m, centred on the ground), not a cylinder: rays leaving a flat top vs the side
+    # switched path length at the rim and drew a hard grey band across the sky
+    bmesh.ops.create_uvsphere(bm, u_segments=96, v_segments=48, radius=1.0)
+    bmesh.ops.scale(bm, vec=(2400.0, 2400.0, 450.0), verts=bm.verts)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.to_mesh(me); bm.free()
-    ob = bpy.data.objects.new("outdoor_haze", me); ob.location = (cx, cy, 180.0); bpy.context.scene.collection.objects.link(ob)
+    ob = bpy.data.objects.new("outdoor_haze", me); ob.location = (cx, cy, 0.0); bpy.context.scene.collection.objects.link(ob)
     m = bpy.data.materials.new("outdoor_haze"); m.use_nodes = True; nt = m.node_tree
+    # constant density: integrated exactly (ray marching stopped at its step limit a few km out and drew an edge across the sky)
+    try: m.cycles.homogeneous_volume = True
+    except Exception: pass
     for n in list(nt.nodes):
         if n.type != "OUTPUT_MATERIAL": nt.nodes.remove(n)
     pv = nt.nodes.new("ShaderNodeVolumePrincipled")
@@ -1040,6 +1047,9 @@ else:
   if args.cam:
     c = json.load(open(args.cam))
     co.matrix_world = mathutils.Matrix(c["matrix"]); cam.lens = c.get("lens", 15); cam.sensor_width = c.get("sensor_width", 36)
+# (far clip: the default 1 km cut camera rays still inside the 450 m haze below ~25 deg up -- a hard grey band across the sky; the
+# terrain reaches 2.5 km and the cloud layer 9 km)
+if sc.camera is not None: sc.camera.data.clip_end = 30000.0
 sc.cycles.film_exposure = args.exposure
 sc.render.engine = "CYCLES"; sc.cycles.samples = args.samples; sc.cycles.device = _DEVICE; sc.cycles.use_denoising = True
 try:  # keep fine texture through the denoiser (default settings smeared walls / fabric into a waxy look)
@@ -1111,6 +1121,7 @@ def apply_weather(sc, side):
     for o in bpy.data.objects:
         if o.type == "MESH" and o.name.startswith(("outdoor_sky", "outdoor_rain")):
             o.visible_shadow = False
+            if os.environ.get("NO_CLOUDS") and o.name.startswith("outdoor_sky"): o.hide_render = True
     if wet > 0:
         done = set()
         for o in bpy.data.objects:
@@ -1124,6 +1135,13 @@ def apply_weather(sc, side):
                     if n.type == "BSDF_PRINCIPLED" and "Coat Weight" in n.inputs and not n.inputs["Coat Weight"].is_linked:
                         n.inputs["Coat Weight"].default_value = 0.8 * wet
                         n.inputs["Coat Roughness"].default_value = 0.05
+    if os.environ.get("VOLDBG"):
+        for o in bpy.data.objects:
+            ms = [sl.material for sl in getattr(o, "material_slots", []) if sl.material and sl.material.use_nodes]
+            if any(n.type in ("PRINCIPLED_VOLUME", "VOLUME_SCATTER", "VOLUME_ABSORPTION") for m in ms for n in m.node_tree.nodes) or "haze" in o.name or "sky" in o.name.lower():
+                print("VOLDBG", o.name, o.type, tuple(round(v, 1) for v in o.location), tuple(round(v, 1) for v in o.dimensions), o.hide_render)
+        wv = sc.world.node_tree.nodes if sc.world and sc.world.use_nodes else []
+        print("VOLDBG world", [n.type for n in wv], "volume linked", any(n.type == "OUTPUT_WORLD" and n.inputs["Volume"].is_linked for n in wv))
     print("WEATHER", wx["state"], "sun", s_sun, "ambient", s_amb, "haze", s_haze, "wet", wet)
 
 
@@ -1156,6 +1174,7 @@ if args.view and (args.view.startswith("outdoor") or args.view in ("street", "ne
             hit = bvh.ray_cast(mathutils.Vector((x, y, 500)), mathutils.Vector((0, 0, -1)))
             if hit[0] is not None: z = hit[0].z
     cam = bpy.data.cameras.new("ocam"); cam.lens = float(os.environ.get("OUT_LENS", 24)); co = bpy.data.objects.new("ocam", cam)
+    cam.clip_end = 30000.0
     sc.collection.objects.link(co); sc.camera = co
     co.location = (x, y, z + 1.7)
     co.rotation_euler = (math.radians(86), 0, -az)
