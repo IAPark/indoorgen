@@ -226,7 +226,10 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         }
     }
     let fixed = ["wall", "floor", "ceiling", "skirting", "exterior", "entrance", "window", "portal", "door", "frame", "light", "outdoor"];
-    let view_score = |q: P2, yaw: f64| -> f64 {
+    // (lens: 18 mm, or 14 mm tried too in rooms under 10 m2 -- a tiny bathroom's spots all had a fixture sliced by the frame)
+    let small_room = area < 10.0;
+    let view_score = |q: P2, yaw: f64, lens: f32| -> f64 {
+        let k = 18.0 / lens;
         let (fx, fy) = (cen.0 - q.0, cen.1 - q.1); let l = fx.hypot(fy).max(1e-9);
         let (c_, s_) = (yaw.cos(), yaw.sin());
         let (ux, uy) = ((fx * c_ - fy * s_) / l, (fx * s_ + fy * c_) / l);
@@ -239,7 +242,7 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         let mut slab: HashMap<String, usize> = HashMap::new();
         for i in 0..24 {
             for j in 0..14 {
-                let d = (fwd + right * (((i as f32 + 0.5) / 24.0) * 2.0 - 1.0) + up * ((((j as f32 + 0.5) / 14.0) * 2.0 - 1.0) * 0.5625)).normalize();
+                let d = (fwd + right * ((((i as f32 + 0.5) / 24.0) * 2.0 - 1.0) * k) + up * ((((j as f32 + 0.5) / 14.0) * 2.0 - 1.0) * 0.5625 * k)).normalize();
                 nr += 1;
                 let Some((t, nrm, di)) = bvh.cast(o, d, 8.0) else { continue };
                 let nm = name(di); let nl = nm.to_lowercase();
@@ -265,9 +268,12 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         let slabs: f64 = slab.values().map(|&c| (c as f64 / nr as f64 - 0.18).max(0.0)).sum();
         2.0 * (cols.len() as f64 - cut) + 30.0 * furn as f64 / n - 50.0 * near as f64 / n - 60.0 * leaf as f64 / n - 3.0 * cut - 4.0 * clutter - 40.0 * slabs - 25.0 * wall as f64 / n
     };
+    let lenses: &[f32] = if small_room { &[18.0, 14.0] } else { &[18.0] };
+    let mut lens_of: Vec<f32> = vec![];
     let mut views: Vec<(f64, f64, P2)> = spots.iter().map(|&q| {
-        let (sv, yaw) = (-16..=16).map(|k| { let y = (2.5 * k as f64).to_radians(); (view_score(q, y), y) })
-            .fold((f64::MIN, 0.0f64), |b, x| if x.0 > b.0 || (x.0 == b.0 && x.1.abs() < b.1.abs()) { x } else { b });
+        let (sv, yaw, ln) = lenses.iter().flat_map(|&ln| (-16..=16).map(move |k| (k, ln))).map(|(k, ln)| { let y = (2.5 * k as f64).to_radians(); (view_score(q, y, ln), y, ln) })
+            .fold((f64::MIN, 0.0f64, 18.0f32), |b, x| if x.0 > b.0 || (x.0 == b.0 && x.1.abs() < b.1.abs()) { x } else { b });
+        lens_of.push(ln);
         (sv, yaw, q)
     }).collect();
     if views.is_empty() { eprintln!("viewpick: no usable spot in {room}"); return None }
@@ -287,11 +293,12 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         };
         pick = order.iter().skip(1).copied().find(|&i| ok(i)).unwrap_or(order[1.min(order.len() - 1)]);
     }
+    let lens = lens_of[pick];
     let (sv, yaw, q) = views.swap_remove(pick);
     let (fx, fy) = (cen.0 - q.0, cen.1 - q.1); let l = fx.hypot(fy).max(1e-9);
     let (ux, uy) = ((fx * yaw.cos() - fy * yaw.sin()) / l, (fx * yaw.sin() + fy * yaw.cos()) / l);
-    if verbose { eprintln!("VIEWCAM {room} corner{} ({:.2}, {:.2}) yaw {:.1} score {sv:.1}", if which == 0 { 'A' } else { 'B' }, q.0, q.1, yaw.to_degrees()); }
-    let mut c = cam_look(Vec3::new(q.0 as f32, q.1 as f32, 1.5), Vec3::new((q.0 + ux * 3.0) as f32, (q.1 + uy * 3.0) as f32, 0.75), 18.0);
+    if verbose { eprintln!("VIEWCAM {room} corner{} ({:.2}, {:.2}) yaw {:.1} score {sv:.1} lens {lens}", if which == 0 { 'A' } else { 'B' }, q.0, q.1, yaw.to_degrees()); }
+    let mut c = cam_look(Vec3::new(q.0 as f32, q.1 as f32, 1.5), Vec3::new((q.0 + ux * 3.0) as f32, (q.1 + uy * 3.0) as f32, 0.75), lens);
     c.name = format!("{}_corner{}", room.replace('/', "-"), if which == 0 { 'A' } else { 'B' });
     Some(c)
 }
