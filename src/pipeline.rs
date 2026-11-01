@@ -674,6 +674,8 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
 fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(String, crate::shp::G)], fixed: &[Cutter], deferred: &[Cutter]) -> Vec<Cutter> {
     let mut out: Vec<Cutter> = vec![];
     let mut scores: Vec<f64> = vec![];
+    // how much of each window stands behind a tall piece (wardrobe, shelf unit, ...)
+    let mut talls: Vec<f64> = vec![];
     let wb = |st: &State, k: &str| -> ([f64; 3], [f64; 3]) {
         let o = &st.objs[k];
         let (l, h) = (o.geom.lo, o.geom.hi);
@@ -898,6 +900,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             nc.dims[2] = head - sill;
             nc.loc[2] = (sill + head) / 2.0;
             score = -1.0;
+            best_tall = 0.0;
             if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: high window over a tall piece, sill {sill:.2} m"); }
         }
         if let Some((fs, fnc, keys)) = best_free {
@@ -908,7 +911,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     if state.objs.contains_key(a) { crate::furn::layout2d::remove_tree(state, a); }
                     if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: alcove shelves {a} removed for a window"); }
                 }
-                score = fs; nc = fnc;
+                score = fs; nc = fnc; best_tall = 0.0;
             }
         }
         // a window with nowhere to go but behind a wardrobe (a bedroom's one outside wall, 1.5 m, all wardrobe): the wardrobe goes, the
@@ -928,9 +931,10 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 crate::furn::layout2d::remove_tree(state, k);
                 if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: wardrobe {k} removed for the room's window"); }
             }
-            if !gone.is_empty() { score = -1.0; }
+            if !gone.is_empty() { score = -1.0; best_tall = 0.0; }
         }
         scores.push(score);
+        talls.push(best_tall);
         if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window {w0:.2} m -> {:.2} m at ({:.2}, {:.2}) (score {score:.2})", nc.dims[0], nc.loc[0], nc.loc[1]); }
         out.push(nc);
     }
@@ -941,7 +945,11 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
         // (or when it is a utility room, a closet or a garage: none is better than one behind a shelf unit)
         let service = room.map_or(false, |r| matches!(crate::rooms::state::room_type(r), "utility" | "closet" | "garage"));
         // (a service room's window goes sooner: -2.5 is about the narrowing alone plus a tall piece's edge)
-        let k = !(scores[i] < -5.0 && others) && !(service && scores[i] < -2.5);
+        // (and any window still behind a tall piece when the room has another: a living room's second window came 20 cm behind a
+        // shelf unit, 954)
+        // (counting only a window that is clear itself: two behind tall pieces would each leave the other out)
+        let clear_other = (0..out.len()).any(|j| j != i && out[j].rooms.first() == room && scores[j] >= -5.0 && talls[j] <= 0.02) || fixed.iter().any(|o| o.kind == CutKind::Window && o.rooms.first() == room);
+        let k = !(scores[i] < -5.0 && others) && !(service && scores[i] < -2.5) && !(talls[i] > 0.02 && clear_other);
         if !k && std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {:?}: window left out (score {:.2}, the room has another)", room, scores[i]); }
         k
     }).collect();
