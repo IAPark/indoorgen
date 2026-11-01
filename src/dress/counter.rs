@@ -197,8 +197,22 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
                     .filter(|(z, _)| *z < zt + 0.02).max_by(|a, b| a.0.partial_cmp(&b.0).unwrap()).map_or(false, |(_, nz)| nz > 0.9)
             });
             if !flat { continue }
+            // rest on the highest surface under every low vertex of the vessel -- its base and the handle's root, turned as placed (the 9
+            // probes fell between grate bars, and a pan's handle reached over the next burner's grate: it sat 1 cm into them)
+            let ly = r.uniform(0.0, std::f64::consts::TAU);
+            let (cy, sy) = (ly.cos(), ly.sin());
+            let ilo = item.bounds().0[2];
+            let mut zt = zt;
+            let mut seen: std::collections::HashSet<(i64, i64)> = Default::default();
+            for p in item.parts.iter().flat_map(|p| p.mesh.pos.iter()) {
+                if p[2] > ilo + 0.012 { continue }
+                let (px, py) = (x + sc * (p[0] * cy - p[1] * sy), y + sc * (p[0] * sy + p[1] * cy));
+                if !seen.insert(((px / 0.01).floor() as i64, (py / 0.01).floor() as i64)) { continue }
+                let lift = sc * (p[2] - ilo);
+                for z in heights(&tris, px, py) { if z - lift > zt && z <= band.1 + 0.04 { zt = z - lift; } }
+            }
             let at = o.pose.apply([x, y, zt]);
-            let yaw = r.uniform(0.0, std::f64::consts::TAU);
+            let yaw = o.pose.r[1][0].atan2(o.pose.r[0][0]) + ly;
             let b = box_at(&item, at, yaw, sc);
             if !occ.free(&b) { continue }
             let bb = place(scene, &format!("dress_range_{}_{i}", k.replace('/', "_")), cls, &item, at, yaw, sc);

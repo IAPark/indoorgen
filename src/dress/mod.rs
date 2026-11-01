@@ -160,7 +160,21 @@ impl Occ {
     pub fn from_scene(scene: &Scene, skip_prefix: &[String]) -> Occ {
         // windows: their boxes span the wall reveal and reach down to counters set under them; the glass is in the wall, items cannot touch it
         let ns: Vec<&crate::mesh::Node> = scene.nodes.iter().filter(|n| n.class != "room" && n.class != "Window" && !n.name.starts_with("skirting") && !n.mesh.is_empty() && !skip_prefix.iter().any(|p| n.name.starts_with(p.as_str()))).collect();
-        Occ { boxes: ns.iter().map(|n| n.mesh.bounds()).collect(), names: ns.iter().map(|n| n.name.clone()).collect() }
+        let mut o = Occ { boxes: ns.iter().map(|n| n.mesh.bounds()).collect(), names: ns.iter().map(|n| n.name.clone()).collect() };
+        o.add_door_zones(scene);
+        o
+    }
+    /// keep-outs in every door's passage (the QC's door zone: 0.6 m each side of the wall, the opening's width): no dresser puts an
+    /// item there (fireplace tools and firewood stood in a doorway; a door leaf swinging over a rug's basket)
+    pub fn add_door_zones(&mut self, scene: &Scene) {
+        for n in &scene.nodes {
+            if n.class != "Door" || !n.name.ends_with(".frame") || n.mesh.is_empty() { continue }
+            let (lo, hi) = n.mesh.bounds();
+            let thin_x = hi[0] - lo[0] < hi[1] - lo[1];
+            let (d, m) = (0.6, 0.06);
+            let (l, h) = if thin_x { ([lo[0] - d, lo[1] + m, lo[2] + 0.05], [hi[0] + d, hi[1] - m, hi[2] - 0.1]) } else { ([lo[0] + m, lo[1] - d, lo[2] + 0.05], [hi[0] - m, hi[1] + d, hi[2] - 0.1]) };
+            self.boxes.push((l, h)); self.names.push(format!("{} passage", n.name));
+        }
     }
     /// keep-outs in front of every window's glass (the QC's window zone: ~0.12 m into the room plus the wall's half thickness, over the
     /// glass height) -- a bedside lamp on a nightstand by a window stood in it
