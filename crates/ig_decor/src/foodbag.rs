@@ -205,6 +205,15 @@ impl FoodBag {
 }
 
 impl Factory for FoodBag {
+    /// collision: the squashed cylinder (width x depth, length long) and its two seals extrude_length of the length out at the ends,
+    /// scaled about the middle by geo_extension's crinkle (offset = (musgrave + 0.25) * strength * position; a 3-octave fBM stays
+    /// within 1.75)
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let strength = inst_rng(self.fs, i).uniform(0.1, 0.2);
+        let k = 1.0 + 2.0 * strength;
+        let (x, y, z) = (self.width / 2.0 * k, self.depth / 2.0 * k, (self.length / 2.0 + self.extrude_length * self.length) * k);
+        Some(vec![crate::piece::Volume::hard([-x, -y, -z], [x, y, z])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let (m, e) = self.make_base();

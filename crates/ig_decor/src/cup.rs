@@ -154,6 +154,12 @@ impl Factory for Cup {
         a
     }
 
+    /// collision: the cup's outline (the bevelled profile, the wrap, the handle ring outside the wall), grown by the wall
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.outline(i);
+        let g = self.thickness * self.scale + 0.003;
+        Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])])
+    }
     fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
         let (lo, hi) = self.outline(i);
         Some([hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]])

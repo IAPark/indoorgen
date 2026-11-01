@@ -221,6 +221,12 @@ impl Factory for Jar {
         }
         Some(self.outline(i))
     }
+    /// collision: the revolved profile's outline with the cap on its neck
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.outline(i);
+        let g = 0.003;
+        Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let (m, cap) = self.stage_mesh(i, 9);
         let mat = spec_material("jar", json!({"cls": self.surface, "kwargs": {}, "seed": self.fs}), [0.8, 0.85, 0.9]);

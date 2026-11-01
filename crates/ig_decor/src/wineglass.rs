@@ -89,6 +89,12 @@ impl Factory for Wineglass {
         }
         Some(self.outline(i))
     }
+    /// collision: the revolved profile's outline, grown by the glass
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.outline(i);
+        let g = self.thickness * self.scale + 0.002;
+        Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let z_bottom = self.z_length * r.log_uniform(0.01, 0.05);

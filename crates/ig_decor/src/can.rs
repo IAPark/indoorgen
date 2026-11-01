@@ -117,6 +117,11 @@ impl Factory for Can {
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
         Some([2.0 * self.x_length / self.skewness + 2.0 * CAN_EXTRA[1], 2.0 * self.x_length + 2.0 * CAN_EXTRA[0], self.z_length + CAN_EXTRA[2]])
     }
+    /// collision: the outline (a disc of x_length, or a square rounded to it), squeezed by the skewness in y, z_length high
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (x, y, m) = (self.x_length + 0.002, self.x_length / self.skewness + 0.002, 0.002);
+        Some(vec![crate::piece::Volume::hard([-x, -y, -m], [x, y, self.z_length + m])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let coords = self.coords(&mut r);

@@ -80,6 +80,12 @@ impl Factory for Plate {
         }
         Some(self.outline())
     }
+    /// collision: the revolved profile's outline, grown by the plate's thickness
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.outline();
+        let g = self.thickness + 0.002;
+        Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - 0.002], [hi[0] + g, hi[1] + g, hi[2] + g])])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let sc = self.scale;
         let xs = [0.0, self.x_mid * sc, self.x_mid * sc, self.x_end * sc];

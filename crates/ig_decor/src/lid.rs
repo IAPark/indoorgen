@@ -139,6 +139,15 @@ impl Lid {
 }
 
 impl Factory for Lid {
+    /// collision: the dome (x_length round, z_height high, its shell thickness about the surface), a glass lid's rim torus, the knob
+    /// (a stem handle_height up, a cap up to two thicknesses) or the arched handle on top
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let t = self.thickness;
+        let r = self.x_length + t + 0.002;
+        let z0 = -(t / 2.0).max(self.rim_height / 2.0) - 0.002;
+        let z1 = self.z_height + self.handle_height + 3.0 * t + 0.002;
+        Some(vec![crate::piece::Volume::hard([-r, -r, z0], [r, r, z1])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         for k in 0..3 {

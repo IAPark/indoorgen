@@ -10,8 +10,6 @@ pub fn handles(c: &str) -> bool {
 
 type F3 = [f32; 3];
 
-/// overall width / height over the nominal ones (the star profile's rim overshoots, the subdivision shrinks the top; measured)
-const VASE_K: [f64; 2] = [1.045, 0.985];
 
 pub struct Vase {
     inner: f64,
@@ -57,8 +55,8 @@ impl Vase {
         let mut v = Vase { inner, points, height: z, diameter: x, top_scale, neck_mid, neck_pos, neck_scale, shoulder_pos, shoulder_t, foot_scale, foot_h, fs };
         // built to the layout box [width (y), depth (x), height]: round, the smaller of width and depth is the diameter
         if let Some(h) = crate::api::size_hint() {
-            v.diameter = h[0].min(h[1]) / 2.0 / VASE_K[0];
-            v.height = h[2] / VASE_K[1];
+            v.diameter = h[0].min(h[1]) / 2.0 / v.radius_k();
+            v.height = h[2];
         }
         v
     }
@@ -124,10 +122,24 @@ fn catmull_rom_eval(p: &[F3], res: usize) -> Vec<F3> {
     out
 }
 
+impl Vase {
+    /// the outline's radius over the diameter: the star profile reaches 1, the curves' radii are the body (1), the top, neck and foot
+    /// scales and their mean, and the Catmull-Rom between them overshoots by at most 8 %
+    fn radius_k(&self) -> f64 {
+        [1.0, self.top_scale, self.neck_scale, self.foot_scale, (self.neck_scale + self.top_scale) / 2.0].into_iter().fold(0.0, f64::max) * 1.08
+    }
+}
+
 impl Factory for Vase {
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
-        let w = 2.0 * self.diameter * VASE_K[0];
-        Some([w, w, self.height * VASE_K[1]])
+        let w = 2.0 * self.diameter * self.radius_k();
+        Some([w, w, self.height])
+    }
+    /// collision: round, the widest of the profile's radii (with the Catmull-Rom's overshoot), from the floor to the top
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let r = self.diameter * self.radius_k() + 0.002;
+        // (the curve dips up to 1 % of the height under the floor)
+        Some(vec![crate::piece::Volume::hard([-r, -r, -0.002 - 0.01 * self.height], [r, r, self.height + 0.002])])
     }
     fn asset(&self, _i: u64) -> Asset {
         let f = |x: f64| x as f32;

@@ -216,9 +216,9 @@ impl Cutlery {
     }
 }
 
-impl Factory for Cutlery {
-    fn asset(&self, i: u64) -> Asset {
-        let mut r = inst_rng(self.fs, i);
+impl Cutlery {
+    /// the profile's anchors (x, half-width y, z) from the instance's draws
+    fn anchors(&self, r: &mut Rng) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let x_end = 0.15f64;
         let (xa, ya, za): (Vec<f64>, Vec<f64>, Vec<f64>);
         if self.fork {
@@ -256,6 +256,27 @@ impl Factory for Cutlery {
             let z6 = self.z_offset + r.uniform(-0.02, 0.0);
             za = vec![0.0, 0.0, 0.0, 0.0, self.z_offset, z5, z6];
         }
+        (xa, ya, za)
+    }
+}
+
+impl Factory for Cutlery {
+    /// collision: the profile's anchors (the grid the solidified, subdivided surface stays inside), the solidify's thickness and the
+    /// guard's extrusion round them, scaled
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (xa, ya, za) = self.anchors(&mut inst_rng(self.fs, i));
+        let g = self.thickness + self.guard_depth;
+        let mn = |v: &[f64]| v.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = |v: &[f64]| v.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let z0 = mn(&za).min(-self.z_depth);
+        let (sc, m) = (self.scale, 0.002);
+        let y = mx(&ya) + g;
+        Some(vec![crate::piece::Volume::hard([(mn(&xa) - g) * sc - m, -y * sc - m, (z0 - g) * sc - m], [(mx(&xa) + 0.02 + g) * sc + m, y * sc + m, (mx(&za) + g) * sc + m])])
+    }
+    fn asset(&self, i: u64) -> Asset {
+        let mut r = inst_rng(self.fs, i);
+        let x_end = 0.15f64;
+        let (xa, ya, za) = self.anchors(&mut r);
         let nx = xa.len();
         let rows = if self.fork { 2 * (self.n_cuts + 1) } else { 3 };
         let mut m = Mesh::new();
@@ -369,6 +390,21 @@ impl Knife {
 }
 
 impl Factory for Knife {
+    /// collision: the blade and handle outline (x from the handle's end to the tip, y from the spine to the widest of blade and guard,
+    /// the edge offset in), the solidify's thickness and the guard's extrusion round it, scaled
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let mut r = inst_rng(self.fs, i);
+        let x_end = 0.5f64;
+        r.uniform(0.5, 0.8);
+        r.uniform(0.3, 0.4);
+        let ya1 = self.y_length * r.log_uniform(0.75, 0.95);
+        let off = self.y_offset * self.y_length;
+        let g = self.thickness + self.guard_depth + 0.004;
+        let y1 = self.y_length.max(self.y_guard).max(ya1 + 3e-3) + off.max(0.0);
+        let y0 = off.min(0.0);
+        let (sc, m) = (self.scale, 0.002);
+        Some(vec![crate::piece::Volume::hard([(-x_end * self.x_length - g) * sc - m, (y0 - g) * sc - m, -g * sc - m], [(x_end + 1e-3 + g) * sc + m, (y1 + g) * sc + m, g * sc + m])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let x_end = 0.5f64;

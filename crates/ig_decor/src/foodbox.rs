@@ -60,6 +60,11 @@ impl Factory for FoodBox {
         a.mesh(m, &mat("ph", [0.5; 3], 0.5), Some(b));
         Some(a)
     }
+    /// collision: the box
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let h = self.dims.map(|d| d / 2.0 + 0.002);
+        Some(vec![crate::piece::Volume::hard([-h[0], -h[1], -h[2]], h)])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let h = self.dims.map(|d| (d / 2.0) as f32);
         let m = beveled_box(h, 0.001);

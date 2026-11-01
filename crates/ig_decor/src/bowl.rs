@@ -45,6 +45,11 @@ impl Factory for Bowl {
         a.mesh(m, &mat("ph", [0.5; 3], 0.5), Some(b));
         Some(a)
     }
+    /// collision: the rim's radius and the profile's height, grown by the wall
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (r, g) = (self.x_end * self.scale + self.thickness + 0.002, self.thickness + 0.002);
+        Some(vec![crate::piece::Volume::hard([-r, -r, -g], [r, r, self.z_length * self.scale + g])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let sc = self.scale;
@@ -93,6 +98,13 @@ pub fn fruit_make(fs: u64) -> Option<Box<dyn Factory>> {
 impl Factory for FruitContainer {
     fn asset(&self, i: u64) -> Asset {
         self.base.asset(i)
+    }
+    /// collision: the bowl's or the pot's, its top raised 5 cm for the fruit heaped in it
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let mut v = self.base.volumes(i)?;
+        let (lo, hi) = crate::piece::rigid_bounds(&v);
+        v.push(crate::piece::Volume::hard(lo, [hi[0], hi[1], hi[2] + 0.05]));
+        Some(v)
     }
     fn placeholder(&self, i: u64) -> Option<Asset> {
         let p = self.base.placeholder(i)?;

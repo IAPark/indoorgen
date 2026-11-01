@@ -122,6 +122,26 @@ impl Factory for Pan {
         a.cuboid([x0 * s, y0 * s, 0.0], [x1 * s, y1 * s, self.depth * s], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
+    /// collision: the body (round, its widest of the rim and the bulge, the wall's thickness out, depth high, the bottom plateau a
+    /// thickness below), a pan's handle out along +x rising by z_handle, a pot's two bars out to either side
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let t = self.thickness;
+        let r = self.r_expand.max(self.r_mid) + t;
+        let (mut x0, mut x1, y) = (-r, r, r);
+        let mut top = self.depth + t;
+        if self.pot && self.has_bar {
+            let b = r + self.bar_x_offset + self.bar_radius + self.bar_inner;
+            (x0, x1) = (-b, b);
+        } else if self.has_handle {
+            x1 = r + self.x_handle * self.s_handle.max(1.0) + t;
+            top = top.max(self.depth + self.z_handle + t);
+        }
+        let s = self.scale;
+        let m = 0.002;
+        // (a pan is lifted onto the floor; a pot's bottom plateau stays a thickness under it)
+        let z0 = if self.pot { -t * s } else { 0.0 };
+        Some(vec![crate::piece::Volume::hard([x0 * s - m, -y * s - m, z0 - m], [x1 * s + m, y * s + m, (top + t) * s + m])])
+    }
     fn bounds_hint(&self, i: u64) -> Option<(V3, V3)> {
         if self.pot {
             return None;

@@ -119,6 +119,38 @@ impl Chopsticks {
 }
 
 impl Factory for Chopsticks {
+    /// collision: the two sticks' boxes (x along the stick, scale long from 0 or from -1, the section y_length about it), the second one
+    /// placed as the build's draws put it relative to the first
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let mut r = inst_rng(self.fs, i);
+        let ident: M = ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3]);
+        let mut x0 = 0.0;
+        let (ma, mb): (M, M);
+        if r.uniform(0.0, 1.0) < 0.6 {
+            let distance = r.log_uniform(self.y_length, 0.04);
+            let flip = r.uniform(0.0, 1.0) >= 0.5;
+            if flip { x0 = -1.0; }
+            let a1 = r.uniform(0.0, PI / 8.0);
+            let a2 = r.uniform(0.0, PI / 8.0);
+            let s = if flip { -1.0 } else { 1.0 };
+            ma = (rotz(s * a1), [0.0, distance, 0.0]);
+            mb = (rotz(-s * a2), [0.0, -distance, 0.0]);
+        } else {
+            let lx = r.uniform(-0.1, 0.2);
+            let ly = r.uniform(-0.2, 0.2);
+            let sign = if ly > 0.0 { 1.0 } else if ly < 0.0 { -1.0 } else { 0.0 };
+            let ang = r.log_uniform(PI / 8.0, PI / 4.0);
+            ma = ident;
+            mb = (rotz(-sign * ang), [lx, ly, self.y_length]);
+        }
+        let rel = compose(&inv(&ma), &mb);
+        let (sc, yl, m) = (self.scale, self.y_length * self.scale * 1.02, 0.002);
+        // (the stick is scaled first, then the flipped pair moved back by a whole unit)
+        let (lo, hi) = ([x0 - m, -yl - m, -yl - m], [x0 + sc + m, yl + m, yl + m]);
+        let mut pts = vec![];
+        for x in [lo[0], hi[0]] { for y in [lo[1], hi[1]] { for z in [lo[2], hi[2]] { pts.push(apply(&rel, [x, y, z])); } } }
+        Some(vec![crate::piece::Volume::hard(lo, hi), crate::piece::Volume::hard_hull(pts)])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         let single = self.make_single();

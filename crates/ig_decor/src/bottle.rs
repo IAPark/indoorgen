@@ -184,6 +184,12 @@ impl Factory for Bottle {
         }
         Some(self.outline())
     }
+    /// collision: the revolved profile's outline (and the cap), grown by the glass (bottle_width) and the label 2 mm round the body
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.outline();
+        let g = self.bottle_width.abs() + 0.004;
+        Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - 0.002], [hi[0] + g, hi[1] + g, hi[2] + g])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut r = inst_rng(self.fs, i);
         // --- bottle body
