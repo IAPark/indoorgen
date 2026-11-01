@@ -282,6 +282,25 @@ impl Factory for Tv {
         a.transform(&Mat4::rot_z(PI / 2.0));
         a
     }
+    /// collision (x depth, the screen's back at x = 0 and its front toward -x, y across): the panel with its bezel and back; the stand
+    /// -- two splayed legs at +-leg_w of the width (round, leg_r thick, their feet leg_len_y deep, cut off at most 0.6 leg_r under
+    /// leg_len), or one blade and its base plate (up to 0.3 of the width each side, leg_r thick) -- under it
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let tw = self.width + 2.0 * self.side;
+        let th = self.height + self.side + self.bottom;
+        let (r, ly, e, m) = (self.leg_r, self.leg_len_y / 2.0, self.extrude, 0.002);
+        let mut v = vec![Volume::hard([-e - self.depth - m, -tw / 2.0 - m, -m], [m, tw / 2.0 + m, th + m])];
+        if self.two_legs {
+            let c = -(1.0 - self.leg_w) * e;
+            let y = tw / 2.0 * self.leg_w + r;
+            v.push(Volume::hard([c - ly - r - m, -y - m, -self.leg_len - 0.6 * r - m], [c + ly + r + m, y + m, th * 0.5 + m]));
+        } else {
+            let c = -e / 2.0;
+            v.push(Volume::hard([c - ly - m, -0.3 * tw - m, -self.leg_len - r - m], [c + ly + m, 0.3 * tw + m, th * 0.5 + m]));
+        }
+        Some(v)
+    }
 }
 
 pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {

@@ -12,7 +12,7 @@ pub fn make(c: &str, _rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
         "TriangleShelfFactory" => {
             static TPL: OnceLock<GnTemplate> = OnceLock::new();
             let tpl = TPL.get_or_init(|| GnTemplate::parse(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/gn/triangle_shelf.json"))));
-            Some(Box::new(GnFactory { tpl, sample: triangle_shelf_params, fseed }))
+            Some(Box::new(GnFactory { tpl, sample: triangle_shelf_params, fseed, volumes: Some(triangle_shelf_volumes) }))
         }
         _ => None,
     }
@@ -55,4 +55,17 @@ pub fn triangle_shelf_params(fseed: u64, inst: u64) -> Params {
     p.insert("top_layer_height".into(), p1(top_layer_height));
     p.insert("mid_layer_height".into(), p1(mid_layer_height));
     p
+}
+
+/// collision of the triangle shelf: a corner prism leg_length high, the right angle at the origin, its sides board_width along x and y
+/// (out by up to a leg's depth), the front cut across where the boards' extruded lips and the front legs reach (x + y <= board_width +
+/// extrude + leg width)
+fn triangle_shelf_volumes(p: &Params) -> Vec<crate::piece::Volume> {
+    let g = |k: &str| p[k][0];
+    let (bw, d, h, m) = (g("board_width"), g("leg_depth"), g("leg_length"), 0.002);
+    let (a, b) = (-d - m, bw + d + m);
+    let c = (bw + g("board_extrude_length") + g("leg_width") + 2.0 * m - b).clamp(a, b);
+    let mut pts = vec![];
+    for z in [-m, h + m] { pts.extend([[a, a, z], [b, a, z], [b, c, z], [c, b, z], [a, b, z]]); }
+    vec![crate::piece::Volume::hard_hull(pts)]
 }

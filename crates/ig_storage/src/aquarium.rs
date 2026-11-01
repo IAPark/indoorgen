@@ -37,6 +37,11 @@ impl Factory for Aquarium {
         a.cuboid([-t - d, -t, 0.0], [t, w + t, h], &mat("aquarium_ph", [0.6, 0.7, 0.8], 0.1));
         Some(a)
     }
+    /// collision: the tank's walls and belts (its box); the floor inside holds the decoration
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (w, d, h, t, m) = (self.width, self.depth, self.height, self.thickness, 0.002);
+        Some(vec![crate::piece::Volume::hard([-t - d - m, -t - m, -m], [t + m, w + t + m, h + m])])
+    }
     fn asset(&self, _i: u64) -> Asset {
         // glass tank walls (open top box shell), two belts, and a stand-in for the decoration
         let (w, d, h, t) = (self.width, self.depth, self.height, self.thickness);

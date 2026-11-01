@@ -103,6 +103,11 @@ impl Factory for WallArt {
         a.cuboid(lo, hi, &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
+    /// collision: the art plane at x = 0 and the frame ring around it (thickness out at the corners, depth to either side: the solidify follows the ring's winding)
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (y, z, m) = (self.width / 2.0 + self.thickness + 0.002, self.height / 2.0 + self.thickness + 0.002, 0.002);
+        Some(vec![crate::piece::Volume::hard([-self.depth - m, -y, -z], [self.depth + m, y, z])])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let inner_m = if self.mirror {

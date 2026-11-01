@@ -194,6 +194,8 @@ pub struct GnFactory {
     pub tpl: &'static GnTemplate,
     pub sample: fn(u64, u64) -> Params,
     pub fseed: u64,
+    /// the collision from the sampled parameters (ig_kit::piece)
+    pub volumes: Option<fn(&Params) -> Vec<crate::piece::Volume>>,
 }
 
 impl GnFactory {
@@ -212,5 +214,8 @@ impl Factory for GnFactory {
     }
     fn exact(&self, inst: u64) -> Option<ExactMesh> {
         exact_of(&self.geometry(inst))
+    }
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        self.volumes.map(|f| f(&(self.sample)(self.fseed, inst)))
     }
 }
