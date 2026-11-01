@@ -63,6 +63,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                     // (over a basin 0.3 m clear: its tap stands above the box)
                     let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); let up = |d: usize| if d == 2 && oo.generator.as_ref().map_or(false, |gg| gg.class.contains("Sink")) { 0.3 } else { 0.02 };
                     (0..3).all(|d| ml[d] < b.1[d] + up(d) && b.0[d] - 0.02 < mh[d]) }) { continue }
+                // (nor over a window: a towel hung 12 cm into the glass's zone)
+                if state.objs.iter().any(|(wk, w)| wk.starts_with("window") && w.generator.is_none() && { let b = wbox(&w.pose, w.geom.lo, w.geom.hi); (0..3).all(|d| ml[d] < b.1[d] + 0.15 && b.0[d] - 0.15 < mh[d]) }) { continue }
                 scene.add(&format!("towel_{}#0", k.replace('/', "_")), "TowelFactory", mesh, m);
                 log.push(format!("towel on {k}"));
             }

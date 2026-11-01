@@ -892,6 +892,24 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                 score = fs; nc = fnc;
             }
         }
+        // a window with nowhere to go but behind a wardrobe (a bedroom's one outside wall, 1.5 m, all wardrobe): the wardrobe goes, the
+        // room keeps its daylight
+        if score < -20.0 {
+            let (c, sn) = (nc.rot_z.cos(), nc.rot_z.sin());
+            let gone: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |g| g.class == "WardrobeFactory") && crate::furn::layout2d::room_of(state, k).as_deref() == Some(room.as_str()) && {
+                let (lo, hi) = wb(state, k);
+                // (its box in the window's frame overlapping the opening's width, within 0.8 m of the wall)
+                let q: Vec<[f64; 2]> = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]].iter().map(|p| { let (dx, dy) = (p[0] - nc.loc[0], p[1] - nc.loc[1]); [dx * c + dy * sn, -dx * sn + dy * c] }).collect();
+                let (a0, a1) = (q.iter().map(|v| v[0]).fold(f64::MAX, f64::min), q.iter().map(|v| v[0]).fold(f64::MIN, f64::max));
+                let (b0, b1) = (q.iter().map(|v| v[1]).fold(f64::MAX, f64::min), q.iter().map(|v| v[1]).fold(f64::MIN, f64::max));
+                a0 < nc.dims[0] / 2.0 && a1 > -nc.dims[0] / 2.0 && b0 < 0.8 && b1 > -0.8
+            }).map(|(k, _)| k.clone()).collect();
+            for k in &gone {
+                crate::furn::layout2d::remove_tree(state, k);
+                if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: wardrobe {k} removed for the room's window"); }
+            }
+            if !gone.is_empty() { score = -1.0; }
+        }
         scores.push(score);
         if std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {room}: window {w0:.2} m -> {:.2} m at ({:.2}, {:.2}) (score {score:.2})", nc.dims[0], nc.loc[0], nc.loc[1]); }
         out.push(nc);
