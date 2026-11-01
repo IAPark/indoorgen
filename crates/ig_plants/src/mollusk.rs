@@ -305,7 +305,19 @@ pub fn snail_final(maker: Maker, r: &mut Rng) -> Mesh {
     m
 }
 
+/// collision of a snail-like mollusk: scaled to a largest side of 1, then turned at random -- inside the ball round its box (half
+/// diagonal at most sqrt(3) / 2) whatever the turn -- centred in x / y, z from -0.1 to 0.9 of its height; the shell's solidify (5 mm)
+/// and displacement (2 cm) round it
+pub fn snail_volumes() -> Vec<crate::piece::Volume> {
+    let r = 3f64.sqrt() / 2.0;
+    let g = 0.027;
+    vec![crate::piece::Volume::hard([-r - g, -r - g, -0.2 * r - g], [r + g, r + g, 1.8 * r + g])]
+}
+
 impl Factory for Snail {
+    fn volumes(&self, _inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        Some(snail_volumes())
+    }
     fn asset(&self, inst: u64) -> Asset {
         let mut r = inst_rng(self.fs, inst);
         let m = snail_final(self.maker, &mut r);

@@ -26,6 +26,12 @@ pub struct Mollusk {
 }
 
 impl Factory for Mollusk {
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        Some(match self.base {
+            Base::MolluskShell(k) | Base::Shell(k) => super::shell::shell_volumes(k, &mut inst_rng(self.fs, inst)),
+            _ => super::mollusk::snail_volumes(),
+        })
+    }
     fn asset(&self, inst: u64) -> Asset {
         let t = Trinkets { fs: self.fs, base: self.base, fallback: Box::new(NoFallback) };
         let m = t.base_mesh(inst).unwrap();
@@ -131,6 +137,12 @@ fn triangulate_beauty(m: &Mesh) -> Vec<[u32; 3]> {
 impl Factory for Trinkets {
     fn placeholder(&self, i: u64) -> Option<Asset> {
         self.fallback.placeholder(i)
+    }
+    /// collision: every kind is fitted into the placeholder's cube (its side the instance's first draw), centred in x / y, its bottom
+    /// at -side / 2
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let h = inst_rng(self.fs, i).uniform(0.1, 0.15) / 2.0 + 0.002;
+        Some(vec![crate::piece::Volume::hard([-h, -h, -h], [h, h, h])])
     }
 
     fn asset(&self, i: u64) -> Asset {

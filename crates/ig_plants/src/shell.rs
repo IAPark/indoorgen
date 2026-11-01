@@ -497,7 +497,54 @@ pub struct Shell {
     fs: u64,
 }
 
+/// collision of a bivalve: the valve is the unit circle about (1, 0) (x 0..2, y -1..1) domed up to its softness toward (0, 0, 1),
+/// stretched in y (1.2 scallop and clam, 3 mussel), shaped by angle (its quadratic spline through the drawn scales, its largest value
+/// over the turn taken; a scallop's hinge plate y +-0.4 displaced 0.2), scaled by 1 / sqrt(dx dy + 0.01) of the valve's size (clam,
+/// mussel: the unshaped valve's; a scallop's at least 2 x 0.8 with its hinge), lifted 5 mm; the lower valve mirrored in z, the upper
+/// one opened by up to pi / 3 about y; subdivision, a 5 mm shell and a 2 cm displacement round it
+pub fn shell_volumes(kind: ShellKind, r: &mut Rng) -> Vec<crate::piece::Volume> {
+    // the maker's draws: the shaping spline
+    let (angles, scales): (Vec<f64>, Vec<f64>) = match kind {
+        ShellKind::Scallop => {
+            let boundary = 0.42;
+            let outer = r.uniform(0.28, 0.32);
+            let inner = r.uniform(0.18, 0.22);
+            let s = r.uniform(0.6, 0.7);
+            ([-boundary, -outer, -inner, inner, outer, boundary].iter().map(|a| a * PI).collect(), vec![0.0, s, 1.0, 1.0, s, 0.0])
+        }
+        ShellKind::Clam => {
+            let s = r.uniform(0.6, 0.7);
+            let a = [-r.uniform(0.4, 0.5), -r.uniform(0.3, 0.35), r.uniform(-0.25, 0.25), r.uniform(0.3, 0.35), r.uniform(0.4, 0.5)];
+            (a.iter().map(|a| a * PI).collect(), vec![0.0, s, 1.0, s, 0.0])
+        }
+        ShellKind::Mussel => {
+            let s = r.uniform(0.6, 0.8);
+            let a1 = -r.uniform(0.1, 0.15);
+            let a2 = r.uniform(0.0, 0.25);
+            let s3 = r.uniform(0.6, 0.8);
+            ([-0.5, a1, a2, 0.5].iter().map(|a| a * PI).collect(), vec![0.0, s, 1.0, s3])
+        }
+    };
+    let f = QuadSpline::new(&angles, &scales);
+    let k = (0..=2000).map(|i| f.eval(-PI + 2.0 * PI * i as f64 / 2000.0).abs()).fold(0.0, f64::max) * 1.01;
+    let (soft, ys, dim) = match kind {
+        ShellKind::Scallop => (0.3f64, 1.2f64, (2.0f64 * 0.8 + 0.01).sqrt()),
+        ShellKind::Clam => (0.5, 1.2, (2.0f64 * 2.4 + 0.01).sqrt()),
+        ShellKind::Mussel => (0.5, 3.0, (2.0f64 * 6.0 + 0.01).sqrt()),
+    };
+    let hinge = if matches!(kind, ShellKind::Scallop) { 0.2 } else { 0.0 };
+    let x = 2.0 * k / dim;
+    let y = (ys * k).max(0.4 + hinge) / dim;
+    let z = (soft * k + hinge) / dim + 0.005;
+    let sd = std::f64::consts::FRAC_PI_3.sin();
+    let g = 0.027;
+    vec![crate::piece::Volume::hard([-z * sd - g, -y - g, -z - g], [x + g, y + g, x * sd + z + g])]
+}
+
 impl Factory for Shell {
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        Some(shell_volumes(self.kind, &mut inst_rng(self.fs, inst)))
+    }
     fn asset(&self, inst: u64) -> Asset {
         let mut r = inst_rng(self.fs, inst);
         let m = shell_asset(self.kind, &mut r, 0.003);

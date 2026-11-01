@@ -90,6 +90,12 @@ impl Factory for Decor {
         Some(a)
     }
 
+    /// collision: a trinket is fitted into the placeholder's cube
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        if self.vase { return None }
+        let h = inst_rng(self.fs, i).uniform(0.1, 0.15) / 2.0 + 0.002;
+        Some(vec![crate::piece::Volume::hard([-h, -h, -h], [h, h, h])])
+    }
     fn asset(&self, i: u64) -> Asset {
         let mut a = self.asset_raw(i);
         if !self.vase {
