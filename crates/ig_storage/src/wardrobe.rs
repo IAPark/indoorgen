@@ -98,10 +98,32 @@ impl Wardrobe {
         let cb = cab.bounds();
         a.mesh(cab, &body, Some(cb));
         a.supports.push(([0.0, 0.0, h], [d, w, h + 0.001]));
+        // door style from its own stream (the draws above keep their values): flat slabs 50 %, shaker (a frame proud of the panel) 30 %,
+        // a mirror on every other tall door 20 %; NO_WARDROBE_STYLES=1: flat
+        let mut sq = Rng::seeded(crate::int_hash(&["wardrobe_style", &self.seed.to_string()]));
+        let style = if std::env::var_os("NO_WARDROBE_STYLES").is_some() { 0 } else { sq.choice_p(&[0.5, 0.3, 0.2]) };
+        // (WARDROBE_STYLE=0|1|2 forces one: debugging)
+        let style = std::env::var("WARDROBE_STYLE").ok().and_then(|v| v.parse().ok()).unwrap_or(style);
+        let mirror_m = spec("wardrobe_mirror", "metal.Mirror", s + 7);
+        let n_panel = std::cell::Cell::new(0usize);
         let panel = |a: &mut Asset, xa: f64, xb: f64, y0: f64, y1: f64, z0: f64, z1: f64| {
             let m = Mesh::cuboid([xa, y0 + GAP, z0 + GAP], [xb, y1 - GAP, z1 - GAP]);
             let b = m.bounds();
             a.mesh(m, &door, Some(b));
+            let (dh, dw) = (z1 - z0, y1 - y0);
+            let k = n_panel.get(); n_panel.set(k + 1);
+            if style == 1 {
+                // shaker: four rails 8 mm proud round the panel (narrower on drawers)
+                let fw = 0.07f64.min(0.22 * dh).min(0.22 * dw);
+                let (ya, yb, za, zb) = (y0 + GAP, y1 - GAP, z0 + GAP, z1 - GAP);
+                for (lo, hi) in [([xb, ya, za], [xb + 0.008, yb, za + fw]), ([xb, ya, zb - fw], [xb + 0.008, yb, zb]),
+                                 ([xb, ya, za + fw], [xb + 0.008, ya + fw, zb - fw]), ([xb, yb - fw, za + fw], [xb + 0.008, yb, zb - fw])] {
+                    let m = Mesh::cuboid(lo, hi); let b = m.bounds(); a.mesh(m, &door, Some(b));
+                }
+            } else if style == 2 && dh > 1.2 && k % 2 == 0 {
+                // a full-length mirror inset on the door
+                let m = Mesh::cuboid([xb, y0 + 0.07, z0 + 0.12], [xb + 0.004, y1 - 0.07, z1 - 0.12]); let b = m.bounds(); a.mesh(m, &mirror_m, Some(b));
+            }
         };
         let off = 0.03;
         let vbar = |a: &mut Asset, x: f64, y: f64, zc: f64, len: f64| {
