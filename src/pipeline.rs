@@ -730,6 +730,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let mut alcs: Vec<(f64, f64, f64, String)> = vec![];
             let mut sinks: Vec<(f64, f64)> = vec![];
             let mut lows: Vec<(f64, f64, f64)> = vec![];
+            let mut beds: Vec<(f64, f64)> = vec![];
             for (k, o) in &state.objs {
                 let Some(g) = &o.generator else { continue };
                 if crate::furn::layout2d::room_of(state, k).as_deref() != Some(room.as_str()) { continue }
@@ -750,7 +751,10 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     // (a headboard rising past the sill stands in front of the glass)
                     "BedFactory" => if tall { 6.0 } else { 2.0 },
                     "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "SingleCabinetFactory" if hi[2] - lo[2] < 1.3 => 0.5,
-                    "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "WardrobeFactory" | "ShowerFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" | "FridgeFactory" => 10.0,
+                    // (a wardrobe in front of the glass is never right, a bed under a sill is: at 10 a window went 11 cm behind a
+                    // wardrobe's side rather than narrow beside it)
+                    "WardrobeFactory" | "ShowerFactory" | "FridgeFactory" => 40.0,
+                    "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" => 10.0,
                     _ if tall => 5.0,
                     _ => 0.0,
                 };
@@ -783,6 +787,7 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     _ => None,
                 };
                 if let Some(z) = need { lows.push((s0, s1, z)); }
+                if g.class == "BedFactory" { beds.push((s0, s1)); }
             }
             let mut taken: Vec<(f64, f64)> = vec![];
             for o in fixed.iter().chain(out.iter()) {
@@ -813,7 +818,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                         // over a counter / basin the sill rises to clear it (the head stays): at least 0.6 m of glass, a little penalty
                         let head = sill + ct.dims[2];
                         let need = lows.iter().filter(|(s0, s1, _)| x0 < *s1 && *s0 < x1).map(|(_, _, z)| *z).fold(sill, f64::max);
-                        if head - need < 0.6 { continue }
+                        // (0.45 m of glass over a headboard: a tall one left a small bedroom's window only the stretch behind its wardrobe)
+                        let over_bed = beds.iter().any(|(s0, s1)| x0 < *s1 && *s0 < x1);
+                        if head - need < if over_bed { 0.45 } else { 0.6 } { continue }
                         let score = over_sink - 0.5 * (need - sill) - pen - 1.0 * (w0 - w) - if wi == 0 { 0.2 * (t - t0).abs() } else { 1.0 } + street;
                         let over_alc: Vec<&(f64, f64, f64, String)> = alcs.iter().filter(|(s0, s1, _, _)| x0 < *s1 && *s0 < x1).collect();
                         let pen_alc: f64 = over_alc.iter().map(|(s0, s1, wt, _)| (x1.min(*s1) - x0.max(*s0)).max(0.0) * wt).sum();
@@ -887,7 +894,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
     let keep: Vec<bool> = (0..out.len()).map(|i| {
         let room = out[i].rooms.first();
         let others = (0..out.len()).any(|j| j != i && out[j].rooms.first() == room && (scores[j] >= -5.0 || scores[j] > scores[i])) || fixed.iter().any(|o| o.kind == CutKind::Window && o.rooms.first() == room);
-        let k = !(scores[i] < -5.0 && others);
+        // (or when it is a utility room, a closet or a garage: none is better than one behind a shelf unit)
+        let service = room.map_or(false, |r| matches!(crate::rooms::state::room_type(r), "utility" | "closet" | "garage"));
+        let k = !(scores[i] < -5.0 && (others || service));
         if !k && std::env::var_os("LAYERDBG").is_some() { eprintln!("WALLLAYER {:?}: window left out (score {:.2}, the room has another)", room, scores[i]); }
         k
     }).collect();
