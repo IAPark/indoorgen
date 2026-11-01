@@ -319,6 +319,9 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
             let mut gap = f64::MAX;
             let mut support: Option<(usize, V3)> = None;
             let mut sup_votes: std::collections::BTreeMap<usize, usize> = Default::default();
+            // contacts touching (within 1 cm) and of those, how many on a slope: a pot on a stove's round grate bars met one bar's
+            // flank at its lowest point and read as resting on a slope
+            let mut touch = (0usize, 0usize);
             for c in &contacts {
                 if let Some((z, ni, nrm)) = down_hit(nodes, &bb, &cand, [c[0], c[1], c[2] + 0.02]) {
                     let g = c[2] - z;
@@ -329,6 +332,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     if g.abs() < 0.02 {
                         *sup_votes.entry(node_obj.get(&ni).copied().unwrap_or(usize::MAX)).or_default() += 1;
                     }
+                    if g.abs() < 0.01 { touch.0 += 1; if nrm[2].clamp(-1.0, 1.0).acos().to_degrees() > 25.0 { touch.1 += 1; } }
                 }
             }
             let parent = parent_of.get(&o.key).cloned();
@@ -360,7 +364,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                         let tilt = nrm[2].clamp(-1.0, 1.0).acos().to_degrees();
                         if is_tableware(&o.class) && bad_support(sc) {
                             issues.push(format!("implausible support {} on {}", o.class, sc));
-                        } else if tilt > 25.0 && gap.abs() < 0.01 {
+                        } else if tilt > 25.0 && gap.abs() < 0.01 && 2 * touch.1 > touch.0 {
                             issues.push(format!("resting on a {:.0} deg slope of {}", tilt, sc));
                         }
                     }
