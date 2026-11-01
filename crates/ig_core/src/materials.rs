@@ -52,8 +52,26 @@ pub const OFFICE_FLOOR: Weighted = &[
 ];
 pub const CONCRETE: Weighted = &[("ceramic.Concrete", 1.0)];
 
+// plausible finishes per room type, as tools/render/roommats.py draws them for Blender (infinigen's tables gave a third of living /
+// dining / bedroom walls glossy tile and 40 % of their floors tile); RAW_ROOMS=1 keeps infinigen's tables
+const HOME_WALL: Weighted = &[("ceramic.Plaster", 19.0), ("ceramic.Tile", 1.0)];
+const LIVING_WALL: Weighted = &[("ceramic.Plaster", 19.0), ("ceramic.Tile", 1.0), ("ceramic.Brick", 1.2)];
+const KITCHEN_WALL_REAL: Weighted = &[("ceramic.Plaster", 8.0), ("ceramic.Tile", 2.0)];
+const HOME_FLOOR: Weighted = &[("wood.HardwoodFloor", 5.0), ("wood.StaggeredWoodTile", 2.0), ("wood.SquareWoodTile", 1.0), ("wood.CompositeWoodTile", 1.0),
+    ("wood.HexagonWoodTile", 0.3), ("wood.CrossedWoodTile", 0.3), ("ceramic.Tile", 0.9), ("fabric.Rug", 1.1)];
+const KITCHEN_FLOOR: Weighted = &[("ceramic.Tile", 5.0), ("wood.HardwoodFloor", 3.0), ("wood.StaggeredWoodTile", 1.0)];
+fn raw_rooms() -> bool { crate::envx::var_os("RAW_ROOMS").is_some() }
+
 /// decorate.py room_wall_fns
 pub fn wall_table(room_type: &str) -> Weighted {
+    if !raw_rooms() {
+        match room_type {
+            "living-room" | "dining-room" => return LIVING_WALL,
+            "bedroom" => return HOME_WALL,
+            "kitchen" => return KITCHEN_WALL_REAL,
+            _ => {}
+        }
+    }
     match room_type {
         "kitchen" => KITCHEN_WALL,
         "garage" | "warehouse" => GARAGE_WALL,
@@ -66,6 +84,13 @@ pub fn wall_table(room_type: &str) -> Weighted {
 
 /// decorate.py room_floor_fns
 pub fn floor_table(room_type: &str) -> Weighted {
+    if !raw_rooms() {
+        match room_type {
+            "living-room" | "dining-room" | "bedroom" => return HOME_FLOOR,
+            "kitchen" => return KITCHEN_FLOOR,
+            _ => {}
+        }
+    }
     match room_type {
         "bathroom" | "restroom" | "balcony" => BATHROOM_FLOOR,
         "utility" => UTILITY_FLOOR,
@@ -109,13 +134,33 @@ pub struct RoomMaterials {
 
 fn alt_choice(rng: &mut Rng, room_type: &str) -> &'static str {
     const RICH: &[(f64, &str)] = &[(2.0, "none"), (1.0, "half"), (1.0, "ceramic.Plaster"), (1.0, "art.Art"), (0.5, "art.DarkArt")];
+    // (roommats.py: plain paint mostly, wainscoting sometimes; printed art walls read as synthetic)
+    const RICH_REAL: &[(f64, &str)] = &[(6.0, "none"), (1.5, "half")];
+    let rich = if raw_rooms() { RICH } else { RICH_REAL };
     const PLAIN: &[(f64, &str)] = &[(2.0, "none"), (0.5, "half")];
     let tab = match room_type {
-        "living-room" | "bedroom" | "office" | "open-office" | "factory-office" | "break-room" => RICH,
+        "living-room" | "bedroom" | "dining-room" | "office" | "open-office" | "factory-office" | "break-room" => rich,
         _ => PLAIN,
     };
     let p: Vec<f64> = tab.iter().map(|x| x.0).collect();
     tab[rng.choice_p(&p)].1
+}
+
+/// the plain colour a material class shows where its procedural shader is not realised (previewers, the browser, glb viewers),
+/// varied by the material's seed: off-white or light paint for plaster, light oak .. walnut for wood, white / grey / beige tile,
+/// muted rugs, red-brown brick (every floor was one tan and every wall one beige)
+pub fn fallback_rgb(cls: &str, seed: u64) -> [f32; 3] {
+    let mut r = Rng::seeded(seed ^ 0x6a09_e667);
+    let pick = |r: &mut Rng, pal: &[[f32; 3]]| { let c = pal[r.randint(0, pal.len() as i64) as usize]; let v = r.uniform(0.94, 1.06) as f32; [c[0] * v, c[1] * v, c[2] * v] };
+    match cls {
+        "ceramic.Plaster" => pick(&mut r, &[[0.82, 0.80, 0.75], [0.85, 0.84, 0.80], [0.78, 0.76, 0.70], [0.70, 0.74, 0.66], [0.66, 0.72, 0.78], [0.76, 0.70, 0.64], [0.86, 0.82, 0.70], [0.62, 0.62, 0.64]]),
+        "ceramic.Tile" => pick(&mut r, &[[0.86, 0.86, 0.84], [0.62, 0.63, 0.64], [0.74, 0.70, 0.62], [0.40, 0.42, 0.44], [0.55, 0.66, 0.70], [0.80, 0.78, 0.72]]),
+        "ceramic.Brick" => pick(&mut r, &[[0.45, 0.20, 0.13], [0.52, 0.28, 0.18], [0.38, 0.22, 0.17]]),
+        "ceramic.Concrete" => pick(&mut r, &[[0.50, 0.50, 0.48], [0.58, 0.57, 0.54]]),
+        "fabric.Rug" => pick(&mut r, &[[0.55, 0.50, 0.44], [0.36, 0.40, 0.46], [0.48, 0.30, 0.26], [0.62, 0.60, 0.56], [0.30, 0.34, 0.30]]),
+        c if c.starts_with("wood.") => pick(&mut r, &[[0.62, 0.46, 0.30], [0.50, 0.34, 0.20], [0.36, 0.23, 0.14], [0.70, 0.56, 0.40], [0.55, 0.50, 0.44], [0.44, 0.30, 0.20]]),
+        _ => [0.8, 0.8, 0.8],
+    }
 }
 
 fn wall_kwargs(cls: &str, shape: &str) -> serde_json::Value {
@@ -147,7 +192,8 @@ pub fn decorate_rooms(seed: u64, rooms: &[(String, String)]) -> Vec<RoomMaterial
         let shape = ["square", "rectangle", "hexagon"][sr.choice_idx(3)];
         let kw = wall_kwargs(wall_cls[i], shape);
         last_kw = kw.clone();
-        let wall = spec_material(&format!("wall:{name}"), json!({"cls": wall_cls[i], "kwargs": kw, "seed": sr.randint(0, 1_000_000)}), [0.78, 0.76, 0.7]);
+        let ws = sr.randint(0, 1_000_000);
+        let wall = spec_material(&format!("wall:{name}"), json!({"cls": wall_cls[i], "kwargs": kw, "seed": ws}), fallback_rgb(wall_cls[i], ws as u64));
         out.push((wall, rt.as_str()));
     }
     let mut res = vec![];
@@ -170,7 +216,8 @@ pub fn decorate_rooms(seed: u64, rooms: &[(String, String)]) -> Vec<RoomMaterial
                 (WallAlt::Aligned, Some(m))
             }
         };
-        let floor = spec_material(&format!("floor:{name}"), json!({"cls": floor_cls[i], "kwargs": {}, "seed": sr.randint(0, 1_000_000)}), [0.45, 0.32, 0.2]);
+        let fs = sr.randint(0, 1_000_000);
+        let floor = spec_material(&format!("floor:{name}"), json!({"cls": floor_cls[i], "kwargs": {}, "seed": fs}), fallback_rgb(floor_cls[i], fs as u64));
         let ceiling = spec_material(&format!("ceiling:{name}"), json!({"cls": ceil_cls[i], "kwargs": {}, "seed": sr.randint(0, 1_000_000)}), [0.9, 0.9, 0.9]);
         res.push(RoomMaterials { wall, alt, alt_wall, floor, ceiling });
     }
