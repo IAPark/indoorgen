@@ -170,4 +170,34 @@ impl Factory for MediaConsole {
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> { Some([self.w, self.d, self.h]) }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> { Some(([0.0, -self.w / 2.0, 0.0], [self.d, self.w / 2.0, self.h])) }
     fn asset(&self, _i: u64) -> Asset { self.build() }
+    /// collision: the body (carcass, base, fronts, pulls: its whole depth), the top, a pull-out per drawer (3/4 of the carcass depth) and
+    /// a swing per door, hinged on the edge away from its pull (pulls face the middle of the piece)
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let (w, h, t, gap) = (self.w, self.h, 0.018, 0.003);
+        let hw = w / 2.0;
+        let d = self.d - self.proud();
+        let mut v = vec![Volume::hard([0.0, -hw, -0.002], [self.d, hw, h + 0.0005]), Volume::support([0.0, -hw, h - 0.001], [d, hw, h])];
+        let (fz0, fz1) = (self.base_h + t, h - t);
+        let n = self.cols.len();
+        let cw = (w - 2.0 * t) / n as f64;
+        for (i, c) in self.cols.iter().enumerate() {
+            let (y0, y1) = (-hw + t + cw * i as f64 + gap, -hw + t + cw * (i + 1) as f64 - gap);
+            match *c {
+                Col::Drawers(k) => {
+                    let dh = (fz1 - fz0) / k as f64;
+                    for j in 0..k {
+                        let (za, zb) = (fz0 + dh * j as f64 + gap, fz0 + dh * (j + 1) as f64 - gap);
+                        v.push(Volume::opening(Leaf::Drawer { panel: ([0.03, y0, za], [self.d, y1, zb]), dir: [1.0, 0.0, 0.0], travel: 0.75 * (d - 0.03) }));
+                    }
+                }
+                Col::Door | Col::Slats => {
+                    let (hy, axis) = if 0.5 * (y0 + y1) < 0.0 { (y0, [0.0, 0.0, -1.0]) } else { (y1, [0.0, 0.0, 1.0]) };
+                    v.push(Volume::opening(Leaf::Hinged { panel: ([d - 0.018, y0, fz0 + gap], [self.d, y1, fz1 - gap]), hinge: [d, hy, fz0], axis, max_angle: 100f64.to_radians() }));
+                }
+                Col::Open => {}
+            }
+        }
+        Some(v)
+    }
 }

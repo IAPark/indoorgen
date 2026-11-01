@@ -658,6 +658,45 @@ impl Factory for CellShelf {
         a.transform(&Mat4::rot_z(-R90));
         a
     }
+    /// collision: every board, the attach plates and screw heads as `asset` places them (before the quarter turn); the top, the
+    /// bottom and the horizontal divisions are supports
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let (d, c, h, v, dv, e) = (self.dims[0], self.cell, self.hn as f64, self.vn as f64, self.div_t, self.ext_t);
+        let cz = self.cell_z;
+        let g = 0.0008;
+        let turn = |lo: [f64; 3], hi: [f64; 3]| -> ([f64; 3], [f64; 3]) { ([lo[1] - g, -hi[0] - g, lo[2] - g], [hi[1] + g, -lo[0] + g, hi[2] + g]) };
+        let cube = |size: [f64; 3], at: [f64; 3]| turn([at[0] - size[0] / 2.0, at[1] - size[1] / 2.0, at[2] - size[2] / 2.0], [at[0] + size[0] / 2.0, at[1] + size[1] / 2.0, at[2] + size[2] / 2.0]);
+        let mut out = vec![];
+        let mut put = |size: [f64; 3], at: [f64; 3], sup: bool| {
+            let (lo, hi) = cube(size, at);
+            out.push(Volume::hard(lo, hi));
+            if sup { out.push(Volume::support([lo[0], lo[1], hi[2] - g - 0.001], [hi[0], hi[1], hi[2] - g])); }
+        };
+        let z5 = (v - 1.0) * dv + v * cz;
+        let sx = 0.5 * (c * h + (e + dv * (h - 1.0)));
+        for sg in [1.0, -1.0] { put([e, d, z5], [sg * sx, d * 0.5, z5 * 0.5 + e], false); }
+        let bx = (e * 2.0 + dv * (h - 1.0)) + c * h + 0.002;
+        let zb = e * 0.5;
+        let zt = zb + e + v * cz + dv * (v - 1.0);
+        put([bx, d, e], [0.0, d * 0.5, zb], true);
+        put([bx, d, e], [0.0, d * 0.5, zt], true);
+        for i in 1..self.hn {
+            let i = i as f64;
+            put([dv, d - 0.001, z5], [(0.5 * (h - 1.0) - i + 0.5) * dv + c * (h * 0.5 - i), d * 0.5, e + z5 * 0.5], false);
+        }
+        for j in 1..self.vn {
+            let j = j as f64;
+            put([h * c + (h - 1.0) * dv, d, dv], [0.0, d * 0.5, j * cz + (j - 1.0) * dv + (e + dv * 0.5)], true);
+        }
+        let sz = self.attach;
+        let (ax, az) = ((bx * 0.5 - e) - sz * 0.5, (z5 + e - 0.02) - sz * 0.5);
+        put([sz, 0.001, sz], [-ax, 0.0, az], false);
+        put([sz, 0.001, sz], [ax, 0.0, az], false);
+        let (sxx, sy, szz) = ((bx - e) * 0.5, e * 0.5, z5 + e * 2.0);
+        for (x, y) in [(sxx, sy), (sxx, d - sy), (-sxx, d - sy), (-sxx, sy)] { put([0.01, 0.01, 0.001], [x, y, szz], false); }
+        Some(out)
+    }
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let (x, y, z) = (self.dims[0], self.dims[1], self.dims[2]);
         let mut a = Asset::default();
@@ -1354,18 +1393,10 @@ pub fn make(c: &str, rng: &mut Rng, factory_seed: u64) -> Option<Box<dyn Factory
         "LargeShelfFactory" => Box::new(LargeShelf::new(rng, seed)),
         "SimpleBookcaseFactory" => Box::new(SimpleBookcase::new(rng, factory_seed)),
         "CellShelfFactory" => Box::new(CellShelf::new(rng, false, seed)),
-        // 60 % of TV stands are media consoles (drawers / doors / slats / cubbies on legs, a plinth or a frame), the rest infinigen's
-        // cubby bench; the choice is its own stream (NO_CONSOLE=1: off)
-        "TVStandFactory" => {
-            let mut pick = Rng::seeded(crate::int_hash(&["media_console", &seed.to_string()]));
-            if std::env::var_os("NO_CONSOLE").is_none() && pick.f64() < 0.6 { Box::new(super::console::MediaConsole::new(&mut rng.clone())) } else { Box::new(CellShelf::new(rng, true, seed)) }
-        }
-        // 55 % of desks are ModernDesk (pedestals, panel / trestle / A-frame / sled bases), the rest infinigen's; its own stream
-        // (NO_MODERN_DESK=1: off)
-        "SimpleDeskFactory" => {
-            let mut pick = Rng::seeded(crate::int_hash(&["modern_desk", &seed.to_string()]));
-            if std::env::var_os("NO_MODERN_DESK").is_none() && pick.f64() < 0.55 { Box::new(super::desk::ModernDesk::new(&mut rng.clone())) } else { Box::new(SimpleDesk::new(rng, false, factory_seed)) }
-        }
+        // a TV stand is a media console (drawers / doors / slats / cubbies on legs, a plinth or a frame: its cubby style is infinigen's
+        // cubby bench); a desk is ModernDesk (pedestals, panel / trestle / A-frame / sled bases, infinigen's plain desk among them)
+        "TVStandFactory" => Box::new(super::console::MediaConsole::new(&mut rng.clone())),
+        "SimpleDeskFactory" => Box::new(super::desk::ModernDesk::new(&mut rng.clone())),
         "SidetableDeskFactory" => Box::new(SimpleDesk::new(rng, true, factory_seed)),
         "SingleCabinetFactory" => Box::new(SingleCabinet::new(rng, factory_seed)),
         "KitchenCabinetFactory" => Box::new(KitchenCabinet { fseed: Some(factory_seed), ..KitchenCabinet::with_dims(rng, None) }),

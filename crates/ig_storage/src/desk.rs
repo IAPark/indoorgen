@@ -187,4 +187,79 @@ impl Factory for ModernDesk {
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> { Some([self.w, self.d, self.h]) }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> { Some(([-self.d / 2.0, -self.w / 2.0, 0.0], [self.d / 2.0, self.w / 2.0, self.h])) }
     fn asset(&self, _i: u64) -> Asset { self.build() }
+    /// collision: the top, each pedestal (pulls in its box), the base at each end without one, the rails between, the drawer under the
+    /// top -- the knee hole between them open for the chair; a pull-out per drawer; the top as the support
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::{Leaf, Volume};
+        let (d, w, h, t) = (self.d, self.w, self.h, self.t);
+        let (x0, x1, hw) = (-d / 2.0, d / 2.0, w / 2.0);
+        let zt = h - t;
+        let g = 0.001;
+        let mut v = vec![Volume::hard([x0 - g, -hw - g, zt - g], [x1 + g, hw + g, h + g]), Volume::support([x0, -hw, h - 0.001], [x1, hw, h])];
+        let hard = |v: &mut Vec<Volume>, lo: [f64; 3], hi: [f64; 3]| v.push(Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g]));
+        let mut ped_span = [(-hw, -hw), (hw, hw)];
+        for (side, p) in self.peds.iter().enumerate() {
+            let Some(p) = p else { continue };
+            let (y0, y1) = if side == 0 { (-hw + 0.02, -hw + 0.02 + self.ped_w) } else { (hw - 0.02 - self.ped_w, hw - 0.02) };
+            ped_span[side] = (y0, y1);
+            let (px0, px1) = (x0 + 0.02, x1 - 0.03);
+            hard(&mut v, [px0, y0, 0.0], [px1 + 0.024, y1, zt]);
+            if let Ped::Drawers(n) = *p {
+                let (fz0, fz1) = (0.04 + 0.018, zt - 0.01);
+                let hts: Vec<f64> = if n == 3 { vec![0.42, 0.29, 0.29] } else { vec![1.0 / n as f64; n] };
+                let mut z = fz0;
+                for f in hts {
+                    let dz = (fz1 - fz0) * f;
+                    v.push(Volume::opening(Leaf::Drawer { panel: ([px0 + 0.01, y0 + 0.003, z + 0.003], [px1 + 0.024, y1 - 0.003, z + dz - 0.003]), dir: [1.0, 0.0, 0.0], travel: 0.75 * (px1 - px0) }));
+                    z += dz;
+                }
+            }
+        }
+        let (ya, yb) = (if self.peds[0].is_some() { ped_span[0].1 } else { -hw }, if self.peds[1].is_some() { ped_span[1].0 } else { hw });
+        let open = [self.peds[0].is_none(), self.peds[1].is_none()];
+        let end_y = |side: usize| if side == 0 { -hw } else { hw };
+        match self.base {
+            Base::Legs => {
+                // (the leg radius is drawn in the build: up to 2.6 cm)
+                let lr = 0.026;
+                for side in 0..2 { if !open[side] { continue }
+                    let y = end_y(side) - (side as f64 * 2.0 - 1.0) * 0.05;
+                    hard(&mut v, [x0 + 0.05 - lr, y - lr, 0.0], [x1 - 0.05 + lr, y + lr, zt]);
+                }
+                hard(&mut v, [x1 - 0.06, ya + 0.02, zt - 0.07], [x1 - 0.04, yb - 0.02, zt]);
+                hard(&mut v, [x0 + 0.04, ya + 0.02, zt - 0.07], [x0 + 0.06, yb - 0.02, zt]);
+            }
+            Base::Panels => {
+                for side in 0..2 { if !open[side] { continue }
+                    let y = if side == 0 { -hw + 0.01 } else { hw - 0.01 - 0.025 };
+                    hard(&mut v, [x0 + 0.01, y, 0.0], [x1 - 0.02, y + 0.025, zt]);
+                }
+                hard(&mut v, [x0 + 0.03, ya + 0.02, zt * 0.45], [x0 + 0.048, yb - 0.02, zt]);
+            }
+            Base::Trestle => {
+                for side in 0..2 { if !open[side] { continue }
+                    let y = end_y(side) - (side as f64 * 2.0 - 1.0) * 0.1;
+                    hard(&mut v, [x0 + 0.04, y - 0.03, 0.0], [x1 - 0.04, y + 0.03, zt]);
+                }
+                let (sa, sb) = (if open[0] { -hw + 0.1 } else { ya }, if open[1] { hw - 0.1 } else { yb });
+                hard(&mut v, [x0 + 0.08, sa, 0.32], [x0 + 0.13, sb, 0.4]);
+            }
+            Base::AFrame | Base::Sled => {
+                let s = 0.014;
+                for side in 0..2 { if !open[side] { continue }
+                    let y = end_y(side) - (side as f64 * 2.0 - 1.0) * 0.05;
+                    // (an A-frame's tubes lean in from the floor corners; their square section stands s past the ends)
+                    // (and their square-cut feet dip ~4 mm under the floor)
+                    hard(&mut v, [x0 + 0.04 - s, y - s, -0.006], [x1 - 0.04 + s, y + s, zt]);
+                }
+                hard(&mut v, [x0 + 0.05, ya + 0.02, zt - 0.06], [x0 + 0.05 + 2.0 * s, yb - 0.02, zt - 0.06 + 2.0 * s]);
+            }
+        }
+        if self.apron_drawer && yb - ya > 0.7 {
+            let dw = (yb - ya - 0.2).min(0.6);
+            hard(&mut v, [x0 + 0.1, -dw / 2.0, zt - 0.08], [x1, dw / 2.0, zt]);
+            v.push(Volume::opening(Leaf::Drawer { panel: ([x0 + 0.1, -dw / 2.0, zt - 0.08], [x1, dw / 2.0, zt]), dir: [1.0, 0.0, 0.0], travel: 0.4 }));
+        }
+        Some(v)
+    }
 }
