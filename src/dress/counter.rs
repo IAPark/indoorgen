@@ -229,6 +229,12 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
                 if gx * gx + gy * gy > br * br * 0.8 { continue }
                 for z in heights(&tris, bcx + gx, bcy + gy) { if z > zt && z <= band.1 + 0.12 { zt = z; } }
             }}
+            // (a spot where something still rises into the vessel's body after the lift -- the back guard behind a rear burner -- is no
+            // spot: a pan stood 19 mm into it)
+            let hb = sc * (item.bounds().1[2] - ilo);
+            let into = (-steps..=steps).any(|i| (-steps..=steps).any(|j| { let (gx, gy) = (i as f64 * 0.01, j as f64 * 0.01);
+                gx * gx + gy * gy <= br * br * 0.8 && heights(&tris, bcx + gx, bcy + gy).iter().any(|z| *z > zt + 0.005 && *z < zt + hb) }));
+            if into { continue }
             let at = o.pose.apply([x, y, zt]);
             let yaw = o.pose.r[1][0].atan2(o.pose.r[0][0]) + ly;
             let b = box_at(&item, at, yaw, sc);
