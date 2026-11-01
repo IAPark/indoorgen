@@ -279,6 +279,7 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
     if views.is_empty() { eprintln!("viewpick: no usable spot in {room}"); return None }
     if verbose { eprintln!("VIEWCAND {room} {:?}", views.iter().map(|v| (format!("{:.1}", v.0), format!("{:.0}", v.1.to_degrees()), format!("{:.2},{:.2}", v.2 .0, v.2 .1))).collect::<Vec<_>>()); }
     let order: Vec<usize> = { let mut o: Vec<usize> = (0..views.len()).collect(); o.sort_by(|&a, &b| views[b].0.partial_cmp(&views[a].0).unwrap()); o };
+    let views_a = views[order[0]];
     let mut pick = order[0];
     if which == 1 {
         // another viewpoint: 1.2 m or more from cornerA's spot, or 0.6 m and a heading 35 deg or more apart (a small room's other
@@ -293,8 +294,26 @@ pub fn corner_cam(s: &SceneInfo, room: &str, which: usize, verbose: bool) -> Opt
         };
         pick = order.iter().skip(1).copied().find(|&i| ok(i)).unwrap_or(order[1.min(order.len() - 1)]);
     }
-    let lens = lens_of[pick];
-    let (sv, yaw, q) = views.swap_remove(pick);
+    let mut lens = lens_of[pick];
+    let (mut sv, mut yaw, mut q) = views.swap_remove(pick);
+    // a small room (under 9 m2: a WC, a small bathroom) where no other spot scores >= 0: cornerB stands at cornerA's spot facing 60 deg or more away
+    // (a photographer's second shot there; every other spot had a wall or fixture within 1.8 m)
+    if which == 1 && sv < 0.0 && area < 9.0 {
+        let a = views_a;
+        let head_a = (cen.1 - a.2 .1).atan2(cen.0 - a.2 .0) + a.1;
+        let base = (cen.1 - a.2 .1).atan2(cen.0 - a.2 .0);
+        let mut best: Option<(f64, f64, f32)> = None;
+        for &ln in lenses {
+            for k in -24..=24 {
+                let y = (5.0 * k as f64).to_radians();
+                let mut dh = (base + y - head_a).abs() % std::f64::consts::TAU; if dh > std::f64::consts::PI { dh = std::f64::consts::TAU - dh; }
+                if dh < 60f64.to_radians() { continue }
+                let sc = view_score(a.2, y, ln);
+                if best.map_or(true, |b| sc > b.0) { best = Some((sc, y, ln)); }
+            }
+        }
+        if let Some((sc, y, ln)) = best { if sc > sv { sv = sc; yaw = y; q = a.2; lens = ln; } }
+    }
     let (fx, fy) = (cen.0 - q.0, cen.1 - q.1); let l = fx.hypot(fy).max(1e-9);
     let (ux, uy) = ((fx * yaw.cos() - fy * yaw.sin()) / l, (fx * yaw.sin() + fy * yaw.cos()) / l);
     if verbose { eprintln!("VIEWCAM {room} corner{} ({:.2}, {:.2}) yaw {:.1} score {sv:.1} lens {lens}", if which == 0 { 'A' } else { 'B' }, q.0, q.1, yaw.to_degrees()); }
