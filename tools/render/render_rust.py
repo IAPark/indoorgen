@@ -892,7 +892,9 @@ def auto_exposure(sc):
     if os.environ.get("NO_AUTOEXP") or args.top or args.showcase: return
     keep = (sc.render.resolution_percentage, sc.cycles.samples, sc.render.filepath, sc.cycles.use_denoising)
     sc.render.use_persistent_data = True
-    sc.render.resolution_percentage = max(5, keep[0] // 8); sc.cycles.samples = 4; sc.cycles.use_denoising = False
+    # (16 samples, denoised: at 4 noisy samples many pixels came back near black, the mean read low and white kitchens were pushed to
+    # x20 exposure, blown out)
+    sc.render.resolution_percentage = max(5, keep[0] // 8); sc.cycles.samples = 16; sc.cycles.use_denoising = True
     tmp = os.path.join(tempfile.gettempdir(), "autoexp_probe.png"); sc.render.filepath = tmp
     import math
     # up to 3 probes: the image is tone mapped (AgX compresses), so one step undershoots
@@ -902,10 +904,16 @@ def auto_exposure(sc):
         lum = [0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2] for i in range(0, len(px), 4)]
         lum.sort(); core = lum[len(lum) // 20: len(lum) * 19 // 20] or lum
         avg = sum(core) / len(core)
-        if 0.36 < avg < 0.5: break
+        # highlight guard: the share of near-clipped pixels (white kitchens: AgX saturates the cabinets while dark fronts keep the
+        # mean low, and the mean-only rule pushed the exposure to x20 -- blown out)
+        clip = sum(1 for v in lum if v > 0.95) / len(lum)
+        if 0.36 < avg < 0.5 and clip < 0.18: break
         step = max(-2.5, min(1.5, math.log2(0.43 / max(avg, 1e-3)) * 2.0))
+        if clip > 0.10: step = min(step, 0.0)
+        if clip > 0.18: step = min(step, -0.6)
+        if step == 0.0: break
         sc.cycles.film_exposure *= 2 ** step
-        print("AUTOEXP probe %d mean %.3f -> x%.2f (exposure %.3f)" % (it, avg, 2 ** step, sc.cycles.film_exposure))
+        print("AUTOEXP probe %d mean %.3f clip %.2f -> x%.2f (exposure %.3f)" % (it, avg, clip, 2 ** step, sc.cycles.film_exposure))
     sc.render.resolution_percentage, sc.cycles.samples, sc.render.filepath, sc.cycles.use_denoising = keep
 
 # point lights (PointLampFactory)
