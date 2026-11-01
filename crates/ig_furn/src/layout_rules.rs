@@ -105,5 +105,9 @@ impl Default for LayoutRules {
 
 static RULES: RwLock<Option<LayoutRules>> = RwLock::new(None);
 
-pub fn set(r: &LayoutRules) { *RULES.write().unwrap() = Some(r.clone()); }
+pub fn set(r: &LayoutRules) {
+    *RULES.write().unwrap() = Some(r.clone());
+    // (the rules pieces decide by: a dining table decides itself whether it is round)
+    crate::piece::set_rules(crate::piece::PieceRules { round_table_p: r.round_table_p });
+}
 pub fn get() -> LayoutRules { RULES.read().unwrap().clone().unwrap_or_default() }

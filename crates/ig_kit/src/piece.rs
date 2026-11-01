@@ -151,7 +151,9 @@ pub fn sweep(leaf: &Leaf, steps: usize) -> Vec<V3> {
 /// as support-tagged top faces; soft and opening volumes as proxies with their role
 pub fn solver_geom(vols: &[Volume], max_rigid: usize) -> ObjGeom {
     let (lo, hi) = rigid_bounds(vols);
-    let mut boxes: Vec<(V3, V3)> = vols.iter().filter(|v| v.is_rigid()).map(|v| v.bounds()).collect();
+    // rigid boxes merge; rigid hulls (a round table top) stay as they are
+    let mut boxes: Vec<(V3, V3)> = vols.iter().filter(|v| v.is_rigid() && matches!(v.shape, Shape::Box { .. })).map(|v| v.bounds()).collect();
+    let hulls: Vec<&Vec<V3>> = vols.iter().filter(|v| v.is_rigid()).filter_map(|v| match &v.shape { Shape::Hull(p) => Some(p), _ => None }).collect();
     let inside = |a: &(V3, V3), b: &(V3, V3)| (0..3).all(|k| a.0[k] >= b.0[k] - 1e-6 && a.1[k] <= b.1[k] + 1e-6);
     let vol = |b: &(V3, V3)| (0..3).map(|k| (b.1[k] - b.0[k]).max(0.0)).product::<f64>();
     let uni = |a: &(V3, V3), b: &(V3, V3)| -> (V3, V3) { ([0, 1, 2].map(|k| a.0[k].min(b.0[k])), [0, 1, 2].map(|k| a.1[k].max(b.1[k]))) };
@@ -163,7 +165,7 @@ pub fn solver_geom(vols: &[Volume], max_rigid: usize) -> ObjGeom {
         bs.retain(|_| *it.next().unwrap());
     };
     dedup(&mut boxes);
-    while boxes.len() > max_rigid.max(1) {
+    while boxes.len() + hulls.len() > max_rigid.max(1 + hulls.len()) {
         let mut best = (f64::INFINITY, 0, 1);
         for i in 0..boxes.len() { for j in i + 1..boxes.len() {
             let c = vol(&uni(&boxes[i], &boxes[j])) - vol(&boxes[i]) - vol(&boxes[j]);
@@ -180,6 +182,12 @@ pub fn solver_geom(vols: &[Volume], max_rigid: usize) -> ObjGeom {
     for (a, b) in &boxes {
         tris.extend(box_tris(*a, *b, 0));
         proxies.push((Proxy::Box { center: [0, 1, 2].map(|k| (a[k] + b[k]) / 2.0), half: [0, 1, 2].map(|k| ((b[k] - a[k]) / 2.0).max(1e-6)) }, u32::MAX));
+        roles.push(ROLE_HARD);
+    }
+    for p in &hulls {
+        let (a, b) = bounds_of(p);
+        tris.extend(box_tris(a, b, 0));
+        proxies.push((Proxy::Hull((*p).clone()), u32::MAX));
         roles.push(ROLE_HARD);
     }
     canonical_tag(&mut tris, lo, hi);
@@ -262,3 +270,14 @@ pub fn install(r: Registry) { let _ = REGISTRY.set(r); }
 pub fn make_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
     REGISTRY.get().and_then(|r| r(class, seed))
 }
+
+/// the rules pieces decide by (set from the layout rules, GenConfig.rules: user-editable)
+#[derive(Clone, Copy, Debug)]
+pub struct PieceRules {
+    /// how often a dining table up to 1.6 m long is round
+    pub round_table_p: f64,
+}
+impl Default for PieceRules { fn default() -> Self { PieceRules { round_table_p: 0.5 } } }
+static RULES: std::sync::RwLock<Option<PieceRules>> = std::sync::RwLock::new(None);
+pub fn set_rules(r: PieceRules) { *RULES.write().unwrap() = Some(r); }
+pub fn rules() -> PieceRules { RULES.read().unwrap().unwrap_or_default() }

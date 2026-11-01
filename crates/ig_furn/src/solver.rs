@@ -230,6 +230,11 @@ fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
     match real_layout(ctx, &gen) { Some(g) => Some((g, gen)), None => Some((geom, gen)) }
 }
 
+/// a piece whose top is round (its rigid collision holds a hull of a round outline: a round table)
+pub fn round_top(o: &ObjState) -> bool {
+    o.geom.proxies.iter().enumerate().any(|(i, (p, _))| o.geom.role(i) == ROLE_HARD && matches!(p, Proxy::Hull(pts) if pts.len() >= 40))
+}
+
 /// at most this many rigid boxes per piece in the solver (merged: its cost grows with the proxies)
 pub const PIECE_BOXES: usize = 6;
 
@@ -379,8 +384,10 @@ pub fn set_size(ctx: &mut Ctx, state: &mut State, name: &str, base: &ObjState, x
     *oo = base.clone();
     oo.geom = Arc::new(ng);
     oo.generator.as_mut().unwrap().fit_box = Some(fb);
-    if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
-    if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+        // (a piece keeps the size it has: it may not take the one asked -- a round table squares itself)
+    let had_piece = oo.generator.as_ref().unwrap().piece.is_some();
+    if m.exact && !had_piece { oo.generator.as_mut().unwrap().size = Some(x); }
+    if let Some(p) = np { let ps = p.size(); oo.generator.as_mut().unwrap().piece = Some(p); oo.generator.as_mut().unwrap().size = Some(ps); }
     let mut p = oo.pose;
     p.translate([base.pose.r[0][1] * shift, base.pose.r[1][1] * shift, base.pose.r[2][1] * shift]);
     state.set_pose(name, p);
@@ -445,8 +452,10 @@ pub fn fit_builtins(ctx: &mut Ctx, state: &mut State, only_room: Option<&str>) -
                 *oo = base.clone();
                 oo.geom = Arc::new(ng);
                 oo.generator.as_mut().unwrap().fit_box = Some(fb);
-                if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
-                if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+                                // (a piece keeps the size it has: it may not take the one asked -- a round table squares itself)
+                let had_piece = oo.generator.as_ref().unwrap().piece.is_some();
+                if m.exact && !had_piece { oo.generator.as_mut().unwrap().size = Some(x); }
+                if let Some(p) = np { let ps = p.size(); oo.generator.as_mut().unwrap().piece = Some(p); oo.generator.as_mut().unwrap().size = Some(ps); }
                 let mut p = oo.pose;
                 p.translate([base.pose.r[0][1] * shift, base.pose.r[1][1] * shift, base.pose.r[2][1] * shift]);
                 state.set_pose(name.as_str(), p);
@@ -553,8 +562,10 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
                         let oo = state.objs.get_mut(name.as_str()).unwrap();
                         oo.geom = Arc::new(ng);
                         oo.generator.as_mut().unwrap().fit_box = Some(fb);
-                        if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
-                        if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+                                                // (a piece keeps the size it has: it may not take the one asked -- a round table squares itself)
+                        let had_piece = oo.generator.as_ref().unwrap().piece.is_some();
+                        if m.exact && !had_piece { oo.generator.as_mut().unwrap().size = Some(x); }
+                        if let Some(p) = np { let ps = p.size(); oo.generator.as_mut().unwrap().piece = Some(p); oo.generator.as_mut().unwrap().size = Some(ps); }
                         oo.pose = Pose::identity();
                         state.touch(name);
                         okk = try_apply_relation_constraints(state, name, rng);
@@ -630,8 +641,10 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
                     let oo = state.objs.get_mut(name.as_str()).unwrap();
                     oo.geom = Arc::new(ng);
                     oo.generator.as_mut().unwrap().fit_box = Some(fb);
-                    if np.is_some() { oo.generator.as_mut().unwrap().piece = np; oo.generator.as_mut().unwrap().size = Some(x); }
-                    if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
+                                        // (a piece keeps the size it has: it may not take the one asked -- a round table squares itself)
+                    let had_piece = oo.generator.as_ref().unwrap().piece.is_some();
+                    if m.exact && !had_piece { oo.generator.as_mut().unwrap().size = Some(x); }
+                    if let Some(p) = np { let ps = p.size(); oo.generator.as_mut().unwrap().piece = Some(p); oo.generator.as_mut().unwrap().size = Some(ps); }
                     state.touch(name);
                     return check_post_move_validity(state, name);
                 }

@@ -1510,7 +1510,15 @@ pub fn dining(ctx: &mut Ctx, state: &mut State, rng: &mut Rng) -> Vec<String> {
         {
             let (l, h) = lohi(state, &t);
             let (w, dp) = (h[1] - l[1], h[0] - l[0]);
-            if w <= 1.6 && rng.f64() < lr0.round_table_p {
+            // (a table piece decided itself: round when its top's collision is round -- tagged, its chairs set round it)
+            let piece_round = state.objs[&t].generator.as_ref().map_or(false, |g| g.piece.is_some());
+            if piece_round {
+                if super::solver::round_top(&state.objs[&t]) && (w - dp).abs() < 0.02 {
+                    state.objs.get_mut(&t).unwrap().tags.insert(Tag::sem("RoundTable"));
+                    state.touch(&t);
+                    log.push(format!("{room}: table {t} round"));
+                }
+            } else if w <= 1.6 && rng.f64() < lr0.round_table_p {
                 let base = state.objs[&t].clone();
                 // (both sides: squared by width alone, a 0.81 m deep table was laid out 0.9 m wide and built 0.81 m round)
                 let dd = dp.clamp(0.9, 1.2);
@@ -2089,7 +2097,9 @@ pub fn rugs(state: &mut State) -> Vec<String> {
             // (a piece: resized to the rug's size, its own geometry)
             if let Some(np) = o.generator.as_ref().and_then(|g| g.piece.as_ref()).and_then(|p| p.resize([w, d, t])) {
                 o.geom = std::sync::Arc::new(super::solver::piece_geom(&np).0);
+                let ps = np.size();
                 o.generator.as_mut().unwrap().piece = Some(np);
+                o.generator.as_mut().unwrap().size = Some(ps);
             }
             if round > 0.5 { o.tags.insert(Tag::sem("RoundTable")); }
             state.touch(&rug);

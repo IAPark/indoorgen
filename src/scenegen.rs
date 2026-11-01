@@ -185,8 +185,8 @@ pub fn build_scene(p: &Params) -> Built {
     }
     let (steps_l, steps_m, steps_s) = cfg.steps();
     let assets = indoorgen::assets::RealAssets { fallback: p.fallback.clone() };
-    // classes with a piece are laid out and built as one (PIECES=1; off by default until the native ports pass the regression set)
-    if std::env::var("PIECES").map_or(false, |v| v == "1") { indoorgen::assets::install_pieces(); }
+    // classes ported to pieces (native collision) are laid out and built as one (PIECES=0: the old boxes and factories)
+    if std::env::var("PIECES").map_or(true, |v| v != "0") { indoorgen::assets::install_pieces(); }
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
     let mk = |nudges: Vec<(String, String, f64)>| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges };

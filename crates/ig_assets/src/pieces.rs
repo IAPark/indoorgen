@@ -23,10 +23,27 @@ const WRAPPED: &[&str] = &["SofaFactory", "ArmChairFactory", "ChairFactory", "Ba
     "SideTableFactory", "TableCocktailFactory", "SimpleDeskFactory", "BedFactory", "WardrobeFactory", "SimpleBookcaseFactory", "LargeShelfFactory", "CellShelfFactory",
     "TVStandFactory", "FridgeFactory", "ShowerFactory", "FloorLampFactory", "BookStackFactory"];
 
+thread_local! {
+    /// classes found not native (a class is ported whole: every factory struct behind it writes its volumes)
+    static NOT_NATIVE: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
 pub fn make_piece(class: &str, seed: u64) -> Option<Box<dyn Piece>> {
-    let p = any_piece(class, seed)?;
-    // (a native piece -- its factory writes its volumes -- for any class; a wrapped one only for the classes above)
-    if p.native() || WRAPPED.contains(&class) { Some(p) } else { None }
+    if NOT_YET.contains(&class) { return None }
+    let wrapped = std::env::var_os("PIECES_WRAPPED").is_some() && WRAPPED.contains(&class);
+    // (every proposal of every class comes through here: a class known not to be native goes straight back)
+    if !wrapped && NOT_NATIVE.with(|n| n.borrow().contains(class)) { return None }
+    crate::make_factory(class, seed)?;
+    // a native piece -- its factory writes its volumes -- for any class; PIECES_WRAPPED=1: also a wrapped one for the classes above
+    // (asked first, without the wrapper's layout build: every proposal of every class comes through here)
+    let mut p = FactoryPiece::new(class, seed, None);
+    if p.try_native() || wrapped {
+        p.volumes();
+        Some(Box::new(p))
+    } else {
+        NOT_NATIVE.with(|n| n.borrow_mut().insert(class.to_string()));
+        None
+    }
 }
 
 /// any class with a factory as a piece (what colcheck checks): native when its factory writes its volumes, else wrapped
@@ -94,6 +111,17 @@ impl FactoryPiece {
         vols.extend(a.cols.iter().map(|(lo, hi)| Volume::hard(*lo, *hi)));
         vols.extend(a.supports.iter().map(|(lo, hi)| Volume::support(*lo, *hi)));
         vols
+    }
+
+    /// the factory's own volumes, if it writes them (kept as the collision)
+    fn try_native(&mut self) -> bool {
+        if self.col.is_none() {
+            if let Some(v) = self.with_hints(|| crate::make_factory(&self.class, self.seed).and_then(|f| f.volumes(self.inst))) {
+                self.native = true;
+                self.col = Some(v);
+            }
+        }
+        self.native
     }
 
     /// the collision: the factory's own volumes from its parameters, else the boxes of a layout build

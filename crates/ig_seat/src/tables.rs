@@ -104,11 +104,14 @@ impl Table {
         };
         // (the size asked: the layout box as given -- a nightstand's box can be deeper than wide)
         if let Some(sz) = crate::api::size_hint() { hy = sz[0] / 2.0; hx = sz[1] / 2.0; h = sz[2]; } else if hx > hy { std::mem::swap(&mut hx, &mut hy); }
+        // a dining table up to 1.6 m long is round some of the time (the rule round_table_p): squared to its depth, 0.9-1.2 m (the layout
+        // reads it from the round top's collision and seats one chair per side round it); the old path's round hint, likewise
+        let round = kind == Kind::Dining && (ig_kit::api::round_hint() || (2.0 * hy.max(hx) <= 1.6 + 1e-9 && r.f64() < crate::piece::rules().round_table_p));
+        if round { let d = (2.0 * hx.min(hy)).clamp(0.9, 1.2) / 2.0; hx = d; hy = d; }
         let squareish = hy.max(hx) / hy.min(hx) < 1.15;
-        // outline: round / oval tops only where the box allows (round in a square box, oval in a long one), else (rounded) rectangles;
-        // the layout made it round (RoundTable: chairs set round it): a circle / oval
+        // outline: round / oval tops only where the box allows (round in a square box, oval in a long one), else (rounded) rectangles
         let mut sq = match r.choice_p(&[0.45, 0.3, 0.25]) { 0 => 40.0, 1 => r.uniform(4.0, 7.0), _ => if squareish { 2.0 } else { 2.4 } };
-        if ig_kit::api::round_hint() { sq = 2.0; }
+        if round { sq = 2.0; }
         let w: &[f64] = match kind {
             //               Legs  Splay Taper Sled  Trest Pedes Slab  Drum  Stand
             Kind::Dining => &[0.25, 0.1, 0.15, 0.1, 0.15, 0.15, 0.1, 0.0, 0.0],
@@ -274,7 +277,12 @@ impl Table {
         let ztop = self.ztop();
         let r0 = self.r0();
         let spots = self.leg_spots();
-        let mut v = vec![Volume::hard([-hx, -hy, ztop], [hx, hy, h])];
+        let mut v = vec![if self.sq < 3.0 {
+            // a round / oval top: its outline (24 points pushed out by 1 / cos(7.5 deg) to hold the arcs between them), extruded
+            let g = 1.0 / (std::f64::consts::PI / 24.0).cos();
+            let ring = outline(hx * g, hy * g, self.sq, 24);
+            Volume::hard_hull(ring.iter().flat_map(|q| [[q[0], q[1], ztop], [q[0], q[1], h]]).collect())
+        } else { Volume::hard([-hx, -hy, ztop], [hx, hy, h]) }];
         let (s0, s1) = self.support();
         v.push(Volume::support(s0, s1));
         match self.base {
