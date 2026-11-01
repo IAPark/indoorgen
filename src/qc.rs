@@ -455,7 +455,14 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     for &a in &o.nodes {
                         for &b in &q.nodes {
                             let ov: Vec<f64> = (0..3).map(|d| bb[a].1[d].min(bb[b].1[d]) - bb[a].0[d].max(bb[b].0[d])).collect();
-                            if ov.iter().all(|&x| x > 0.03) {
+                            // (boxes in world axes: a basin turned 45 deg on a diagonal wall had a box 30 % wider than itself, and "overlapped"
+                            // a toilet 9.5 cm away (1069) -- the overlap must also hold along every horizontal direction, 15 deg apart)
+                            if ov.iter().all(|&x| x > 0.03) && !(0..12).any(|i| {
+                                let (s_, c_) = (i as f64 * std::f64::consts::PI / 12.0).sin_cos();
+                                let pr = |n: usize| nodes[n].mesh.pos.iter().map(|q| q[0] * c_ + q[1] * s_).fold((f64::MAX, f64::MIN), |a, v| (a.0.min(v), a.1.max(v)));
+                                let ((a0, a1), (b0, b1)) = (pr(a), pr(b));
+                                a1.min(b1) - a0.max(b0) <= 0.03
+                            }) {
                                 let m = ov.iter().cloned().fold(f64::MAX, f64::min);
                                 if box_ov.map_or(true, |w| m > w.0) {
                                     box_ov = Some((m, other));
