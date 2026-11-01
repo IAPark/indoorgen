@@ -49,8 +49,7 @@ impl MattressSpec {
     pub fn build_job(&self, r: &mut Rng) -> (Mesh, Option<(Mesh, f64, Vec<u32>)>) {
         let (w, s, t) = (self.width, self.size, self.thickness);
         let mut m = Mesh::cuboid([-w / 2.0, -s / 2.0, -t / 2.0], [w / 2.0, s / 2.0, t / 2.0]).welded(1e-9);
-        // (a layout build: the plain block, the coils' dimples lie within it -- envx::set_layout_build)
-        if self.coiled && !ig_core::envx::layout_build() {
+        if self.coiled {
             for (i, d) in [w, s, t].iter().enumerate() {
                 m = subdivide_edge_ring(&m, (d / self.dot_distance).ceil() as usize, i);
             }
@@ -104,6 +103,12 @@ impl Factory for Mattress {
         Some(a)
     }
 
+    /// collision: measured on its build (the coils puff the block out by up to 9 cm, not inward)
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.s.build(&mut inst_rng(self.fseed, inst)).bounds();
+        let g = 0.003;
+        Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g]), crate::piece::Volume::support([lo[0] + 0.05, lo[1] + 0.05, hi[2] - 0.001], [hi[0] - 0.05, hi[1] - 0.05, hi[2]])])
+    }
     fn asset(&self, inst: u64) -> Asset {
         let mut r = inst_rng(self.fseed, inst);
         let m = self.s.build(&mut r);

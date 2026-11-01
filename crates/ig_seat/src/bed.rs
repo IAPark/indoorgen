@@ -660,6 +660,28 @@ fn quad_grid_pillow(w: f64, s: f64, pressure_h: f64, n: usize) -> Mesh {
 }
 
 impl Factory for Bed {
+    /// collision: the frame and mattress measured once on the layout build (it stops at the mattress: no bedding simulated), and the
+    /// bedding as a soft volume over the mattress -- sheet and cover hang down its sides and foot, pillows stand on it
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let prev = ig_core::envx::layout_build();
+        ig_core::envx::set_layout_build(true);
+        let a = self.asset(inst);
+        ig_core::envx::set_layout_build(prev);
+        // the frame: every part but the layout build's bedding stand-in (its last part when the bed has bedding)
+        let n = if self.frame_only { a.parts.len() } else { a.parts.len().saturating_sub(1) };
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for p in &a.parts[..n] { let (pl, ph) = p.mesh.bounds(); for k in 0..3 { lo[k] = lo[k].min(pl[k]); hi[k] = hi[k].max(ph[k]); } }
+        let g = 0.004;
+        let mut v = vec![Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])];
+        if !self.frame_only && n >= 1 {
+            // the mattress (the frame's last part): the bedding drapes up to 0.45 m round it and down toward the floor, pillows up to 0.4 m up
+            let (ml, mh) = a.parts[n - 1].mesh.bounds();
+            v.push(Volume::soft([ml[0] - 0.45, ml[1] - 0.45, lo[2] - g], [mh[0] + 0.45, mh[1] + 0.45, mh[2] + 0.42]));
+            v.push(Volume::support([ml[0] + 0.05, ml[1] + 0.05, mh[2] - 0.001], [mh[0] - 0.05, mh[1] - 0.05, mh[2]]));
+        }
+        Some(v)
+    }
     fn placeholder_exact(&self, _i: u64) -> Option<super::cabnodes::ExactMesh> {
         let c = &self.s.c;
         Some(super::chair::rotated_bbox_exact(-c.width / 2.0, c.width / 2.0, -c.size - c.leg_thickness * 0.5, 0.0, -c.leg_height, c.back_height * 1.2))
@@ -920,6 +942,8 @@ impl Factory for Bed {
             super::cloth::rest_and_wrap(&mut pm.pos, &rest_col, 0.07, 0.01, 0.15);
             let b = pm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
+            // (pillows and the towel are bedding: soft, within the bed's soft volume)
+            a.soft.push(a.parts.len());
             a.parts.push(Part { mesh: pm, mat: pill_mat.clone(), col: Some((b.0, b.1)) });
         }
         // ---- towel
@@ -939,6 +963,7 @@ impl Factory for Bed {
             let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
             let b = tm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
+            a.soft.push(a.parts.len());
             a.parts.push(Part { mesh: tm, mat: tmat, col: Some((b.0, b.1)) });
         }
         a

@@ -104,8 +104,13 @@ fn sides(class: &str, seed: u64, vols: &[Volume], mesh: &ig_kit::api::Asset) {
     let rigid: Vec<Prepared> = vols.iter().filter(|v| v.is_rigid() || matches!(v.role, Role::Opening(_))).map(Prepared::new).collect();
     let (clo, chi) = rigid_bounds(vols);
     let (mut mlo, mut mhi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    let softp: Vec<Prepared> = vols.iter().filter(|v| !matches!(v.role, Role::Opening(_)) || true).map(Prepared::new).collect();
     for (i, part) in mesh.parts.iter().enumerate() {
-        if mesh.is_soft(i) { continue }
+        if mesh.is_soft(i) {
+            let w = part.mesh.pos.iter().map(|p| (softp.iter().map(|v| v.outside(*p)).fold(f64::INFINITY, f64::min), *p)).fold((0.0f64, [0.0; 3]), |a, b| if b.0 > a.0 { b } else { a });
+            if w.0 > 0.001 { let (lo, hi) = part.mesh.bounds(); println!("  {class} seed {seed} soft part {i}: {:.1} cm out at ({:.3}, {:.3}, {:.3}); part box {:.3?}..{:.3?}", w.0 * 100.0, w.1[0], w.1[1], w.1[2], lo, hi); }
+            continue;
+        }
         let worst = part.mesh.pos.iter().map(|p| (rigid.iter().map(|v| v.outside(*p)).fold(f64::INFINITY, f64::min), *p)).fold((0.0f64, [0.0; 3]), |a, b| if b.0 > a.0 { b } else { a });
         let (lo, hi) = part.mesh.bounds();
         for k in 0..3 { mlo[k] = mlo[k].min(lo[k]); mhi[k] = mhi[k].max(hi[k]); }
