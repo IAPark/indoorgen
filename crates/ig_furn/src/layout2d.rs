@@ -217,7 +217,9 @@ pub fn is_room(o: &ObjState) -> bool {
     o.tags.contains(Tag::sem("Room"))
 }
 
-/// object-object penetration depth (rooms excluded: see `outside_depth`)
+/// object-object penetration depth (rooms excluded: see `outside_depth`). The deepest overlap of any one pair of convex parts: for a
+/// piece built of boards (cabinets, shelves) that is at most a board's thickness however far the piece stands into the other (a cabinet
+/// 0.35 m into a door keep-out read 0.02); groups::door_keepouts measures world boxes for that reason
 pub fn depth(state: &State, a: &str, b: &str) -> f64 {
     let (pa, pb) = (prisms(state, a), prisms(state, b));
     let mut best = 0.0f64;
