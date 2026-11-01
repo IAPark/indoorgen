@@ -735,6 +735,60 @@ pub fn repair(state: &mut State) -> Vec<String> {
             if !(s < cur) { break }
             cur = s;
         }
+        // last resort: the secondary anchors (a TV stand, a sofa, a dining table with its chairs), smallest first, each kept out only
+        // when the room improves -- never a bed, a counter run or a bathroom fixture (narrow rooms: a sofa and TV stand across a 2.5 m
+        // living room cut its doors apart)
+        let mut cur = score(state);
+        if cur != (0, 0) {
+            let mut sec: Vec<(f64, String)> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "TVStandFactory" | "SofaFactory" | "TableDiningFactory" | "ArmChairFactory") && room_of(state, k).as_deref() == Some(room.as_str()))
+                .map(|(k, _)| (prisms(state, k).iter().map(|p| (p.bb[2] - p.bb[0]) * (p.bb[3] - p.bb[1])).sum::<f64>(), k.clone())).collect();
+            sec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            for (_, k) in sec {
+                if !state.objs.contains_key(&k) { continue }
+                let mut trial = State { objs: state.objs.clone(), caches: Default::default(), next_version: state.next_version };
+                remove_tree(&mut trial, &k);
+                // (a dining table's chairs go with it: they are related to the room, not the table)
+                if class_of(&state.objs[&k]) == "TableDiningFactory" {
+                    let chairs: Vec<String> = trial.objs.iter().filter(|(ck, co)| class_of(co).starts_with("Chair") && dist(&trial, ck, ck).is_finite() && state.objs.get(&k).map_or(false, |_| dist(state, ck, &k) < 0.3)).map(|(ck, _)| ck.clone()).collect();
+                    for ck in chairs { remove_tree(&mut trial, &ck); }
+                }
+                let s2 = score(&trial);
+                if s2 < cur {
+                    let gone: Vec<String> = state.objs.keys().filter(|x| !trial.objs.contains_key(*x)).cloned().collect();
+                    for x in &gone { if state.objs.contains_key(x) { remove_tree(state, x); } }
+                    log.push(format!("{room}: removed {k} and {} more (last resort)", gone.len().saturating_sub(1)));
+                    cur = score(state);
+                    if cur == (0, 0) { break }
+                }
+            }
+        }
+        // and a bed (never removed) slid along its headboard wall, with what is related to it (nightstands, what stands on them), to the
+        // nearest spot that joins the room up, inside it and clear of everything else (a bed across a narrow room cut its doors apart)
+        if cur != (0, 0) {
+            let beds: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "BedFactory" && room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            'beds: for b in beds {
+                let mut tree = vec![b.clone()];
+                loop {
+                    let more: Vec<String> = state.objs.iter().filter(|(k, o)| !tree.contains(k) && o.relations.iter().any(|r| tree.contains(&r.target))).map(|(k, _)| k.clone()).collect();
+                    if more.is_empty() { break }
+                    tree.extend(more);
+                }
+                let ax = [state.objs[&b].pose.r[0][1], state.objs[&b].pose.r[1][1]];
+                let old: Vec<(String, super::geom::Pose)> = tree.iter().map(|k| (k.clone(), state.objs[k].pose)).collect();
+                for step in 1..=12 { for sgn in [1.0, -1.0] {
+                    let d = sgn * 0.1 * step as f64;
+                    for (k, p) in &old { let mut q = *p; let t = q.t; q.set_loc([t[0] + ax[0] * d, t[1] + ax[1] * d, t[2]]); state.set_pose(k, q); state.touch(k); }
+                    let clear = outside_room_depth(state, &b, &room) < 0.01 && tree.iter().all(|k| !state.objs.iter().any(|(o, ob)| !tree.contains(o) && !is_room(ob) && ((ob.generator.is_some() && floor_foot(state, o).is_some()) || o.starts_with("doorclear/") || o.contains(".keepout")) && depth(state, k, o) > 0.01));
+                    if clear && score(state) < cur {
+                        log.push(format!("{room}: bed {b} slid {d:+.1} m along its wall (last resort)"));
+                        cur = score(state);
+                        if cur == (0, 0) { break 'beds }
+                        continue 'beds;
+                    }
+                    for (k, p) in &old { state.set_pose(k, *p); state.touch(k); }
+                }}
+            }
+        }
         let (c, bad) = walk_status(state, &room);
         if !(c || !base) || !bad.is_empty() { log.push(format!("{room}: still failing (doors connected {c}, unreachable {:?})", bad.iter().map(|k| class_of(&state.objs[k]).to_string()).collect::<Vec<_>>())); }
     }
