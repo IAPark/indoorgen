@@ -185,7 +185,9 @@ impl Occ {
             // the glass is thin across the wall: grow that axis by 0.2 m each way
             let thin_x = hi[0] - lo[0] < hi[1] - lo[1];
             let g = 0.2;
-            let (l, h) = if thin_x { ([lo[0] - g, lo[1], lo[2]], [hi[0] + g, hi[1], hi[2]]) } else { ([lo[0], lo[1] - g, lo[2]], [hi[0], hi[1] + g, hi[2]]) };
+            // (and out to the frame: the opening is a few cm past the glass all round -- a roll under the glass stood in the sill's zone)
+            let (f, fz) = (0.05, 0.08);
+            let (l, h) = if thin_x { ([lo[0] - g, lo[1] - f, lo[2] - fz], [hi[0] + g, hi[1] + f, hi[2] + fz]) } else { ([lo[0] - f, lo[1] - g, lo[2] - fz], [hi[0] + f, hi[1] + g, hi[2] + fz]) };
             self.boxes.push((l, h)); self.names.push(format!("{} zone", n.name));
         }
     }
