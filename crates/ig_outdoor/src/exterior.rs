@@ -7,7 +7,7 @@
 //!              or hip roof over eaves of `overhang` -- overlapping rectangles give the cross gables of real L / T houses --
 //!              fascia boards and a procedural shingle texture
 //! Classes "OutdoorHouse" (budget-exempt like the terrain); names "exterior_<house>.<part>".
-use ig_core::mesh::{encode_png, Material, Mesh, Scene};
+use ig_core::mesh::{encode_png, Mat4, Material, Mesh, Scene};
 use ig_core::rng::Rng;
 use ig_rooms::solidify::{CutKind, Cutter};
 use std::sync::Arc;
@@ -342,21 +342,35 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
             }
         }
     }
-    // roof
+    // roof, built in the house's own frame (its longest wall along x): the rectangle decomposition needs axis-aligned walls, and
+    // a neighbour turned toward a curving road or a turning circle is not (it came out as a heap of sliver roofs)
+    let (ang, piv) = {
+        let mut best = (0.0, 0.0);
+        for k in 0..ring.len() { let (a, b) = (ring[k], ring[(k + 1) % ring.len()]); let l = (b[0] - a[0]).hypot(b[1] - a[1]); if l > best.0 { best = (l, (b[1] - a[1]).atan2(b[0] - a[0])); } }
+        (best.1, ring[0])
+    };
+    let (ca, sa) = (ang.cos(), ang.sin());
+    let local: Vec<[f64; 2]> = ring.iter().map(|q| { let (dx, dy) = (q[0] - piv[0], q[1] - piv[1]); [ca * dx + sa * dy, -sa * dx + ca * dy] }).collect();
+    let mut rp = Parts { siding: Mesh::new(), trim: Mesh::new(), roof: Mesh::new(), concrete: Mesh::new() };
     let mut gables = vec![];
-    for rc in rectangles(&ring) {
+    for rc in rectangles(&local) {
         // a narrow strip (< 2 m across) between wings gets a low-slope hip roof under its neighbours' eaves (a steep gable over
         // it read as a sawtooth of ridges; dropping it left the ceiling showing)
         if (rc[2] - rc[0]).min(rc[3] - rc[1]) < 2.0 {
             let lo = Style { pitch_deg: 8.0, hip: true, overhang: 0.1, ..st.clone() };
-            rect_roof(&mut p, rc, ze, &lo, &mut gables);
+            rect_roof(&mut rp, rc, ze, &lo, &mut gables);
         } else {
-            rect_roof(&mut p, rc, ze, st, &mut gables);
+            rect_roof(&mut rp, rc, ze, st, &mut gables);
         }
     }
     for (o, u, n, w, z0, z1) in gables {
         let rise = z1 - z0;
-        siding(&mut p.siding, o, u, n, z0, z1, st.exposure, &|z| { let f = ((z - z0) / rise).clamp(0.0, 1.0); (0.5 * w * f, w - 0.5 * w * f) }, &[]);
+        siding(&mut rp.siding, o, u, n, z0, z1, st.exposure, &|z| { let f = ((z - z0) / rise).clamp(0.0, 1.0); (0.5 * w * f, w - 0.5 * w * f) }, &[]);
+    }
+    let back = Mat4::translation([piv[0], piv[1], 0.0]).mul(&Mat4::rot_z(ang));
+    for (dst, mut m) in [(&mut p.roof, rp.roof), (&mut p.trim, rp.trim), (&mut p.siding, rp.siding)] {
+        m.transform(&back);
+        if dst.is_empty() { *dst = m; } else { dst.append(&m); }
     }
     let mut r = Rng::seeded(seed);
     let sm = scene.material(Material::diffuse(&format!("ext_siding:{tag}"), st.siding, 0.6));

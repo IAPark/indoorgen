@@ -75,11 +75,12 @@ impl Site {
         h
     }
 
-    /// no trees / shrubs here: the road and its verges, the driveway, the neighbours' houses and yards
-    pub fn blocked(&self, x: f64, y: f64) -> bool {
+    /// nothing grows here: the road and its verges, the driveway, the neighbours' houses and `yard` m around them (a tree's
+    /// crown reaches ~7 m: trees ask with ~9 m, shrubs with ~2.5 m)
+    pub fn blocked(&self, x: f64, y: f64, yard: f64) -> bool {
         if let Some((d, _)) = self.road_near(x, y) { if d < self.half + 3.5 { return true } }
         for w in self.drive.windows(2) { if seg_dist([x, y], w[0], w[1]).0 < self.drive_half + 1.5 { return true } }
-        self.neighbours.iter().any(|nb| (x - nb.centre[0]).hypot(y - nb.centre[1]) < nb.radius + 5.0)
+        self.neighbours.iter().any(|nb| (x - nb.centre[0]).hypot(y - nb.centre[1]) < nb.radius + yard)
     }
 }
 

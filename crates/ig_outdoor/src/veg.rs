@@ -43,7 +43,7 @@ pub(super) fn plant_community(t: &Terrain, cfg: &OutdoorCfg, r: &mut Rng, centre
         if rr > far { return None }
         let d = if (x - centre[0]).abs() < e * 0.5 && (y - centre[1]).abs() < e * 0.5 { t.dist(x, y) } else { rr };
         if d < cfg.tree_wall_clearance { return None }
-        if t.site.as_ref().map_or(false, |s| s.blocked(x, y)) { return None }
+        if t.site.as_ref().map_or(false, |s| s.blocked(x, y, 9.0)) { return None }
         let p = ramp(mask(x, y), thresh - 0.08, thresh + 0.05).max(0.006);
         if r.f64() < p { Some(d) } else { None }
     };
@@ -144,7 +144,7 @@ pub(super) fn plant_community(t: &Terrain, cfg: &OutdoorCfg, r: &mut Rng, centre
         let c = cover(x, y);
         if c > 0.55 || r.f64() < c { continue }
         if shrubs.iter().any(|p| (p[0] - x).hypot(p[1] - y) < 2.5) { continue }
-        if t.site.as_ref().map_or(false, |s| s.blocked(x, y)) { continue }
+        if t.site.as_ref().map_or(false, |s| s.blocked(x, y, 2.5)) { continue }
         shrubs.push([x, y]);
     }
     log.push(format!("plant community: {n_seeded} seeds, {} trees survive ({n_near} in the fine grid; {n_thinned} thinned, {n_old} died of age; oak/maple/birch/pine/willow {:?}), {} shrubs (to {far:.0} m)",
