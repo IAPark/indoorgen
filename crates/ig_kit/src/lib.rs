@@ -14,6 +14,7 @@ pub use ig_exbool as exbool;
 pub use ig_bm as bm;
 pub use ig_geom::*;
 pub mod api;
+pub mod piece;
 pub mod bevel;
 pub mod bevel3;
 pub mod bevelfull;

@@ -85,6 +85,7 @@ fn geom_w(g: &ObjGeom) -> Value {
         "proxies": g.proxies.iter().map(|(p, m)| match p { Proxy::Box { center, half } => json!({"box": [center, half], "m": m}), Proxy::Hull(v) => json!({"hull": v, "m": m}) }).collect::<Vec<_>>(),
         "lo": g.lo, "hi": g.hi,
         "convex": g.convex.as_ref().map(|c| c.as_ref().clone()),
+        "roles": g.roles,
     })
 }
 fn geom_r(v: &Value) -> ObjGeom {
@@ -96,6 +97,7 @@ fn geom_r(v: &Value) -> ObjGeom {
         }).collect(),
         lo: v3(&v["lo"]), hi: v3(&v["hi"]),
         convex: if v["convex"].is_null() { None } else { Some(Arc::new(v3s(&v["convex"]))) },
+        roles: v["roles"].as_array().map_or(vec![], |a| a.iter().map(|x| x.as_u64().unwrap() as u8).collect()),
     }
 }
 

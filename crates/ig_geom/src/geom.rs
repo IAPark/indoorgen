@@ -70,6 +70,20 @@ pub struct ObjGeom {
     pub hi: V3,
     /// unique vertices when the mesh is watertight and convex (trimesh: `mesh.is_convex` -> fcl.Convex), else None (BVH)
     pub convex: Option<std::sync::Arc<Vec<V3>>>,
+    /// the role of each proxy (ROLE_*, parallel to `proxies`); empty: every proxy is hard (geometry made before pieces)
+    pub roles: Vec<u8>,
+}
+
+/// proxy roles (ObjGeom::roles, from a piece's volumes): hard parts collide with everything; soft parts (drapes, foliage) may overlap
+/// neighbouring furniture but not walls, door clearances or walkways; openings (a door's swing, a drawer's pull-out) block other pieces'
+/// hard parts and items, and may overlap rugs, other openings and what lies wholly above or below them
+pub const ROLE_HARD: u8 = 0;
+pub const ROLE_SOFT: u8 = 1;
+pub const ROLE_OPEN: u8 = 2;
+
+impl ObjGeom {
+    /// the role of proxy `i`
+    pub fn role(&self, i: usize) -> u8 { self.roles.get(i).copied().unwrap_or(ROLE_HARD) }
 }
 
 impl ObjGeom {
@@ -153,7 +167,7 @@ impl ObjGeom {
             }
         }
         let convex = convex_vertices(&tris).map(std::sync::Arc::new);
-        ObjGeom { tris, proxies, lo, hi, convex }
+        ObjGeom { tris, proxies, lo, hi, convex, roles: vec![] }
     }
 
     pub fn dims(&self) -> V3 {

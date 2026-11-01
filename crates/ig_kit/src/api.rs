@@ -57,9 +57,14 @@ pub struct Asset {
     pub cutters: Vec<Mesh>,
     /// extra solver collision boxes (local space) not tied to a part (e.g. every board / divider of a built-in bookshelf)
     pub cols: Vec<(V3, V3)>,
+    /// soft parts (drapes, foliage, throws): they lie within the piece's hard and soft volumes, not necessarily its hard ones;
+    /// cloth-job targets are soft too (Asset::is_soft)
+    pub soft: Vec<usize>,
 }
 
 impl Asset {
+    /// part `i` is soft: marked so, or a cloth job's target
+    pub fn is_soft(&self, i: usize) -> bool { self.soft.contains(&i) || self.cloth.iter().any(|j| j.target == i) }
     /// cloth jobs and followers as sidecar JSON; part `i` is named `{prefix}#{i}`; `m` places the asset in the world (z-rotation + translation)
     pub fn cloth_json(&self, prefix: &str, m: &Mat4) -> Vec<serde_json::Value> {
         use serde_json::json;

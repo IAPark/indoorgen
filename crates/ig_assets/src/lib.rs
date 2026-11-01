@@ -18,6 +18,8 @@ pub use ig_storage::*;
 pub use ig_plants::*;
 pub use ig_decor::*;
 pub use ig_openings::*;
+pub mod pieces;
+pub use pieces::install_pieces;
 // Procedural asset factories (ports of infinigen/assets/objects/*): parameter sampling + simplified geometry.
 use crate::geom::*;
 use crate::furn::solver::{Assets, PlaceholderKind};
