@@ -720,11 +720,20 @@ pub(crate) fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: 
     tags.update(&ctx.usage.usages_of(class));
     let mut o = ObjState::new(Arc::new(geom), super::geom::Pose::identity(), tags);
     o.generator = Some(gen);
-    if let Some((ro, r)) = state.objs.values().flat_map(|x| x.relations.iter().map(move |r| (x, r))).find(|(_, r)| r.target == room && r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom")))) {
-        o.relations.push(r.clone());
+    // (the room's own floor piece, else any room's, retargeted: a bedroom emptied for its bed had none, and the bed was added with no
+    // floor relation and at z 0, half a metre into the floor)
+    let floor_rel = |own: bool| state.objs.values().flat_map(|x| x.relations.iter().map(move |r| (x, r))).find(|(_, r)| (!own || r.target == room) && (own || r.target.contains('/')) && r.relation.geo().map_or(false, |g| g.child.contains(Tag::sub("Bottom"))));
+    if let Some((ro, r)) = floor_rel(true).or_else(|| floor_rel(false)) {
+        let mut r = r.clone(); r.target = room.to_string();
+        o.relations.push(r);
         // standing at that piece's floor height (its bottom)
         let z = ro.pose.t[2] + ro.geom.lo[2] - o.geom.lo[2];
         let t = o.pose.t; o.pose.set_loc([t[0], t[1], z]);
+    }
+    // (no floor piece anywhere to copy: the floor height from the doors, whose bottoms stand on it)
+    if o.relations.is_empty() {
+        let fz = state.objs.iter().filter(|(k, _)| k.starts_with("door") && !k.starts_with("doorclear")).map(|(k, _)| layout2d::lohi_world(state, k).0[2]).fold(f64::INFINITY, f64::min);
+        if fz.is_finite() { let t = o.pose.t; o.pose.set_loc([t[0], t[1], fz.max(0.0) - o.geom.lo[2]]); }
     }
     o.active = true;
     state.objs.insert(name.to_string(), o);
@@ -732,7 +741,10 @@ pub(crate) fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: 
     // the copied relation's child face index belongs to the other piece's geometry: re-matched to this one's downward face
     if let Some(g) = state.objs[name].relations.first().and_then(|r| r.relation.geo().cloned()) {
         let pl = state.planes(name, &g.child);
-        let best = (0..pl.len()).min_by(|&i, &j| state.plane_nd(name, pl[i]).0[2].partial_cmp(&state.plane_nd(name, pl[j]).0[2]).unwrap());
+        // (the lowest of the downward faces: a bed's placeholder has its legs' bottoms and the frame's underside, and snapping the
+        // frame's to the floor sank an added bed half a metre)
+        let key = |i: usize| { let (n, p) = state.plane_nd(name, pl[i]); ((n[2] * 1000.0).round(), p[2]) };
+        let best = (0..pl.len()).min_by(|&i, &j| key(i).partial_cmp(&key(j)).unwrap());
         if let Some(bi) = best { state.objs.get_mut(name).unwrap().relations[0].child_plane = bi; }
         state.touch(name);
     }
@@ -1675,6 +1687,27 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                         ok = place_on_wall(state, &name, &room, &score);
                         if ok { break; }
                     }
+                }
+                // (then fresh draws of the bed, the narrower ones only -- a quarter are singles: a 3 x 3 m room took no king)
+                if !ok {
+                    // (the first bed's floor relation and height: the room was cleared since, and a redrawn bed found nothing to copy them from)
+                    let (rel0, floor0) = { let o = &state.objs[&name]; (o.relations.clone(), o.pose.t[2] + o.geom.lo[2]) };
+                    for _ in 0..16 {
+                        state.objs.shift_remove(&name);
+                        super::solver::forget_placeholder("BedFactory");
+                        if !new_piece(ctx, state, rng, "BedFactory", &room, &name) { break }
+                        if state.objs[&name].relations.is_empty() && !rel0.is_empty() {
+                            let o = state.objs.get_mut(&name).unwrap();
+                            o.relations = rel0.clone();
+                            let t = o.pose.t; let lz = o.geom.lo[2]; o.pose.set_loc([t[0], t[1], floor0 - lz]);
+                            state.touch(&name);
+                        }
+                        let bw = { let g = &state.objs[&name].geom; g.hi[1] - g.lo[1] };
+                        if bw > 1.55 { continue }
+                        ok = place_on_wall(state, &name, &room, &score);
+                        if ok { log.push(format!("{room}: bed redrawn {bw:.2} m wide to fit")); break }
+                    }
+                    if !state.objs.contains_key(&name) { continue }
                 }
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
             }
