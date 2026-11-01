@@ -498,8 +498,12 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                 if (ct.loc[0] - ctr[0]).hypot(ct.loc[1] - ctr[1]) > 4.0 {
                     continue;
                 }
-                let (hw, depth) = (ct.dims[0] / 2.0, if matches!(ct.kind, CutKind::Window) { 0.12 + wall_t / 2.0 } else { 0.6 });
+                // (a half wall is not a way through: like a window, only what stands against the opening -- a counter run along it
+                // is a pass-through, and what stands low on it is below the opening)
+                let half_wall = matches!(ct.kind, CutKind::Passage) && ct.style == crate::rooms::solidify::DoorStyle::HalfWall;
+                let (hw, depth) = (ct.dims[0] / 2.0, if matches!(ct.kind, CutKind::Window) || half_wall { 0.12 + wall_t / 2.0 } else { 0.6 });
                 let (zlo, zhi) = match ct.kind {
+                    _ if half_wall => (-ct.dims[2] / 2.0 + 0.25, ct.dims[2] / 2.0),
                     CutKind::Window => (-ct.dims[2] / 2.0, ct.dims[2] / 2.0),
                     _ => (-ct.dims[2] / 2.0 + 0.05, ct.dims[2] / 2.0 - 0.1),
                 };
@@ -524,6 +528,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                 if hit > 0.045 {
                     let which = match ct.kind {
                         CutKind::Window => "blocks window",
+                        _ if half_wall => "blocks window (half wall)",
                         _ => "blocks door passage",
                     };
                     issues.push(format!("{which} (cutter {ci}, {:.0}cm into the zone)", hit * 100.0));
