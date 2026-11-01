@@ -916,9 +916,84 @@ fn glass_material(g: Glass, seed: u64) -> Material {
     }
 }
 
+impl CeilingFan {
+    /// collision from the spec, as `build` lays the fan out down from the ceiling: the canopy, downrod, motor housing (its outline's
+    /// spline bounded by 1.25x its largest profile radius, trim rings 5 mm proud) and switch housing as one column; the blade disc (tip
+    /// radius with the sweep and half the widest blade sideways; pitched and drooped about the root); the light kit; each pull cord's
+    /// sway cone and fob
+    pub fn volumes_from_spec(&self) -> Vec<crate::piece::Volume> {
+        use crate::piece::Volume;
+        let s = &self.spec;
+        let flush = s.downrod_length <= 1e-6;
+        let ch_eff = if flush { s.canopy_height * 0.6 } else { s.canopy_height };
+        let zt = -ch_eff - if flush { 0.0 } else { s.downrod_length + 0.01 };
+        let (hr, hh) = (s.housing_radius * if flush { 1.15 } else { 1.0 }, s.housing_height);
+        let zb = zt - hh;
+        // the housing outline's radius at t (build's Catmull-Rom through the profile, sampled at 16 steps)
+        let hp = &s.housing_profile;
+        let r_at = |t: f64| -> f64 {
+            let x = (t * 16.0).round() / 16.0 * 4.0;
+            let k = (x.floor() as usize).min(3);
+            let u = x - k as f64;
+            let p = |j: isize| hp[(j.clamp(0, 4)) as usize];
+            let (p0, p1, p2, p3) = (p(k as isize - 1), p(k as isize), p(k as isize + 1), p(k as isize + 2));
+            let rr = 0.5 * (2.0 * p1 + (-p0 + p2) * u + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * u * u + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * u * u * u);
+            (hr * rr).max(0.02)
+        };
+        let hmax = (hr * hp.iter().cloned().fold(0.0, f64::max) * 1.25).max(0.02);
+        let (sr, sh) = (r_at(1.0).max(hr * 0.4) * 0.9, 0.05);
+        let zs = zb + 0.004;
+        let zk = zs - sh;
+        let rb = s.canopy_radius.max(hmax + 0.006).max(sr).max(0.022) + 0.003;
+        let m = 0.003;
+        let mut v = vec![Volume::hard([-rb, -rb, zk - m], [rb, rb, m])];
+        // blades and irons
+        let blade_z = zb + hh * 0.3;
+        let root = r_at(0.7) + if matches!(s.arms, ArmStyle::None) { 0.01 } else { 0.07 };
+        let len = (s.span - root).max(0.1);
+        let w = s.blade_root_width.max(s.blade_tip_width);
+        let hw = 0.6 * w * s.blade_profile.iter().cloned().fold(0.0, f64::max);
+        let side = s.blade_sweep.abs() * len + hw;
+        let rbl = (root + len).hypot(side) + 0.01;
+        let (mut down, mut up) = (0.0f64, 0.0f64);
+        for &(pe, _, de) in &s.blade_errors {
+            let (p, d) = ((s.blade_pitch_deg + pe).to_radians(), (s.blade_droop_deg + de).to_radians());
+            let pitch = hw * p.sin().abs() + s.blade_thickness;
+            down = down.max(len * d.sin().max(0.0) + pitch);
+            up = up.max(len * (-d).sin().max(0.0) + pitch);
+        }
+        v.push(Volume::hard([-rbl, -rbl, blade_z - down.max(0.04) - m], [rbl, rbl, blade_z + up + 0.001 + m]));
+        // the light kit: its radius and its bottom
+        let (rk, bottom) = match s.light_kit {
+            LightKit::None => if matches!(s.style, Style::Traditional | Style::Tropical) { (sr * 0.5, zk - 0.07) } else { (sr * 0.6, zk - 0.028) },
+            LightKit::Bowl => (sr * 1.7, zk - sr * 0.9),
+            LightKit::Globe => (sr * 1.25, zk - 0.015 - sr * 1.25 * 1.95),
+            LightKit::Schoolhouse => (sr * 1.15, zk - 0.012 - sr * 2.0),
+            LightKit::Disc => ((hr * 1.05).max(0.11), zk - 0.024),
+            LightKit::Cage => (sr * 1.1 + 0.0015, zk - 0.03 - sr * 2.2 - 0.0015),
+            LightKit::Tulips => (sr + 0.1 + 0.055 + 0.006, zk - 0.07 - 0.11),
+        };
+        v.push(Volume::hard([-rk - m, -rk - m, bottom - m], [rk + m, rk + m, zk + 0.001]));
+        // the pull cords: a chain from the switch housing swaying from vertical, its bow and twist, a fob below
+        for i in 0..s.pull_cords as usize {
+            let (sway, _, twist, _) = s.cord_states[i % s.cord_states.len()];
+            let ang = 0.6 + i as f64 * 1.4;
+            let (x, y) = (sr * 0.85 * ang.cos(), sr * 0.85 * ang.sin());
+            let len = s.cord_length * (1.0 - 0.18 * i as f64);
+            let reach = len * sway.sin().abs() + 0.004 * twist.abs() + 0.08 * sway.abs() * len + 0.012;
+            let z0 = zs - sh * 0.5;
+            v.push(Volume::hard([x - reach, y - reach, z0 - len * sway.cos() - 0.032 - m], [x + reach, y + reach, z0 + 0.002]));
+        }
+        v
+    }
+}
+
 impl Factory for CeilingFan {
     fn asset(&self, _i: u64) -> Asset {
         self.build().0
+    }
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        Some(self.volumes_from_spec())
     }
 }
 

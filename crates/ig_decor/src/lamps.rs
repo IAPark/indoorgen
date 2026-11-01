@@ -46,6 +46,15 @@ impl CeilingLight {
 }
 
 impl Factory for CeilingLight {
+    /// collision: the housing (radius + thickness, height down from the ceiling) and the bulb cover's cylinder and its cap
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let (r, ri, m) = (self.radius + self.thickness + 0.002, self.inner_radius + 0.002, 0.002);
+        Some(vec![
+            Volume::hard([-r, -r, -self.height - m], [r, r, m]),
+            Volume::hard([-ri, -ri, -self.inner_height - self.inner_radius * self.curvature - m], [ri, ri, m]),
+        ])
+    }
     fn asset(&self, _i: u64) -> Asset {
         let black = spec_material("ceiling_black", json!({"cls": "lamp_shaders.shader_black", "kwargs": {}, "seed": self.seed}), [0.15, 0.15, 0.15]);
         let white = spec_material("ceiling_bulb", json!({"cls": "lamp_shaders.shader_lamp_bulb_nonemissive", "kwargs": {}, "seed": self.seed}), [0.8, 0.75, 0.65]);
@@ -179,17 +188,19 @@ impl StandLamp {
         l
     }
 
-    /// overall [x extent, y extent, z extent] of the lamp parts
+    /// the lamp is round about z (the stand's control points stand on the axis): the shade hangs from 0.4 of its height below the
+    /// stand's end to 0.6 above (its walls extruded 5 mm out), the rack's outer ring (tube rack_t) at its top
+    fn head(&self) -> (f64, f64, f64) {
+        let p = &self.p;
+        let z3 = p.cp[2][2];
+        (p.top_radius.max(p.bot_radius) + 0.005 + p.rack_t, z3 - 0.4 * p.shade_height - 0.001, z3 + 0.6 * p.shade_height + p.rack_t)
+    }
+
+    /// overall [x extent, y extent, z extent]
     fn extents(&self) -> [f64; 3] {
-        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for m in lamp_parts(&self.p) {
-            let (a, b) = m.bounds();
-            for k in 0..3 {
-                lo[k] = lo[k].min(a[k]);
-                hi[k] = hi[k].max(b[k]);
-            }
-        }
-        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+        let (r, _, top) = self.head();
+        let d = 2.0 * r.max(self.p.base_radius).max(self.p.stand_radius);
+        [d, d, top]
     }
 }
 
@@ -288,6 +299,18 @@ impl Factory for StandLamp {
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
         let e = self.extents();
         Some([e[1], e[0], e[2]])
+    }
+    /// collision: the base disc, the stand on the axis, the shade and its rack
+    fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
+        use crate::piece::Volume;
+        let p = &self.p;
+        let (r, z0, z1) = self.head();
+        let (br, sr, m) = (p.base_radius + 0.002, p.stand_radius + 0.002, 0.002);
+        Some(vec![
+            Volume::hard([-br, -br, -m], [br, br, p.base_height + m]),
+            Volume::hard([-sr, -sr, 0.0], [sr, sr, p.cp[2][2] + m]),
+            Volume::hard([-r - m, -r - m, z0 - m], [r + m, r + m, z1 + m]),
+        ])
     }
     fn asset(&self, _i: u64) -> Asset {
         let mut r = Rng::seeded(self.seed);
