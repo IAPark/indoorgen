@@ -115,6 +115,39 @@ impl Assets for RealAssets {
         }
         r
     }
+    fn layout_geom(&self, class: &str, factory_seed: u64, inst_seed: u64, unseeded: Option<&[f64]>, size: Option<[f64; 3]>, fit: Option<((V3, V3), ig_geom::geom::LayoutFit)>, round: bool) -> Option<ObjGeom> {
+        use ig_geom::geom::LayoutFit;
+        let t = thread_cpu();
+        // the hints of the final build (build_visual in scenegen), the caller's restored after
+        let (s0, r0, u0) = (ig_kit::api::size_hint(), ig_kit::api::round_hint(), crate::unseeded());
+        ig_kit::api::set_size_hint(size);
+        ig_kit::api::set_round_hint(round);
+        set_unseeded(unseeded.map(|u| u.to_vec()));
+        let raw = self.layout_raw(class, factory_seed, inst_seed);
+        ig_kit::api::set_size_hint(s0);
+        ig_kit::api::set_round_hint(r0);
+        set_unseeded(u0);
+        let r = raw.map(|(boxes, sup, (lo, hi))| {
+            // onto the solver's box as the final asset goes (scenegen build_visual): moved (built to size) or scaled and moved
+            let (sc, off) = match fit {
+                Some(((tlo, thi), LayoutFit::Exact)) => ([1.0; 3], [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]]),
+                Some(((tlo, thi), LayoutFit::Scale { uniform })) => crate::furn::sizes::fit_matrix(uniform, lo, hi, tlo, thi),
+                None => ([1.0; 3], [0.0; 3]),
+            };
+            let tf = |b: &(V3, V3)| -> (V3, V3) {
+                let (p, q) = ([0, 1, 2].map(|k| b.0[k] * sc[k] + off[k]), [0, 1, 2].map(|k| b.1[k] * sc[k] + off[k]));
+                ([0, 1, 2].map(|k| p[k].min(q[k])), [0, 1, 2].map(|k| p[k].max(q[k])))
+            };
+            let boxes: Vec<(V3, V3)> = boxes.iter().map(tf).collect();
+            let sup: Vec<(V3, V3)> = sup.iter().map(tf).collect();
+            // (open shapes keep their parts -- a seat under a table top, legs round a bed's frame; box-shaped storage is one box: the
+            // solver's collision cost grows with the boxes, and a wardrobe's or a shelf unit's parts fill their box anyway)
+            let open = matches!(class, "SofaFactory" | "ArmChairFactory" | "ChairFactory" | "BarChairFactory" | "OfficeChairFactory" | "TableDiningFactory" | "CoffeeTableFactory" | "SideTableFactory" | "TableCocktailFactory" | "SimpleDeskFactory" | "BedFactory" | "FloorLampFactory");
+            round_geom_f32(ig_kit::api::layout_geom_of(&boxes, &sup, if open { 6 } else { 1 }))
+        });
+        if prof_on() { prof_add(format!("layout_geom {class}"), thread_cpu() - t); }
+        r
+    }
     fn solver_asset(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<ObjGeom> {
         let t = thread_cpu();
         let key = cache_key(class, factory_seed, inst_seed, "solver");
@@ -142,20 +175,50 @@ fn cache_key(class: &str, fs: u64, inst: u64, what: &str) -> CacheKey {
     (class.to_string(), fs, inst, what, unseeded().map(|v| v.iter().map(|x| x.to_bits()).collect()))
 }
 type Memo<T> = std::sync::Mutex<Option<std::collections::HashMap<CacheKey, T>>>;
+// (nothing a layout build makes -- coarse meshes -- goes into or comes out of the caches of real builds)
 fn memo_get<T: Clone>(m: &Memo<T>, k: &CacheKey) -> Option<T> {
+    if ig_core::envx::layout_build() { return None }
     m.lock().unwrap().as_ref().and_then(|h| h.get(k).cloned())
 }
 fn memo_put<T: Clone>(m: &Memo<T>, k: CacheKey, v: &T) {
+    if ig_core::envx::layout_build() { return }
     m.lock().unwrap().get_or_insert_with(Default::default).insert(k, v.clone());
 }
 static PH_MEMO: Memo<Option<ObjGeom>> = std::sync::Mutex::new(None);
 static SOLVER_MEMO: Memo<Option<ObjGeom>> = std::sync::Mutex::new(None);
 static VISUAL_MEMO: Memo<Asset> = std::sync::Mutex::new(None);
+static LAYOUT_MEMO: Memo<Option<(Vec<(V3, V3)>, Vec<(V3, V3)>, (V3, V3))>> = std::sync::Mutex::new(None);
 fn memo_off() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| ig_core::env_on!("NOMEMO"))
 }
 impl RealAssets {
+    /// the raw layout build of a piece (its part boxes, support boxes, bounds), under the hints already set (size, round, draws);
+    /// cached per build. The final asset is fitted onto its box with these bounds too (scenegen), so it lands where its parts were laid out.
+    pub fn layout_raw(&self, class: &str, factory_seed: u64, inst_seed: u64) -> Option<(Vec<(V3, V3)>, Vec<(V3, V3)>, (V3, V3))> {
+        let t = thread_cpu();
+        // the raw build's boxes, cached per build (class, seeds, draws, the size asked of a build-to-size class): the fit onto the
+        // solver's box is a scale and a shift, applied to the boxes below -- a toilet tried at 30 sizes is built once
+        let key = cache_key(class, factory_seed, inst_seed, "layout");
+        match if memo_off() { None } else { memo_get(&LAYOUT_MEMO, &key) } {
+            Some(r) => r,
+            None => {
+                let r = make_factory(class, factory_seed).map(|f| {
+                    // (the coarse build only where it is known to hold and to pay: subdivided cushions and bodies, bevelled chair
+                    // frames, a bed's bedding drape; a tub's and a basin's builds pair their coarse and subdivided meshes, the rest build in a millisecond)
+                    ig_core::envx::set_layout_build(matches!(class, "SofaFactory" | "ArmChairFactory" | "ChairFactory" | "OvenFactory" | "DishwasherFactory" | "BedFactory"));
+                    // (the approximate parts: scene_asset's exact python mesh only re-splits them, at 0.6 s for an oven)
+                    let a = f.asset(inst_seed);
+                    ig_core::envx::set_layout_build(false);
+                    let (boxes, sup) = a.layout_boxes();
+                    (boxes, sup, a.bounds())
+                });
+                if ig_core::env_on!("LAYOUTDBG") { eprintln!("LAYOUTDBG build {class} {factory_seed} {inst_seed} {:.1} ms boxes {} bounds {:?}", (thread_cpu() - t) * 1e3, r.as_ref().map_or(0, |x| x.0.len()), r.as_ref().map(|x| (x.2.0.map(|v| (v * 1000.0).round() / 1000.0), x.2.1.map(|v| (v * 1000.0).round() / 1000.0)))); }
+                memo_put(&LAYOUT_MEMO, key, &r);
+                r
+            }
+        }
+    }
     pub fn placeholder_raw(&self, class: &str, factory_seed: u64, inst_seed: u64, kind: PlaceholderKind) -> Option<ObjGeom> {
         if let Some(f) = make_factory(class, factory_seed) {
             return Some(match kind {

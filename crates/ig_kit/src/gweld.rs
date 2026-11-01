@@ -806,7 +806,7 @@ pub fn subdivide(m: &GMesh, level: u32) -> GMesh {
 
 /// `ev(face, ptex_face, u, v)` replaces the simple-mode bilinear evaluation (used for the Catmull-Clark limit surface)
 pub fn subdivide_ev(m: &GMesh, level: u32, ev: Option<&dyn Fn(usize, usize, f32, f32) -> [f32; 3]>) -> GMesh {
-    if level == 0 {
+    if level == 0 || ig_core::envx::layout_build() {
         return m.clone();
     }
     let res = (1usize << level) + 1;

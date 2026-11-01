@@ -16,7 +16,8 @@ impl Mesh {
     /// Catmull-Clark smoothing; `bevel` > 0 first bevels sharp edges (width, segments, 30 degree limit) like Blender's BEVEL then SUBSURF.
     pub fn smoothed(&self, bevel_w: f64, segments: usize, levels: usize) -> Mesh {
         use crate::subdiv::*;
-        if self.faces.is_empty() {
+        // (a layout build: the coarse mesh, see envx::set_layout_build)
+        if self.faces.is_empty() || crate::envx::layout_build() {
             return self.clone();
         }
         let q = QMesh { pos: self.pos.clone(), faces: self.faces.clone() }.weld(1e-6);

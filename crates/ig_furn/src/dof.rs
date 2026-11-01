@@ -399,6 +399,14 @@ fn check_post_move_validity_inner(state: &State, name: &str) -> bool {
     if super::layout2d::outside_depth(state, name) > 1e-4 {
         return false;
     }
+    // (an item on another piece stays inside its room's wall faces: the house outline runs to the wall centrelines, and a book stack
+    // overhanging a side table set flush to the wall stood 2.5 cm in it -- 806)
+    let o = &state.objs[name];
+    if o.relations.iter().any(|r| state.objs.get(&r.target).map_or(false, |t| t.generator.is_some())) {
+        if let Some(room) = super::layout2d::room_of(state, name) {
+            if super::layout2d::outside_room_depth(state, name, &room) > 0.01 { return false; }
+        }
+    }
     super::layout2d::layout_ok(state, name)
 }
 

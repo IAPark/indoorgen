@@ -14,6 +14,8 @@ pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, c
 /// like `bevel_modifier`; `edge_order`: the Blender mesh's edge list (vertex pairs in edge index order, e.g. `mesh.edges`), used instead of the
 /// first-use order of the face corners (matters for the vertex/face order of the result)
 pub fn bevel_modifier_ex(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
+    // (a layout build: the sharp mesh, the bevel lies within it -- envx::set_layout_build)
+    if ig_core::envx::layout_build() { return Ok(m.clone()); }
     bevel_modifier_edges(m, width, segments, angle, clamp, profile, edge_order).map(|r| r.0)
 }
 

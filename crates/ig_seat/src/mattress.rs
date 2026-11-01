@@ -49,7 +49,8 @@ impl MattressSpec {
     pub fn build_job(&self, r: &mut Rng) -> (Mesh, Option<(Mesh, f64, Vec<u32>)>) {
         let (w, s, t) = (self.width, self.size, self.thickness);
         let mut m = Mesh::cuboid([-w / 2.0, -s / 2.0, -t / 2.0], [w / 2.0, s / 2.0, t / 2.0]).welded(1e-9);
-        if self.coiled {
+        // (a layout build: the plain block, the coils' dimples lie within it -- envx::set_layout_build)
+        if self.coiled && !ig_core::envx::layout_build() {
             for (i, d) in [w, s, t].iter().enumerate() {
                 m = subdivide_edge_ring(&m, (d / self.dot_distance).ceil() as usize, i);
             }

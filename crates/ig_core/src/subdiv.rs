@@ -282,6 +282,7 @@ pub fn catmull_clark(
     crease: Option<&HashMap<(u32, u32), f64>>,
 ) -> QMesh {
     let mut cur = m.clone();
+    if crate::envx::layout_build() { return cur; }
     let mut cr: HashMap<(u32, u32), f64> = HashMap::default();
     if let Some(c) = crease {
         for (&(a, b), &s) in c {

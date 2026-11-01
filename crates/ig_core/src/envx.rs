@@ -87,3 +87,14 @@ macro_rules! env_str {
         F.get_or_init(|| std::env::var($n).ok()).as_deref()
     }};
 }
+
+thread_local! { static LAYOUT_BUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+/// a layout build (the solver's collision geometry from the real factory): subdivision and other refinement passes are skipped -- their
+/// result lies within the coarse mesh, so the part boxes stay conservative. Per thread; the caller resets it.
+pub fn set_layout_build(on: bool) {
+    LAYOUT_BUILD.with(|c| c.set(on));
+}
+pub fn layout_build() -> bool {
+    LAYOUT_BUILD.with(|c| c.get())
+}

@@ -2284,6 +2284,8 @@ pub fn bevel_angle(m: &Mesh, width: f64, segments: usize, angle_limit: f64, widt
 /// like `bevel_angle`, with the mesh edge order of the Blender mesh (`edge_order`: vertex pairs in Blender's edge index order); the
 /// order decides which edge starts the vertex edge ring and with it the vertex patch variant of Blender
 pub fn bevel_angle_ex(m: &Mesh, width: f64, segments: usize, angle_limit: f64, width_mode: bool, edge_order: Option<&[(u32, u32)]>) -> Result<Mesh, String> {
+    // (a layout build: the sharp mesh, the bevel lies within it -- envx::set_layout_build)
+    if ig_core::envx::layout_build() { return Ok(m.clone()); }
     let mut b = Bevel::new(m, width, segments.max(1), width_mode);
     if let Some(eo) = edge_order {
         let mut rank = vec![usize::MAX / 2; b.edges.len()];

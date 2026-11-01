@@ -813,6 +813,7 @@ fn subdiv_propagate(m: &Mesh, level: u32, o: &mut Mesh) {
 }
 
 pub fn subdivide_mesh_simple(m: &Mesh, level: u32) -> Mesh {
+    let level = if ig_core::envx::layout_build() { 0 } else { level };
     let g = to_gmesh(m);
     let sg = crate::gweld::subdivide(&g, level);
     let mut o = from_gmesh(&sg);
@@ -834,7 +835,7 @@ pub fn subsurf_mesh_cr(m: &Mesh, level: usize, crease: Option<&crate::dhash::Has
         uv: vec![],
     };
     let q = crate::subdiv::QMesh { pos: mm.pos.clone(), faces: mm.faces.clone() };
-    if level == 0 {
+    if level == 0 || ig_core::envx::layout_build() {
         return m.clone();
     }
     let t_cc = crate::subdiv::catmull_clark(&q, level, crease);

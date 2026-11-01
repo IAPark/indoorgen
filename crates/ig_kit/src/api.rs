@@ -162,6 +162,22 @@ impl Asset {
         ObjGeom::from_tris(tris, proxies)
     }
 
+    /// the solver's collision geometry from the real asset: one box per part (its collision box, else its mesh bounds -- an oven's or
+    /// a toilet's parts carry none, a wardrobe's handles neither), the extra boxes, minus boxes inside another; canonical and support
+    /// tags as solver_geom. Laid out per part, the 2D footprints (layout2d::prisms) follow the asset: a chair's seat may go under a
+    /// table top where its arms may not.
+    pub fn layout_geom(&self) -> ObjGeom {
+        let (boxes, supports) = self.layout_boxes();
+        layout_geom_of(&boxes, &supports, 6)
+    }
+
+    /// the part boxes (collision box, else mesh bounds; the extra boxes) and the support boxes of Asset::layout_geom
+    pub fn layout_boxes(&self) -> (Vec<(V3, V3)>, Vec<(V3, V3)>) {
+        let mut boxes: Vec<(V3, V3)> = self.parts.iter().filter(|p| !p.mesh.pos.is_empty()).map(|p| p.col.unwrap_or_else(|| p.mesh.bounds())).collect();
+        boxes.extend(self.cols.iter().cloned());
+        (boxes, self.supports.clone())
+    }
+
     /// python's box placeholder layout (8 verts, 12 tris) for the bounds of this asset: see ObjGeom::cuboid
     pub fn bbox_exact(&self) -> cabnodes::ExactMesh {
         let (lo, hi) = self.bounds();
@@ -214,6 +230,53 @@ pub fn box_from_corners_exact(lo: V3, hi: V3) -> cabnodes::ExactMesh {
 
 pub fn box_from_corners_geom(lo: V3, hi: V3) -> ObjGeom {
     exact_geom(&box_from_corners_exact(lo, hi))
+}
+
+/// Asset::layout_geom from its boxes: one box proxy per part box (minus boxes inside another), canonical tags over their bounds, support
+/// tags on the support boxes' tops
+pub fn layout_geom_of(boxes: &[(V3, V3)], supports: &[(V3, V3)], max_boxes: usize) -> ObjGeom {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for b in boxes { for k in 0..3 { lo[k] = lo[k].min(b.0[k]); hi[k] = hi[k].max(b.1[k]); } }
+    let inside = |a: &(V3, V3), b: &(V3, V3)| (0..3).all(|k| a.0[k] >= b.0[k] - 1e-6 && a.1[k] <= b.1[k] + 1e-6);
+    let mut keep: Vec<(V3, V3)> = boxes.iter().enumerate().filter(|(i, a)| !boxes.iter().enumerate().any(|(j, b)| j != *i && inside(a, b) && (!inside(b, a) || j < *i))).map(|(_, a)| *a).collect();
+    // at most `max_boxes` (LAYOUT_MAX_BOXES overrides): the pair whose union adds the least empty volume merges first -- a shelf's boards go into its
+    // carcass for nothing, a chair's legs into the space under its seat, its arms and back stay apart (the solver's collision cost grows
+    // with the boxes: a wardrobe had 26)
+    let vol = |b: &(V3, V3)| (0..3).map(|k| (b.1[k] - b.0[k]).max(0.0)).product::<f64>();
+    let uni = |a: &(V3, V3), b: &(V3, V3)| -> (V3, V3) { ([0, 1, 2].map(|k| a.0[k].min(b.0[k])), [0, 1, 2].map(|k| a.1[k].max(b.1[k]))) };
+    static MAXB: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let maxb = MAXB.get_or_init(|| std::env::var("LAYOUT_MAX_BOXES").ok().and_then(|v| v.parse().ok())).unwrap_or(max_boxes).max(1);
+    while keep.len() > maxb {
+        let mut best = (f64::INFINITY, 0, 1);
+        for i in 0..keep.len() { for j in i + 1..keep.len() {
+            let c = vol(&uni(&keep[i], &keep[j])) - vol(&keep[i]) - vol(&keep[j]);
+            if c < best.0 { best = (c, i, j); }
+        }}
+        let u = uni(&keep[best.1], &keep[best.2]);
+        keep.remove(best.2);
+        keep[best.1] = u;
+        // (a merged box may now hold others)
+        let k2 = keep.clone();
+        keep.retain(|a| !k2.iter().any(|b| b != a && inside(a, b)));
+    }
+    let mut tris: Vec<Tri> = vec![];
+    let mut proxies = vec![];
+    for (a, b) in &keep {
+        tris.extend(box_tris(*a, *b, 0));
+        proxies.push((Proxy::Box { center: [(a[0] + b[0]) / 2., (a[1] + b[1]) / 2., (a[2] + b[2]) / 2.], half: [(b[0] - a[0]) / 2., (b[1] - a[1]) / 2., (b[2] - a[2]) / 2.] }, u32::MAX));
+    }
+    canonical_tag(&mut tris, lo, hi);
+    for (a, b) in supports {
+        for mut t in box_tris(*a, *b, 0) {
+            let u = sub(t.v[1], t.v[0]);
+            let v = sub(t.v[2], t.v[0]);
+            if cross(u, v)[2] > 1e-12 {
+                t.tags = SUPPORT;
+                tris.push(t);
+            }
+        }
+    }
+    ObjGeom::from_tris(tris, proxies)
 }
 
 pub trait Factory {

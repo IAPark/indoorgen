@@ -50,6 +50,8 @@ impl Osd {
     /// same vertex and have the same UV). Blender meshes carrying a UV map (every bpy primitive does) are refined with this face-varying channel, which
     /// changes the adaptive isolation and so the last float32 bits of the limit points (verified bit-identical on the sink bowl, see BACKLOG K2).
     pub fn new_uv(pos: &[[f32; 3]], faces: &[Vec<u32>], level: usize, adaptive: bool, simple: bool, uv_corner_ids: Option<&[i32]>) -> Option<Osd> {
+        // (a layout build takes the callers' no-OpenSubdiv path, as the wasm build does)
+        if crate::envx::layout_build() { return None; }
         let flat: Vec<f32> = pos.iter().flat_map(|p| p.iter().cloned()).collect();
         let sizes: Vec<c_int> = faces.iter().map(|f| f.len() as c_int).collect();
         let verts: Vec<c_int> = faces.iter().flat_map(|f| f.iter().map(|&v| v as c_int)).collect();

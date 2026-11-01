@@ -903,5 +903,15 @@ pub trait Assets {
     fn natural_size(&self, _class: &str, _factory_seed: u64, _inst_seed: u64) -> Option<[f64; 3]> {
         None
     }
+    /// the solver's collision geometry from a layout build of the real asset (Asset::layout_geom): built as the final asset is (the
+    /// constructor draws `unseeded`, the size asked `size`, a round top) and put on its box as the final one is (`fit`: Exact -- moved
+    /// onto it, Scale(uniform) -- fitted into it); None: the class has no real factory
+    fn layout_geom(&self, _class: &str, _factory_seed: u64, _inst_seed: u64, _unseeded: Option<&[f64]>, _size: Option<[f64; 3]>, _fit: Option<((V3, V3), LayoutFit)>, _round: bool) -> Option<ObjGeom> {
+        None
+    }
 }
+
+/// how a layout build goes onto the solver's box (see Assets::layout_geom)
+#[derive(Clone, Copy, Debug)]
+pub enum LayoutFit { Exact, Scale { uniform: bool } }
 

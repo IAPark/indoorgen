@@ -190,7 +190,38 @@ pub fn sample_rand_placeholder(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Opt
 
 thread_local! { static EXACT_SIZE: std::cell::Cell<Option<[f64; 3]>> = const { std::cell::Cell::new(None) }; }
 
+/// floor furniture laid out by its real asset's parts (Assets::layout_geom) instead of one box: the box was a guess (bounds_hint) or a
+/// sampled size the built asset then overshot -- chair arms in a table top, wardrobe handles in a bed, a headboard before a window.
+/// Counter runs and kitchen cabinets keep their real per-cabinet placeholders; box-shaped pieces with slow builds (oven 0.4 s, toilet,
+/// tub, basin, dishwasher: every proposal is a new asset), a single cabinet (built to its box exactly, knobs and doors measured) and a large plant (1.5 s, soft foliage) their boxes. LAYOUT_BOXES=0: the boxes, as before.
+const LAYOUT_REAL: &[&str] = &["SofaFactory", "ArmChairFactory", "ChairFactory", "BarChairFactory", "OfficeChairFactory", "TableDiningFactory", "CoffeeTableFactory",
+    "SideTableFactory", "TableCocktailFactory", "SimpleDeskFactory", "BedFactory", "WardrobeFactory", "SimpleBookcaseFactory", "LargeShelfFactory", "CellShelfFactory",
+    "TVStandFactory", "FridgeFactory", "ShowerFactory", "FloorLampFactory",
+    // (a small item whose guessed box was 3 cm off its build: a stack on a side table flush to the wall stood in the wall, 806)
+    "BookStackFactory"];
+
+/// a class laid out by its real asset's parts (LAYOUT_REAL, unless LAYOUT_BOXES=0)
+pub fn layout_real_class(class: &str) -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    LAYOUT_REAL.contains(&class) && !*OFF.get_or_init(|| std::env::var("LAYOUT_BOXES").map_or(false, |v| v == "0"))
+}
+
+/// the real per-part geometry of a placed piece at its current size (None: not a LAYOUT_REAL class, or no real factory)
+pub fn real_layout(ctx: &Ctx, gen: &super::state::GenRef) -> Option<ObjGeom> {
+    if !layout_real_class(&gen.class) { return None }
+    let m = super::sizes::model(&gen.class);
+    let exact = m.map_or(false, |m| m.exact);
+    let fit = gen.fit_box.map(|fb| (fb, if exact { crate::geom::LayoutFit::Exact } else { crate::geom::LayoutFit::Scale { uniform: m.map_or(true, |m| m.uniform) } }));
+    let size = if exact { cur_size(gen) } else { None };
+    ctx.assets.layout_geom(&gen.class, gen.factory_seed, gen.inst_seed, gen.unseeded.as_deref(), size, fit, false)
+}
+
 fn sample_rand_placeholder_new(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
+    let (geom, gen) = sample_rand_placeholder_box(ctx, rng, class)?;
+    match real_layout(ctx, &gen) { Some(g) => Some((g, gen)), None => Some((geom, gen)) }
+}
+
+fn sample_rand_placeholder_box(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
     let singleton = ctx.usage.has_usage(class, "SingleGenerator");
     let fac_seed = if singleton && ctx.singletons.contains_key(class) {
         ctx.singletons[class]
@@ -457,7 +488,10 @@ fn sized_geom(ctx: &mut Ctx, class: &str, g: &super::state::GenRef, m: &super::s
         Some((ng, fb))
     } else {
         let (nlo, nhi) = super::sizes::target_box(lo, hi, x);
-        Some((crate::api::box_from_corners_geom(nlo, nhi), (nlo, nhi)))
+        let mut g1 = g.clone();
+        g1.fit_box = Some((nlo, nhi));
+        if m.exact { g1.size = Some(x); }
+        Some((real_layout(ctx, &g1).unwrap_or_else(|| crate::api::box_from_corners_geom(nlo, nhi)), (nlo, nhi)))
     }
 }
 
@@ -561,9 +595,13 @@ pub fn apply_move(mv: &mut Move, state: &mut State, ctx: &mut Ctx, rng: &mut Rng
                 if rng.f64() < 0.6 && !real_exact {
                     let x = super::sizes::perturb(m, [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]], rng);
                     let (nlo, nhi) = super::sizes::target_box(lo, hi, x);
+                    let mut g1 = o.generator.clone().unwrap();
+                    g1.fit_box = Some((nlo, nhi));
+                    if m.exact { g1.size = Some(x); }
+                    let ng = real_layout(ctx, &g1).unwrap_or_else(|| crate::api::box_from_corners_geom(nlo, nhi));
                     *old = Some((o, b));
                     let oo = state.objs.get_mut(name.as_str()).unwrap();
-                    oo.geom = Arc::new(crate::api::box_from_corners_geom(nlo, nhi));
+                    oo.geom = Arc::new(ng);
                     oo.generator.as_mut().unwrap().fit_box = Some((nlo, nhi));
                     if m.exact { oo.generator.as_mut().unwrap().size = Some(x); }
                     state.touch(name);

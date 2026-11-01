@@ -469,17 +469,20 @@ pub fn build_scene(p: &Params) -> Built {
                     eprintln!("SIZEDBG {k} {} fs {} inst {} round {} hint [{:.3}, {:.3}, {:.3}] built [{:.3}, {:.3}, {:.3}] err [{:.3}, {:.3}, {:.3}]{}", gen.class, gen.factory_seed, gen.inst_seed, round, h[0], h[1], h[2], e[0], e[1], e[2], err[0], err[1], err[2], if bad { " OFF" } else { "" });
                 }
             }
+            // a class laid out by its parts goes onto its box by its layout build's bounds, as its parts did: by its own the fit
+            // differed (a bed's real pillows against its layout's bedding box) and its headboard rose 11 cm past the raised sill
+            let layout_bounds = if indoorgen::furn::solver::layout_real_class(&gen.class) { assets.layout_raw(&gen.class, gen.factory_seed, gen.inst_seed).map(|r| r.2) } else { None };
             if exact { ig_kit::api::set_size_hint(None); }
             // exact classes are built at the size but at their own origin (wardrobes: back-left corner): move them onto the box
             if let (true, Some((tlo, thi))) = (exact, gen.fit_box) {
-                let (lo, hi) = a.bounds();
+                let (lo, hi) = layout_bounds.unwrap_or_else(|| a.bounds());
                 // (an L leg's wall cabinet reaching on into the corner widens the model toward that end: kitchen_plan.rs)
                 let reach = gen.join.map_or(0.0, |j| if j[2].abs() > 1.5 { 0.0 } else { j[2] * j[3] / 2.0 });
                 let off = [tlo[0] - lo[0], (tlo[1] + thi[1]) / 2.0 + reach - (lo[1] + hi[1]) / 2.0, tlo[2] - lo[2]];
                 if off.iter().any(|v| v.abs() > 1e-6) { a.transform(&indoorgen::mesh::Mat4::translation(off)); }
             }
             if let (false, Some((tlo, thi)), Some(m)) = (exact, gen.fit_box, indoorgen::furn::sizes::model(&gen.class)) {
-                let (lo, hi) = a.bounds();
+                let (lo, hi) = layout_bounds.unwrap_or_else(|| a.bounds());
                 if std::env::var_os("FITDBG").is_some() { eprintln!("FITDBG {k} {} asset {:.2?}..{:.2?} box {:.2?}..{:.2?}", gen.class, lo, hi, tlo, thi); }
                 let (s, off) = indoorgen::furn::sizes::fit_matrix(m.uniform, lo, hi, tlo, thi);
                 let mut mt = indoorgen::mesh::Mat4::scale(s);

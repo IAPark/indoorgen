@@ -760,6 +760,13 @@ impl Factory for Bed {
         let mat_m = m("mattress", ms.mat_cls, 3, [0.92, 0.92, 0.9]);
         let mb = mattress.bounds();
         a.parts.push(Part { mesh: mattress.clone(), mat: mat_m, col: Some((mb.0, mb.1)) });
+        // a layout build (envx::set_layout_build) ends here: the bedding's two cloth simulations are most of a bed's build; in their
+        // place a box over the mattress -- 3 cm each side where sheet and cover hang, 15 cm up for them and the pillows
+        if ig_core::envx::layout_build() {
+            let (lo, hi) = ([mb.0[0] - 0.03, mb.0[1] - 0.03, mb.1[2] - 0.02], [mb.1[0] + 0.03, mb.1[1] + 0.03, mb.1[2] + 0.15]);
+            a.parts.push(Part { mesh: Mesh::cuboid(lo, hi), mat: m("bedding_layout", "fabric.FineKnitFabric", 4, [0.7, 0.7, 0.75]), col: Some((lo, hi)) });
+            return a;
+        }
         let (mw, msz) = (ms.width, ms.size);
         let cm = Collider::new(&mattress.pos, &mattress.faces);
         let cf = Collider::new(&frame_all.pos, &frame_all.faces);

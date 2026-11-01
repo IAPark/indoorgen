@@ -12,6 +12,8 @@ pub fn subsurf(m: &Mesh, levels: usize, simple: bool) -> Mesh {
 /// `preserve_corners`: SUBSURF boundary_smooth PRESERVE_CORNERS (valence-2 boundary vertices stay fixed); false = 'ALL' (the modifier default:
 /// corners are treated like creased boundary vertices and move)
 pub fn subsurf_bs(m: &Mesh, levels: usize, simple: bool, preserve_corners: bool) -> Mesh {
+    // (a layout build: the coarse mesh, see envx::set_layout_build)
+    if ig_core::envx::layout_build() { return m.clone(); }
     let prev = crate::subdiv::set_corner_fixed(preserve_corners);
     let prev2 = CORNER_FIXED_NOW.with(|c| c.replace(preserve_corners));
     let r = subsurf_inner(m, levels, simple);
@@ -171,7 +173,7 @@ fn simple_subdiv(m: &Mesh, levels: usize) -> Mesh {
 /// simple-subdivision positions both layouts share.
 pub fn subsurf_bl(m: &Mesh, levels: usize, simple: bool) -> Mesh {
     use super::cabnodes::GMesh;
-    if levels == 0 {
+    if levels == 0 || ig_core::envx::layout_build() {
         return m.clone();
     }
     let mut g = GMesh::new();
@@ -239,7 +241,7 @@ pub fn subsurf_osd_ex(m: &Mesh, levels: usize, simple: bool, limit_surface: bool
 /// same UV value (`Osd::new_uv`). Blender refines such meshes with a face-varying channel, which changes the last float32 bits (BACKLOG K2).
 pub fn subsurf_osd_uv(m: &Mesh, levels: usize, simple: bool, limit_surface: bool, quality: usize, edges: Option<&[[u32; 2]]>, uv_corner_ids: Option<&[i32]>) -> Option<Mesh> {
     use super::cabnodes::GMesh;
-    if levels == 0 {
+    if levels == 0 || ig_core::envx::layout_build() {
         return Some(m.clone());
     }
     let mut g = GMesh::new();

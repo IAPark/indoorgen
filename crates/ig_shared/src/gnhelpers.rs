@@ -59,6 +59,20 @@ pub fn geo_radius_ex(polylines: &[Vec<[f64; 3]>], radius: f64, resolution: i64, 
 
 /// geo_radius on an arbitrary wire mesh (vertices + edges, e.g. a branching skeleton)
 pub fn geo_radius_graph(verts: &[[f64; 3]], edges: &[[u32; 2]], radius: f64, resolution: i64, merge: f64, align_tilt: bool) -> Mesh {
+    // (a layout build: each edge's tube by its bounds -- a capped cylinder reaches r * sqrt(1 - d_k^2) past its ends along axis k, d
+    // its direction: no further, or a bed's legs read 5 cm below the floor -- the node graph was most of a chair's build;
+    // envx::set_layout_build)
+    if ig_core::envx::layout_build() {
+        let mut m = Mesh::new();
+        for e in edges {
+            let (a, b) = (verts[e[0] as usize], verts[e[1] as usize]);
+            let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-12);
+            let ext = [0, 1, 2].map(|k| radius * (1.0 - (d[k] / l).powi(2)).max(0.0).sqrt());
+            m.append(&Mesh::cuboid([0, 1, 2].map(|k| a[k].min(b[k]) - ext[k]), [0, 1, 2].map(|k| a[k].max(b[k]) + ext[k])));
+        }
+        return m;
+    }
     static TPL: OnceLock<J> = OnceLock::new();
     static TPL2: OnceLock<J> = OnceLock::new();
     let tpl = if align_tilt {
