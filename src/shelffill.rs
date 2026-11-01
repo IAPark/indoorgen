@@ -144,6 +144,15 @@ pub fn fill(state: &mut State, visuals: &mut HashMap<String, Asset>, seed: u64, 
                             let busy = |x: f64| kids.iter().any(|(lo, hi)| hi[2] > top - 0.01 && lo[la] < x + 0.2 && hi[la] > x - 0.2);
                             let x = if !busy(x) { x } else if !busy(a0 + a1 - x) { a0 + a1 - x } else { f64::NAN };
                             if x.is_nan() { continue }
+                            // (not up into a window over the unit: a vase stood 9 cm into the glass's zone)
+                            let (blo, bhi) = a.bounds();
+                            let c0 = up.apply({ let mut q = [0.0; 3]; q[la] = x - 0.15; q[da] = d0; q[2] = top; q });
+                            let c1 = up.apply({ let mut q = [0.0; 3]; q[la] = x + 0.15; q[da] = d1 + 0.2; q[2] = top + bhi[2] - blo[2]; q });
+                            let (wl, wh) = ([c0[0].min(c1[0]), c0[1].min(c1[1]), c0[2]], [c0[0].max(c1[0]), c0[1].max(c1[1]), c1[2]]);
+                            let at_window = state.objs.iter().any(|(wk, w)| wk.starts_with("window") && w.generator.is_none() && {
+                                let (ol, oh) = crate::furn::layout2d::lohi_world(state, wk);
+                                (0..3).all(|d| wl[d] < oh[d] + 0.2 && ol[d] - 0.2 < wh[d]) });
+                            if at_window { continue }
                             let mut at = [0.0; 3]; at[la] = x; at[da] = (d0 + d1) / 2.0; at[2] = top;
                             let name = format!("{key}.decor{n}"); n += 1;
                             add_decor(state, visuals, &up, &key, &room, name.clone(), cls, fs, a, at, rng.uniform(-0.4, 0.4));
