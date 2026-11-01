@@ -118,6 +118,7 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
                         for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } }
                         if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt && u[2] < h.1[2] + 0.06 { zt = u[2]; }
                     }}
+                    if std::env::var_os("FIREDBG").is_some() { eprintln!("FIREDBG k={k} slab h={h:?} spot=({sx:.3},{sy:.3},{zt:.3}) rad={rad:.3} depth_b={depth_b:.3} item=({dx:.3},{dy:.3}) fx={fx:?} breast={breast:?}"); for p in &pf.asset.parts { for f in &p.mesh.faces { let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]); for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } } if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt - 0.001 && l[2] < zt + 0.3 { eprintln!("  face lo={l:.3?} hi={u:.3?}"); } }} }
                     spots.push([sx, sy, zt]);
                 }
             }
@@ -127,10 +128,17 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
             let fy = rad + 0.1;
             // (the median over the footprint: the highest face anywhere under it was the slab's edge, and a basket floated 26 mm)
             let ftris = super::tris_of(&pf.asset);
-            let mut zs: Vec<f64> = [[0.0, 0.0], [0.7, 0.0], [-0.7, 0.0], [0.0, 0.7], [0.0, -0.7]].iter().map(|o| super::heights(&ftris, fxp + o[0] * rad, fy + o[1] * rad).into_iter().filter(|z| *z < 0.06).fold(0.0f64, f64::max)).collect();
-            zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let fz = zs[2];
-            spots.push([fxp, fy, fz]);
+            // (and the whole footprint on one level: with the slab's end under one edge the median read the floor and the tool stand's base
+            // stood 18 mm into the slab -- step outward, away from the breast, until it is clear)
+            let level = |x: f64| -> Option<f64> {
+                let g = [-1.05, -0.5, 0.0, 0.5, 1.05]; // the whole footprint, edges included (the slab edge lay between 0.7 rad and the rim)
+                let mut zs: Vec<f64> = g.iter().flat_map(|a| g.iter().map(move |b| [*a, *b])).collect::<Vec<_>>().iter().map(|o| super::heights(&ftris, x + o[0] * rad, fy + o[1] * rad).into_iter().filter(|z| *z < 0.06).fold(0.0f64, f64::max)).collect();
+                zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                (zs[zs.len() - 1] - zs[0] < 0.003).then_some(zs[zs.len() - 1])
+            };
+            if let Some((x, fz)) = (0..10).map(|i| fxp + if left { -0.03 } else { 0.03 } * i as f64).find_map(|x| level(x).map(|z| (x, z))) {
+                spots.push([x, fy, fz]);
+            }
             for (j, s) in spots.iter().enumerate() {
                 let at = w(*s);
                 let yaw_i = yaw + if k == 1 { std::f64::consts::FRAC_PI_2 * if r.f64() < 0.5 { 0.0 } else { 1.0 } } else { 0.0 };
