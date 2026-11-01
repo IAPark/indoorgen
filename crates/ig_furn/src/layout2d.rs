@@ -401,7 +401,7 @@ fn no_reach(cls: &str) -> bool {
 
 /// floor footprint of a piece standing on the floor (bottom below 0.25 m, no furniture parent except for chairs: dining chairs hang off
 /// their table, books / trinkets inside low cabinets also start below 0.25 m), else None
-fn floor_foot(state: &State, name: &str) -> Option<Vec<Vec<[f64; 2]>>> {
+pub fn floor_foot(state: &State, name: &str) -> Option<Vec<Vec<[f64; 2]>>> {
     let o = &state.objs[name];
     let cls = class_of(o);
     if cls.contains("Art") || cls.contains("Mirror") || cls.contains("Light") {
@@ -663,7 +663,7 @@ pub fn prisms_of_obj(o: &ObjState) -> Vec<Prism> {
     out
 }
 
-fn anchor(cls: &str) -> bool {
+pub fn anchor(cls: &str) -> bool {
     ["Bed", "Sofa", "TVStand", "KitchenSpace", "Toilet", "StandingSink", "BathroomSink", "Bathtub", "Shower", "TableDining", "Fridge", "Oven", "Chair", "Dishwasher", "Sink"].iter().any(|a| cls.starts_with(a))
 }
 

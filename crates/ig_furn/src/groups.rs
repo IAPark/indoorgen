@@ -2467,6 +2467,25 @@ pub fn fittings_clear(state: &mut State) -> Vec<String> {
     log
 }
 
+/// last word on the door keep-outs: a floor piece (not an anchor: beds, sofas, tables, fixtures stay) more than 5 cm into a door's
+/// clearance after every pass is removed (a living-room cabinet stood 44 cm into a doorway's passage)
+pub fn door_keepouts(state: &mut State) -> Vec<String> {
+    let mut log = vec![];
+    let kos: Vec<String> = state.objs.keys().filter(|k| k.starts_with("doorclear/")).cloned().collect();
+    let pieces: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.is_some() && !layout2d::is_room(o) && !layout2d::anchor(class_of(o)) && !class_of(o).contains("Rug") && !class_of(o).ends_with("Feature") && layout2d::floor_foot(state, k).is_some()).map(|(k, _)| k.clone()).collect();
+    for k in pieces {
+        if !state.objs.contains_key(&k) { continue }
+        // (world boxes: the prism depth read 2 cm for a cabinet 0.35 m into one)
+        let (l, h) = layout2d::lohi_world(state, &k);
+        let into = |ko: &String| { let (a, b) = layout2d::lohi_world(state, ko); (0..2).map(|d| (h[d].min(b[d]) - l[d].max(a[d])).max(0.0)).fold(f64::MAX, f64::min) };
+        if let Some(ko) = kos.iter().find(|ko| into(ko) > 0.05) {
+            log.push(format!("removed {} {k} ({:.2} m into {ko})", class_of(&state.objs[&k]), into(ko)));
+            layout2d::remove_tree(state, &k);
+        }
+    }
+    log
+}
+
 /// one cabinet style per kitchen: every counter run (and wall cabinet) of a room built with the factory seed of its longest run --
 /// each run drew its own, so a short run beside the sink came out white next to dark cabinets and read as a separate unit
 pub fn kitchen_style(state: &mut State) -> Vec<String> {
