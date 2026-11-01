@@ -2500,6 +2500,8 @@ pub fn orphans(state: &mut State) -> Vec<String> {
     // a TV centred on its stand (the solver left one at the stand's back edge, its foot 2 cm into the wall)
     let tvs: Vec<(String, String)> = state.objs.iter().filter(|(_, o)| class_of(o) == "TVFactory").filter_map(|(k, o)| o.relations.iter().map(|r| r.target.clone()).find(|t| state.objs.get(t).map_or(false, |p| class_of(p) == "TVStandFactory")).map(|t| (k.clone(), t))).collect();
     for (tv, st) in tvs {
+        // (a second TV on the stand went with the first's clearing)
+        if !state.objs.contains_key(&tv) || !state.objs.contains_key(&st) { continue }
         let (sl, sh) = layout2d::lohi_world(state, &st);
         let (tl, th) = layout2d::lohi_world(state, &tv);
         let d = [(sl[0] + sh[0] - tl[0] - th[0]) / 2.0, (sl[1] + sh[1] - tl[1] - th[1]) / 2.0];
@@ -2508,6 +2510,8 @@ pub fn orphans(state: &mut State) -> Vec<String> {
         let (tl, th) = layout2d::lohi_world(state, &tv);
         let kids: Vec<String> = state.objs.iter().filter(|(k, o)| **k != tv && o.relations.iter().any(|r| r.target == st)).map(|(k, _)| k.clone()).collect();
         for k in kids {
+            // (gone with an earlier one's tree)
+            if !state.objs.contains_key(&k) { continue }
             let (kl, kh) = layout2d::lohi_world(state, &k);
             if !(0..2).all(|i| kl[i] < th[i] + 0.02 && tl[i] - 0.02 < kh[i]) { continue }
             // the stand's long axis in world xy, and the shifts that put the piece just past either side of the TV
