@@ -125,12 +125,11 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
             let fxp = if left { breast[0] - rad - 0.06 } else { breast[1] + rad + 0.06 };
             // (on what is really there: the hearth slab runs on past the breast, and a log basket stood 2 cm into it)
             let fy = rad + 0.1;
-            let mut fz = 0.0f64;
-            for p in &pf.asset.parts { for f in &p.mesh.faces {
-                let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]);
-                for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } }
-                if l[0] < fxp + rad && u[0] > fxp - rad && l[1] < fy + rad && u[1] > fy - rad && u[2] > fz && u[2] < 0.06 { fz = u[2]; }
-            }}
+            // (the median over the footprint: the highest face anywhere under it was the slab's edge, and a basket floated 26 mm)
+            let ftris = super::tris_of(&pf.asset);
+            let mut zs: Vec<f64> = [[0.0, 0.0], [0.7, 0.0], [-0.7, 0.0], [0.0, 0.7], [0.0, -0.7]].iter().map(|o| super::heights(&ftris, fxp + o[0] * rad, fy + o[1] * rad).into_iter().filter(|z| *z < 0.06).fold(0.0f64, f64::max)).collect();
+            zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let fz = zs[2];
             spots.push([fxp, fy, fz]);
             for (j, s) in spots.iter().enumerate() {
                 let at = w(*s);
