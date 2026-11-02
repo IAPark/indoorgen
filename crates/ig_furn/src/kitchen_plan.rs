@@ -459,6 +459,8 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     // (the solver found no spot for a run: the plan makes its own, a kitchen without a counter is no kitchen)
     let proto = match runs.first().cloned() {
         Some(r) => r,
+        // (only with appliances there to go with it: on another room's copy of the house this kitchen just looks empty)
+        None if fridge.is_none() && range.is_none() => return None,
         None => {
             let name = format!("{room}_krun").replace('/', "_");
             let mut r = Rng::seeded(ig_core::int_hash(&["kitchen_run", room]));

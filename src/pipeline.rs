@@ -107,6 +107,23 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
     #[allow(unused_mut)]
     let mut st = solver.solve(&mut a);
+    // a plan with a room too small to furnish is planned again (a 2 x 2 m bedroom took no bed whatever the layout tried; the score only
+    // discourages them): the plan is under a second of the house, a room without its furniture is not worth keeping
+    {
+        let too_small = |st: &RoomState| st.valid_rooms().filter(|(k, _)| {
+            let (min_area, min_w) = match room_type(k) { "bedroom" => (7.5, 2.5), "living-room" => (9.0, 2.5), "dining-room" => (6.0, 2.2), "kitchen" => (4.5, 1.8), _ => return false };
+            let b = crate::shp::bounds(st.poly(k));
+            crate::shp::area(st.poly(k)) < min_area || (b.2 - b.0).min(b.3 - b.1) < min_w
+        }).count();
+        let mut bad = too_small(&st);
+        for attempt in 1..=8 {
+            if bad == 0 { break }
+            let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms", &attempt.to_string()]));
+            let s2 = solver.solve(&mut a);
+            let b2 = too_small(&s2);
+            if b2 < bad { st = s2; bad = b2; }
+        }
+    }
     // plan refinement (tools/plan_refine.py): PLAN_NUDGE="room_a,room_b,d;..." moves shared walls before the house is built
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(spec) = std::env::var("PLAN_NUDGE") {

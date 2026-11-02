@@ -16,7 +16,11 @@ pub fn bevel_modifier(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, c
 pub fn bevel_modifier_ex(m: &Mesh, width: f64, segments: i32, angle: Option<f32>, clamp: bool, profile: f32, edge_order: Option<&[[u32; 2]]>) -> Result<Mesh, String> {
     // (a layout build: the sharp mesh, the bevel lies within it -- envx::set_layout_build)
     if ig_core::envx::layout_build() { return Ok(m.clone()); }
-    bevel_modifier_edges(m, width, segments, angle, clamp, profile, edge_order).map(|r| r.0)
+    // (a degenerate mesh can panic deep in the bevel -- a toilet seat with its cut took a whole house down: it goes unbevelled instead)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| bevel_modifier_edges(m, width, segments, angle, clamp, profile, edge_order).map(|r| r.0))) {
+        Ok(r) => r,
+        Err(_) => Ok(m.clone()),
+    }
 }
 
 /// like `bevel_modifier_ex`, also returning the result's edge list in Blender's (BMesh) order with the stored vertex order (v1, v2)

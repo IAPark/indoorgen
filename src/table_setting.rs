@@ -208,6 +208,17 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 for d in 0..2 { b.0[d] -= m; b.1[d] += m; } b.0[2] = -10.0; b.1[2] = 10.0; b }).collect();
             let others: Vec<B> = doors.into_iter().chain(state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && !o.generator.as_ref().unwrap().class.contains("Rug") && !o.relations.iter().any(|x| x.target == tk && o.generator.as_ref().unwrap().class != "ChairFactory")).map(|(_, o)| wbox(o))).collect();
             let mut done = false;
+            // the table's legs: its rigid volumes below the top
+            let legs: Vec<B> = state.objs[&tk].generator.as_ref().and_then(|g| g.piece.as_ref()).map_or(vec![], |pc| {
+                let (t, vols) = (&state.objs[&tk], pc.collision());
+                let top = vols.iter().filter(|v| v.is_rigid()).map(|v| v.bounds().1[2]).fold(f64::MIN, f64::max);
+                vols.iter().filter(|v| v.is_rigid() && v.bounds().0[2] < top * 0.5).map(|v| {
+                    let (a, c) = v.bounds();
+                    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+                    for x in [a[0], c[0]] { for y in [a[1], c[1]] { for z in [a[2], c[2]] { let q = t.pose.apply([x, y, z]); for d in 0..3 { lo[d] = lo[d].min(q[d]); hi[d] = hi[d].max(q[d]); } } } }
+                    (lo, hi)
+                }).collect()
+            });
             let here = to_local(seat(&c));
             let mut order: Vec<usize> = (0..slots.len()).filter(|i| !taken.contains(i)).collect();
             order.sort_by(|&a, &b| { let d = |i: usize| (slots[i].0[0] - here[0]).hypot(slots[i].0[1] - here[1]); prio[a].0.cmp(&prio[b].0).then(d(a).partial_cmp(&d(b)).unwrap()) });
@@ -215,16 +226,24 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
                 let (p, nl) = (&slots[si].0, &slots[si].1);
                 // seat centre 0.5 depth out from the edge minus the tuck (layout_rules.chair_tuck: the seat's front under the top, as
                 // chairs are left at a table); chair faces -n (its +x toward the table)
-                let off = 0.5 * depth - crate::furn::layout_rules::get().chair_tuck;
-                let sc = to_world([p[0] + nl[0] * off, p[1] + nl[1] * off]);
                 let nw = [r[0][0] * nl[0] + r[0][1] * nl[1], r[1][0] * nl[0] + r[1][1] * nl[1]];
                 let yaw = (-nw[1]).atan2(-nw[0]);
                 let mut np = c.pose;
                 let e = np.o.eul; np.set_euler([e[0] as f64, e[1] as f64, yaw]);
                 let cc = np.rot([(cl[0] + ch[0]) / 2.0, (cl[1] + ch[1]) / 2.0, 0.0]);
-                np.set_loc([sc[0] - cc[0], sc[1] - cc[1], c.pose.t[2]]);
-                let mut cand = c.clone(); cand.pose = np;
-                let b = wbox(&cand);
+                let mut off = 0.5 * depth - crate::furn::layout_rules::get().chair_tuck;
+                let mut b = wbox(&c);
+                // (the tuck stops at the table's legs: seated near a corner, chairs stood 2 cm into them)
+                for _ in 0..3 {
+                    let sc = to_world([p[0] + nl[0] * off, p[1] + nl[1] * off]);
+                    np.set_loc([sc[0] - cc[0], sc[1] - cc[1], c.pose.t[2]]);
+                    let mut cand = c.clone(); cand.pose = np;
+                    b = wbox(&cand);
+                    let d = if nw[0].abs() > nw[1].abs() { 0 } else { 1 };
+                    let push = legs.iter().filter(|l| (0..2).all(|k| b.0[k] < l.1[k] && l.0[k] < b.1[k])).map(|l| if nw[d] > 0.0 { l.1[d] - b.0[d] } else { b.1[d] - l.0[d] }).fold(0.0f64, f64::max);
+                    if push <= 0.0 { break }
+                    off += push + 0.006;
+                }
                 if seated.iter().any(|o| (0..2).all(|d| b.0[d] < o.1[d] + 0.06 && o.0[d] < b.1[d] + 0.06)) { continue }
                 if others.iter().any(|o| ov(&b, o)) {
                     if std::env::var_os("CHAIR_DEBUG").is_some() {
@@ -250,6 +269,33 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
         }
         let (moved, poses, unseated, nslots) = best.unwrap();
         for (k, p) in poses { state.objs.get_mut(&k).unwrap().pose = p; }
+        // (every chair at the table, those the solver left there too: the tuck stops at the table's legs -- they stood 2 cm into them)
+        {
+            let legs: Vec<B> = state.objs[&tk].generator.as_ref().and_then(|g| g.piece.as_ref()).map_or(vec![], |pc| {
+                let (t, vols) = (&state.objs[&tk], pc.collision());
+                let top = vols.iter().filter(|v| v.is_rigid()).map(|v| v.bounds().1[2]).fold(f64::MIN, f64::max);
+                vols.iter().filter(|v| v.is_rigid() && v.bounds().0[2] < top * 0.5).map(|v| {
+                    let (a, c) = v.bounds();
+                    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+                    for x in [a[0], c[0]] { for y in [a[1], c[1]] { for z in [a[2], c[2]] { let q = t.pose.apply([x, y, z]); for d in 0..3 { lo[d] = lo[d].min(q[d]); hi[d] = hi[d].max(q[d]); } } } }
+                    (lo, hi)
+                }).collect()
+            });
+            let chairs: Vec<String> = state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |g| g.class == "ChairFactory") && legs.iter().any(|l| { let b = wbox(o); (0..2).all(|d| b.0[d] < l.1[d] && l.0[d] < b.1[d]) }) && *k != &tk).map(|(k, _)| k.clone()).collect();
+            for ck in chairs {
+                let o = &state.objs[&ck];
+                // back along its facing, away from the table (its +x faces it)
+                let f = [o.pose.r[0][0], o.pose.r[1][0]];
+                let d = if f[0].abs() > f[1].abs() { 0 } else { 1 };
+                let b = wbox(o);
+                let push = legs.iter().filter(|l| (0..2).all(|k| b.0[k] < l.1[k] && l.0[k] < b.1[k])).map(|l| if f[d] > 0.0 { b.1[d] - l.0[d] } else { l.1[d] - b.0[d] }).fold(0.0f64, f64::max) + 0.006;
+                if push > 0.15 { continue }
+                let o = state.objs.get_mut(&ck).unwrap();
+                let t = o.pose.t;
+                o.pose.set_loc([t[0] - f[0] * push, t[1] - f[1] * push, t[2]]);
+                state.touch(&ck);
+            }
+        }
         remove.extend(unseated.iter().cloned());
         let slots_len = nslots;
         log.push(format!("{} of {} chairs seated at {tk} ({} slots, {} removed)", moved, far.len(), slots_len, far.len() - moved));
