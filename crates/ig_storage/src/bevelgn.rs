@@ -407,6 +407,8 @@ fn oven_params_r(mut r: Rng) -> (Sampled, Rng) {
     let width = 1.0 + r.normal(0.0, 0.1);
     let height = 1.0 + r.normal(0.0, 0.1);
     let door_t = r.uniform(0.05, 0.1) * depth;
+    // (the cooktop at the standard 0.90 m, the worktop's: KitchenSpace::new -- body + door over it)
+    let height = 0.90 - door_t;
     let rack_r = r.uniform(0.01, 0.02) * depth;
     let rh = r.randint(2, 4);
     let rd = r.randint(4, 6);

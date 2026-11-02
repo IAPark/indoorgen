@@ -1081,7 +1081,9 @@ impl KitchenSpace {
         }
         // (a worktop near the standard 0.9 m: 0.8-1.0 m base cabinets plus plinth and top made 1.0-1.2 m counters, ranges stretched to
         // match and window sills clipped)
-        let bottom_h = r.uniform(0.74, 0.8);
+        let _ = r.uniform(0.74, 0.8);
+        // (the standard 0.90 m worktop, a range's height too: the frame up to 5 cm under it, the worktop's thickness)
+        let bottom_h = Self::row_height(0.85);
         let top_h = r.uniform(0.8, 1.0);
         let join = if island { None } else { crate::api::kitchen_join() };
         KitchenSpace { dims, island, bottom_h, top_h, factory_seed, join }
