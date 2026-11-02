@@ -49,8 +49,9 @@ impl BedSpec {
         }
         // (a tight spot's last resort: Piece::tucked asked twice)
         if crate::api::tuck_hint() >= 2 {
-            c.width = 0.95;
-            c.size = 1.9;
+            // (the mattress: the frame adds ~12 cm across and 10 cm along, and 1.07 x 2.0 missed an angled room by 10 cm)
+            c.width = 0.85;
+            c.size = 1.85;
         }
         c.thickness = r.uniform(0.05, 0.12);
         let has_all_legs = r.uniform(0.0, 1.0) < 0.2;

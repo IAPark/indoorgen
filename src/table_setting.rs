@@ -206,7 +206,7 @@ pub fn gather_chairs(state: &mut State) -> Vec<String> {
             let doors: Vec<B> = state.objs.iter().filter(|(k, o)| k.starts_with("doorclear/") || (k.starts_with("passage") && o.generator.is_none())).map(|(k, o)| {
                 let mut b = wbox(o); let m = if k.starts_with("passage") { 0.6 } else { 0.0 };
                 for d in 0..2 { b.0[d] -= m; b.1[d] += m; } b.0[2] = -10.0; b.1[2] = 10.0; b }).collect();
-            let others: Vec<B> = doors.into_iter().chain(state.objs.iter().filter(|(k, o)| *k != ck && *k != &tk && o.generator.is_some() && !o.generator.as_ref().unwrap().class.contains("Rug") && !o.relations.iter().any(|x| x.target == tk && o.generator.as_ref().unwrap().class != "ChairFactory")).map(|(_, o)| wbox(o))).collect();
+            let others: Vec<B> = doors.into_iter().chain(state.objs.iter().filter(|(k, o)| !far.contains(*k) && *k != &tk && o.generator.is_some() && !o.generator.as_ref().unwrap().class.contains("Rug") && !o.relations.iter().any(|x| x.target == tk && o.generator.as_ref().unwrap().class != "ChairFactory")).map(|(_, o)| wbox(o))).collect();
             let mut done = false;
             // the table's legs: its rigid volumes below the top
             let legs: Vec<B> = state.objs[&tk].generator.as_ref().and_then(|g| g.piece.as_ref()).map_or(vec![], |pc| {

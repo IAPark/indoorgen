@@ -141,6 +141,7 @@ fn try_place(state: &mut State, name: &str, yaw_: f64, anchor: V3, at: V3) -> bo
     if ig_core::env_on!("GROUPDBG") {
         let nc = Tag::sem("NoCollision");
         let hits: Vec<String> = state.objs.iter().filter(|(k, b)| k.as_str() != name && !b.tags.contains(nc) && !layout2d::is_room(b) && !b.relations.iter().any(|r| r.target == name) && layout2d::depth(state, name, k) > 1e-4).map(|(k, _)| k.clone()).collect();
+        if hits.is_empty() && layout2d::outside_depth(state, name) < 1e-3 { let r = layout2d::room_of(state, name).unwrap_or_default(); let (lo, hi) = layout2d::lohi_world(state, name); eprintln!("GROUPDBG {name} at {:.2?}..{:.2?} walk {:?}", lo, hi, layout2d::walk_status(state, &r)); }
         eprintln!("GROUPDBG {name}: hits {hits:?} outside {:.3} own {:.3} zone {} layout {}", layout2d::outside_depth(state, name), layout2d::room_of(state, name).map_or(-1.0, |r| layout2d::outside_room_depth(state, name, &r)), super::kitchen_rules::zone_clash(state, name), layout2d::layout_ok(state, name));
     }
     state.set_pose(name, old);
@@ -1808,7 +1809,9 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                         if ok { log.push(format!("{room}: a compact bed to fit")); }
                     }
                 }
-                if std::env::var_os("GROUPDBG").is_some() && !ok { let (a, b) = state.objs.get(room.as_str()).and_then(|r| r.polygon.as_ref()).map_or(([0.0; 2], [0.0; 2]), |g| { let b = crate::shp::bounds(g); ([b.0, b.1], [b.2, b.3]) }); eprintln!("GROUPDBG bedless {room} {:.2} x {:.2}", b[0] - a[0], b[1] - a[1]); }
+                if std::env::var_os("GROUPDBG").is_some() && !ok { let (a, b) = state.objs.get(room.as_str()).and_then(|r| r.polygon.as_ref()).map_or(([0.0; 2], [0.0; 2]), |g| { let b = crate::shp::bounds(g); ([b.0, b.1], [b.2, b.3]) }); eprintln!("GROUPDBG bedless {room} {:.2} x {:.2}", b[0] - a[0], b[1] - a[1]);
+                    for (x, y, n) in wall_segments(state, &room) { println!("GROUPDBG  wall {:.2?}-{:.2?} n {:.2?}", x, y, n); }
+                    for (k, _) in state.objs.iter().filter(|(k, _)| k.starts_with("door") || k.starts_with("window") || k.starts_with("passage")) { let (l, h) = layout2d::lohi_world(state, k); if (0..2).all(|d| l[d] < b[d] + 0.5 && a[d] - 0.5 < h[d]) { println!("GROUPDBG  {k} {:.2?}..{:.2?}", l, h); } } }
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
             }
         }
@@ -2606,8 +2609,8 @@ pub fn wall_hangings(state: &mut State) -> Vec<String> {
                 let back = sp.apply([slo[0], (slo[1] + shi[1]) / 2.0, 0.0]);
                 let sink_top = wbox(state, &sink).1[2];
                 let h = mhi[2] - mlo[2];
-                // (its bottom 0.35 m over the basin's box: the tap stands above the box, and a mirror 0.2 m up sat on it)
-                let zc = (floor_z + 1.55).max(sink_top + 0.35 + h / 2.0).min(floor_z + ceil - 0.2 - h / 2.0);
+                // (its bottom 8 cm over the basin's box, which holds the tap)
+                let zc = (floor_z + 1.55).max(sink_top + 0.08 + h / 2.0).min(floor_z + ceil - 0.25 - h / 2.0);
                 let (s_, c_) = ys.sin_cos();
                 let a = [mlo[0], (mlo[1] + mhi[1]) / 2.0, (mlo[2] + mhi[2]) / 2.0];
                 let ra = [c_ * a[0] - s_ * a[1], s_ * a[0] + c_ * a[1]];
