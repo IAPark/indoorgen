@@ -21,7 +21,7 @@ pub struct ProxyShape {
 }
 
 /// do proxy `ra` of object `a` and proxy `rb` of object `b` collide by their roles? Hard against hard always; a soft volume (drape,
-/// foliage) only against the room's structure (walls, doors, door clearances: objects without a generator); openings (door swings,
+/// foliage) only against the room's structure (walls, doors: objects without a generator), not door clearances; openings (door swings,
 /// drawer pull-outs, door clearances) never against each other, against hard parts unless one object stands on or in the other
 pub fn roles_collide(state: &State, a: &str, ra: u8, b: &str, rb: u8) -> bool {
     // (a door clearance is an opening: a cabinet's door may swing over it)
@@ -29,8 +29,8 @@ pub fn roles_collide(state: &State, a: &str, ra: u8, b: &str, rb: u8) -> bool {
     let rb = if b.starts_with("doorclear/") { ROLE_OPEN } else { rb };
     match (ra, rb) {
         (ROLE_HARD, ROLE_HARD) => true,
-        (ROLE_SOFT, _) => state.objs[b].generator.is_none(),
-        (_, ROLE_SOFT) => state.objs[a].generator.is_none(),
+        (ROLE_SOFT, _) => state.objs[b].generator.is_none() && !b.starts_with("doorclear/"),
+        (_, ROLE_SOFT) => state.objs[a].generator.is_none() && !a.starts_with("doorclear/"),
         (ROLE_OPEN, ROLE_OPEN) => false,
         _ => !(state.objs[a].relations.iter().any(|r| r.target == b) || state.objs[b].relations.iter().any(|r| r.target == a)),
     }

@@ -1689,6 +1689,8 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
             if new_piece(ctx, state, rng, "BedFactory", &room, &name) {
                 let score = |_: &State, _c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| len - (t - len / 2.0).abs();
                 let mut ok = place_on_wall(state, &name, &room, &score);
+                // (its bedding tucked in before anything in the room gives way)
+                if !ok && super::solver::tuck_piece(state, &name) { ok = place_on_wall(state, &name, &room, &score); }
                 if !ok {
                     // (plants and pictures first: a spot blocked only by a corner plant or a picture over it left the room bedless)
                     let mut crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "LargePlantContainerFactory" | "WallArtFactory" | "MirrorFactory" | "WardrobeFactory" | "LargeShelfFactory" | "SimpleDeskFactory" | "SingleCabinetFactory" | "WindowSeatFeature" | "BookshelfWallFeature")
@@ -1716,6 +1718,7 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                             let t = o.pose.t; let lz = o.geom.lo[2]; o.pose.set_loc([t[0], t[1], floor0 - lz]);
                             state.touch(&name);
                         }
+                        super::solver::tuck_piece(state, &name);
                         let bw = { let g = &state.objs[&name].geom; g.hi[1] - g.lo[1] };
                         if bw > 1.55 { continue }
                         ok = place_on_wall_step(state, &name, &room, &score, 0.05);

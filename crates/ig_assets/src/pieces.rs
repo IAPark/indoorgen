@@ -69,6 +69,8 @@ pub struct FactoryPiece {
     native: bool,
     /// a counter run's ends (one leg of an L)
     ends: Option<[f64; 4]>,
+    /// a bed's bedding tucked in
+    tuck: bool,
     /// what the collision decided
     col: Option<Vec<Volume>>,
 }
@@ -87,7 +89,7 @@ impl FactoryPiece {
     fn new(class: &str, seed: u64, size: Option<[f64; 3]>) -> FactoryPiece {
         let draws = ig_kit::ctor_draws::ctor_draws(class, &mut Rng::seeded(hash("piece_draws", seed)));
         let size = if builds_to_size(class) { size.or_else(|| sizes::model(class).map(|m| sizes::sample(m, &mut Rng::seeded(hash("piece_size", seed))))) } else { None };
-        FactoryPiece { class: class.into(), seed, inst: hash("piece_inst", seed) % 10_000_000, draws, size, native: false, ends: None, col: None }
+        FactoryPiece { class: class.into(), seed, inst: hash("piece_inst", seed) % 10_000_000, draws, size, native: false, ends: None, tuck: false, col: None }
     }
 
     /// run `f` with the factory's hints set as this piece's state says (the old factories read them), restored after
@@ -96,7 +98,10 @@ impl FactoryPiece {
         ig_kit::api::set_size_hint(self.size);
         ig_kit::ctor_draws::set_unseeded(self.draws.clone());
         ig_kit::api::set_kitchen_join(self.ends);
+        let t0 = ig_kit::api::tuck_hint();
+        ig_kit::api::set_tuck_hint(self.tuck);
         let r = f();
+        ig_kit::api::set_tuck_hint(t0);
         ig_kit::api::set_size_hint(s0);
         ig_kit::ctor_draws::set_unseeded(u0);
         ig_kit::api::set_kitchen_join(j0);
@@ -166,6 +171,14 @@ impl Piece for FactoryPiece {
         if !builds_to_size(&self.class) { return None }
         let mut p = FactoryPiece::new(&self.class, self.seed, Some(size));
         p.ends = self.ends;
+        p.tuck = self.tuck;
+        p.volumes();
+        Some(Box::new(p))
+    }
+    fn tucked(&self) -> Option<Box<dyn Piece>> {
+        if self.class != "BedFactory" { return None }
+        let mut p = FactoryPiece::new(&self.class, self.seed, self.size);
+        p.tuck = true;
         p.volumes();
         Some(Box::new(p))
     }

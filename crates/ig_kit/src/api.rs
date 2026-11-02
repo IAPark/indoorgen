@@ -658,6 +658,16 @@ pub fn round_hint() -> bool {
     ROUND_HINT.with(|c| c.get())
 }
 thread_local! {
+    static TUCK_HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// the bed built or measured next has its bedding tucked in (Piece::tucked)
+pub fn set_tuck_hint(on: bool) {
+    TUCK_HINT.with(|c| c.set(on));
+}
+pub fn tuck_hint() -> bool {
+    TUCK_HINT.with(|c| c.get())
+}
+thread_local! {
     static KITCHEN_JOIN: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
 }
 /// the next counter run built is one leg of an L (furn::kitchen_plan): [blind end, blind width, joined end, wall-cabinet reach]

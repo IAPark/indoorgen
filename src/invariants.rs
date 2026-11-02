@@ -146,6 +146,22 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
         let exact = crate::furn::sizes::model(&g.class).map_or(false, |m| m.exact) || g.class == "RugFactory";
         let (Some(sz), true) = (g.size.or_else(|| crate::furn::solver::cur_size(g)), exact) else { continue };
         let Some(a) = inp.visuals.get(k) else { continue };
+        // a piece: it sizes itself, and what is checked is that what it built stays inside what it claimed (openings: a door left ajar)
+        if let Some(pc) = &g.piece {
+            let vols = pc.collision();
+            let (mut cl, mut ch) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for v in &vols { let (l, h) = v.bounds(); for d in 0..3 { cl[d] = cl[d].min(l[d]); ch[d] = ch[d].max(h[d]); } }
+            let (mut ml, mut mh) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for (i, part) in a.parts.iter().enumerate() {
+                // (a soft part's reach is the collision's soft volume: an unmade bed's cloth is pulled past it on purpose)
+                if a.is_soft(i) || part.mesh.pos.is_empty() { continue }
+                let (l, h) = part.mesh.bounds();
+                for d in 0..3 { ml[d] = ml[d].min(l[d]); mh[d] = mh[d].max(h[d]); }
+            }
+            let over = (0..3).map(|d| (cl[d] - ml[d]).max(mh[d] - ch[d])).fold(0.0f64, f64::max);
+            if over > 0.02 { add("size", format!("{k} {} [{}]: built {over:.3} m past its collision", g.class, crate::furn::layout2d::room_of(inp.state, k).unwrap_or_default())); }
+            continue;
+        }
         let (l, h) = a.bounds();
         // (an L leg's wall cabinet reaching into the corner: kitchen_plan.rs)
         // (not when its wall cabinets came off under a window: the reach went with them)

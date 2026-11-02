@@ -244,6 +244,19 @@ pub fn piece_geom(p: &super::state::PieceRef) -> (ObjGeom, (V3, V3)) {
     (crate::piece::solver_geom(&vols, PIECE_BOXES), crate::piece::rigid_bounds(&vols))
 }
 
+/// ask a piece to draw its soft parts in (a tight spot): its new collision replaces the old; false if it cannot
+pub fn tuck_piece(state: &mut super::state::State, name: &str) -> bool {
+    let Some(o) = state.objs.get_mut(name) else { return false };
+    let Some(g) = o.generator.as_mut() else { return false };
+    let Some(np) = g.piece.as_ref().and_then(|p| p.tucked()) else { return false };
+    let (geom, fb) = piece_geom(&np);
+    g.piece = Some(np);
+    g.fit_box = Some(fb);
+    o.geom = std::sync::Arc::new(geom);
+    state.touch(name);
+    true
+}
+
 fn sample_rand_placeholder_box(ctx: &mut Ctx, rng: &mut Rng, class: &str) -> Option<(ObjGeom, super::state::GenRef)> {
     let singleton = ctx.usage.has_usage(class, "SingleGenerator");
     let fac_seed = if singleton && ctx.singletons.contains_key(class) {

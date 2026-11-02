@@ -687,7 +687,9 @@ impl Factory for Bed {
             v.push(Volume::hard([ml[0] - g, ml[1] - g, ml[2] - g], [mh[0] + g, mh[1] + g, mh[2] + g]));
             // the bedding hangs over the mattress (drape): it reaches as far as the sheet's overhang and its slide toward the foot carry it
             // (a simulated one spreads up to 0.45 m), not past the headboard, which holds it at the head end
-            let (side, foot) = if sim_bedding() { (0.45, 0.45) } else {
+            // (tucked in, it keeps within the frame: the soft volume comes in to the hard box)
+            let tuck = crate::api::tuck_hint();
+            let (side, foot) = if tuck { (hi[1] - mh[1], hi[0] - mh[0]) } else if sim_bedding() { (0.45, 0.45) } else {
                 let gm = DrapeGeom::of(c, &ms);
                 let lift = drape_loft(self.s.sheet_type) + 0.012;
                 let (ov_s, ov_f) = ((wm - 1.0) / 2.0 * ms.width, (0.15 + sm * ms.size - gm.x1).max(0.0));
@@ -1002,7 +1004,16 @@ impl Factory for Bed {
             a.soft.push(a.parts.len());
             a.parts.push(Part { mesh: tm, mat: tmat, col: Some((b.0, b.1)) });
         }
-        if !sim {
+        // (a tucked bed keeps what lies on it within its frame too)
+        if geom.tuck {
+            for &(part, ..) in &rests {
+                let (l, h) = a.parts[part].mesh.bounds();
+                let dy = (-geom.ymax - l[1]).max(0.0) + (geom.ymax - h[1]).min(0.0);
+                let dx = (geom.xmax - h[0]).min(0.0);
+                a.parts[part].mesh.transform(&Mat4::translation([dx, dy, 0.0]));
+            }
+        }
+        if !sim && !geom.tuck {
             // unmade (mess pass): the sheet pulled back toward the foot and askew, the cover thrown crooked, both more rumpled; what lay on them
             // comes to rest on them again
             let (loft, margin) = (drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 });
@@ -1198,6 +1209,10 @@ fn sheet_scale(sheet_type: usize, r: &mut Rng) -> (f64, f64) {
 /// rail below it (how far it stands out past the mattress at the side and the foot) and the floor
 #[derive(Clone)]
 struct DrapeGeom {
+    tuck: bool,
+    /// the frame's outline, a tucked-in cloth's limit
+    xmax: f64,
+    ymax: f64,
     x0: f64,
     x1: f64,
     yh: f64,
@@ -1226,7 +1241,7 @@ const DRAPE_POOL: f64 = 0.10;
 impl DrapeGeom {
     fn of(c: &ChairSpec, ms: &MattressSpec) -> DrapeGeom {
         let (x0, x1) = ((c.size - ms.size) / 2.0, (c.size + ms.size) / 2.0);
-        DrapeGeom { x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0 + 0.012 - DRAPE_R).max(0.0), gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
+        DrapeGeom { tuck: crate::api::tuck_hint(), xmax: c.size + c.leg_thickness * 0.5, ymax: c.width / 2.0 + 0.018, x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0 + 0.012 - DRAPE_R).max(0.0), gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
     }
 
     /// the mattress's top under (x, y)
@@ -1259,6 +1274,8 @@ impl DrapeGeom {
         let drop = top - r - self.rail;
         let l = gap.hypot(drop);
         if s < arc + l { let t = (s - arc) / l; return (r + gap * t, top - r - drop * t, drop / l, gap / l) }
+        // (tucked in: what is left goes under the mattress at the rail)
+        if self.tuck { return (r + gap, self.rail, 1.0, 0.0) }
         let v = self.rail - self.floor - 0.004;
         if s < arc + l + v { return (r + gap, self.rail - (s - arc - l), 1.0, 0.0) }
         let rem = s - arc - l - v;
@@ -1375,7 +1392,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let (h, z, nh, nz) = g.profile(s, gap, 0.0);
         let ramp = (s / 0.2).min(1.0);
         // toward the head (where side tables stand against the frame) it hangs close: no flare, folds or fill standing out
-        let free = if ny == 0.0 { 1.0 } else { (((x - g.x0) - 0.55) / 0.35).clamp(0.0, 1.0) };
+        let free = if g.tuck { 0.0 } else if ny == 0.0 { 1.0 } else { (((x - g.x0) - 0.55) / 0.35).clamp(0.0, 1.0) };
         // the folds deepen down the skirt, which flares toward its hem where a fold opens out
         let drop = ((g.top - z) / 0.5).clamp(0.0, 1.0);
         let mut fold = PLEAT * ramp * (0.4 + 0.6 * drop) * wave * nh;
@@ -1384,7 +1401,9 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let h = (h - (1.0 - free) * (h - DRAPE_R - gap).max(0.0)) + (0.15 + 0.85 * free) * off * nh + free * (fold + rum * nh * 0.5);
         // (at the head end it stays clear of the headboard)
         let px = (qx + nx * h).max(if nx < 0.0 { 0.005 } else { f64::NEG_INFINITY });
-        *p = [px, qy + ny * h, z + (off + rum) * nz];
+        let py = qy + ny * h;
+        let (px, py) = if g.tuck { (px.min(g.xmax), py.clamp(-g.ymax, g.ymax)) } else { (px, py) };
+        *p = [px, py, z + (off + rum) * nz];
     }
     m
 }

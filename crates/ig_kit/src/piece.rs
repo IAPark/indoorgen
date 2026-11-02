@@ -33,7 +33,7 @@ pub enum Role {
     Hard,
     /// rigid, and items may stand on its top face
     Support,
-    /// drapes, foliage, throws: may overlap neighbouring furniture, not walls, door clearances or walkways
+    /// drapes, foliage, throws: may overlap neighbouring furniture and door clearances, not walls or walkways
     Soft,
     /// a door's swing or a drawer's pull-out (the volume's shape is the leaf's sweep)
     Opening(Leaf),
@@ -84,6 +84,8 @@ pub trait Piece: Collide + Build + Send + Sync {
     fn resize(&self, _size: [f64; 3]) -> Option<Box<dyn Piece>> { None }
     /// a counter run with its ends set (one leg of an L: [blind end, blind width, joined end, wall-cabinet reach]); None: it has no ends
     fn with_ends(&self, _ends: [f64; 4]) -> Option<Box<dyn Piece>> { None }
+    /// the piece with its soft parts drawn in to its rigid ones (a bed's bedding tucked in, for a tight spot); None: it cannot
+    fn tucked(&self) -> Option<Box<dyn Piece>> { None }
     /// collision written from the piece's parameters (false: the compatibility wrapper's layout-build boxes)
     fn native(&self) -> bool { true }
     /// its current size [width (y), depth (x), height (z)]: the rigid volumes' extents
