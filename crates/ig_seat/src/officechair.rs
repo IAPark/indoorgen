@@ -149,15 +149,6 @@ pub struct OfficeChair {
     wheel_rot: f64,
     pole_len: f64,
     seed: u64,
-    /// collision measured when the chair is made: the base's box and the seat's (the seat surface sampled coarsely), a quarter-turned
-    col: Vec<(V3, V3)>,
-}
-
-/// the bounds of `meshes` turned a quarter about z (x, y) -> (-y, x), grown by `g`
-fn quarter_box(meshes: &[Mesh], g: f64) -> (V3, V3) {
-    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-    for m in meshes { let (a, b) = m.bounds(); for k in 0..3 { lo[k] = lo[k].min(a[k]); hi[k] = hi[k].max(b[k]); } }
-    ([-hi[1] - g, lo[0] - g, lo[2] - g], [-lo[1] + g, hi[0] + g, hi[2] + g])
 }
 
 impl OfficeChair {
@@ -193,7 +184,7 @@ impl OfficeChair {
             wheel_rot = r.uniform(0.0, 360.0);
             pole_len = r.uniform(1.6, 2.0);
         }
-        let mut c = OfficeChair { x, z, top_t, wheeled, sp, bottom_scale, leg_d, curve, poles, joint_h, wheel_arc, wheel_w, wheel_rot, pole_len, seed: r.randint(0, 1_000_000) as u64, col: vec![] };
+        let mut c = OfficeChair { x, z, top_t, wheeled, sp, bottom_scale, leg_d, curve, poles, joint_h, wheel_arc, wheel_w, wheel_rot, pole_len, seed: r.randint(0, 1_000_000) as u64 };
         // built to the layout box [width (y), depth (x), height]: the seat width x (and with it the stand / the wheel base) gives the
         // footprint, the height scales the seat height and the stand with it
         if let Some(h) = crate::api::size_hint() {
@@ -210,10 +201,6 @@ impl OfficeChair {
                 c.joint_h *= zf;
             }
         }
-        // its collision, measured once: the base, and the seat (sampled at 48 x 32; the 256 x 128 build bulges up to ~1 cm between samples)
-        let parts = c.parts((48, 32));
-        let n = parts.len();
-        c.col = vec![quarter_box(&parts[..n - 1], 0.003), quarter_box(&parts[n - 1..], 0.012)];
         c
     }
 
@@ -234,22 +221,53 @@ impl OfficeChair {
     }
 
     /// overall extents in the final frame (the parts are turned a quarter about z: x extent = y extent before)
-    fn extents(&self) -> [f64; 3] {
-        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for m in self.parts((48, 32)) {
-            let (a, b) = m.bounds();
-            for k in 0..3 {
-                lo[k] = lo[k].min(a[k]);
-                hi[k] = hi[k].max(b[k]);
+    /// collision, in the built frame turned a quarter (x, y) -> (-y, x): the seat -- profiles at most half its width by half its
+    /// thickness (the bends turn them in their plane; the loft's spline overshoots up to 10 %) swept along the spine's Bezier -- and the base:
+    /// the pedestal (the stand's flare at the floor) or the wheeled star
+    fn vols(&self) -> Vec<crate::piece::Volume> {
+        use crate::piece::Volume;
+        let sp = &self.sp;
+        let top_h = self.z - self.top_t;
+        let w = sp.width;
+        let r = 0.5 * w.hypot(sp.thickness) * 1.1 + 0.005;
+        // the spine (curvy_seat's warp curve), evaluated: start (-w/2, 0.03), handles (mid_pos, -0.05) and (0.1, 0.1), end (w/2, height)
+        let (p0, p1, p2, p3) = ([-w / 2.0, 0.03], [sp.mid_pos, -0.05], [0.1, 0.1], [w / 2.0, sp.seat_height]);
+        let (mut a, mut b) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for i in 0..=64 {
+            let t = i as f64 / 64.0;
+            let u = 1.0 - t;
+            for k in 0..2 {
+                let q = u * u * u * p0[k] + 3.0 * u * u * t * p1[k] + 3.0 * u * t * t * p2[k] + t * t * t * p3[k];
+                a[k] = a[k].min(q);
+                b[k] = b[k].max(q);
             }
         }
-        [hi[1] - lo[1], hi[0] - lo[0], hi[2] - lo[2]]
+        // (off the spine only the profile's thickness half, and what the bends -- a turn of at most r^2 * bend -- swing of its width)
+        let bend = [sp.front_bent, sp.seat_bent, sp.mid_bent, sp.back_bent, sp.top_bent].iter().fold(0.0f64, |m, b| m.max(b.abs()));
+        let rt = sp.thickness / 2.0 * 1.1 + r * (r * r * bend).min(std::f64::consts::FRAC_PI_2).sin() + 0.008;
+        let (y0, y1) = (a[0] - rt, b[0] + rt);
+        let (z0, z1) = (top_h + a[1] - rt, top_h + b[1] + rt);
+        let turn = |lo: V3, hi: V3| Volume::hard([-hi[1], lo[0], lo[2]], [-lo[1], hi[0], hi[2]]);
+        let mut v = vec![turn([-r, y0, z0], [r, y1, z1])];
+        if self.wheeled {
+            v.extend(wheeled_volumes(self.joint_h, self.leg_d, top_h, self.pole_len));
+        } else {
+            let rl = self.leg_d / 2.0 * self.bottom_scale.max(1.0) + 0.005;
+            v.push(Volume::hard([-rl, -rl, -0.002], [rl, rl, top_h + 0.005]));
+        }
+        v
+    }
+
+    /// overall [x extent, y extent, z extent] (before the quarter turn)
+    fn extents(&self) -> [f64; 3] {
+        let (lo, hi) = crate::piece::rigid_bounds(&self.vols());
+        [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2].max(0.0)]
     }
 }
 
 impl Factory for OfficeChair {
     fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
-        Some(self.col.iter().map(|(lo, hi)| crate::piece::Volume::hard(*lo, *hi)).collect())
+        Some(self.vols())
     }
     fn natural_size(&self, _i: u64) -> Option<[f64; 3]> {
         let e = self.extents();
@@ -288,6 +306,15 @@ impl OfficeChair {
     fn n_parts_hint(&self, _m: &Mesh) -> usize {
         0
     }
+}
+
+/// collision of the wheeled base: the column (leg_d, to the seat), the star of arms (each pole_length long with its castor at the end,
+/// all scaled 0.15) round it on the floor
+fn wheeled_volumes(joint_h: f64, leg_d: f64, top_h: f64, pole_len: f64) -> Vec<crate::piece::Volume> {
+    let r = leg_d / 2.0 + 0.003;
+    let reach = 0.15 * (pole_len + 0.35) + 0.008;
+    let _ = joint_h;
+    vec![crate::piece::Volume::hard([-r, -r, -0.002], [r, r, top_h + 0.002]), crate::piece::Volume::hard([-reach, -reach, -0.002], [reach, reach, 0.15 * 0.95])]
 }
 
 /// tables/legs/wheeled.py nodegroup_wheeled_leg: meshes in the order python's join leaves them
@@ -416,11 +443,15 @@ impl Factory for BarChair {
         use crate::piece::Volume;
         let (x, th) = (self.x, self.top_t);
         let top_h = self.z - th;
-        // the seat: a disc with a swept rim and a domed cap, from the instance's draws -- measured on a 24-segment build (the 128-segment
-        // one lies within a few mm of it)
+        // the seat (capped_cylinder_full): a disc x wide, twice the thickness high, and the dome on it -- the cap of a sphere of
+        // radius cap_radius cut where it is 1 wide, scaled by x / 2 + 0.014, standing 2 mm into the disc's top
         let mut ir = inst_rng(self.fseed, _inst);
         let (cap_radius, bevel) = (ir.uniform(2.0, 3.2), ir.uniform(0.01, 0.04));
-        let (slo, shi) = capped_cylinder_full(th, x, cap_radius, bevel / th, 0.0140, -0.0020, 24).bounds();
+        let cs = x * 0.5 + 0.0140;
+        let dome = (cap_radius - (cap_radius * cap_radius - 1.0).sqrt()) * cs;
+        // (the rim's vertical fillet -- the disc's height, its profile squeezed to bevel / thickness -- bulges out by under 2 bevels)
+        let rr = (x / 2.0 + 2.0 * bevel + 0.004).max(cs);
+        let (slo, shi) = ([-rr, -rr, 0.0], [rr, rr, (2.0 * th).max(2.0 * th - 0.002 + dome)]);
         let g = 0.006;
         let mut v = vec![Volume::hard([slo[0] - g, slo[1] - g, slo[2] + top_h - g], [shi[0] + g, shi[1] + g, shi[2] + top_h + g])];
         v.push(Volume::support([-x * 0.3, -x * 0.3, shi[2] + top_h - 0.001], [x * 0.3, x * 0.3, shi[2] + top_h]));
@@ -442,12 +473,7 @@ impl Factory for BarChair {
                 v.push(Volume::hard([lo[0] - rs, lo[1] - rs, zs - rs], [hi[0] + rs, hi[1] + rs, zs + rs]));
             }
             1 => { let rl = self.leg_d / 2.0 + 0.003; v.push(Volume::hard([-rl, -rl, -0.002], [rl, rl, top_h + 0.002])); }
-            _ => {
-                let parts = wheeled_leg(self.joint_h, self.leg_d, top_h, self.wheel_arc, self.wheel_w, self.wheel_rot, self.pole_len, self.poles);
-                let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-                for m in &parts { let (a, b) = m.bounds(); for k in 0..3 { lo[k] = lo[k].min(a[k]); hi[k] = hi[k].max(b[k]); } }
-                v.push(Volume::hard([lo[0] - 0.003, lo[1] - 0.003, lo[2] - 0.003], [hi[0] + 0.003, hi[1] + 0.003, hi[2] + 0.003]));
-            }
+            _ => v.extend(wheeled_volumes(self.joint_h, self.leg_d, top_h, self.pole_len)),
         }
         Some(v)
     }

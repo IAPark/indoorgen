@@ -41,6 +41,17 @@ impl MattressSpec {
     }
 
     /// create_asset: box centred at the origin, `r` = the spawn_asset stream
+    /// the mattress's bounds from its parameters: the block (width x size x thickness, centred), puffed by the build -- a coiled one
+    /// by its coils, a wrapped one by the pressure inflating its cover
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        let (w, s, t) = (self.width, self.size, self.thickness);
+        // (a coiled block stays within its box -- the coils dent it; a wrapped one's cover inflates under the pressure: the top domes up
+        // to 7.5 % of the smaller side, the sides 6 % of the thickness, the pinned bottom stays)
+        if self.coiled { return ([-w / 2.0, -s / 2.0, -t / 2.0], [w / 2.0, s / 2.0, t / 2.0]) }
+        let (side, top) = (0.06 * t + 0.003, 0.075 * w.min(s));
+        ([-w / 2.0 - side, -s / 2.0 - side, -t / 2.0], [w / 2.0 + side, s / 2.0 + side, t / 2.0 + top])
+    }
+
     pub fn build(&self, r: &mut Rng) -> Mesh {
         self.build_job(r).0
     }
@@ -104,8 +115,8 @@ impl Factory for Mattress {
     }
 
     /// collision: measured on its build (the coils puff the block out by up to 9 cm, not inward)
-    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
-        let (lo, hi) = self.s.build(&mut inst_rng(self.fseed, inst)).bounds();
+    fn volumes(&self, _inst: u64) -> Option<Vec<crate::piece::Volume>> {
+        let (lo, hi) = self.s.bounds();
         let g = 0.003;
         Some(vec![crate::piece::Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g]), crate::piece::Volume::support([lo[0] + 0.05, lo[1] + 0.05, hi[2] - 0.001], [hi[0] - 0.05, hi[1] - 0.05, hi[2]])])
     }

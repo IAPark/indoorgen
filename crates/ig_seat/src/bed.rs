@@ -662,23 +662,28 @@ fn quad_grid_pillow(w: f64, s: f64, pressure_h: f64, n: usize) -> Mesh {
 impl Factory for Bed {
     /// collision: the frame and mattress measured once on the layout build (it stops at the mattress: no bedding simulated), and the
     /// bedding as a soft volume over the mattress -- sheet and cover hang down its sides and foot, pillows stand on it
-    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
+    /// collision from the spec: the frame (bed.py's box: the seat's depth and width, the legs below, the headboard up to 1.2 of the
+    /// back's height), the mattress on it (at most 0.96 of the frame's width and depth, its own block and puff), the bedding as soft
+    /// (draping up to 0.45 m round the mattress and down to the floor, pillows up to 0.42 m up)
+    fn volumes(&self, _inst: u64) -> Option<Vec<crate::piece::Volume>> {
         use crate::piece::Volume;
-        let prev = ig_core::envx::layout_build();
-        ig_core::envx::set_layout_build(true);
-        let a = self.asset(inst);
-        ig_core::envx::set_layout_build(prev);
-        // the frame: every part but the layout build's bedding stand-in (its last part when the bed has bedding)
-        let n = if self.frame_only { a.parts.len() } else { a.parts.len().saturating_sub(1) };
-        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for p in &a.parts[..n] { let (pl, ph) = p.mesh.bounds(); for k in 0..3 { lo[k] = lo[k].min(pl[k]); hi[k] = hi[k].max(ph[k]); } }
+        let c = &self.s.c;
         let g = 0.004;
-        let mut v = vec![Volume::hard([lo[0] - g, lo[1] - g, lo[2] - g], [hi[0] + g, hi[1] + g, hi[2] + g])];
-        if !self.frame_only && n >= 1 {
-            // the mattress (the frame's last part): the bedding drapes up to 0.45 m round it and down toward the floor, pillows up to 0.4 m up
-            let (ml, mh) = a.parts[n - 1].mesh.bounds();
-            v.push(Volume::soft([ml[0] - 0.45, ml[1] - 0.45, lo[2] - g], [mh[0] + 0.45, mh[1] + 0.45, mh[2] + 0.42]));
-            v.push(Volume::support([ml[0] + 0.05, ml[1] + 0.05, mh[2] - 0.001], [mh[0] - 0.05, mh[1] - 0.05, mh[2]]));
+        // (an upholstered headboard's padding stands up to 2.5 cm behind the frame, the legs' decor panels 2 cm out at the sides)
+        let sd = 0.02;
+        let (lo, hi) = ([-0.025, -c.width / 2.0 - sd, -c.leg_height - g], [c.size + c.leg_thickness * 0.5 + g, c.width / 2.0 + sd, c.back_height * 1.2 + g]);
+        let mut v = vec![Volume::hard(lo, hi)];
+        if !self.frame_only {
+            let mut ms = MattressSpec::new(c.fseed);
+            ms.coiled = false;
+            ms.width = c.width * 0.96;
+            ms.size = c.size * 0.96;
+            let (a, b) = ms.bounds();
+            // (turned a quarter, its centre at (size / 2, 0, thickness / 2))
+            let (ml, mh) = ([c.size / 2.0 - b[1], a[0], a[2] + ms.thickness / 2.0], [c.size / 2.0 - a[1], b[0], b[2] + ms.thickness / 2.0]);
+            v.push(Volume::hard([ml[0] - g, ml[1] - g, ml[2] - g], [mh[0] + g, mh[1] + g, mh[2] + g]));
+            v.push(Volume::soft([ml[0] - 0.45, ml[1] - 0.45, lo[2]], [mh[0] + 0.45, mh[1] + 0.45, mh[2] + 0.42]));
+            v.push(Volume::support([ml[0] + 0.05, ml[1] + 0.05, ms.thickness - 0.001], [mh[0] - 0.05, mh[1] - 0.05, ms.thickness]));
         }
         Some(v)
     }
