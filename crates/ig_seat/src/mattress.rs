@@ -13,6 +13,11 @@ use serde_json::json;
 
 pub const FABRICS_W: Table = &[("fabric.CoarseKnitFabric", 1.0), ("fabric.FineKnitFabric", 1.0), ("fabric.Leather", 0.3), ("fabric.SofaFabric", 1.0)];
 
+/// BED_SIM=1: bedding and wrapped mattresses from the cloth simulation (else from formulas)
+pub fn sim_bedding() -> bool {
+    std::env::var_os("BED_SIM").is_some()
+}
+
 #[derive(Clone, Debug)]
 pub struct MattressSpec {
     pub width: f64,
@@ -41,14 +46,26 @@ impl MattressSpec {
     }
 
     /// create_asset: box centred at the origin, `r` = the spawn_asset stream
+    /// a wrapped mattress's fill: (how far the sides belly, how far the top domes); the simulated one's is larger
+    pub fn puff(&self) -> (f64, f64) {
+        let (w, s, t) = (self.width, self.size, self.thickness);
+        if self.coiled { return (0.0, 0.0) }
+        if sim_bedding() { (0.06 * t + 0.003, 0.075 * w.min(s)) } else { (0.03 * t + 0.002, 0.03 * w.min(s)) }
+    }
+
+    /// the top's dome over (x, y) in the mattress's frame: 1 in the middle, 0 at the edges
+    pub fn dome(&self, x: f64, y: f64) -> f64 {
+        let (u, v) = ((2.0 * x / self.width).clamp(-1.0, 1.0), (2.0 * y / self.size).clamp(-1.0, 1.0));
+        (1.0 - u.powi(4)) * (1.0 - v.powi(4))
+    }
+
     /// the mattress's bounds from its parameters: the block (width x size x thickness, centred), puffed by the build -- a coiled one
     /// by its coils, a wrapped one by the pressure inflating its cover
     pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
         let (w, s, t) = (self.width, self.size, self.thickness);
-        // (a coiled block stays within its box -- the coils dent it; a wrapped one's cover inflates under the pressure: the top domes up
-        // to 7.5 % of the smaller side, the sides 6 % of the thickness, the pinned bottom stays)
+        // (a coiled block stays within its box -- the coils dent it; a wrapped one's cover fills out: its top and sides, the bottom stays)
         if self.coiled { return ([-w / 2.0, -s / 2.0, -t / 2.0], [w / 2.0, s / 2.0, t / 2.0]) }
-        let (side, top) = (0.06 * t + 0.003, 0.075 * w.min(s));
+        let (side, top) = self.puff();
         ([-w / 2.0 - side, -s / 2.0 - side, -t / 2.0], [w / 2.0 + side, s / 2.0 + side, t / 2.0 + top])
     }
 
@@ -79,6 +96,19 @@ impl MattressSpec {
             }
             let m = bevel_angle_ex(&m, wd / 3.0, 2, 30f64.to_radians(), false, None).unwrap_or(m);
             let pressure = r.uniform(0.1, 0.2);
+            if !sim_bedding() {
+                // the cover filled out: the top domes, the sides belly, the bottom stays (no simulation)
+                let mut m = m;
+                let (side, top) = self.puff();
+                for q in m.pos.iter_mut() {
+                    let f = ((q[2] + t / 2.0) / t).clamp(0.0, 1.0);
+                    q[2] += top * f * f * self.dome(q[0], q[1]);
+                    let b = side * (std::f64::consts::PI * f).sin();
+                    q[0] += b * (2.0 * q[0] / w).powi(5);
+                    q[1] += b * (2.0 * q[1] / s).powi(5);
+                }
+                return (m, None);
+            }
             let mut p = ClothParams::default();
             p.gravity = 0.0;
             p.use_pressure = true;

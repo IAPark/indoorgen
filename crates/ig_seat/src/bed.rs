@@ -204,7 +204,7 @@ impl BedSpec {
 }
 
 // ------------------------------------------------------------------------------------------------ assembly
-use super::mattress::MattressSpec;
+use super::mattress::{sim_bedding, MattressSpec};
 use super::pillow::PillowSpec;
 use super::cloth::{simulate_job, Calib, ClothParams, Collider};
 use super::clothes::{Blanket, BlanketKind};
@@ -663,9 +663,9 @@ impl Factory for Bed {
     /// collision: the frame and mattress measured once on the layout build (it stops at the mattress: no bedding simulated), and the
     /// bedding as a soft volume over the mattress -- sheet and cover hang down its sides and foot, pillows stand on it
     /// collision from the spec: the frame (bed.py's box: the seat's depth and width, the legs below, the headboard up to 1.2 of the
-    /// back's height), the mattress on it (at most 0.96 of the frame's width and depth, its own block and puff), the bedding as soft
-    /// (draping up to 0.45 m round the mattress but the head end and down to the floor, pillows up to 0.42 m up)
-    fn volumes(&self, _inst: u64) -> Option<Vec<crate::piece::Volume>> {
+    /// back's height), the mattress on it (its block and puff), the bedding as soft
+    /// (round the mattress by the sheet's overhang but the head end and down to the floor, pillows up to 0.42 m up)
+    fn volumes(&self, inst: u64) -> Option<Vec<crate::piece::Volume>> {
         use crate::piece::Volume;
         let c = &self.s.c;
         let g = 0.004;
@@ -674,17 +674,27 @@ impl Factory for Bed {
         let sd = 0.02;
         let (lo, hi) = ([-0.05, -c.width / 2.0 - sd, -c.leg_height - g], [c.size + c.leg_thickness * 0.5 + g, c.width / 2.0 + sd, c.back_height * 1.2 + g]);
         let mut v = vec![Volume::hard(lo, hi)];
+        // (the headboard's panels can stand wider than the frame)
+        v.push(Volume::hard([lo[0], -c.width / 2.0 - 0.06, 0.0], [0.15, c.width / 2.0 + 0.06, hi[2]]));
         if !self.frame_only {
-            let mut ms = MattressSpec::new(c.fseed);
-            ms.coiled = false;
-            ms.width = c.width * 0.96;
-            ms.size = c.size * 0.96;
+            let mut r = bedding_rng(c.fseed, inst);
+            let ms = bed_mattress(c, &mut r);
+            let _ = blanket_ctor(&mut r, self.s.sheet_type >= 2);
+            let (wm, sm) = sheet_scale(self.s.sheet_type, &mut r);
             let (a, b) = ms.bounds();
             // (turned a quarter, its centre at (size / 2, 0, thickness / 2))
             let (ml, mh) = ([c.size / 2.0 - b[1], a[0], a[2] + ms.thickness / 2.0], [c.size / 2.0 - a[1], b[0], b[2] + ms.thickness / 2.0]);
             v.push(Volume::hard([ml[0] - g, ml[1] - g, ml[2] - g], [mh[0] + g, mh[1] + g, mh[2] + g]));
-            // (not past the headboard: it holds the bedding at the head end)
-            v.push(Volume::soft([lo[0], ml[1] - 0.45, lo[2]], [mh[0] + 0.45, mh[1] + 0.45, mh[2] + 0.42]));
+            // the bedding hangs over the mattress (drape): it reaches as far as the sheet's overhang and its slide toward the foot carry it
+            // (a simulated one spreads up to 0.45 m), not past the headboard, which holds it at the head end
+            let (side, foot) = if sim_bedding() { (0.45, 0.45) } else {
+                let gm = DrapeGeom::of(c, &ms);
+                let lift = drape_loft(self.s.sheet_type) + 0.012;
+                let (ov_s, ov_f) = ((wm - 1.0) / 2.0 * ms.width, (0.15 + sm * ms.size - gm.x1).max(0.0));
+                let ov = ov_s.hypot(ov_f);
+                (gm.reach(ov, gm.gap_side, lift), gm.reach(ov, gm.gap_foot, lift))
+            };
+            v.push(Volume::soft([lo[0], ml[1] - side, lo[2]], [mh[0] + foot, mh[1] + side, mh[2] + 0.42]));
             v.push(Volume::support([ml[0] + 0.05, ml[1] + 0.05, ms.thickness - 0.001], [mh[0] - 0.05, mh[1] - 0.05, ms.thickness]));
         }
         Some(v)
@@ -773,10 +783,9 @@ impl Factory for Bed {
         }
         // ---- outer stream continues after the frame (BedFactory.create_asset)
         // ---- mattress (MattressFactory: its own FixedSeed(fseed) ctor, type / width / size overridden from the bed stream)
-        let mut ms = MattressSpec::new(c.fseed);
-        ms.coiled = r.choice_p(&[0.25, 0.75]) == 0;
-        ms.width = c.width * r.uniform(0.88, 0.96);
-        ms.size = c.size * r.uniform(0.88, 0.96);
+        // (from here its own stream: the collision replays these draws without building the frame)
+        let mut r = bedding_rng(c.fseed, inst);
+        let ms = bed_mattress(c, &mut r);
         let (mut mattress, mjob) = ms.build_job(&mut inst_rng(c.fseed, inst));
         mattress.transform(&rot);
         mattress.transform(&Mat4::translation([c.size / 2.0, 0.0, ms.thickness / 2.0]));
@@ -809,7 +818,7 @@ impl Factory for Bed {
         // ---- sheet: "none" falls into python's `case _` = box comforter
         let kind = [BlanketKind::Blanket, BlanketKind::Comforter, BlanketKind::BoxComforter, BlanketKind::BoxComforter][s.sheet_type];
         let bc = blanket_ctor(&mut r, s.sheet_type >= 2);
-        let (wm, sm) = if s.sheet_type == 0 { (r.uniform(1.4, 1.6), r.uniform(0.9, 1.1)) } else { (r.uniform(1.4, 1.8), r.uniform(0.9, 1.2)) };
+        let (wm, sm) = sheet_scale(s.sheet_type, &mut r);
         // `py_pressure`: python's draw, what Blender's cloth sim gets in the job; `pressure`: the Rust solver's (its calibration
         // differs: a filled comforter at 1.0-1.5 lofted no more than a sheet; PUFF_SCALE overrides). Blender given the boosted value
         // blew a folded comforter up into a half-metre lump over the pillows.
@@ -833,6 +842,10 @@ impl Factory for Bed {
         let off = r.uniform(0.0, 0.15);
         pre.transform(&rot);
         pre.transform(&Mat4::translation([b.size / 2.0 + off, 0.0, z_sheet]));
+        let sim = sim_bedding();
+        let geom = DrapeGeom::of(c, &ms);
+        let pleats = Pleats::new(&mut r);
+        let sheet = if !sim { drape(&pre, z_sheet, &geom, 0.0, drape_loft(s.sheet_type), &pleats) } else {
         let mut p = ClothParams::default();
         p.mass = 0.05;
         p.tension = 2.0;
@@ -851,13 +864,18 @@ impl Factory for Bed {
         let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf, &floor_c], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
+        sheet
+        };
         let sheet = subsurf(&sheet, 2, false);
         let sb = sheet.bounds();
         let sheet_idx = a.parts.len();
         let btype = ["blanket", "comforter", "box", "box"][s.sheet_type];
+        if sim {
         let mut collide = vec![mattress_idx];
         collide.extend(frame_idx.iter().cloned());
         a.cloth.push(ClothJob { target: sheet_idx, pre: pre.clone(), collide, kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005, "use_pressure": true, "uniform_pressure_force": py_pressure, "use_self_collision": s.sheet_folded}), end_frame: 50, subsurf: 2, pin: vec![], z_from: Some((mattress_idx, z_sheet)), build: Some(json!({"type": btype, "width": b.width, "size": b.size, "thickness": b.thickness, "margin": b.margin, "fold": fold_p, "x": b.size / 2.0 + off})), post: None });
+        }
+        a.soft.push(a.parts.len());
         a.parts.push(Part { mesh: sheet.clone(), mat: fabric.clone(), col: Some((sb.0, sb.1)) });
 
         // ---- cover (always made: python never reads has_cover); 80 frames, no pressure
@@ -871,6 +889,7 @@ impl Factory for Bed {
         let off = r.uniform(0.0, 0.3);
         cover.transform(&rot);
         cover.transform(&Mat4::translation([c.size / 2.0 + off, 0.0, z_cover]));
+        let cvm = if !sim { drape(&cover, z_cover, &geom, drape_loft(s.sheet_type) + 0.008, 0.0, &pleats) } else {
         // the comforter is a thin two-layer shell: the cover only sees its outer (top) layer, else vertices that sink between the layers pop out below it
         let top_faces = {
             let k = pre.faces.iter().take_while(|f| {
@@ -893,10 +912,15 @@ impl Factory for Bed {
         let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm, &floor_c], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;
+        cvm
+        };
         let cvm = subsurf(&cvm, 2, false);
         let cbb = cvm.bounds();
+        if sim {
         a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)), build: Some(json!({"type": "blanket", "width": cb.width, "size": cb.size, "thickness": cb.thickness, "margin": 0.0, "fold": null, "x": c.size / 2.0 + off})), post: None });
+        }
         let cover_final = cvm.clone();
+        a.soft.push(a.parts.len());
         a.parts.push(Part { mesh: cvm, mat: fabric.clone(), col: Some((cbb.0, cbb.1)) });
 
         // ---- pillows
@@ -1116,4 +1140,157 @@ fn find_split(ring: &[(u32, i32)]) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+/// the stream of a bed's mattress and bedding decisions (apart from the frame's)
+fn bedding_rng(fseed: u64, inst: u64) -> Rng {
+    inst_rng(fseed ^ 0x6265_6464, inst)
+}
+
+/// the mattress of a bed: type and size over the frame (MattressFactory's own ctor for the rest)
+fn bed_mattress(c: &ChairSpec, r: &mut Rng) -> MattressSpec {
+    let mut ms = MattressSpec::new(c.fseed);
+    ms.coiled = r.choice_p(&[0.25, 0.75]) == 0;
+    ms.width = c.width * r.uniform(0.88, 0.96);
+    ms.size = c.size * r.uniform(0.88, 0.96);
+    ms
+}
+
+/// the sheet's size over the mattress's (width, length)
+fn sheet_scale(sheet_type: usize, r: &mut Rng) -> (f64, f64) {
+    if sheet_type == 0 { (r.uniform(1.4, 1.6), r.uniform(0.9, 1.1)) } else { (r.uniform(1.4, 1.8), r.uniform(0.9, 1.2)) }
+}
+
+/// what the bedding hangs over, in the bed's frame: the mattress's top rectangle (z = its top's edge, the dome over it), the frame's
+/// rail below it (how far it stands out past the mattress at the side and the foot) and the floor
+struct DrapeGeom {
+    x0: f64,
+    x1: f64,
+    yh: f64,
+    top: f64,
+    rail: f64,
+    gap_side: f64,
+    gap_foot: f64,
+    floor: f64,
+    dome_h: f64,
+    size_mid: f64,
+    ms_w: f64,
+    ms_s: f64,
+}
+
+/// the edge's roll radius
+const DRAPE_R: f64 = 0.035;
+/// the pleats' largest depth, and their extra at a corner, where the cloth bunches
+const PLEAT: f64 = 0.018;
+const PLEAT_CORNER: f64 = 0.025;
+/// how far cloth lying on the floor can run out
+const DRAPE_POOL: f64 = 0.10;
+
+impl DrapeGeom {
+    fn of(c: &ChairSpec, ms: &MattressSpec) -> DrapeGeom {
+        let (x0, x1) = ((c.size - ms.size) / 2.0, (c.size + ms.size) / 2.0);
+        DrapeGeom { x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0).max(0.0) + 0.03, gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
+    }
+
+    /// the mattress's top under (x, y)
+    fn top_at(&self, x: f64, y: f64) -> f64 {
+        let (u, v) = ((2.0 * y / self.ms_w).clamp(-1.0, 1.0), (2.0 * (x - self.size_mid) / self.ms_s).clamp(-1.0, 1.0));
+        self.top + self.dome_h * (1.0 - u.powi(4)) * (1.0 - v.powi(4))
+    }
+
+    /// `s` of cloth past the mattress's edge, `gap` to the rail: out by h at height z, and the surface's normal (nh, nz) there -- over the
+    /// edge's roll, down and out to the rail, straight down, then running out on the floor
+    fn profile(&self, s: f64, gap: f64, lift: f64) -> (f64, f64, f64, f64) {
+        let r = DRAPE_R;
+        let top = self.top + lift;
+        let arc = std::f64::consts::FRAC_PI_2 * r;
+        if s < arc { let a = s / r; return (r * a.sin(), top - r * (1.0 - a.cos()), a.sin(), a.cos()) }
+        let drop = top - r - self.rail;
+        let l = gap.hypot(drop);
+        if s < arc + l { let t = (s - arc) / l; return (r + gap * t, top - r - drop * t, drop / l, gap / l) }
+        let v = self.rail - self.floor - 0.004;
+        if s < arc + l + v { return (r + gap, self.rail - (s - arc - l), 1.0, 0.0) }
+        let rem = s - arc - l - v;
+        (r + gap + (rem * 0.45).min(DRAPE_POOL), self.floor + 0.004 + (rem * 0.05).min(0.02), 0.0, 1.0)
+    }
+
+    /// how far past the mattress's edge a cloth with `over` of overhang reaches, its layers and pleats included
+    fn reach(&self, over: f64, gap: f64, lift: f64) -> f64 {
+        self.profile(over, gap, lift).0.max(DRAPE_R + gap.min(over)) + lift + PLEAT + PLEAT_CORNER + 0.008
+    }
+}
+
+/// the hanging folds round the bed (shared by the layers, so they nest)
+struct Pleats {
+    wave: [(f64, f64, f64); 4],
+    top: [(f64, f64, f64); 3],
+}
+
+impl Pleats {
+    fn new(r: &mut Rng) -> Pleats {
+        let tau = std::f64::consts::TAU;
+        Pleats {
+            wave: [0.11, 0.17, 0.29, 0.47].map(|l| (l * r.uniform(0.85, 1.15), r.uniform(0.0, tau), r.uniform(0.5, 1.0))),
+            top: [0.6, 0.9, 1.4].map(|l| (l * r.uniform(0.8, 1.2), r.uniform(0.0, tau), r.uniform(0.0, tau))),
+        }
+    }
+    /// -1..1 along the perimeter coordinate u
+    fn at(&self, u: f64) -> f64 {
+        let tau = std::f64::consts::TAU;
+        let (mut v, mut n) = (0.0, 0.0);
+        for (l, ph, w) in self.wave { v += w * (tau * u / l + ph).sin(); n += w; }
+        v / n
+    }
+    /// -1..1: the shallow rumples on the top
+    fn rumple(&self, x: f64, y: f64) -> f64 {
+        let tau = std::f64::consts::TAU;
+        let mut v = 0.0;
+        for (l, a, ph) in self.top { v += (tau * (x * a.cos() + y * a.sin()) / l + ph).sin(); }
+        v / 3.0
+    }
+}
+
+/// a comforter's fill (a sheet's none)
+fn drape_loft(sheet_type: usize) -> f64 {
+    if sheet_type == 0 { 0.0 } else { 0.045 }
+}
+
+/// a flat cloth (lying at z = z0, its layers and any fold above and below that) laid over the bed without simulating it: over the
+/// mattress it follows the top; past its edge each point keeps its distance along the surface (DrapeGeom::profile), radially at the
+/// corners, where the extra cloth bunches into a pleat. `lift`: what it lies on; `loft`: the fill between a comforter's layers, tapering
+/// to its edges (a box comforter's pinched seams come out as its quilting)
+fn drape(pre: &Mesh, z0: f64, g: &DrapeGeom, lift: f64, loft: f64, pl: &Pleats) -> Mesh {
+    let (lo, hi) = pre.bounds();
+    let zmin = lo[2];
+    let mut m = pre.clone();
+    for p in m.pos.iter_mut() {
+        let (x, y) = (p[0], p[1]);
+        let dz = p[2] - zmin;
+        // (a fold lies 5 cm over the layer it came from)
+        let folded = dz >= 0.03;
+        let layer = if zmin < z0 - 1e-6 { ((if folded { (dz - 0.05).max(0.0) } else { dz }) / 0.01).clamp(0.0, 1.0) } else { 0.0 };
+        let edge = (x - lo[0]).min(hi[0] - x).min(y - lo[1]).min(hi[1] - y).max(0.0);
+        let taper = (edge / 0.07).min(1.0).sqrt();
+        let off = lift + layer * loft * taper + if folded { loft + 0.006 } else { 0.0 } + 0.003;
+        let (qx, qy) = (x.clamp(g.x0, g.x1), y.clamp(-g.yh, g.yh));
+        let (dx, dy) = (x - qx, y - qy);
+        let s = dx.hypot(dy);
+        if s < 1e-9 {
+            *p = [x, y, g.top_at(x, y) + off + 0.003 * (pl.rumple(x, y) + 1.0)];
+            continue;
+        }
+        let (nx, ny) = (dx / s, dy / s);
+        let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
+        let (h, z, nh, nz) = g.profile(s, gap, 0.0);
+        // the hanging folds, deeper down the drop (the perimeter's coordinate); a corner's bunched cloth
+        let u = if dy == 0.0 { qx } else if dx == 0.0 { qy + 7.0 } else { qx + qy + 3.0 * dy.atan2(dx) };
+        let ramp = (s / 0.25).min(1.0);
+        let mut pleat = PLEAT * ramp * pl.at(u) * nh;
+        if dx != 0.0 && dy != 0.0 { pleat += PLEAT_CORNER * ramp * (5.0 * dy.atan2(dx)).sin() * nh; }
+        let h = h + off * nh + pleat;
+        // (at the head end it stays clear of the headboard)
+        let px = (qx + nx * h).max(if nx < 0.0 { 0.005 } else { f64::NEG_INFINITY });
+        *p = [px, qy + ny * h, z + off * nz + 0.003 * nz * (pl.rumple(x, y) + 1.0)];
+    }
+    m
 }

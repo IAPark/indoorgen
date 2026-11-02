@@ -110,7 +110,8 @@ pub fn inset_individual(m: &Mesh, sel: &[bool], thickness: f64, depth: f64) -> M
             // inward normals of the incoming and outgoing edge
             let (n0, n1) = (unit(cross(fnrm, e0)), unit(cross(fnrm, e1)));
             let bis = [n0[0] + n1[0], n0[1] + n1[1], n0[2] + n1[2]];
-            let s = thickness / (1.0 + dot(n0, n1)).max(1e-9);
+            // (a miter limit: at a needle-sharp corner the offset ran to metres -- a bed's headboard panel 12 m tall)
+            let s = (thickness / (1.0 + dot(n0, n1)).max(1e-9)).min(2.0 * thickness / dot(bis, bis).sqrt().max(1e-9));
             let q = [pc[0] + bis[0] * s + fnrm[0] * depth, pc[1] + bis[1] * s + fnrm[1] * depth, pc[2] + bis[2] * s + fnrm[2] * depth];
             o.pos.push(q);
             new_ids.push((o.pos.len() - 1) as u32);

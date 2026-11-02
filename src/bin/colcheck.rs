@@ -126,5 +126,12 @@ fn sides(class: &str, seed: u64, vols: &[Volume], mesh: &ig_kit::api::Asset) {
             }
         }
     }
+    // the soft parts against the soft volumes' bounds
+    for v in vols.iter().filter(|v| matches!(v.role, Role::Soft)) {
+        let (a, b) = v.bounds();
+        let (mut l, mut h) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for (i, part) in mesh.parts.iter().enumerate() { if mesh.is_soft(i) { let (pl, ph) = part.mesh.bounds(); for k in 0..3 { l[k] = l[k].min(pl[k]); h[k] = h[k].max(ph[k]); } } }
+        println!("  {class} seed {seed} soft gaps cm -x {:.1} -y {:.1} -z {:.1} +x {:.1} +y {:.1} +z {:.1}", (l[0] - a[0]) * 100.0, (l[1] - a[1]) * 100.0, (l[2] - a[2]) * 100.0, (b[0] - h[0]) * 100.0, (b[1] - h[1]) * 100.0, (b[2] - h[2]) * 100.0);
+    }
     println!("  {class} seed {seed} gaps cm (collision past mesh) -x {:.1} -y {:.1} -z {:.1} +x {:.1} +y {:.1} +z {:.1}", (mlo[0] - clo[0]) * 100.0, (mlo[1] - clo[1]) * 100.0, (mlo[2] - clo[2]) * 100.0, (chi[0] - mhi[0]) * 100.0, (chi[1] - mhi[1]) * 100.0, (chi[2] - mhi[2]) * 100.0);
 }
