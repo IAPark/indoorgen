@@ -319,7 +319,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
     }
     rooms.sort_by(|a, b| (b.nobj, b.area as i32).cmp(&(a.nobj, a.area as i32)).then(a.name.cmp(&b.name)));
     let mut out = vec![];
-    for rm in rooms.iter().filter(|r| r.nobj > 0 || r.area > 6.0) {
+    for rm in rooms.iter() {
         let z0 = rm.tris[0][0].z; let tgt = Vec3::new(rm.subj.x, rm.subj.y, z0 + 0.9);
         let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
         for t in &rm.tris { for v in t { lo = lo.min(*v); hi = hi.max(*v); } }
@@ -348,8 +348,22 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             if chosen.iter().any(|c| (*c - e).truncate().length() < 2.5) { continue; }
             chosen.push(e);
         }
+        // (every room gets a view: a closet or a hallway fails the rules above, so it takes the farthest clear spot in it and a wider lens)
+        let mut lens = 18.0;
+        if chosen.is_empty() {
+            let mut best: Option<(f32, Vec3)> = None;
+            let step = 0.2; let mut y = lo.y + step / 2.0;
+            while y < hi.y { let mut x = lo.x + step / 2.0; while x < hi.x {
+                let p = Vec3::new(x, y, z0);
+                if rm.tris.iter().any(|t| in_tri2(p, t)) {
+                    let e = Vec3::new(x, y, z0 + 1.5); let dist = (e - tgt).truncate().length();
+                    if !sh.blocked(e, tgt) && !inside(e, 0.05) && sh.clearance(e) > 0.12 && best.map_or(true, |b| dist > b.0) { best = Some((dist, e)); }
+                }
+                x += step; } y += step; }
+            if let Some((_, e)) = best { chosen.push(e); lens = 13.0; }
+        }
         for (k, e) in chosen.iter().enumerate() {
-            let mut cm = cam_look(*e, tgt, 18.0); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }); out.push(cm);
+            let mut cm = cam_look(*e, tgt, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }); out.push(cm);
             if out.len() >= n { return out; }
         }
     }

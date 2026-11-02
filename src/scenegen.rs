@@ -763,7 +763,14 @@ pub fn build_scene(p: &Params) -> Built {
         for k in crate::features::prune_feature_children(&mut g.state, &visuals, &g.features) { eprintln!("FEATURE removed {k} (taller than its shelf)"); }
     }
     if cfg.post.snap {
-        for (k, s) in indoorgen::snap::untuck_chairs(&mut g.state, &visuals) { eprintln!("UNTUCK {k} drawn back {:.1} cm (arms under the table top)", s * 100.0); }
+        let drawn = indoorgen::snap::untuck_chairs(&mut g.state, &visuals);
+        for (k, s) in &drawn { eprintln!("UNTUCK {k} drawn back {:.1} cm (arms under the table top)", s * 100.0); }
+        // (a chair resting on a table's foot, drawn back off it, was left in the air: settled again)
+        if !drawn.is_empty() {
+            let mut skip: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
+            skip.extend(feature_keys.iter().cloned());
+            indoorgen::snap::snap_children(&mut g.state, &visuals, &skip, g.c.wall_thickness / 2.0, 0.30, 0.03);
+        }
         let fboxes: Vec<([f64; 3], [f64; 3])> = g.features.iter().map(|pf| {
             let p = pf.pose();
             let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);

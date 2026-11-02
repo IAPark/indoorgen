@@ -232,7 +232,10 @@ pub fn tall_unit(st: &Style, o: &mut Out, rng: &mut Rng, a: f64, b: f64, top: f6
     bx(&mut o.case, a + ts, b - ts, 0.0, d, st.ph, st.ph + tb);
     if st.has_lower {
         let lh = st.lower_h;
-        under_block(st, o, rng, a + ts, b - ts, lh, true);
+        // (the doors of each bay between its own panels: spaced on their own, a divider's face strip came through a door's panel)
+        for k in 0..nb {
+            fronts(st, o, rng, a + step * k as f64 + ts, a + step * (k + 1) as f64, st.ph + tb, lh, true);
+        }
         zb = lh + st.ct;
         bx(&mut o.counter, a, b, 0.0, d + st.co, lh, lh + st.ct);
         o.supports.push(([a, 0.0, lh], [b, d + st.co, lh + st.ct]));

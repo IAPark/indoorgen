@@ -18,7 +18,7 @@ type V3 = [f64; 3];
 /// (0: +x, Infinigen furniture; 1: +y, room features in their wall-span frame)
 const UNITS: &[(&str, Option<&[&str]>, usize)] = &[
     ("BookshelfWallFeature", None, 1),
-    ("SimpleBookcaseFactory", Some(&["living-room", "bedroom"]), 0),
+    ("SimpleBookcaseFactory", Some(&["living-room", "bedroom", "dining-room"]), 0),
     ("LargeShelfFactory", Some(&["living-room", "bedroom"]), 0),
     ("CellShelfFactory", Some(&["living-room", "bedroom"]), 0),
 ];
