@@ -121,6 +121,8 @@ pub fn post_visuals(visuals: &mut HashMap<String, Asset>, state: &State, cfg: &M
 /// re-simulates them with the new placement) and the approximate part meshes the same way.
 fn unmake_bed(a: &mut Asset, lvl: f64, rng: &mut ig_core::rng::Rng) -> bool {
     use ig_core::mesh::Mat4;
+    // (procedural bedding re-lays itself)
+    if let Some(f) = a.unmake.clone() { return f(a, lvl, rng) }
     let jobs: Vec<usize> = (0..a.cloth.len()).filter(|&i| a.cloth[i].build.is_some()).collect();
     if jobs.is_empty() {
         return false;

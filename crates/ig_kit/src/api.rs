@@ -60,6 +60,8 @@ pub struct Asset {
     /// soft parts (drapes, foliage, throws): they lie within the piece's hard and soft volumes, not necessarily its hard ones;
     /// cloth-job targets are soft too (Asset::is_soft)
     pub soft: Vec<usize>,
+    /// a piece that can be disarranged after it is built (a bed's bedding re-laid unmade, mess level given): true if it changed
+    pub unmake: Option<std::sync::Arc<dyn Fn(&mut Asset, f64, &mut crate::rng::Rng) -> bool + Send + Sync>>,
 }
 
 impl Asset {

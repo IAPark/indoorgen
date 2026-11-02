@@ -848,7 +848,7 @@ impl Factory for Bed {
         let sim = sim_bedding();
         let geom = DrapeGeom::of(c, &ms);
         let pleats = Pleats::new(&mut r);
-        let sheet = if !sim { drape(&pre, &geom, 0.0, drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 }, &pleats, drape_slide(c.fseed, inst, 0)) } else {
+        let sheet = if !sim { drape(&pre, &geom, 0.0, drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 }, &pleats, drape_slide(c.fseed, inst, 0), 0.0, 1.0) } else {
         let mut p = ClothParams::default();
         p.mass = 0.05;
         p.tension = 2.0;
@@ -891,7 +891,7 @@ impl Factory for Bed {
         let off = r.uniform(0.0, 0.3);
         cover.transform(&rot);
         cover.transform(&Mat4::translation([c.size / 2.0 + off, 0.0, z_cover]));
-        let cvm = if !sim { drape(&cover, &geom, drape_loft(s.sheet_type) + 0.008, 0.0, 0.0, &pleats, drape_slide(c.fseed, inst, 1)) } else {
+        let cvm = if !sim { drape(&cover, &geom, drape_loft(s.sheet_type) + 0.008, 0.0, 0.0, &pleats, drape_slide(c.fseed, inst, 1), 0.0, 1.0) } else {
         // the comforter is a thin two-layer shell: the cover only sees its outer (top) layer, else vertices that sink between the layers pop out below it
         let top_faces = {
             let k = pre.faces.iter().take_while(|f| {
@@ -937,6 +937,8 @@ impl Factory for Bed {
             }
             Collider::new(&pos, &faces)
         };
+        let mut rests: Vec<(usize, f64, f64, f64)> = vec![];
+        let (sheet_part, cover_part) = (sheet_idx, a.parts.len() - 1);
         let np = r.randint(2, 4) as usize;
         let pc = pillow_ctor(&mut r);
         let pspec = PillowSpec::from_ctor(&pc);
@@ -975,6 +977,7 @@ impl Factory for Bed {
             let b = pm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
             // (pillows and the towel are bedding: soft, within the bed's soft volume)
+            rests.push((a.parts.len(), 0.07, 0.01, 0.15));
             a.soft.push(a.parts.len());
             a.parts.push(Part { mesh: pm, mat: pill_mat.clone(), col: Some((b.0, b.1)) });
         }
@@ -995,8 +998,37 @@ impl Factory for Bed {
             let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
             let b = tm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
+            rests.push((a.parts.len(), 0.02, 0.005, 0.1));
             a.soft.push(a.parts.len());
             a.parts.push(Part { mesh: tm, mat: tmat, col: Some((b.0, b.1)) });
+        }
+        if !sim {
+            // unmade (mess pass): the sheet pulled back toward the foot and askew, the cover thrown crooked, both more rumpled; what lay on them
+            // comes to rest on them again
+            let (loft, margin) = (drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 });
+            let mat_mesh = mattress.clone();
+            a.unmake = Some(std::sync::Arc::new(move |a: &mut Asset, lvl: f64, r: &mut Rng| {
+                let tilt = |r: &mut Rng, y: f64, t: f64| [lvl * (r.f64() * 2.0 - 1.0) * y, lvl * (r.f64() * 2.0 - 1.0) * t.to_radians()];
+                let (p0, s0) = (lvl * (0.1 + 0.35 * r.f64()), tilt(r, 0.08, 6.0));
+                let (p1, s1) = (lvl * (r.f64() * 2.0 - 0.6) * 0.3, tilt(r, 0.15, 14.0));
+                let k = 1.0 + 2.5 * lvl;
+                let sh = drape(&pre, &geom, 0.0, loft, margin, &pleats, s0, p0, k);
+                let cv = drape(&cover, &geom, loft + 0.008, 0.0, 0.0, &pleats, s1, p0.min(p1 + 0.1).max(p1), k);
+                let col = {
+                    let (mut pos, mut faces): (Vec<V3>, Vec<Vec<u32>>) = (vec![], vec![]);
+                    for mm in [&sh, &mat_mesh, &cv] {
+                        let o = pos.len() as u32;
+                        pos.extend_from_slice(&mm.pos);
+                        faces.extend(mm.faces.iter().map(|f| f.iter().map(|i| i + o).collect()));
+                    }
+                    Collider::new(&pos, &faces)
+                };
+                a.parts[sheet_part].mesh = sh;
+                a.parts[cover_part].mesh = cv;
+                for &(part, depth, skin, gap) in &rests { super::cloth::rest_and_wrap(&mut a.parts[part].mesh.pos, &col, depth, skin, gap); }
+                for &i in [sheet_part, cover_part].iter().chain(rests.iter().map(|x| &x.0)) { let b = a.parts[i].mesh.bounds(); a.parts[i].col = Some(b); }
+                true
+            }));
         }
         a
     }
@@ -1164,6 +1196,7 @@ fn sheet_scale(sheet_type: usize, r: &mut Rng) -> (f64, f64) {
 
 /// what the bedding hangs over, in the bed's frame: the mattress's top rectangle (z = its top's edge, the dome over it), the frame's
 /// rail below it (how far it stands out past the mattress at the side and the foot) and the floor
+#[derive(Clone)]
 struct DrapeGeom {
     x0: f64,
     x1: f64,
@@ -1239,6 +1272,7 @@ impl DrapeGeom {
 }
 
 /// the hanging folds and the rumples (shared by the layers, so they nest)
+#[derive(Clone)]
 struct Pleats {
     wave: [(f64, f64, f64); 5],
     lump: [(f64, f64, f64); 4],
@@ -1289,8 +1323,9 @@ fn drape_loft(sheet_type: usize) -> f64 {
 /// each point keeping which layer it is on; then a comforter's top layer stands `loft` over its bottom, easing to nothing at its edges and,
 /// a box comforter (`margin`, its seams' spacing), domed over each cell; then each point is laid: over the mattress it follows the top; past
 /// its edge it keeps its distance along the surface (DrapeGeom::profile), radially at the corners, where the extra cloth bunches into a pleat,
-/// its skirt flaring and its hem waving. `lift`: what it lies on; `slide`: off true on the bed
-fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Pleats, slide: [f64; 2]) -> Mesh {
+/// its skirt flaring and its hem waving. `lift`: what it lies on; `slide`: off true on the bed; `pull`: moved toward the foot; `rumple`: the
+/// rumples' scale (an unmade bed's are larger)
+fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Pleats, slide: [f64; 2], pull: f64, rumple: f64) -> Mesh {
     let (lo, hi) = pre.bounds();
     let zmin = lo[2];
     let two_layers = pre.pos.iter().any(|p| { let d = p[2] - zmin; d > 0.002 && d < 0.02 });
@@ -1319,9 +1354,9 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
     for p in m.pos.iter_mut() {
         let off = p[2];
         let (dx0, dy0) = (p[0] - c[0], p[1] - c[1]);
-        let (x, y) = (c[0] + dx0 * cy - dy0 * sy, c[1] + dx0 * sy + dy0 * cy + slide[0]);
+        let (x, y) = (c[0] + dx0 * cy - dy0 * sy + pull, c[1] + dx0 * sy + dy0 * cy + slide[0]);
         // (a comforter's fill takes up most of the rumples)
-        let rum = RUMPLE * pl.rumple(x, y) * if loft > 0.0 { 0.5 } else { 1.0 };
+        let rum = rumple * RUMPLE * pl.rumple(x, y) * if loft > 0.0 { 0.5 } else { 1.0 };
         let (qx, qy) = (x.clamp(g.x0, g.x1), y.clamp(-g.yh, g.yh));
         let (dx, dy) = (x - qx, y - qy);
         let s0 = dx.hypot(dy);

@@ -705,7 +705,7 @@ impl Feature for FireplaceFeature {
         }
         for p in parts.iter_mut() { pad_uv(&mut p.mesh); }
         if let Some((lo, hi)) = mantel_box { supports.insert(0, ([lo[0], d, lo[2]], hi)); }
-        let asset = Asset { cloth: vec![], followers: vec![], parts, supports, cutters: vec![], cols: vec![], soft: vec![] };
+        let asset = Asset { cloth: vec![], followers: vec![], parts, supports, cutters: vec![], cols: vec![], soft: vec![], unmake: None };
         let (fx_0, fx_1) = (l.hearth[0].min(l.bench[0]).min(bx0), l.hearth[1].max(l.bench[1]).max(bx1));
         let fy1 = if l.hearth_kind == HearthKind::Bench { d + l.hearth_depth + 0.03 } else { hy1 };
         let clear = 0.35; // keep-out in front of the hearth
