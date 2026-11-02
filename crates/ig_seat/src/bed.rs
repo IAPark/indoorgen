@@ -47,6 +47,11 @@ impl BedSpec {
             c.width = 1.0 + (c.width - 1.4) / 1.0 * 0.5;
             c.size = 1.9 + (c.size - 2.0) * 0.75;
         }
+        // (a tight spot's last resort: Piece::tucked asked twice)
+        if crate::api::tuck_hint() >= 2 {
+            c.width = 0.95;
+            c.size = 1.9;
+        }
         c.thickness = r.uniform(0.05, 0.12);
         let has_all_legs = r.uniform(0.0, 1.0) < 0.2;
         c.leg_thickness = r.uniform(0.08, 0.12);
@@ -688,7 +693,7 @@ impl Factory for Bed {
             // the bedding hangs over the mattress (drape): it reaches as far as the sheet's overhang and its slide toward the foot carry it
             // (a simulated one spreads up to 0.45 m), not past the headboard, which holds it at the head end
             // (tucked in, it keeps within the frame: the soft volume comes in to the hard box)
-            let tuck = crate::api::tuck_hint();
+            let tuck = crate::api::tuck_hint() > 0;
             let (side, foot) = if tuck { (hi[1] - mh[1], hi[0] - mh[0]) } else if sim_bedding() { (0.45, 0.45) } else {
                 let gm = DrapeGeom::of(c, &ms);
                 let lift = drape_loft(self.s.sheet_type) + 0.012;
@@ -1018,6 +1023,13 @@ impl Factory for Bed {
             // comes to rest on them again
             let (loft, margin) = (drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 });
             let mat_mesh = mattress.clone();
+            // (kept to the soft volume the bed was placed with: pulled through a wall, the whole bed was removed)
+            let mut geom = geom.clone();
+            let lift = loft + 0.012;
+            let (ov_s, ov_f) = ((wm - 1.0) / 2.0 * ms.width, (0.15 + sm * ms.size - geom.x1).max(0.0));
+            let ov = ov_s.hypot(ov_f);
+            geom.xmax = geom.x1 + geom.reach(ov, geom.gap_foot, lift);
+            geom.ymax = geom.yh + geom.reach(ov, geom.gap_side, lift);
             a.unmake = Some(std::sync::Arc::new(move |a: &mut Asset, lvl: f64, r: &mut Rng| {
                 let tilt = |r: &mut Rng, y: f64, t: f64| [lvl * (r.f64() * 2.0 - 1.0) * y, lvl * (r.f64() * 2.0 - 1.0) * t.to_radians()];
                 let (p0, s0) = (lvl * (0.1 + 0.35 * r.f64()), tilt(r, 0.08, 6.0));
@@ -1210,7 +1222,7 @@ fn sheet_scale(sheet_type: usize, r: &mut Rng) -> (f64, f64) {
 #[derive(Clone)]
 struct DrapeGeom {
     tuck: bool,
-    /// the frame's outline, a tucked-in cloth's limit
+    /// how far the cloth may reach: a tucked-in one the frame's outline, an unmade one the soft volume
     xmax: f64,
     ymax: f64,
     x0: f64,
@@ -1241,7 +1253,7 @@ const DRAPE_POOL: f64 = 0.10;
 impl DrapeGeom {
     fn of(c: &ChairSpec, ms: &MattressSpec) -> DrapeGeom {
         let (x0, x1) = ((c.size - ms.size) / 2.0, (c.size + ms.size) / 2.0);
-        DrapeGeom { tuck: crate::api::tuck_hint(), xmax: c.size + c.leg_thickness * 0.5, ymax: c.width / 2.0 + 0.018, x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0 + 0.012 - DRAPE_R).max(0.0), gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
+        DrapeGeom { tuck: crate::api::tuck_hint() > 0, xmax: if crate::api::tuck_hint() > 0 { c.size + c.leg_thickness * 0.5 } else { f64::INFINITY }, ymax: if crate::api::tuck_hint() > 0 { c.width / 2.0 + 0.018 } else { f64::INFINITY }, x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0 + 0.012 - DRAPE_R).max(0.0), gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
     }
 
     /// the mattress's top under (x, y)
@@ -1353,7 +1365,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let folded = d >= 0.03;
         p[2] = if two_layers { ((if folded { d - 0.06 } else { d }) / 0.01).clamp(0.0, 1.0) } else { 0.0 } + if folded { 2.0 } else { 0.0 };
     }
-    let mut m = subsurf(&m, 2, false);
+    let mut m = subsurf(&m, 1, false);
     let c0 = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     // the seams run from the cloth's middle (Blanket::box_pinch)
     let dome = |d: f64| { let t = (d / margin).rem_euclid(1.0); let t = if t > 0.5 { 1.0 - t } else { t } * 2.0; (1.0 - (1.0 - t) * (1.0 - t)).sqrt() };
@@ -1402,7 +1414,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         // (at the head end it stays clear of the headboard)
         let px = (qx + nx * h).max(if nx < 0.0 { 0.005 } else { f64::NEG_INFINITY });
         let py = qy + ny * h;
-        let (px, py) = if g.tuck { (px.min(g.xmax), py.clamp(-g.ymax, g.ymax)) } else { (px, py) };
+        let (px, py) = (px.min(g.xmax), py.clamp(-g.ymax, g.ymax));
         *p = [px, py, z + (off + rum) * nz];
     }
     m

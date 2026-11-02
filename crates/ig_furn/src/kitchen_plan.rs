@@ -451,12 +451,21 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     let dbg = ig_core::env_on!("KPLANDBG");
     let in_room = |st: &State, c: &str| -> Vec<String> { st.objs.iter().filter(|(k, o)| class_of(o) == c && layout2d::room_of(st, k).as_deref() == Some(room)).map(|(k, _)| k.clone()).collect() };
     let runs = in_room(state, "KitchenSpaceFactory");
-    let proto = runs.first().cloned()?;
     let fridge = in_room(state, "FridgeFactory").first().cloned();
     let range = in_room(state, "OvenFactory").first().cloned();
     // (a dishwasher whose box does not fit under the counter -- the placeholder comes with its door open, 1 m by 1.2 m -- goes)
     let dish = in_room(state, "DishwasherFactory").first().cloned().filter(|k| { let (l, h) = lohi(state, k); h[1] - l[1] <= 0.7 && h[0] - l[0] <= 0.85 });
     let saved = state.objs.clone();
+    // (the solver found no spot for a run: the plan makes its own, a kitchen without a counter is no kitchen)
+    let proto = match runs.first().cloned() {
+        Some(r) => r,
+        None => {
+            let name = format!("{room}_krun").replace('/', "_");
+            let mut r = Rng::seeded(ig_core::int_hash(&["kitchen_run", room]));
+            if !new_piece(ctx, state, &mut r, "KitchenSpaceFactory", room, &name) { return None }
+            name
+        }
+    };
     // the room's kitchen pieces out: other runs, cabinets, sinks, second appliances, what stands on any of them
     let keep: Vec<String> = [Some(proto.clone()), fridge.clone(), range.clone(), dish.clone()].into_iter().flatten().collect();
     for c in ["KitchenSpaceFactory", "KitchenCabinetFactory", "SinkFactory", "FridgeFactory", "OvenFactory", "DishwasherFactory"] {

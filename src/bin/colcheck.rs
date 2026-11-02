@@ -36,7 +36,7 @@ fn main() {
             }
             // a counter run's L ends: a blind corner at one end and the filler at the other, and both at both (a U's middle)
             for e in [[-1.0, 0.65, 1.0, 0.3], [2.0, 0.65, 2.0, 0.3]] { if let Some(p) = p0.with_ends(e) { pieces.push(p); } }
-            if let Some(p) = p0.tucked() { pieces.push(p); }
+            if let Some(p) = p0.tucked() { if let Some(q) = p.tucked() { pieces.push(q); } pieces.push(p); }
             pieces.insert(0, p0);
             for mut p in pieces {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

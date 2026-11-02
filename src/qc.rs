@@ -527,6 +527,12 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     CutKind::Window => (-ct.dims[2] / 2.0, ct.dims[2] / 2.0),
                     _ => (-ct.dims[2] / 2.0 + 0.05, ct.dims[2] / 2.0 - 0.1),
                 };
+                // (a small thing -- a lamp on a table, a vase -- does not block a window; it stands in front of it)
+                if matches!(ct.kind, CutKind::Window) || half_wall {
+                    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+                    for &n in &o.nodes { let (a, b) = nodes[n].mesh.bounds(); for d in 0..2 { lo[d] = lo[d].min(a[d]); hi[d] = hi[d].max(b[d]); } }
+                    if (hi[0] - lo[0]).max(hi[1] - lo[1]) < 0.45 { continue }
+                }
                 let mut hit: f64 = 0.0;
                 let mut check = |p: V3| {
                     let l = to_local(p);

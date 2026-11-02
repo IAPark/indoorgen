@@ -658,13 +658,13 @@ pub fn round_hint() -> bool {
     ROUND_HINT.with(|c| c.get())
 }
 thread_local! {
-    static TUCK_HINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TUCK_HINT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
-/// the bed built or measured next has its bedding tucked in (Piece::tucked)
-pub fn set_tuck_hint(on: bool) {
-    TUCK_HINT.with(|c| c.set(on));
+/// the bed built or measured next (Piece::tucked): 1 its bedding tucked in, 2 also a compact single bed
+pub fn set_tuck_hint(level: u8) {
+    TUCK_HINT.with(|c| c.set(level));
 }
-pub fn tuck_hint() -> bool {
+pub fn tuck_hint() -> u8 {
     TUCK_HINT.with(|c| c.get())
 }
 thread_local! {

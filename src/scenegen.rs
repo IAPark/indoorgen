@@ -533,7 +533,14 @@ pub fn build_scene(p: &Params) -> Built {
             let Some(a) = visuals.get(k) else { continue };
             let Some(room) = indoorgen::furn::layout2d::room_of(&g.state, k) else { continue };
             let Some(poly) = inner.get(&room) else { continue };
-            let (lo, hi) = a.bounds();
+            // (its rigid parts: soft ones -- bedding -- may spread within the soft volume, and a corner of their box means nothing in an angled room)
+            let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for (i, part) in a.parts.iter().enumerate() {
+                if a.is_soft(i) || part.mesh.pos.is_empty() { continue }
+                let (l, h) = part.mesh.bounds();
+                for d in 0..3 { lo[d] = lo[d].min(l[d]); hi[d] = hi[d].max(h[d]); }
+            }
+            if lo[0] > hi[0] { continue }
             // only pieces standing on the floor (the bottom within 15 cm of it)
             if o.pose.apply([0.0, 0.0, lo[2]])[2] > wt / 2.0 + 0.15 { continue }
             let corners = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]];

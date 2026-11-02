@@ -69,8 +69,8 @@ pub struct FactoryPiece {
     native: bool,
     /// a counter run's ends (one leg of an L)
     ends: Option<[f64; 4]>,
-    /// a bed's bedding tucked in
-    tuck: bool,
+    /// a bed's tight-spot level (Piece::tucked)
+    tuck: u8,
     /// what the collision decided
     col: Option<Vec<Volume>>,
 }
@@ -89,7 +89,7 @@ impl FactoryPiece {
     fn new(class: &str, seed: u64, size: Option<[f64; 3]>) -> FactoryPiece {
         let draws = ig_kit::ctor_draws::ctor_draws(class, &mut Rng::seeded(hash("piece_draws", seed)));
         let size = if builds_to_size(class) { size.or_else(|| sizes::model(class).map(|m| sizes::sample(m, &mut Rng::seeded(hash("piece_size", seed))))) } else { None };
-        FactoryPiece { class: class.into(), seed, inst: hash("piece_inst", seed) % 10_000_000, draws, size, native: false, ends: None, tuck: false, col: None }
+        FactoryPiece { class: class.into(), seed, inst: hash("piece_inst", seed) % 10_000_000, draws, size, native: false, ends: None, tuck: 0, col: None }
     }
 
     /// run `f` with the factory's hints set as this piece's state says (the old factories read them), restored after
@@ -176,9 +176,9 @@ impl Piece for FactoryPiece {
         Some(Box::new(p))
     }
     fn tucked(&self) -> Option<Box<dyn Piece>> {
-        if self.class != "BedFactory" { return None }
+        if self.class != "BedFactory" || self.tuck >= 2 { return None }
         let mut p = FactoryPiece::new(&self.class, self.seed, self.size);
-        p.tuck = true;
+        p.tuck = self.tuck + 1;
         p.volumes();
         Some(Box::new(p))
     }

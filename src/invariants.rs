@@ -6,7 +6,7 @@
 //!     dishwasher: top off the counter top by more than 4 cm),
 //!   * door_paths: a room whose doors are not all joined by walkable floor (layout2d::walk_status),
 //!   * size: a piece built to a layout size whose model is off it by more than 2 cm on an axis,
-//!   * unfurnished: a bedroom without a bed, a living room without a sofa or an armchair, a bathroom without a toilet, a dining room without a table.
+//!   * unfurnished: a bedroom without a bed, a living room without a sofa or an armchair, a bathroom without a toilet, a dining room without a table, a kitchen without a counter.
 //! One `INV <kind> <key> <class> [room]: <detail>` line per violation and an `INVARIANTS n` summary line; the counts are returned.
 use crate::mesh::Scene;
 use std::collections::BTreeMap;
@@ -133,7 +133,7 @@ pub fn check(inp: &Inv) -> BTreeMap<String, usize> {
     for (rk, ro) in &inp.state.objs {
         if !crate::furn::layout2d::is_room(ro) { continue }
         let rt = crate::rooms::state::room_type(rk);
-        let need: &[&str] = match rt { "bedroom" => &["BedFactory"], "living-room" => &["SofaFactory", "ArmChairFactory"], "bathroom" => &["ToiletFactory"], "dining-room" => &["TableDiningFactory"], _ => continue };
+        let need: &[&str] = match rt { "bedroom" => &["BedFactory"], "living-room" => &["SofaFactory", "ArmChairFactory"], "bathroom" => &["ToiletFactory"], "dining-room" => &["TableDiningFactory"], "kitchen" => &["KitchenSpaceFactory"], _ => continue };
         // (by position: a piece the group passes added carries the relation of whatever floor piece it was copied from)
         let Some(pg) = ro.polygon.as_ref() else { continue };
         let has = inp.state.objs.iter().any(|(_, o)| o.generator.as_ref().map_or(false, |g| need.contains(&g.class.as_str())) && {

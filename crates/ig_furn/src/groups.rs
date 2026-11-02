@@ -39,9 +39,23 @@ pub fn free_ok(state: &State, name: &str) -> bool {
     // anything lower than a sill (sofas, tables, stands) stands under a window too
     let top = layout2d::prisms(state, name).iter().map(|p| p.z[1]).fold(f64::NEG_INFINITY, f64::max);
     let skip_win = (top < 1.0 && class_of(o) != "TVStandFactory") || matches!(class_of(o), "BedFactory" | "KitchenSpaceFactory" | "OvenFactory" | "DishwasherFactory" | "SinkFactory");
-    let win = Tag::sem("Window");
+    // (windows are named so: they carry no Window tag here, and the rules below never fired)
+    let is_win = |k: &str, b: &ObjState| k.starts_with("window") || b.tags.contains(Tag::sem("Window"));
+    let by_class = matches!(class_of(o), "BedFactory" | "KitchenSpaceFactory" | "OvenFactory" | "DishwasherFactory" | "SinkFactory");
+    // anything standing higher than a sill clears the window in plan (a sideboard's back stood 12 cm in a window's depth; windows carry no
+    // collision of their own there)
+    if !by_class {
+        let pa = layout2d::prisms(state, name);
+        for (k, b) in state.objs.iter().filter(|(k, b)| k.as_str() != name && is_win(k.as_str(), b)) {
+                    if top <= b.pose.t[2] + b.geom.lo[2] + 0.02 { continue }
+            let pb = layout2d::prisms(state, k);
+            if pa.iter().any(|x| pb.iter().any(|y| layout2d::poly_dist(&x.poly, &y.poly) < 0.05)) { return false }
+        }
+    }
     for (k, b) in &state.objs {
-        if k == name || b.tags.contains(nc) || layout2d::is_room(b) || (skip_win && b.tags.contains(win)) {
+        // (low pieces stand under a window only if they clear its sill: a sideboard stood 12 cm into a low window)
+        let under_sill = top < 1.0 && top <= b.pose.t[2] + b.geom.lo[2] + 0.02;
+        if k == name || b.tags.contains(nc) || layout2d::is_room(b) || (is_win(k.as_str(), b) && skip_win && (by_class || under_sill)) {
             continue;
         }
         // art and mirrors hang on the wall over furniture
@@ -50,7 +64,7 @@ pub fn free_ok(state: &State, name: &str) -> bool {
         }
         // a door's cutter box reaches 1 m into each room (2 m deep: it cuts the walls); the door clearances (doorclear/..., from the
         // wall face, the opening's width) say what a door needs -- the cutter took a 1.5 x 1.5 m WC's whole floor from the toilet
-        if b.tags.contains(Tag::sem("Cutter")) && !b.tags.contains(win) && (k.starts_with("door") || k.starts_with("entrance")) {
+        if b.tags.contains(Tag::sem("Cutter")) && !is_win(k.as_str(), b) && (k.starts_with("door") || k.starts_with("entrance")) {
             continue;
         }
         // another room's door clearance and feature keep-outs stop at its walls (a bedroom's built-in shelves kept the living
@@ -69,7 +83,7 @@ pub fn free_ok(state: &State, name: &str) -> bool {
             return false;
         }
         // a TV stand clears windows in plan too (its screen would stand in front of the glass, above the sill the 3D test starts at)
-        if class_of(o) == "TVStandFactory" && b.tags.contains(win.clone()) {
+        if class_of(o) == "TVStandFactory" && is_win(k.as_str(), b) {
             let (pa, pb) = (layout2d::prisms(state, name), layout2d::prisms(state, k));
             if pa.iter().any(|x| pb.iter().any(|y| layout2d::poly_dist(&x.poly, &y.poly) < 0.05)) {
                 return false;
@@ -1726,7 +1740,13 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                         if ok { log.push(format!("{room}: bed redrawn {bw:.2} m wide to fit")); break }
                     }
                     if !state.objs.contains_key(&name) { continue }
+                    // (the last of them made a compact single, which fits where nothing else does: an angled room's door takes the rest)
+                    if !ok && super::solver::tuck_piece(state, &name) {
+                        ok = place_on_wall_step(state, &name, &room, &score, 0.05);
+                        if ok { log.push(format!("{room}: a compact bed to fit")); }
+                    }
                 }
+                if std::env::var_os("GROUPDBG").is_some() && !ok { let (a, b) = state.objs.get(room.as_str()).and_then(|r| r.polygon.as_ref()).map_or(([0.0; 2], [0.0; 2]), |g| { let b = crate::shp::bounds(g); ([b.0, b.1], [b.2, b.3]) }); eprintln!("GROUPDBG bedless {room} {:.2} x {:.2}", b[0] - a[0], b[1] - a[1]); }
                 if ok { log.push(format!("{room}: added a bed")); } else { state.objs.shift_remove(&name); }
             }
         }

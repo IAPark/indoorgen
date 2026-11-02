@@ -32,8 +32,14 @@ pub fn roles_collide(state: &State, a: &str, ra: u8, b: &str, rb: u8) -> bool {
         (ROLE_SOFT, _) => state.objs[b].generator.is_none() && !b.starts_with("doorclear/"),
         (_, ROLE_SOFT) => state.objs[a].generator.is_none() && !a.starts_with("doorclear/"),
         (ROLE_OPEN, ROLE_OPEN) => false,
+        // (a kitchen's units stand side by side and at corners: their doors and drawers swing past each other's fronts as they do in any kitchen)
+        _ if ra != rb && kitchen_unit(state, a) && kitchen_unit(state, b) => false,
         _ => !(state.objs[a].relations.iter().any(|r| r.target == b) || state.objs[b].relations.iter().any(|r| r.target == a)),
     }
+}
+
+fn kitchen_unit(state: &State, k: &str) -> bool {
+    state.objs[k].generator.as_ref().map_or(false, |g| matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenCabinetFactory" | "FridgeFactory" | "OvenFactory" | "DishwasherFactory" | "SinkFactory"))
 }
 
 /// the role of an object's proxy `i`

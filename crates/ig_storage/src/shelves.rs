@@ -1269,7 +1269,9 @@ impl KitchenSpace {
         let (cut_lo, cut_hi) = self.blind_cuts();
         // (the base row's depth leaves room for its fronts: drawers' knobs stand up to 3.6 cm proud)
         let dx = x - 0.04;
-        let base_len = if self.island { y - 0.15 } else { y - cut_lo - cut_hi };
+        // (a run's rows stand RUN_INSET in from its ends: their doors' frames and knobs overhang them, and the run must not claim more than asked,
+        // or it no longer fits the slot the kitchen plan sized it for)
+        let base_len = if self.island { y - 0.15 } else { y - cut_lo - cut_hi - 2.0 * RUN_INSET };
         let spec = cabdoor::KcSpec { dims: [dx, 0.0, self.bottom_h], widths: self.row_widths(base_len), drawer_only: true };
         let base = cabdoor::kc_layout(&mut inst_rng(self.factory_seed, 0), &cabdoor::KcSpec { dims: [dx, spec.widths.iter().sum(), self.bottom_h], ..spec }, None);
         let x0 = -dx / 2.0 - 0.005;
@@ -1277,7 +1279,7 @@ impl KitchenSpace {
         let hb = cabdoor::kc_frame_height(self.bottom_h);
         let top_y = if self.island { (0.0, cabdoor::kc_row_length(&base.cells.iter().map(|c| c.sp.cell_w[0]).collect::<Vec<_>>())) } else { (0.0, y) };
         let top = ([-x / 2.0, top_y.0, hb], [-x / 2.0 + dx + 0.04, top_y.1, hb + 0.05]);
-        let mut rows = vec![KsRow { lay: base, at: [shift, if self.island { 0.0 } else { cut_lo }, 0.0], inst: 0 }];
+        let mut rows = vec![KsRow { lay: base, at: [shift, if self.island { 0.0 } else { cut_lo + RUN_INSET }, 0.0], inst: 0 }];
         if !self.island {
             let mut r = inst_rng(self.factory_seed, inst);
             let tmw = r.uniform(1.0, 1.3);
@@ -1291,12 +1293,12 @@ impl KitchenSpace {
                 cabdoor::kc_layout(&mut inst_rng(self.factory_seed, fi), &spec, prev)
             };
             if y < tmw + 0.45 {
-                rows.push(KsRow { lay: row(y, 0, None), at: [wx, 0.0, z - th], inst: 0 });
+                rows.push(KsRow { lay: row(y - 2.0 * RUN_INSET, 0, None), at: [wx, RUN_INSET, z - th], inst: 0 });
             } else {
                 let left = row(ctw, 0, None);
                 let rnd = left.rnd;
-                rows.push(KsRow { lay: left, at: [wx, 0.0, z - th], inst: 0 });
-                rows.push(KsRow { lay: row(ctw, 1, Some(rnd)), at: [wx, y - ctw, z - th], inst: 1 });
+                rows.push(KsRow { lay: left, at: [wx, RUN_INSET, z - th], inst: 0 });
+                rows.push(KsRow { lay: row(ctw, 1, Some(rnd)), at: [wx, y - ctw - RUN_INSET, z - th], inst: 1 });
                 // (the middle cabinet as deep and tall as the side ones: python's deeper, shorter middle unit stood out of the row)
                 rows.push(KsRow { lay: row(tmw, 0, None), at: [wx, y / 2.0 - tmw / 2.0, z - th], inst: 0 });
             }
@@ -1304,6 +1306,9 @@ impl KitchenSpace {
         KsPlan { rows, top }
     }
 }
+
+/// how far a run's cabinet rows stand in from its ends
+const RUN_INSET: f64 = 0.012;
 
 /// a KitchenSpace's decisions (KitchenSpace::plan)
 pub struct KsPlan {
@@ -1343,15 +1348,15 @@ impl KitchenSpace {
         }
         let (lo, hi) = plan.top;
         let m = 0.003;
-        v.push(Volume::hard([lo[0] - m, lo[1] - m, lo[2] - m], [hi[0] + m, hi[1] + m, hi[2] + m]));
+        v.push(Volume::hard([lo[0] - m, lo[1], lo[2] - m], [hi[0] + m, hi[1], hi[2] + m]));
         v.push(Volume::support([lo[0] + 0.02, lo[1] + 0.02, hi[2]], [hi[0] - 0.02, hi[1] - 0.02, hi[2] + 0.001]));
         let (cut_lo, cut_hi) = self.blind_cuts();
         let [x, y, _] = self.dims;
         let hb = lo[2];
         // (the blind boxes span the base row's depth, its fronts and knobs included)
         let bx1 = x / 2.0 + 0.04;
-        if cut_lo > 0.0 { v.push(Volume::hard([-x / 2.0 - m, -m, -m], [bx1, cut_lo + m, hb + m])); }
-        if cut_hi > 0.0 { v.push(Volume::hard([-x / 2.0 - m, y - cut_hi - m, -m], [bx1, y + m, hb + m])); }
+        if cut_lo > 0.0 { v.push(Volume::hard([-x / 2.0 - m, 0.0, -m], [bx1, cut_lo + m, hb + m])); }
+        if cut_hi > 0.0 { v.push(Volume::hard([-x / 2.0 - m, y - cut_hi - m, -m], [bx1, y, hb + m])); }
         if let Some([_, _, js, reach]) = self.join {
             if js != 0.0 && reach > 0.0 && plan.rows.len() > 1 {
                 // the filler box at the joined end(s): the wall cabinets' depth and height, reach past the run's end
