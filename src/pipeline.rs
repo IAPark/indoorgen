@@ -453,6 +453,26 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
             o.relations = ct.rooms.iter().map(|r| RelState { relation: Relation::CutFrom, target: r.clone(), child_plane: 0, parent_plane: 0 }).collect();
             state.objs.insert(name.clone(), o);
             state.touch(&name);
+            // (a window landed behind storage that can go -- it had nowhere else: a bookcase in front of the glass is worse than none)
+            let (wc, ws) = (ct.rot_z.cos(), ct.rot_z.sin());
+            let (hw, sill, head) = (ct.dims[0] / 2.0, ct.loc[2] - ct.dims[2] / 2.0, ct.loc[2] + ct.dims[2] / 2.0);
+            let zone = 0.12 + c.wall_thickness / 2.0;
+            let behind: Vec<String> = state.objs.iter().filter(|(k, o)| {
+                let Some(g) = &o.generator else { return false };
+                if !matches!(g.class.as_str(), "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "SingleCabinetFactory") { return false }
+                let (lo, hi) = crate::furn::layout2d::lohi_world(&state, k);
+                if hi[2] <= sill || lo[2] >= head { return false }
+                let (gl, gh) = (o.geom.lo, o.geom.hi);
+                let (mut l0, mut l1, mut d) = (f64::MAX, f64::MIN, f64::MAX);
+                for q in [[gl[0], gl[1]], [gh[0], gl[1]], [gh[0], gh[1]], [gl[0], gh[1]]] {
+                    let w = o.pose.apply([q[0], q[1], 0.0]);
+                    let (dx, dy) = (w[0] - ct.loc[0], w[1] - ct.loc[1]);
+                    let (x, y) = (wc * dx + ws * dy, -ws * dx + wc * dy);
+                    l0 = l0.min(x); l1 = l1.max(x); d = d.min(y.abs());
+                }
+                l1 > -hw && l0 < hw && d < zone
+            }).map(|(k, _)| k.clone()).collect();
+            for k in behind { crate::furn::layout2d::remove_tree(&mut state, &k); }
             res.cutters.push(ct);
         }
         // the shells again, with the windows where they now are

@@ -27,6 +27,28 @@ pub(crate) fn yaw(p: &super::geom::Pose) -> f64 {
     p.r[1][0].atan2(p.r[0][0])
 }
 
+/// beds with something standing within their bedding's reach (past the head, where it hangs close anyway) tuck the bedding in: a soft
+/// volume may overlap its neighbours when laying out, but the cloth then went through them
+pub fn tuck_crowded_beds(state: &mut State) -> Vec<String> {
+    let beds: Vec<String> = state.objs.iter().filter(|(_, o)| class_of(o) == "BedFactory").map(|(k, _)| k.clone()).collect();
+    let mut out = vec![];
+    for bed in beds {
+        let Some(pc) = state.objs[&bed].generator.as_ref().and_then(|g| g.piece.clone()) else { continue };
+        let vols = pc.collision();
+        let Some((a, b)) = vols.iter().find(|v| matches!(v.role, crate::piece::Role::Soft)).map(|v| v.bounds()) else { continue };
+        let p = state.objs[&bed].pose;
+        let rect: Vec<[f64; 2]> = [[a[0] + 0.6, a[1]], [b[0], a[1]], [b[0], b[1]], [a[0] + 0.6, b[1]]].iter().map(|q| { let w = p.apply([q[0], q[1], 0.0]); [w[0], w[1]] }).collect();
+        let crowded = state.objs.iter().any(|(k, o)| {
+            if *k == bed || o.generator.is_none() || o.relations.iter().any(|r| r.target == bed) { return false }
+            let c = class_of(o);
+            if ["Rug", "Art", "Mirror", "Light", "Curtain", "Fan"].iter().any(|x| c.contains(x)) { return false }
+            layout2d::prisms(state, k).iter().any(|x| x.role == super::geom::ROLE_HARD && x.z[0] < p.t[2] + 0.5 && layout2d::poly_dist(&x.poly, &rect) <= 0.0)
+        });
+        if crowded && super::solver::tuck_piece(state, &bed) { out.push(format!("{bed}: bedding tucked in, a piece stands within its reach")); }
+    }
+    out
+}
+
 /// collisions (2D prisms), the house floor and the layout rules, without the solver's relation tests
 pub fn free_ok(state: &State, name: &str) -> bool {
     let nc = Tag::sem("NoCollision");
@@ -1692,6 +1714,28 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
             }
         }
         // kitchens without a range get one (the kitchen pass puts it at the counter run)
+        // a kitchen the plan found no layout for: at least a counter, as long as a free wall takes (the sink pass puts a sink on it)
+        if rt == "kitchen" && !has(state, "KitchenSpaceFactory") {
+            let name = format!("{room}_krun").replace('/', "_");
+            if new_piece(ctx, state, rng, "KitchenSpaceFactory", &room, &name) {
+                let dd = door_d.clone();
+                let score = |_: &State, c: [f64; 2], _t: f64, len: f64, _n: [f64; 2]| dd(c).min(2.0) + len * 0.2;
+                let mut ok = false;
+                // (what stands on the walls goes if it must: a counter before a cabinet, a range or a fridge)
+                for clear in ["", "KitchenCabinetFactory", "OvenFactory", "FridgeFactory"] {
+                    if !clear.is_empty() { for k in state.objs.iter().filter(|(k, o)| class_of(o) == clear && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect::<Vec<_>>() { layout2d::remove_tree(state, &k); log.push(format!("{room}: removed {k} for a counter")); } }
+                    for w in [1.8, 1.4, 1.1, 0.8, 0.6] {
+                        let base = state.objs[&name].clone();
+                        let Some(cs) = base.generator.as_ref().and_then(super::solver::cur_size) else { break };
+                        if !super::solver::set_size(ctx, state, &name, &base, [w, cs[1].min(0.65), cs[2]], 1.0) && state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(true, |c| (c[0] - w).abs() > 0.03) { continue }
+                        ok = place_on_wall_step(state, &name, &room, &score, 0.1);
+                        if ok { log.push(format!("{room}: a {w:.1} m counter on a free wall")); break }
+                    }
+                    if ok { break }
+                }
+                if !ok { state.objs.shift_remove(&name); }
+            }
+        }
         if rt == "kitchen" && !has(state, "OvenFactory") {
             let name = format!("{room}_range").replace('/', "_");
             if new_piece(ctx, state, rng, "OvenFactory", &room, &name) {

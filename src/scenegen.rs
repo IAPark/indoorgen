@@ -510,6 +510,7 @@ pub fn build_scene(p: &Params) -> Built {
             indoorgen::assets::set_unseeded(None);
         a
     };
+    for l in indoorgen::furn::groups::tuck_crowded_beds(&mut g.state) { eprintln!("GROUP {l}"); }
     let mut visuals: std::collections::HashMap<String, indoorgen::assets::Asset> = {
         use rayon::prelude::*;
         let items: Vec<(&String, &indoorgen::furn::state::GenRef, bool)> = g.state.objs.iter().filter(|(k, _)| !g.features.iter().any(|f| &f.key == *k)).filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen, o.tags.contains(indoorgen::furn::tags::Tag::sem("RoundTable"))))).collect();

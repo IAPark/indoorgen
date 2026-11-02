@@ -29,7 +29,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         }
         (lo, hi)
     };
-    let mut occupied: Vec<([f64; 3], [f64; 3])> = state.objs.values().filter(|o| o.generator.is_some() || o.tags.0.iter().any(|t| format!("{t:?}").contains("Window") || format!("{t:?}").contains("Door"))).map(|o| world_box(o)).collect();
+    let mut occupied: Vec<([f64; 3], [f64; 3])> = state.objs.iter().filter(|(k, o)| k.starts_with("window") || o.generator.is_some() || o.tags.0.iter().any(|t| format!("{t:?}").contains("Window") || format!("{t:?}").contains("Door"))).map(|(_, o)| world_box(o)).collect();
     let mut bare_rooms: Vec<(String, ([f64; 3], [f64; 3]))> = vec![];
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
@@ -152,9 +152,12 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             if used_walls.iter().any(|(q, _)| (q[0] - mid[0]).hypot(q[1] - mid[1]) < 1.0) { continue }
             // clear in front of it: nothing in the 0.5 m before the picture at its height (wardrobes, shelves, windows, doors, other art)
             let zone = {
-                let p0 = [mid[0] - along[0] * (fw / 2.0 + 0.1), mid[1] - along[1] * (fw / 2.0 + 0.1)];
-                let p1 = [mid[0] + along[0] * (fw / 2.0 + 0.1) + inward[0] * 0.5, mid[1] + along[1] * (fw / 2.0 + 0.1) + inward[1] * 0.5];
-                ([p0[0].min(p1[0]), p0[1].min(p1[1]), zc - fh / 2.0 - 0.1], [p0[0].max(p1[0]), p0[1].max(p1[1]), zc + fh / 2.0 + 0.1])
+                // (the box of all four corners: on a diagonal wall two of them gave a sliver, and pictures went over windows)
+                let e = fw / 2.0 + 0.1;
+                let cs = [[-e, 0.0], [e, 0.0], [-e, 0.5], [e, 0.5]].map(|q: [f64; 2]| [mid[0] + along[0] * q[0] + inward[0] * q[1], mid[1] + along[1] * q[0] + inward[1] * q[1]]);
+                let (x0, x1) = (cs.iter().map(|c| c[0]).fold(f64::MAX, f64::min), cs.iter().map(|c| c[0]).fold(f64::MIN, f64::max));
+                let (y0, y1) = (cs.iter().map(|c| c[1]).fold(f64::MAX, f64::min), cs.iter().map(|c| c[1]).fold(f64::MIN, f64::max));
+                ([x0, y0, zc - fh / 2.0 - 0.1], [x1, y1, zc + fh / 2.0 + 0.1])
             };
             if occupied.iter().any(|b| (0..3).all(|d| zone.0[d] < b.1[d] && b.0[d] < zone.1[d])) { continue }
             if best.map_or(true, |(l, ..)| len > l) { best = Some((len, mid, along, [-inward[0], -inward[1]])); }
