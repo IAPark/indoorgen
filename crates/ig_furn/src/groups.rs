@@ -1714,6 +1714,22 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
             }
         }
         // kitchens without a range get one (the kitchen pass puts it at the counter run)
+        // a dining room the solver left without a table: one in the middle of the room, smaller if it must be
+        if rt == "dining-room" && !has(state, "TableDiningFactory") {
+            let name = format!("{room}_table").replace('/', "_");
+            if new_piece(ctx, state, rng, "TableDiningFactory", &room, &name) {
+                let mut ok = center_table(state, &name, &room);
+                for (w, d) in [(1.6, 0.9), (1.2, 0.8), (0.9, 0.9)] {
+                    if ok { break }
+                    let base = state.objs[&name].clone();
+                    let Some(cs) = base.generator.as_ref().and_then(super::solver::cur_size) else { break };
+                    super::solver::set_size(ctx, state, &name, &base, [w, d, cs[2]], 1.0);
+                    ok = center_table(state, &name, &room);
+                }
+                // (its chairs: the dining pass makes the set)
+                if ok { log.push(format!("{room}: added a table")); log.extend(dining(ctx, state, rng)); } else { state.objs.shift_remove(&name); }
+            }
+        }
         // a kitchen the plan found no layout for: at least a counter, as long as a free wall takes (the sink pass puts a sink on it)
         if rt == "kitchen" && !has(state, "KitchenSpaceFactory") {
             let name = format!("{room}_krun").replace('/', "_");
