@@ -453,21 +453,53 @@ fn drawer_pull_for(k: usize, i: usize, dims: &[f64; 3]) -> f64 {
 }
 
 /// n-th drawer (its choice is pushed to `picks`). The polygon order is identical to the untagged call.
-pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd: Option<(f64, f64, f64, f64)>, mut picks: Option<&mut Vec<DrawerPick>>) -> (GMesh, (f64, f64, f64, f64)) {
-    use super::cabnodes::*;
-    let tagged = picks.is_some();
-    let f = |x: f64| x as f32;
+/// a kitchen cabinet cell's front: a door (one, or a pair on a cell wider than 0.6 m), a stack of drawers, or none
+#[derive(Clone)]
+pub enum KcAttach {
+    Door { dw: f64, dh: f64, hinges: Vec<[f64; 3]>, ew: f64, e2: f64, ang: f64, kr: f64, kl: f64 },
+    Drawers(Vec<KcDrawer>),
+    None,
+}
+
+#[derive(Clone)]
+pub struct KcDrawer {
+    pub h: f64,
+    pub board_t: f64,
+    pub side_h: f64,
+    pub width: f64,
+    pub kr: f64,
+    pub kl: f64,
+    /// the front's hinge point (x includes the mess pass's pull)
+    pub at: [f64; 3],
+    pub pull: f64,
+    pub pick: DrawerPick,
+}
+
+#[derive(Clone)]
+pub struct KcCell {
+    /// the cell's centre along the row
+    pub y: f64,
+    pub sp: ShelfParams,
+    pub attach: KcAttach,
+}
+
+/// everything a kitchen cabinet row decides (KitchenCabinetBaseFactory.create_asset's draws, in its order): the frame parameters, each
+/// cell's frame, front kind and front parameters -- the build and the collision both read it
+#[derive(Clone)]
+pub struct KcLayout {
+    pub rnd: (f64, f64, f64, f64),
+    pub depth: f64,
+    pub cells: Vec<KcCell>,
+}
+
+pub fn kc_layout(r: &mut Rng, spec: &KcSpec, frame_rnd: Option<(f64, f64, f64, f64)>) -> KcLayout {
     let (dx, _dy, dz) = (spec.dims[0], spec.dims[1], spec.dims[2]);
     let depth = dx - 0.01;
     let num_h = ((dz - 0.06) / 0.3) as usize;
     let cell_h: Vec<f64> = vec![(dz - 0.06) / num_h as f64; num_h];
     let (side_t, div_t, bottom_h) = (0.02, 0.02, 0.06);
-    // frame random params (drawn once, by the first cabinet's frame)
     let mut rnd: Option<(f64, f64, f64, f64)> = frame_rnd;
-    let mut frames: Vec<GMesh> = vec![];
-    let mut attach_comps: Vec<Option<GMesh>> = vec![];
     let mut y_trans = vec![];
-    // get_cabinet_params
     {
         let mut accum = 0.0;
         for w in &spec.widths {
@@ -476,6 +508,7 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
             accum += side_t + w / 2.0 + 0.0005;
         }
     }
+    let mut cells = vec![];
     for (k, &w) in spec.widths.iter().enumerate() {
         if rnd.is_none() {
             let y_gap = r.uniform(0.01, 0.05);
@@ -492,11 +525,9 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
         let (y_gap, sd, sr, sw) = rnd.unwrap();
         let mut sp = ShelfParams { shelf_depth: depth, side_t, back_t: 0.01, y_gap, bottom_h, div_t, screw_depth: sd, screw_r: sr, screw_wgap: sw, cell_w: vec![w], cell_h: cell_h.clone(), ..Default::default() };
         sp.derive();
-        frames.push(if tagged { shelf_gmesh_slots(&sp, 0, 2) } else { shelf_gmesh(&sp, true) });
-        // attach type
         let kind = if spec.drawer_only { r.choice_p(&[0.5, 0.5]) } else { r.choice_p(&[0.4, 0.4, 0.2]) }; // 0 drawer, 1 door, 2 none
         let shelf_w = sp.shelf_width + side_t * 2.0;
-        match kind {
+        let attach = match kind {
             1 => {
                 let (dw, hinges): (f64, Vec<[f64; 3]>) = if shelf_w <= 0.6 {
                     (shelf_w, vec![[depth / 2.0 + 0.0025, -shelf_w / 2.0, bottom_h]])
@@ -511,44 +542,128 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
                 let kl = r.uniform(0.018, 0.035);
                 let _gap = r.uniform(0.05, 0.15);
                 if std::env::var("KCDBG").is_ok() { eprintln!("door k={k} dh={dh} dw={dw} ew={ew} e2={e2} ang={ang} kr={kr} kl={kl} hinges={:?}", hinges); }
-                let mut dp = DoorParams { height: dh, width: dw, e1: 0.01, ew, e2, ang, knob_r: kr, knob_len: kl, has_mid: false, left: false, knob_slot: true };
-                let right = door_gmesh(&dp, o);
-                dp.left = true;
-                let left = door_gmesh(&dp, o);
-                let z3 = [0f32; 3];
-                let mut att = vec![right.translated([f(hinges[0][0]), f(hinges[0][1]), f(hinges[0][2])])];
-                if hinges.len() > 1 {
-                    att.push(left.translated([f(hinges[1][0]), f(hinges[1][1]), f(hinges[1][2])]));
-                }
-                let _ = z3;
-                let join = GMesh::join(&att);
-                attach_comps.push(Some(join.translated([0.0, f(y_trans[k]), 0.0])));
+                KcAttach::Door { dw, dh, hinges, ew, e2, ang, kr, kl }
             }
             0 => {
-                let mut att = vec![];
+                let mut ds = vec![];
                 for i in 0..cell_h.len() {
-                    let drawer_h = sp.div_z[i + 1] - sp.div_z[i] - div_t;
+                    let h = sp.div_z[i + 1] - sp.div_z[i] - div_t;
                     let board_t = r.uniform(0.005, 0.01);
                     let side_h = r.uniform(0.05, 0.2);
-                    let dwid = sp.shelf_width - r.uniform(0.015, 0.025);
+                    let width = sp.shelf_width - r.uniform(0.015, 0.025);
                     let _tilt = r.uniform(0.02, 0.03);
                     let kr = knob_r(r.uniform(0.003, 0.006));
                     let kl = r.uniform(0.018, 0.035);
                     let (idx, after) = shelf_material_pick(r);
                     shelf_material_draws(r);
-                    let dpar = DrawerParams { board_t, board_w: sp.shelf_width, board_h: drawer_h, depth, side_h, width: dwid, knob_r: kr, knob_len: kl, knob_slot: true };
+                    let pull = drawer_pull_for(k, i, &spec.dims);
+                    ds.push(KcDrawer { h, board_t, side_h, width, kr, kl, at: [depth / 2.0 + pull, 0.0, div_t / 2.0 + sp.div_z[i]], pull, pick: DrawerPick { idx, after } });
+                }
+                KcAttach::Drawers(ds)
+            }
+            _ => KcAttach::None,
+        };
+        cells.push(KcCell { y: y_trans[k], sp, attach });
+    }
+    KcLayout { rnd: rnd.unwrap(), depth, cells }
+}
+
+/// the row's extent along y from its widths (no draws): the cells, their two side boards each and the 0.5 mm gaps
+pub fn kc_row_length(widths: &[f64]) -> f64 {
+    widths.iter().sum::<f64>() + 0.04 * widths.len() as f64 + 0.0005 * (widths.len().max(1) - 1) as f64
+}
+
+/// the row's frame height from its height (no draws): the cells, the bottom and the division boards
+pub fn kc_frame_height(dz: f64) -> f64 {
+    let num_h = ((dz - 0.06) / 0.3) as usize;
+    (num_h as f64 + 1.0) * 0.02 + dz + 0.002
+}
+
+/// the collision of a kitchen cabinet row from its layout, in the row's frame (x depth, the fronts toward +x; y from 0 along the row):
+/// each cell's carcass closed (its fronts shut it), its top a support; each door a hard front and a swing about its hinge; each drawer
+/// a hard front with its knob and a pull-out the cabinet's depth
+pub fn kc_volumes(lay: &KcLayout) -> Vec<crate::piece::Volume> {
+    use crate::piece::{Leaf, Volume};
+    let d = lay.depth;
+    let mut v = vec![];
+    for c in &lay.cells {
+        let sp = &c.sp;
+        let sw = sp.shelf_width + sp.side_t * 2.0;
+        let (y0, y1) = (c.y - sw / 2.0 - 0.001, c.y + sw / 2.0 + 0.001);
+        let h = sp.shelf_height + 0.002;
+        // (the screw heads under the boards stand in front of them by up to their radius)
+        let e = (sp.screw_r - sp.screw_wgap).max(0.0) + 0.002;
+        v.push(Volume::hard([-d / 2.0 - sp.back_t - 0.001, y0 - e, -0.001], [d / 2.0 + e, y1 + e, h + 0.001]));
+        v.push(Volume::support([-d / 2.0, y0, h - 0.001], [d / 2.0, y1, h]));
+        match &c.attach {
+            KcAttach::Door { dw, dh, hinges, e2, .. } => {
+                for hg in hinges {
+                    let off = hg[0] - d / 2.0;
+                    // (the hinge offset, the frame and its edge; the knob lies along the door)
+                    let proud = off + 0.01 + e2 + 0.003;
+                    let right = hg[1] < 0.0;
+                    let (ya, yb) = if right { (c.y + hg[1], c.y + hg[1] + dw) } else { (c.y + hg[1] - dw, c.y + hg[1]) };
+                    let (lo, hi) = ([d / 2.0, ya - 0.006, hg[2] - 0.002], [d / 2.0 + proud, yb + 0.006, hg[2] + dh + 0.002]);
+                    v.push(Volume::hard(lo, hi));
+                    v.push(Volume::opening(Leaf::Hinged { panel: (lo, hi), hinge: [d / 2.0, c.y + hg[1], lo[2]], axis: [0.0, 0.0, if right { -1.0 } else { 1.0 }], max_angle: 100f64.to_radians() }));
+                }
+            }
+            KcAttach::Drawers(ds) => {
+                for dr in ds {
+                    let (x0, z0) = (d / 2.0, dr.at[2]);
+                    let half = (sp.shelf_width / 2.0).max(dr.width / 2.0 + dr.board_t) + 0.001;
+                    let (lo, hi) = ([x0 - dr.board_t - 0.001, c.y - half, z0 - 0.001], [x0 + dr.kl + 0.0012, c.y + half, z0 + dr.h.max(dr.side_h + 0.01 + dr.board_t) + 0.001]);
+                    v.push(Volume::hard(lo, hi));
+                    v.push(Volume::opening(Leaf::Drawer { panel: (lo, hi), dir: [1.0, 0.0, 0.0], travel: d }));
+                }
+            }
+            KcAttach::None => {}
+        }
+    }
+    v
+}
+
+pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd: Option<(f64, f64, f64, f64)>, picks: Option<&mut Vec<DrawerPick>>) -> (GMesh, (f64, f64, f64, f64)) {
+    let lay = kc_layout(r, spec, frame_rnd);
+    (kc_build(&lay, o, picks), lay.rnd)
+}
+
+/// the row's mesh from its layout
+pub fn kc_build(lay: &KcLayout, o: RampedOpts, mut picks: Option<&mut Vec<DrawerPick>>) -> GMesh {
+    use super::cabnodes::*;
+    let tagged = picks.is_some();
+    let f = |x: f64| x as f32;
+    let depth = lay.depth;
+    let mut frames: Vec<GMesh> = vec![];
+    let mut attach_comps: Vec<Option<GMesh>> = vec![];
+    for c in &lay.cells {
+        frames.push(if tagged { shelf_gmesh_slots(&c.sp, 0, 2) } else { shelf_gmesh(&c.sp, true) });
+        match &c.attach {
+            KcAttach::Door { dw, dh, hinges, ew, e2, ang, kr, kl } => {
+                let mut dp = DoorParams { height: *dh, width: *dw, e1: 0.01, ew: *ew, e2: *e2, ang: *ang, knob_r: *kr, knob_len: *kl, has_mid: false, left: false, knob_slot: true };
+                let right = door_gmesh(&dp, o);
+                dp.left = true;
+                let left = door_gmesh(&dp, o);
+                let mut att = vec![right.translated([f(hinges[0][0]), f(hinges[0][1]), f(hinges[0][2])])];
+                if hinges.len() > 1 {
+                    att.push(left.translated([f(hinges[1][0]), f(hinges[1][1]), f(hinges[1][2])]));
+                }
+                attach_comps.push(Some(GMesh::join(&att).translated([0.0, f(c.y), 0.0])));
+            }
+            KcAttach::Drawers(ds) => {
+                let mut att = vec![];
+                for dr in ds {
+                    let dpar = DrawerParams { board_t: dr.board_t, board_w: c.sp.shelf_width, board_h: dr.h, depth, side_h: dr.side_h, width: dr.width, knob_r: dr.kr, knob_len: dr.kl, knob_slot: true };
                     let mut d = drawer_gmesh(&dpar);
                     if let Some(pk) = picks.as_deref_mut() {
                         set_tag(&mut d, ((2 + pk.len()) << 1) as u8);
-                        pk.push(DrawerPick { idx, after });
+                        pk.push(dr.pick.clone());
                     }
-                    let hinge = [depth / 2.0 + drawer_pull_for(k, i, &spec.dims), 0.0, div_t / 2.0 + sp.div_z[i]];
-                    att.push(d.translated([f(hinge[0]), f(hinge[1]), f(hinge[2])]));
+                    att.push(d.translated([f(dr.at[0]), f(dr.at[1]), f(dr.at[2])]));
                 }
-                let join = GMesh::join(&att);
-                attach_comps.push(Some(join.translated([0.0, f(y_trans[k]), 0.0])));
+                attach_comps.push(Some(GMesh::join(&att).translated([0.0, f(c.y), 0.0])));
             }
-            _ => attach_comps.push(None),
+            KcAttach::None => attach_comps.push(None),
         }
     }
     let mut parts: Vec<GMesh> = vec![];
@@ -557,7 +672,7 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
         parts.push(GMesh::join(&comps));
     }
     for (i, fr) in frames.iter().enumerate() {
-        parts.push(fr.translated([0.0, f(y_trans[i]), 0.0]));
+        parts.push(fr.translated([0.0, f(lay.cells[i].y), 0.0]));
     }
     // butil.join_objects: parts in order (first object first)
     let mut out = GMesh::new();
@@ -569,7 +684,7 @@ pub fn kitchen_cabinet_core(r: &mut Rng, spec: &KcSpec, o: RampedOpts, frame_rnd
             out.tag.push(g.tag[i]);
         }
     }
-    (out, rnd.unwrap())
+    out
 }
 
 fn clip_(x: f64, lo: f64, hi: f64) -> f64 {

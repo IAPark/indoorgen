@@ -8,7 +8,7 @@ use ig_kit::api::Asset;
 use ig_core::rng::Rng;
 
 /// classes kept on the solver's old path for now (counter runs and kitchen cabinets: real per-cabinet placeholders, kitchen plans)
-const NOT_YET: &[&str] = &["KitchenSpaceFactory", "KitchenCabinetFactory", "KitchenIslandFactory"];
+const NOT_YET: &[&str] = &["KitchenSpaceFactory", "KitchenIslandFactory"];
 
 /// plant generators that only build the plant inside a PlantContainerFactory (whose collision fits the plant into its box over the
 /// soil): never placed on their own, so no pieces

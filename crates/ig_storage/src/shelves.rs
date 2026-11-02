@@ -1009,6 +1009,13 @@ impl KitchenCabinet {
 }
 
 impl Factory for KitchenCabinet {
+    /// collision: the row's layout (cabdoor::kc_volumes), its frames centred on y like the solver box
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        let fs = self.fseed?;
+        let spec = cabdoor::KcSpec { dims: self.dims, widths: self.widths.clone(), drawer_only: false };
+        let lay = cabdoor::kc_layout(&mut inst_rng(fs, i), &spec, None);
+        Some(cabdoor::kc_volumes(&lay))
+    }
     fn exact(&self, i: u64) -> Option<cabnodes::ExactMesh> {
         let fs = self.fseed?;
         let mut r = inst_rng(fs, i);
@@ -1028,7 +1035,13 @@ impl Factory for KitchenCabinet {
         let mut a = Asset::default();
         // python samples the dimensions once per factory (KitchenCabinetFactory.sample_params under FixedSeed(factory_seed)), and the exact
         // geometry (`exact`) uses them: the approximate asset (its collision boxes are the solver geometry of the populated cabinet) must too
-        let _ = i;
+        // (the standalone factory: the real row from its layout, doors and drawers included)
+        if let Some(fs) = self.fseed {
+            let spec = cabdoor::KcSpec { dims: self.dims, widths: self.widths.clone(), drawer_only: false };
+            let lay = cabdoor::kc_layout(&mut inst_rng(fs, i), &spec, None);
+            a.mesh(cabdoor::kc_build(&lay, Default::default(), None).to_mesh(), &self.mat, None);
+            return a;
+        }
         self.build(&mut a, [0.0, 0.0, 0.0]);
         a
     }
