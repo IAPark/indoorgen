@@ -692,7 +692,10 @@ impl Factory for Bed {
                 let lift = drape_loft(self.s.sheet_type) + 0.012;
                 let (ov_s, ov_f) = ((wm - 1.0) / 2.0 * ms.width, (0.15 + sm * ms.size - gm.x1).max(0.0));
                 let ov = ov_s.hypot(ov_f);
-                (gm.reach(ov, gm.gap_side, lift), gm.reach(ov, gm.gap_foot, lift))
+                let [sl, yaw] = drape_slide(c.fseed, inst, 0);
+                // (slid and turned on the bed: at most its half length times the turn)
+                let off = sl.abs() + yaw.abs() * (ms.size * sm + ms.width * wm) / 2.0;
+                (gm.reach(ov, gm.gap_side, lift) + off, gm.reach(ov, gm.gap_foot, lift) + off)
             };
             v.push(Volume::soft([lo[0], ml[1] - side, lo[2]], [mh[0] + foot, mh[1] + side, mh[2] + 0.42]));
             v.push(Volume::support([ml[0] + 0.05, ml[1] + 0.05, ms.thickness - 0.001], [mh[0] - 0.05, mh[1] - 0.05, ms.thickness]));
@@ -845,7 +848,7 @@ impl Factory for Bed {
         let sim = sim_bedding();
         let geom = DrapeGeom::of(c, &ms);
         let pleats = Pleats::new(&mut r);
-        let sheet = if !sim { drape(&pre, z_sheet, &geom, 0.0, drape_loft(s.sheet_type), &pleats) } else {
+        let sheet = if !sim { drape(&pre, &geom, 0.0, drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 }, &pleats, drape_slide(c.fseed, inst, 0)) } else {
         let mut p = ClothParams::default();
         p.mass = 0.05;
         p.tension = 2.0;
@@ -864,9 +867,8 @@ impl Factory for Bed {
         let out = simulate_job(&pre.pos, &pre.faces, &p, &[&cm, &cf, &floor_c], &cal);
         let mut sheet = pre.clone();
         sheet.pos = out;
-        sheet
+        subsurf(&sheet, 2, false)
         };
-        let sheet = subsurf(&sheet, 2, false);
         let sb = sheet.bounds();
         let sheet_idx = a.parts.len();
         let btype = ["blanket", "comforter", "box", "box"][s.sheet_type];
@@ -889,7 +891,7 @@ impl Factory for Bed {
         let off = r.uniform(0.0, 0.3);
         cover.transform(&rot);
         cover.transform(&Mat4::translation([c.size / 2.0 + off, 0.0, z_cover]));
-        let cvm = if !sim { drape(&cover, z_cover, &geom, drape_loft(s.sheet_type) + 0.008, 0.0, &pleats) } else {
+        let cvm = if !sim { drape(&cover, &geom, drape_loft(s.sheet_type) + 0.008, 0.0, 0.0, &pleats, drape_slide(c.fseed, inst, 1)) } else {
         // the comforter is a thin two-layer shell: the cover only sees its outer (top) layer, else vertices that sink between the layers pop out below it
         let top_faces = {
             let k = pre.faces.iter().take_while(|f| {
@@ -912,9 +914,8 @@ impl Factory for Bed {
         let out = simulate_job(&cover.pos, &cover.faces, &p, &[&cs_, &cm, &floor_c], &Calib::default());
         let mut cvm = cover.clone();
         cvm.pos = out;
-        cvm
+        subsurf(&cvm, 2, false)
         };
-        let cvm = subsurf(&cvm, 2, false);
         let cbb = cvm.bounds();
         if sim {
         a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)), build: Some(json!({"type": "blanket", "width": cb.width, "size": cb.size, "thickness": cb.thickness, "margin": 0.0, "fold": null, "x": c.size / 2.0 + off})), post: None });
@@ -1181,8 +1182,11 @@ struct DrapeGeom {
 /// the edge's roll radius
 const DRAPE_R: f64 = 0.035;
 /// the pleats' largest depth, and their extra at a corner, where the cloth bunches
-const PLEAT: f64 = 0.018;
-const PLEAT_CORNER: f64 = 0.025;
+const PLEAT: f64 = 0.03;
+const PLEAT_CORNER: f64 = 0.03;
+/// the skirt's flare toward its hem, and the rumples' largest height
+const FLARE: f64 = 0.05;
+const RUMPLE: f64 = 0.016;
 /// how far cloth lying on the floor can run out
 const DRAPE_POOL: f64 = 0.10;
 
@@ -1196,6 +1200,20 @@ impl DrapeGeom {
     fn top_at(&self, x: f64, y: f64) -> f64 {
         let (u, v) = ((2.0 * y / self.ms_w).clamp(-1.0, 1.0), (2.0 * (x - self.size_mid) / self.ms_s).clamp(-1.0, 1.0));
         self.top + self.dome_h * (1.0 - u.powi(4)) * (1.0 - v.powi(4))
+    }
+
+    /// the coordinate round the mattress's outline, continuous from one side round the foot to the other (a jump tore the folds at the corners);
+    /// (qx, qy) the point on the outline, (dx, dy) out from it, `ang` that direction's angle
+    fn perimeter(&self, qx: f64, qy: f64, dx: f64, dy: f64, ang: f64) -> f64 {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        const R: f64 = 0.2;
+        let (x1, yh) = (self.x1, self.yh);
+        if dx > 0.0 && dy > 0.0 { x1 + R * (FRAC_PI_2 - ang) }
+        else if dx > 0.0 && dy == 0.0 { x1 + R * FRAC_PI_2 + yh - qy }
+        else if dx > 0.0 { x1 + R * FRAC_PI_2 + 2.0 * yh - R * ang }
+        else if dy > 0.0 { qx + if dx < 0.0 { R * (FRAC_PI_2 - ang) } else { 0.0 } }
+        else if dy < 0.0 { x1 + R * PI + 2.0 * yh + x1 - qx + if dx < 0.0 { R * (ang + FRAC_PI_2) } else { 0.0 } }
+        else { self.x0 + qy }
     }
 
     /// `s` of cloth past the mattress's edge, `gap` to the rail: out by h at height z, and the surface's normal (nh, nz) there -- over the
@@ -1216,81 +1234,120 @@ impl DrapeGeom {
 
     /// how far past the mattress's edge a cloth with `over` of overhang reaches, its layers and pleats included
     fn reach(&self, over: f64, gap: f64, lift: f64) -> f64 {
-        self.profile(over, gap, lift).0.max(DRAPE_R + gap.min(over)) + lift + PLEAT + PLEAT_CORNER + 0.008
+        self.profile(over * 1.06, gap, lift).0.max(DRAPE_R + gap.min(over)) + lift + PLEAT + PLEAT_CORNER + FLARE + RUMPLE + 0.008
     }
 }
 
-/// the hanging folds round the bed (shared by the layers, so they nest)
+/// the hanging folds and the rumples (shared by the layers, so they nest)
 struct Pleats {
-    wave: [(f64, f64, f64); 4],
-    top: [(f64, f64, f64); 3],
+    wave: [(f64, f64, f64); 5],
+    lump: [(f64, f64, f64); 4],
+    crease: [(f64, f64, f64); 3],
 }
 
 impl Pleats {
     fn new(r: &mut Rng) -> Pleats {
         let tau = std::f64::consts::TAU;
-        Pleats {
-            wave: [0.11, 0.17, 0.29, 0.47].map(|l| (l * r.uniform(0.85, 1.15), r.uniform(0.0, tau), r.uniform(0.5, 1.0))),
-            top: [0.6, 0.9, 1.4].map(|l| (l * r.uniform(0.8, 1.2), r.uniform(0.0, tau), r.uniform(0.0, tau))),
-        }
+        let mut dir = |l: f64| (l * r.uniform(0.75, 1.25), r.uniform(0.0, tau), r.uniform(0.0, tau));
+        Pleats { wave: [0.09, 0.14, 0.23, 0.37, 0.61].map(&mut dir), lump: [0.34, 0.52, 0.81, 1.27].map(&mut dir), crease: [0.55, 0.8, 1.1].map(&mut dir) }
     }
     /// -1..1 along the perimeter coordinate u
     fn at(&self, u: f64) -> f64 {
         let tau = std::f64::consts::TAU;
         let (mut v, mut n) = (0.0, 0.0);
-        for (l, ph, w) in self.wave { v += w * (tau * u / l + ph).sin(); n += w; }
+        for (l, ph, w) in self.wave { let w = 0.5 + 0.5 * w.sin().abs(); v += w * (tau * u / l + ph).sin(); n += w; }
         v / n
     }
-    /// -1..1: the shallow rumples on the top
+    /// 0..1: soft lumps, a few long creases running through them (ridged sines, bent by the lumps)
     fn rumple(&self, x: f64, y: f64) -> f64 {
         let tau = std::f64::consts::TAU;
-        let mut v = 0.0;
-        for (l, a, ph) in self.top { v += (tau * (x * a.cos() + y * a.sin()) / l + ph).sin(); }
-        v / 3.0
+        let mut lumps = 0.0;
+        for (l, a, ph) in self.lump { lumps += (tau * (x * a.cos() + y * a.sin()) / l + ph).sin(); }
+        lumps /= 4.0;
+        let mut crease = 0.0f64;
+        for (l, a, ph) in self.crease {
+            let t = tau * (x * a.cos() + y * a.sin()) / l + ph + 2.2 * lumps;
+            // (on one side of each lump only: a crease that fades out along its length)
+            crease = crease.max((1.0 - t.sin().abs()).powi(8) * (0.5 + 0.5 * (t * 0.37 + ph).sin()));
+        }
+        (0.87 * (lumps + 1.0) / 2.0 + 0.13 * (1.0 - crease)).clamp(0.0, 1.0)
     }
+}
+
+/// how a cloth lies on the bed, off true: [sideways slide, turn]; 0 the sheet, 1 the cover
+fn drape_slide(fseed: u64, inst: u64, which: u64) -> [f64; 2] {
+    let mut r = inst_rng(fseed ^ (0x736c_6964 + which), inst);
+    [r.uniform(-0.05, 0.05), r.uniform(-0.03, 0.03)]
 }
 
 /// a comforter's fill (a sheet's none)
 fn drape_loft(sheet_type: usize) -> f64 {
-    if sheet_type == 0 { 0.0 } else { 0.045 }
+    if sheet_type == 0 { 0.0 } else { 0.07 }
 }
 
-/// a flat cloth (lying at z = z0, its layers and any fold above and below that) laid over the bed without simulating it: over the
-/// mattress it follows the top; past its edge each point keeps its distance along the surface (DrapeGeom::profile), radially at the
-/// corners, where the extra cloth bunches into a pleat. `lift`: what it lies on; `loft`: the fill between a comforter's layers, tapering
-/// to its edges (a box comforter's pinched seams come out as its quilting)
-fn drape(pre: &Mesh, z0: f64, g: &DrapeGeom, lift: f64, loft: f64, pl: &Pleats) -> Mesh {
+/// a flat cloth (lying at its lowest z, its layers and any fold above that) laid over the bed without simulating it. It is subdivided first,
+/// each point keeping which layer it is on; then a comforter's top layer stands `loft` over its bottom, easing to nothing at its edges and,
+/// a box comforter (`margin`, its seams' spacing), domed over each cell; then each point is laid: over the mattress it follows the top; past
+/// its edge it keeps its distance along the surface (DrapeGeom::profile), radially at the corners, where the extra cloth bunches into a pleat,
+/// its skirt flaring and its hem waving. `lift`: what it lies on; `slide`: off true on the bed
+fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Pleats, slide: [f64; 2]) -> Mesh {
     let (lo, hi) = pre.bounds();
     let zmin = lo[2];
+    let two_layers = pre.pos.iter().any(|p| { let d = p[2] - zmin; d > 0.002 && d < 0.02 });
+    // (z = which layer: 0 bottom, 1 top, + 2 a fold, lying 5 cm over the layer it came from, flipped: +0.06 and +0.07 over the two, +0.05 over the one)
     let mut m = pre.clone();
     for p in m.pos.iter_mut() {
-        let (x, y) = (p[0], p[1]);
-        let dz = p[2] - zmin;
-        // (a fold lies 5 cm over the layer it came from)
-        let folded = dz >= 0.03;
-        let layer = if zmin < z0 - 1e-6 { ((if folded { (dz - 0.05).max(0.0) } else { dz }) / 0.01).clamp(0.0, 1.0) } else { 0.0 };
-        let edge = (x - lo[0]).min(hi[0] - x).min(y - lo[1]).min(hi[1] - y).max(0.0);
-        let taper = (edge / 0.07).min(1.0).sqrt();
-        let off = lift + layer * loft * taper + if folded { loft + 0.006 } else { 0.0 } + 0.003;
+        let d = p[2] - zmin;
+        let folded = d >= 0.03;
+        p[2] = if two_layers { ((if folded { d - 0.06 } else { d }) / 0.01).clamp(0.0, 1.0) } else { 0.0 } + if folded { 2.0 } else { 0.0 };
+    }
+    let mut m = subsurf(&m, 2, false);
+    let c0 = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    // the seams run from the cloth's middle (Blanket::box_pinch)
+    let dome = |d: f64| { let t = (d / margin).rem_euclid(1.0); let t = if t > 0.5 { 1.0 - t } else { t } * 2.0; (1.0 - (1.0 - t) * (1.0 - t)).sqrt() };
+    for p in m.pos.iter_mut() {
+        let (layer, stack) = if p[2] <= 1.0 { (p[2].max(0.0), 0.0) } else { ((p[2] - 2.0).clamp(0.0, 1.0), (p[2] - 1.0).min(1.0)) };
+        let edge = (p[0] - lo[0]).min(hi[0] - p[0]).min(p[1] - lo[1]).min(hi[1] - p[1]).max(0.0);
+        let mut fill = (edge / 0.09).min(1.0).sqrt();
+        if margin > 0.0 { fill *= 0.15 + 0.85 * dome(p[0] - c0[0]) * dome(p[1] - c0[1]); }
+        // (a throw's edge comes down onto what it lies on: floating, it showed a dark line)
+        let settle = if lift < 0.02 { 0.3 + 0.7 * (edge / 0.06).min(1.0) } else { 1.0 };
+        p[2] = lift * settle + 0.003 + loft * layer * fill + stack * (loft + 0.006);
+    }
+    let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let (sy, cy) = slide[1].sin_cos();
+    for p in m.pos.iter_mut() {
+        let off = p[2];
+        let (dx0, dy0) = (p[0] - c[0], p[1] - c[1]);
+        let (x, y) = (c[0] + dx0 * cy - dy0 * sy, c[1] + dx0 * sy + dy0 * cy + slide[0]);
+        // (a comforter's fill takes up most of the rumples)
+        let rum = RUMPLE * pl.rumple(x, y) * if loft > 0.0 { 0.5 } else { 1.0 };
         let (qx, qy) = (x.clamp(g.x0, g.x1), y.clamp(-g.yh, g.yh));
         let (dx, dy) = (x - qx, y - qy);
-        let s = dx.hypot(dy);
-        if s < 1e-9 {
-            *p = [x, y, g.top_at(x, y) + off + 0.003 * (pl.rumple(x, y) + 1.0)];
+        let s0 = dx.hypot(dy);
+        if s0 < 1e-9 {
+            *p = [x, y, g.top_at(x, y) + off + rum];
             continue;
         }
-        let (nx, ny) = (dx / s, dy / s);
+        let (nx, ny) = (dx / s0, dy / s0);
+        let corner = dx != 0.0 && dy != 0.0;
+        let ang = dy.atan2(dx);
+        let u = g.perimeter(qx, qy, dx, dy, ang);
+        let wave = pl.at(u);
+        // the hem's length waves with the folds
+        let s = s0 * (1.0 + 0.06 * pl.at(u * 0.37 + 11.0));
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
         let (h, z, nh, nz) = g.profile(s, gap, 0.0);
-        // the hanging folds, deeper down the drop (the perimeter's coordinate); a corner's bunched cloth
-        let u = if dy == 0.0 { qx } else if dx == 0.0 { qy + 7.0 } else { qx + qy + 3.0 * dy.atan2(dx) };
-        let ramp = (s / 0.25).min(1.0);
-        let mut pleat = PLEAT * ramp * pl.at(u) * nh;
-        if dx != 0.0 && dy != 0.0 { pleat += PLEAT_CORNER * ramp * (5.0 * dy.atan2(dx)).sin() * nh; }
-        let h = h + off * nh + pleat;
+        let ramp = (s / 0.2).min(1.0);
+        // the folds deepen down the skirt, which flares toward its hem where a fold opens out
+        let drop = ((g.top - z) / 0.5).clamp(0.0, 1.0);
+        let mut fold = PLEAT * ramp * (0.4 + 0.6 * drop) * wave * nh;
+        fold += FLARE * drop * drop * (0.5 + 0.5 * pl.at(u * 0.53 + 5.0)) * nh;
+        if corner { fold += PLEAT_CORNER * ramp * (4.0 * ang).sin() * nh; }
+        let h = h + off * nh + fold + rum * nh * 0.5;
         // (at the head end it stays clear of the headboard)
         let px = (qx + nx * h).max(if nx < 0.0 { 0.005 } else { f64::NEG_INFINITY });
-        *p = [px, qy + ny * h, z + off * nz + 0.003 * nz * (pl.rumple(x, y) + 1.0)];
+        *p = [px, qy + ny * h, z + (off + rum) * nz];
     }
     m
 }
