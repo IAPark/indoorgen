@@ -496,10 +496,16 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     // anneal, then build the best plans; a line every built plan fails on (a run cutting the walkway) is banned and the
     // annealing run again (three rounds)
     let mut log = vec![];
-    for round in 0..3 {
+    for round in 0..6 {
         if kit.banned.len() >= kit.lines.len() { break }
         let best = anneal(&kit, &mut rng);
-        if best.is_empty() { if dbg { eprintln!("KPLAN {room}: {} lines, no plan fits (round {round})", kit.lines.len()); } break }
+        if best.is_empty() {
+            if dbg { eprintln!("KPLAN {room}: {} lines, no plan fits (round {round})", kit.lines.len()); }
+            // a kitchen too short for everything does without, the dishwasher first: a counter and a sink matter most
+            let Some(i) = [ki(Kind::Dish), ki(Kind::Fridge), ki(Kind::Range)].into_iter().find(|&i| kit.has[i]) else { break };
+            kit.has[i] = false;
+            continue;
+        }
         let mut fails: Vec<usize> = vec![];
         for (rank, (s, plan)) in best.iter().enumerate() {
             let (_, broken) = kit.score(plan, true).unwrap();

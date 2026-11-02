@@ -47,9 +47,11 @@ pub fn free_ok(state: &State, name: &str) -> bool {
     if !by_class {
         let pa = layout2d::prisms(state, name);
         for (k, b) in state.objs.iter().filter(|(k, b)| k.as_str() != name && is_win(k.as_str(), b)) {
-                    if top <= b.pose.t[2] + b.geom.lo[2] + 0.02 { continue }
-            let pb = layout2d::prisms(state, k);
-            if pa.iter().any(|x| pb.iter().any(|y| layout2d::poly_dist(&x.poly, &y.poly) < 0.05)) { return false }
+                    let (wl, wh) = layout2d::lohi_world(state, k);
+            if top <= wl[2] + 0.02 { continue }
+            // (its box: windows have no prisms)
+            let rect = vec![[wl[0], wl[1]], [wh[0], wl[1]], [wh[0], wh[1]], [wl[0], wh[1]]];
+            if pa.iter().any(|x| layout2d::poly_dist(&x.poly, &rect) < 0.05) { return false }
         }
     }
     for (k, b) in &state.objs {
