@@ -596,16 +596,18 @@ pub fn kc_volumes(lay: &KcLayout) -> Vec<crate::piece::Volume> {
         v.push(Volume::hard([-d / 2.0 - sp.back_t - 0.001, y0 - e, -0.001], [d / 2.0 + e, y1 + e, h + 0.001]));
         v.push(Volume::support([-d / 2.0, y0, h - 0.001], [d / 2.0, y1, h]));
         match &c.attach {
-            KcAttach::Door { dw, dh, hinges, e2, .. } => {
+            KcAttach::Door { dw, dh, hinges, e2, kr, .. } => {
                 for hg in hinges {
                     let off = hg[0] - d / 2.0;
-                    // (the hinge offset, the frame and its edge; the knob lies along the door)
-                    let proud = off + 0.01 + e2 + 0.003;
+                    // (the hinge offset, the frame and its edge, the knob lying along the door its radius out)
+                    let proud = off + 0.01 + e2 + kr + 0.01;
                     let right = hg[1] < 0.0;
                     let (ya, yb) = if right { (c.y + hg[1], c.y + hg[1] + dw) } else { (c.y + hg[1] - dw, c.y + hg[1]) };
-                    let (lo, hi) = ([d / 2.0, ya - 0.006, hg[2] - 0.002], [d / 2.0 + proud, yb + 0.006, hg[2] + dh + 0.002]);
+                    let (lo, hi) = ([d / 2.0, ya - 0.01, hg[2] - 0.002], [d / 2.0 + proud, yb + 0.01, hg[2] + dh + 0.002]);
                     v.push(Volume::hard(lo, hi));
-                    v.push(Volume::opening(Leaf::Hinged { panel: (lo, hi), hinge: [d / 2.0, c.y + hg[1], lo[2]], axis: [0.0, 0.0, if right { -1.0 } else { 1.0 }], max_angle: 100f64.to_radians() }));
+                    // (the leaf is the door's slab; its knob swings inside the hard box's sweep margin)
+                    let slab = (lo, [d / 2.0 + off + 0.01 + e2 + 0.003, hi[1], hi[2]]);
+                    v.push(Volume::opening(Leaf::Hinged { panel: slab, hinge: [d / 2.0, c.y + hg[1], lo[2]], axis: [0.0, 0.0, if right { -1.0 } else { 1.0 }], max_angle: 100f64.to_radians() }));
                 }
             }
             KcAttach::Drawers(ds) => {

@@ -82,6 +82,8 @@ pub trait Build {
 pub trait Piece: Collide + Build + Send + Sync {
     /// the same piece at another size ([width (y), depth (x), height (z)]); None: it has one size
     fn resize(&self, _size: [f64; 3]) -> Option<Box<dyn Piece>> { None }
+    /// a counter run with its ends set (one leg of an L: [blind end, blind width, joined end, wall-cabinet reach]); None: it has no ends
+    fn with_ends(&self, _ends: [f64; 4]) -> Option<Box<dyn Piece>> { None }
     /// collision written from the piece's parameters (false: the compatibility wrapper's layout-build boxes)
     fn native(&self) -> bool { true }
     /// its current size [width (y), depth (x), height (z)]: the rigid volumes' extents

@@ -49,6 +49,7 @@ impl PieceRef {
     pub fn mesh(&self) -> crate::api::Asset { self.0.lock().unwrap().mesh() }
     pub fn resize(&self, size: [f64; 3]) -> Option<PieceRef> { self.0.lock().unwrap().resize(size).map(PieceRef::new) }
     pub fn size(&self) -> [f64; 3] { self.0.lock().unwrap().size() }
+    pub fn with_ends(&self, ends: [f64; 4]) -> Option<PieceRef> { self.0.lock().unwrap().with_ends(ends).map(PieceRef::new) }
 }
 
 #[derive(Clone)]

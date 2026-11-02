@@ -34,6 +34,8 @@ fn main() {
             if let Some(m) = indoorgen::furn::sizes::model(c) {
                 for x in [m.min, m.max] { if let Some(p) = p0.resize(x) { pieces.push(p); } }
             }
+            // a counter run's L ends: a blind corner at one end and the filler at the other, and both at both (a U's middle)
+            for e in [[-1.0, 0.65, 1.0, 0.3], [2.0, 0.65, 2.0, 0.3]] { if let Some(p) = p0.with_ends(e) { pieces.push(p); } }
             pieces.insert(0, p0);
             for mut p in pieces {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

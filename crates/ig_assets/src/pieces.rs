@@ -8,7 +8,7 @@ use ig_kit::api::Asset;
 use ig_core::rng::Rng;
 
 /// classes kept on the solver's old path for now (counter runs and kitchen cabinets: real per-cabinet placeholders, kitchen plans)
-const NOT_YET: &[&str] = &["KitchenSpaceFactory", "KitchenIslandFactory"];
+const NOT_YET: &[&str] = &[];
 
 /// plant generators that only build the plant inside a PlantContainerFactory (whose collision fits the plant into its box over the
 /// soil): never placed on their own, so no pieces
@@ -67,6 +67,8 @@ pub struct FactoryPiece {
     size: Option<[f64; 3]>,
     /// its factory writes its volumes (else: the boxes of a layout build)
     native: bool,
+    /// a counter run's ends (one leg of an L)
+    ends: Option<[f64; 4]>,
     /// what the collision decided
     col: Option<Vec<Volume>>,
 }
@@ -85,17 +87,19 @@ impl FactoryPiece {
     fn new(class: &str, seed: u64, size: Option<[f64; 3]>) -> FactoryPiece {
         let draws = ig_kit::ctor_draws::ctor_draws(class, &mut Rng::seeded(hash("piece_draws", seed)));
         let size = if builds_to_size(class) { size.or_else(|| sizes::model(class).map(|m| sizes::sample(m, &mut Rng::seeded(hash("piece_size", seed))))) } else { None };
-        FactoryPiece { class: class.into(), seed, inst: hash("piece_inst", seed) % 10_000_000, draws, size, native: false, col: None }
+        FactoryPiece { class: class.into(), seed, inst: hash("piece_inst", seed) % 10_000_000, draws, size, native: false, ends: None, col: None }
     }
 
     /// run `f` with the factory's hints set as this piece's state says (the old factories read them), restored after
     fn with_hints<T>(&self, f: impl FnOnce() -> T) -> T {
-        let (s0, u0) = (ig_kit::api::size_hint(), ig_kit::ctor_draws::unseeded());
+        let (s0, u0, j0) = (ig_kit::api::size_hint(), ig_kit::ctor_draws::unseeded(), ig_kit::api::kitchen_join());
         ig_kit::api::set_size_hint(self.size);
         ig_kit::ctor_draws::set_unseeded(self.draws.clone());
+        ig_kit::api::set_kitchen_join(self.ends);
         let r = f();
         ig_kit::api::set_size_hint(s0);
         ig_kit::ctor_draws::set_unseeded(u0);
+        ig_kit::api::set_kitchen_join(j0);
         r
     }
 
@@ -161,6 +165,14 @@ impl Piece for FactoryPiece {
     fn resize(&self, size: [f64; 3]) -> Option<Box<dyn Piece>> {
         if !builds_to_size(&self.class) { return None }
         let mut p = FactoryPiece::new(&self.class, self.seed, Some(size));
+        p.ends = self.ends;
+        p.volumes();
+        Some(Box::new(p))
+    }
+    fn with_ends(&self, ends: [f64; 4]) -> Option<Box<dyn Piece>> {
+        if self.class != "KitchenSpaceFactory" { return None }
+        let mut p = FactoryPiece::new(&self.class, self.seed, self.size);
+        p.ends = Some(ends);
         p.volumes();
         Some(Box::new(p))
     }

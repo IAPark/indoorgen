@@ -651,7 +651,22 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
             let (bs, js) = (side(state, &orun, corner_pt), side(state, &lrun, joint_pt));
             let leg_depth = { let (a, b) = lohi(state, &lrun); b[0] - a[0] };
             let own_depth = { let (a, b) = lohi(state, &orun); b[0] - a[0] };
-            let set = |state: &mut State, k: &str, f: &dyn Fn(&mut [f64; 4])| { if let Some(g) = state.objs.get_mut(k).and_then(|o| o.generator.as_mut()) { let mut j = g.join.unwrap_or([0.0; 4]); f(&mut j); g.join = Some(j); } state.touch(k); };
+            // (a piece takes its ends and gives its new collision: the leg's blind corner and its wall cabinet's filler)
+            let set = |state: &mut State, k: &str, f: &dyn Fn(&mut [f64; 4])| {
+                let Some(o) = state.objs.get_mut(k) else { return };
+                if let Some(g) = o.generator.as_mut() {
+                    let mut j = g.join.unwrap_or([0.0; 4]);
+                    f(&mut j);
+                    g.join = Some(j);
+                    if let Some(np) = g.piece.as_ref().and_then(|p| p.with_ends(j)) {
+                        let (geom, fb) = super::solver::piece_geom(&np);
+                        g.piece = Some(np);
+                        g.fit_box = Some(fb);
+                        o.geom = std::sync::Arc::new(geom);
+                    }
+                }
+                state.touch(k);
+            };
             set(state, &orun, &|j| if j[0] == 0.0 { j[0] = bs; j[1] = leg_depth; } else if j[0] != bs { j[0] = 2.0; j[1] = j[1].max(leg_depth); });
             // (to the corner leg's wall-cabinet fronts: half the counter deep, less their doors' 3 cm)
             let reach = own_depth * 0.5 - 0.04;

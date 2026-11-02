@@ -1137,29 +1137,12 @@ impl KitchenSpace {
         let parts = self.raw_parts(inst);
         let mut parts = parts;
         if !self.island {
-            self.scale_to_dims(&mut parts);
-            self.fit_base_width(&mut parts);
             self.apply_join(&mut parts);
         }
         hwexact::join_fwd(&parts)
     }
 
-    /// the base cabinets and the worktop across the run's full width (the wall cabinets set it, 3 cm wider: the base stopped 1.5 cm
-    /// short of the appliances beside it, and showed 3 cm short where a window took the wall cabinets)
-    fn fit_base_width(&self, parts: &mut [cabnodes::GMesh]) {
-        let [_, y, _] = self.dims;
-        let yr = |g: &cabnodes::GMesh| g.v.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v[1]), b.max(v[1])));
-        let (a0, a1) = parts.iter().map(yr).fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), (c, d)| (a.min(c), b.max(d)));
-        if (a1 - a0 - y as f32).abs() > 0.01 { return }
-        for g in parts.iter_mut().take(2) {
-            let (b0, b1) = yr(g);
-            if b1 - b0 < 0.05 { continue }
-            let k = (a1 - a0) / (b1 - b0);
-            for v in g.v.iter_mut() { v[1] = a0 + (v[1] - b0) * k; }
-        }
-    }
-
-    /// one leg of an L, after the scaling to size: the corner leg's base cabinets leave the corner square (`blind` m at that end,
+    /// one leg of an L: the corner leg's base cabinets leave the corner square (`blind` m at that end,
     /// under the worktop, behind the other leg), and the other leg's wall cabinet at the joint reaches `reach` m on into the corner
     /// to meet the corner leg's wall cabinets (parts: bottom, countertop, wall cabinets)
     fn apply_join(&self, parts: &mut [cabnodes::GMesh]) {
@@ -1167,24 +1150,21 @@ impl KitchenSpace {
         let yr = |g: &cabnodes::GMesh| g.v.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v[1]), b.max(v[1])));
         // (an end of +-2: both ends -- the middle run of a U)
         if bs != 0.0 && bw > 0.0 && !parts.is_empty() {
-            let (b0, b1) = yr(&parts[0]);
-            let (w, bw) = (b1 - b0, bw as f32);
-            let (cut_lo, cut_hi) = (if bs < 0.0 || bs.abs() > 1.5 { bw } else { 0.0 }, if bs > 0.0 { bw } else { 0.0 });
-            if w > cut_lo + cut_hi + 0.1 {
-                let k = (w - cut_lo - cut_hi) / w;
-                let (xz_lo, xz_hi) = parts[0].v.iter().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[2])], [h[0].max(v[0]), h[1].max(v[2])]));
-                for v in parts[0].v.iter_mut() { v[1] = b0 + cut_lo + (v[1] - b0) * k; }
-                // the corner square closed by a blind box in the cabinets' finish (left empty, the joint showed a slot into the void)
-                let tag = parts[0].tag.iter().copied().find(|t| t >> 1 != cabdoor::KNOB_SLOT).unwrap_or(0);
-                for (y0, y1) in [(b0, b0 + cut_lo), (b1 - cut_hi, b1)] {
-                    if y1 - y0 < 0.01 { continue }
-                    let base = parts[0].v.len() as u32;
-                    let (x0, x1, z0, z1) = (xz_lo[0], xz_hi[0], xz_lo[1], xz_hi[1]);
-                    parts[0].v.extend([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]);
-                    for f in [[0u32, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
-                        parts[0].p.push(f.iter().map(|i| base + i).collect());
-                        parts[0].tag.push(tag);
-                    }
+            // (the base row is built short of the blind ends, KitchenSpace::plan)
+            let (cut_lo, cut_hi) = self.blind_cuts();
+            let [_, y, _] = self.dims;
+            let (b0, b1) = (0.0f32, y as f32);
+            let (xz_lo, xz_hi) = parts[0].v.iter().fold(([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]), |(l, h), v| ([l[0].min(v[0]), l[1].min(v[2])], [h[0].max(v[0]), h[1].max(v[2])]));
+            // the corner square closed by a blind box in the cabinets' finish (left empty, the joint showed a slot into the void)
+            let tag = parts[0].tag.iter().copied().find(|t| t >> 1 != cabdoor::KNOB_SLOT).unwrap_or(0);
+            for (y0, y1) in [(b0, b0 + cut_lo as f32), (b1 - cut_hi as f32, b1)] {
+                if y1 - y0 < 0.01 { continue }
+                let base = parts[0].v.len() as u32;
+                let (x0, x1, z0, z1) = (xz_lo[0], xz_hi[0], xz_lo[1], xz_hi[1]);
+                parts[0].v.extend([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]);
+                for f in [[0u32, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
+                    parts[0].p.push(f.iter().map(|i| base + i).collect());
+                    parts[0].tag.push(tag);
                 }
             }
         }
@@ -1213,28 +1193,6 @@ impl KitchenSpace {
         }
     }
 
-    /// non-island: scale the joined set so its bbox equals `dimensions` (applied to a list of parts it uses their common bbox)
-    fn scale_to_dims(&self, parts: &mut [cabnodes::GMesh]) {
-        let [x, y, z] = self.dims;
-        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-        for g in parts.iter() {
-            for v in &g.v {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(v[k]);
-                    hi[k] = hi[k].max(v[k]);
-                }
-            }
-        }
-        let dims = [x as f32, y as f32, z as f32];
-        for g in parts.iter_mut() {
-            for v in g.v.iter_mut() {
-                for k in 0..3 {
-                    v[k] = v[k] * (dims[k] / (hi[k] - lo[k]));
-                }
-            }
-        }
-    }
-
     /// [bottom cabinet, countertop, (top left, top right, top mid)] before the final scaling
     fn raw_parts(&self, inst: u64) -> Vec<cabnodes::GMesh> {
         self.raw_parts_t(inst, None)
@@ -1243,9 +1201,9 @@ impl KitchenSpace {
     /// raw_parts; with `slots` the faces carry material slots in `tag >> 1`: 0 frame/doors (K_z), 1 boards (K), 2 countertop, 3.. drawers
     /// (their picks and instance seeds are appended to `slots`)
     fn raw_parts_t(&self, inst: u64, mut slots: Option<&mut Vec<(cabdoor::DrawerPick, u64)>>) -> Vec<cabnodes::GMesh> {
-        let [x, y, z] = self.dims;
+        let plan = self.plan(inst);
         // remap a cabinet's local slots (0 frame, 1 board, 2+n drawer n) into the global numbering
-        let mut remap = |g: &mut cabnodes::GMesh, pk: Vec<cabdoor::DrawerPick>, seed: u64, slots: &mut Option<&mut Vec<(cabdoor::DrawerPick, u64)>>| {
+        let remap = |g: &mut cabnodes::GMesh, pk: Vec<cabdoor::DrawerPick>, seed: u64, slots: &mut Option<&mut Vec<(cabdoor::DrawerPick, u64)>>| {
             let Some(sl) = slots.as_deref_mut() else { return };
             let base = sl.len();
             for t in g.tag.iter_mut() {
@@ -1255,52 +1213,160 @@ impl KitchenSpace {
             }
             sl.extend(pk.into_iter().map(|p| (p, seed)));
         };
-        let mut pk0 = vec![];
-        let mut bottom = self.bottom_cabinet_t(slots.is_some().then_some(&mut pk0));
-        remap(&mut bottom, pk0, inst_seed(self.factory_seed, 0), &mut slots);
-        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-        for v in &bottom.v {
-            for k in 0..3 {
-                lo[k] = lo[k].min(v[k]);
-                hi[k] = hi[k].max(v[k]);
+        let mut parts = vec![];
+        for (k, row) in plan.rows.iter().enumerate() {
+            let mut pk = vec![];
+            let mut g = cabdoor::kc_build(&row.lay, Default::default(), slots.is_some().then_some(&mut pk));
+            remap(&mut g, pk, inst_seed(self.factory_seed, row.inst), &mut slots);
+            parts.push(Self::translated(g, row.at));
+            if k == 0 {
+                // the worktop over the base (geometry_nodes_add_cabinet_top: a 4-gon top the base's depth by its length, 5 cm thick)
+                let (lo, hi) = plan.top;
+                let (xr, yr) = (hi[0] - lo[0], hi[1] - lo[1]);
+                let top = super::tableparts::table_top_exact(4, xr * 1.414, yr / xr, 0.01, 0.05, 0.01);
+                let mut slab = cabnodes::GMesh::new();
+                slab.v = top.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+                slab.p = top.faces.clone();
+                slab.tag = vec![if slots.is_some() { 4 } else { 0 }; slab.p.len()];
+                parts.push(Self::translated(slab, [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2]]));
             }
         }
-        let (xr, yr) = ((hi[0] - lo[0]) as f64, (hi[1] - lo[1]) as f64);
-        let top = super::tableparts::table_top_exact(4, xr * 1.414, yr / xr, 0.01, 0.05, 0.01);
-        let mut slab = cabnodes::GMesh::new();
-        slab.v = top.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
-        slab.p = top.faces.clone();
-        slab.tag = vec![if slots.is_some() { 4 } else { 0 }; slab.p.len()];
-        let slab = Self::translated(slab, [0.0, ((lo[1] + hi[1]) / 2.0) as f64, hi[2] as f64]);
-        let mut parts = vec![bottom, slab];
+        parts
+    }
+
+    /// the blind ends of an L's corner leg: (at y = 0, at y = run length)
+    fn blind_cuts(&self) -> (f64, f64) {
+        let Some([bs, bw, _, _]) = self.join else { return (0.0, 0.0) };
+        if bs == 0.0 || bw <= 0.0 { return (0.0, 0.0) }
+        let (lo, hi) = (if bs < 0.0 || bs.abs() > 1.5 { bw } else { 0.0 }, if bs > 0.0 { bw } else { 0.0 });
+        if self.dims[1] - 0.15 > lo + hi + 0.1 { (lo, hi) } else { (0.0, 0.0) }
+    }
+
+    /// a cabinet row whose overall length (cells, side boards, gaps) is `len`: the widths the row is drawn with (the factory's cell draws,
+    /// scaled to the cells' share)
+    fn row_widths(&self, len: f64) -> Vec<f64> {
+        // (cells about 0.45 m and up, each with its two side boards and a gap)
+        let n = (((len + 0.0005) / (0.45 + 0.0405)) as usize).max(1);
+        let inner = len - 0.04 * n as f64 - 0.0005 * (n - 1) as f64;
+        let mut r = Rng::seeded(self.factory_seed);
+        let ws: Vec<f64> = (0..n).map(|_| r.uniform(0.55, 1.0)).collect();
+        let s = np_sum(&ws);
+        ws.iter().map(|w| w / s * inner).collect()
+    }
+
+    /// the frame height a row is drawn with to stand `h` tall
+    fn row_height(h: f64) -> f64 {
+        let mut dz = h - 0.06;
+        for _ in 0..4 { dz += h - cabdoor::kc_frame_height(dz); }
+        dz
+    }
+
+    /// what the run builds, decided from its dims and draws (built to its size, nothing scaled): the base row along the run (short of
+    /// an L's blind corner), the worktop on it, the wall cabinets (one as wide as the base on a short run, else left, right and a wider
+    /// middle one) with their tops at the run's height
+    pub fn plan(&self, inst: u64) -> KsPlan {
+        let [x, y, z] = self.dims;
+        let (cut_lo, cut_hi) = self.blind_cuts();
+        // (the base row's depth leaves room for its fronts: drawers' knobs stand up to 3.6 cm proud)
+        let dx = x - 0.04;
+        let base_len = if self.island { y - 0.15 } else { y - cut_lo - cut_hi };
+        let spec = cabdoor::KcSpec { dims: [dx, 0.0, self.bottom_h], widths: self.row_widths(base_len), drawer_only: true };
+        let base = cabdoor::kc_layout(&mut inst_rng(self.factory_seed, 0), &cabdoor::KcSpec { dims: [dx, spec.widths.iter().sum(), self.bottom_h], ..spec }, None);
+        let x0 = -dx / 2.0 - 0.005;
+        let shift = -x / 2.0 - x0;
+        let hb = cabdoor::kc_frame_height(self.bottom_h);
+        let top_y = if self.island { (0.0, cabdoor::kc_row_length(&base.cells.iter().map(|c| c.sp.cell_w[0]).collect::<Vec<_>>())) } else { (0.0, y) };
+        let top = ([-x / 2.0, top_y.0, hb], [-x / 2.0 + dx + 0.04, top_y.1, hb + 0.05]);
+        let mut rows = vec![KsRow { lay: base, at: [shift, if self.island { 0.0 } else { cut_lo }, 0.0], inst: 0 }];
         if !self.island {
             let mut r = inst_rng(self.factory_seed, inst);
             let tmw = r.uniform(1.0, 1.3);
             let ctw = (y - tmw) / 2.0 - 0.05;
             let th = self.top_h;
-            // left and right share one KitchenCabinetFactory object: the second instance reuses the first one's frame parameters
-            let (mut pl, mut pr, mut pm) = (vec![], vec![], vec![]);
-            let on = slots.is_some();
-            // a run narrower than the middle wall cabinet and two side ones: one wall cabinet as wide as the base (a 1.0-1.3 m
-            // cabinet over a 0.6 m run widened the set's box, and scaling it to the run's size shrank the base cabinets into its middle)
+            let (wdx, dz) = (x / 2.0 - 0.04, Self::row_height(th));
+            let wx = -x / 2.0 + wdx / 2.0 + 0.005;
+            let row = |len: f64, fi: u64, prev: Option<(f64, f64, f64, f64)>| {
+                let ws = self.row_widths(len);
+                let spec = cabdoor::KcSpec { dims: [wdx, ws.iter().sum(), dz], widths: ws, drawer_only: false };
+                cabdoor::kc_layout(&mut inst_rng(self.factory_seed, fi), &spec, prev)
+            };
             if y < tmw + 0.45 {
-                let (mut mid, _) = self.cabinet_t([x / 2.0, y - 0.15, th], false, 0, None, on.then_some(&mut pm));
-                remap(&mut mid, pm, inst_seed(self.factory_seed, 0), &mut slots);
-                parts.push(Self::translated(mid, [-x / 4.0, 0.0, z - th]));
-                return parts;
+                rows.push(KsRow { lay: row(y, 0, None), at: [wx, 0.0, z - th], inst: 0 });
+            } else {
+                let left = row(ctw, 0, None);
+                let rnd = left.rnd;
+                rows.push(KsRow { lay: left, at: [wx, 0.0, z - th], inst: 0 });
+                rows.push(KsRow { lay: row(ctw, 1, Some(rnd)), at: [wx, y - ctw, z - th], inst: 1 });
+                // (the middle cabinet as deep and tall as the side ones: python's deeper, shorter middle unit stood out of the row)
+                rows.push(KsRow { lay: row(tmw, 0, None), at: [wx, y / 2.0 - tmw / 2.0, z - th], inst: 0 });
             }
-            let (mut left, rnd) = self.cabinet_t([x / 2.0, ctw, th], false, 0, None, on.then_some(&mut pl));
-            remap(&mut left, pl, inst_seed(self.factory_seed, 0), &mut slots);
-            let (mut right, _) = self.cabinet_t([x / 2.0, ctw, th], false, 1, Some(rnd), on.then_some(&mut pr));
-            remap(&mut right, pr, inst_seed(self.factory_seed, 1), &mut slots);
-            // (the middle cabinet as deep and tall as the side ones: python's deeper, shorter middle unit stood out of the row)
-            let (mut mid, _) = self.cabinet_t([x / 2.0, tmw, th], false, 0, None, on.then_some(&mut pm));
-            remap(&mut mid, pm, inst_seed(self.factory_seed, 0), &mut slots);
-            parts.push(Self::translated(left, [-x / 4.0, 0.0, z - th]));
-            parts.push(Self::translated(right, [-x / 4.0, y - ctw, z - th]));
-            parts.push(Self::translated(mid, [-x / 4.0, y / 2.0 - tmw / 2.0, z - th]));
         }
-        parts
+        KsPlan { rows, top }
+    }
+}
+
+/// a KitchenSpace's decisions (KitchenSpace::plan)
+pub struct KsPlan {
+    pub rows: Vec<KsRow>,
+    /// the worktop's box
+    pub top: (V3, V3),
+}
+
+pub struct KsRow {
+    pub lay: cabdoor::KcLayout,
+    /// where the row's frame stands in the run
+    pub at: V3,
+    pub inst: u64,
+}
+
+impl KitchenSpace {
+    /// collision from the plan: the rows (cabdoor::kc_volumes), the worktop (its top a support), an L's blind corner boxes and its
+    /// wall cabinet's filler into the corner
+    fn ks_volumes(&self, inst: u64) -> Vec<crate::piece::Volume> {
+        use crate::piece::{Leaf, Shape, Volume};
+        let plan = self.plan(inst);
+        let mv = |p: V3, t: V3| [p[0] + t[0], p[1] + t[1], p[2] + t[2]];
+        let mut v = vec![];
+        for row in &plan.rows {
+            for vol in cabdoor::kc_volumes(&row.lay) {
+                let t = row.at;
+                let shape = match vol.shape { Shape::Box { lo, hi } => Shape::Box { lo: mv(lo, t), hi: mv(hi, t) }, Shape::Hull(p) => Shape::Hull(p.iter().map(|q| mv(*q, t)).collect()) };
+                let role = match vol.role {
+                    crate::piece::Role::Opening(Leaf::Hinged { panel, hinge, axis, max_angle }) => crate::piece::Role::Opening(Leaf::Hinged { panel: (mv(panel.0, t), mv(panel.1, t)), hinge: mv(hinge, t), axis, max_angle }),
+                    crate::piece::Role::Opening(Leaf::Drawer { panel, dir, travel }) => crate::piece::Role::Opening(Leaf::Drawer { panel: (mv(panel.0, t), mv(panel.1, t)), dir, travel }),
+                    r => r,
+                };
+                // (the base row's top is under the worktop: no support there)
+                if matches!(role, crate::piece::Role::Support) && t[2] == 0.0 { continue }
+                v.push(Volume { shape, role });
+            }
+        }
+        let (lo, hi) = plan.top;
+        let m = 0.003;
+        v.push(Volume::hard([lo[0] - m, lo[1] - m, lo[2] - m], [hi[0] + m, hi[1] + m, hi[2] + m]));
+        v.push(Volume::support([lo[0] + 0.02, lo[1] + 0.02, hi[2]], [hi[0] - 0.02, hi[1] - 0.02, hi[2] + 0.001]));
+        let (cut_lo, cut_hi) = self.blind_cuts();
+        let [x, y, _] = self.dims;
+        let hb = lo[2];
+        // (the blind boxes span the base row's depth, its fronts and knobs included)
+        let bx1 = x / 2.0 + 0.04;
+        if cut_lo > 0.0 { v.push(Volume::hard([-x / 2.0 - m, -m, -m], [bx1, cut_lo + m, hb + m])); }
+        if cut_hi > 0.0 { v.push(Volume::hard([-x / 2.0 - m, y - cut_hi - m, -m], [bx1, y + m, hb + m])); }
+        if let Some([_, _, js, reach]) = self.join {
+            if js != 0.0 && reach > 0.0 && plan.rows.len() > 1 {
+                // the filler box at the joined end(s): the wall cabinets' depth and height, reach past the run's end
+                let w = &plan.rows[1];
+                let fh = cabdoor::kc_frame_height(w.lay.cells[0].sp.cell_h.iter().sum::<f64>() + 0.06);
+                let (fx0, fx1) = ((w.at[0] - w.lay.depth / 2.0 - 0.02).min(-x / 2.0 - 0.005), w.at[0] + w.lay.depth / 2.0 + 0.07);
+                for e in [-1.0f64, 1.0] {
+                    if !(js.abs() > 1.5 || js == e) { continue }
+                    // (from the base row's end, a few mm past the run's with its side boards)
+                    let (y0, y1) = if e < 0.0 { (-reach - 0.006, 0.3) } else { (y - 0.3, y + reach + 0.006) };
+                    v.push(Volume::hard([fx0, y0 - m, w.at[2] - m], [fx1, y1 + m, w.at[2] + fh + m]));
+                }
+            }
+        }
+        v
     }
 }
 
@@ -1369,6 +1435,9 @@ impl KitchenSpace {
 }
 
 impl Factory for KitchenSpace {
+    fn volumes(&self, i: u64) -> Option<Vec<crate::piece::Volume>> {
+        Some(self.ks_volumes(i))
+    }
     fn bounds_hint(&self, _i: u64) -> Option<(V3, V3)> {
         if !self.island {
             return None;
@@ -1417,8 +1486,6 @@ impl Factory for KitchenSpace {
         // the same steps as `assemble` (the L legs' blind boxes add faces: slots one short of the mesh were dropped, and every
         // part came out in one material)
         if !self.island {
-            self.scale_to_dims(&mut parts);
-            self.fit_base_width(&mut parts);
             self.apply_join(&mut parts);
         }
         let g = hwexact::join_fwd(&parts);
@@ -1432,8 +1499,6 @@ impl Factory for KitchenSpace {
         let mut a = Asset::default();
         let mut parts = self.raw_parts(i);
         if !self.island {
-            self.scale_to_dims(&mut parts);
-            self.fit_base_width(&mut parts);
             self.apply_join(&mut parts);
         }
         // part 0/2.. = cabinets (KitchenCabinetFactory(factory_seed): z-textured frame material), part 1 = countertop (shader_marble)
