@@ -1193,7 +1193,7 @@ const DRAPE_POOL: f64 = 0.10;
 impl DrapeGeom {
     fn of(c: &ChairSpec, ms: &MattressSpec) -> DrapeGeom {
         let (x0, x1) = ((c.size - ms.size) / 2.0, (c.size + ms.size) / 2.0);
-        DrapeGeom { x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0).max(0.0) + 0.03, gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
+        DrapeGeom { x0, x1, yh: ms.width / 2.0, top: ms.thickness, rail: 0.0, gap_side: ((c.width - ms.width) / 2.0 + 0.012 - DRAPE_R).max(0.0), gap_foot: (c.size + c.leg_thickness * 0.5 - x1).max(0.0) + 0.015, floor: -c.leg_height, dome_h: ms.puff().1, size_mid: c.size / 2.0, ms_w: ms.width, ms_s: ms.size }
     }
 
     /// the mattress's top under (x, y)
@@ -1339,12 +1339,14 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
         let (h, z, nh, nz) = g.profile(s, gap, 0.0);
         let ramp = (s / 0.2).min(1.0);
+        // toward the head (where side tables stand against the frame) it hangs close: no flare, folds or fill standing out
+        let free = if ny == 0.0 { 1.0 } else { (((x - g.x0) - 0.55) / 0.35).clamp(0.0, 1.0) };
         // the folds deepen down the skirt, which flares toward its hem where a fold opens out
         let drop = ((g.top - z) / 0.5).clamp(0.0, 1.0);
         let mut fold = PLEAT * ramp * (0.4 + 0.6 * drop) * wave * nh;
         fold += FLARE * drop * drop * (0.5 + 0.5 * pl.at(u * 0.53 + 5.0)) * nh;
         if corner { fold += PLEAT_CORNER * ramp * (4.0 * ang).sin() * nh; }
-        let h = h + off * nh + fold + rum * nh * 0.5;
+        let h = (h - (1.0 - free) * (h - DRAPE_R - gap).max(0.0)) + (0.15 + 0.85 * free) * off * nh + free * (fold + rum * nh * 0.5);
         // (at the head end it stays clear of the headboard)
         let px = (qx + nx * h).max(if nx < 0.0 { 0.005 } else { f64::NEG_INFINITY });
         *p = [px, qy + ny * h, z + (off + rum) * nz];
