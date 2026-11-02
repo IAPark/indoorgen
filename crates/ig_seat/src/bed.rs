@@ -664,14 +664,15 @@ impl Factory for Bed {
     /// bedding as a soft volume over the mattress -- sheet and cover hang down its sides and foot, pillows stand on it
     /// collision from the spec: the frame (bed.py's box: the seat's depth and width, the legs below, the headboard up to 1.2 of the
     /// back's height), the mattress on it (at most 0.96 of the frame's width and depth, its own block and puff), the bedding as soft
-    /// (draping up to 0.45 m round the mattress and down to the floor, pillows up to 0.42 m up)
+    /// (draping up to 0.45 m round the mattress but the head end and down to the floor, pillows up to 0.42 m up)
     fn volumes(&self, _inst: u64) -> Option<Vec<crate::piece::Volume>> {
         use crate::piece::Volume;
         let c = &self.s.c;
         let g = 0.004;
-        // (an upholstered headboard's padding stands up to 2.5 cm behind the frame, the legs' decor panels 2 cm out at the sides)
+        // (behind the frame: an upholstered headboard's padding up to 2.5 cm, the bedding pressed against it up to 5 cm -- one back plane
+        // for both, against the wall; the legs' decor panels 2 cm out at the sides)
         let sd = 0.02;
-        let (lo, hi) = ([-0.025, -c.width / 2.0 - sd, -c.leg_height - g], [c.size + c.leg_thickness * 0.5 + g, c.width / 2.0 + sd, c.back_height * 1.2 + g]);
+        let (lo, hi) = ([-0.05, -c.width / 2.0 - sd, -c.leg_height - g], [c.size + c.leg_thickness * 0.5 + g, c.width / 2.0 + sd, c.back_height * 1.2 + g]);
         let mut v = vec![Volume::hard(lo, hi)];
         if !self.frame_only {
             let mut ms = MattressSpec::new(c.fseed);
@@ -682,7 +683,8 @@ impl Factory for Bed {
             // (turned a quarter, its centre at (size / 2, 0, thickness / 2))
             let (ml, mh) = ([c.size / 2.0 - b[1], a[0], a[2] + ms.thickness / 2.0], [c.size / 2.0 - a[1], b[0], b[2] + ms.thickness / 2.0]);
             v.push(Volume::hard([ml[0] - g, ml[1] - g, ml[2] - g], [mh[0] + g, mh[1] + g, mh[2] + g]));
-            v.push(Volume::soft([ml[0] - 0.45, ml[1] - 0.45, lo[2]], [mh[0] + 0.45, mh[1] + 0.45, mh[2] + 0.42]));
+            // (not past the headboard: it holds the bedding at the head end)
+            v.push(Volume::soft([lo[0], ml[1] - 0.45, lo[2]], [mh[0] + 0.45, mh[1] + 0.45, mh[2] + 0.42]));
             v.push(Volume::support([ml[0] + 0.05, ml[1] + 0.05, ms.thickness - 0.001], [mh[0] - 0.05, mh[1] - 0.05, ms.thickness]));
         }
         Some(v)
