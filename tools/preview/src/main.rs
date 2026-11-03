@@ -180,15 +180,6 @@ fn painting_at(name: &str, depth: u32) -> image::RgbaImage {
     img
 }
 /// a mirror's look without reflections: cool silver, lighter toward the top, one soft diagonal band
-fn mirror_sheen() -> image::RgbaImage {
-    let n = 64u32;
-    image::RgbaImage::from_fn(n, n, |x, y| {
-        let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
-        let band = (-((u + v - 0.9) * 7.0).powi(2)).exp() * 0.12;
-        let t = 0.52 + 0.22 * (1.0 - v) + band;
-        image::Rgba([(t * 235.0) as u8, (t * 245.0) as u8, (t * 255.0).min(255.0) as u8, 255])
-    })
-}
 fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> wgpu::TextureView {
     let mut img = img;
     if img.width().max(img.height()) > 1024 { let s = 1024.0 / img.width().max(img.height()) as f32; img = image::imageops::resize(&img, (img.width() as f32 * s) as u32, (img.height() as f32 * s) as u32, image::imageops::FilterType::Triangle); }
@@ -265,10 +256,10 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
             // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
             let is_art = m.name == "art" || m.name.starts_with("gallery_art");
-            let shown = is_art || m.name == "mirror" || m.name == "wardrobe_mirror";
+            let shown = is_art;
             let tex = if shown {
                 let k = format!("{}:{}", m.name, n.name);
-                if !tex_views.contains_key(&k) { let img = if is_art { painting(&format!("{}:{}", path.display(), n.name)) } else { mirror_sheen() }; tex_views.insert(k.clone(), load_texture(&gpu.dev, &gpu.q, img)); }
+                if !tex_views.contains_key(&k) { let img = painting(&format!("{}:{}", path.display(), n.name)); tex_views.insert(k.clone(), load_texture(&gpu.dev, &gpu.q, img)); }
                 k
             } else { tex };
             let flags = if cls == "people.hair" || m.mask { 1u32 } else if glass { 2 } else { 0 };

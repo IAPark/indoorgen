@@ -45,6 +45,13 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
         "metal.MetalBasic" | "metal.GalvanizedMetal" | "metal.GrainedMetal" | "metal.HammeredMetal" => metal(&mut r, base, false),
         "metal.BrushedMetal" => metal(&mut r, base, true),
         "metal.BrushedBlackMetal" => metal(&mut r, [0.02, 0.02, 0.022], true),
+        // (firewood keeps its bark colour: the drawn wood colours gave pink and purple logs)
+        "wood.Wood" if family == "log" => {
+            let mut g = G::default();
+            let c = g.coord();
+            let (col, rough, coat, h) = wood_on(&mut g, &mut r, &c, Some(base));
+            g.done("shader_wood", json!({"color": col, "roughness": rough, "coat": coat, "height": h}))
+        }
         "wood.Wood" => {
             // large flat panels of any orientation: straight-grain veneer (the noise-warped grain read as burl or contour lines there), the grain
             // up the face on upright ones

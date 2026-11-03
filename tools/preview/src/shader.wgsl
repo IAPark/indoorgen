@@ -112,6 +112,12 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     // (no environment to reflect here: metal keeps part of its colour as diffuse, and sees neutral room light, or ovens came out dark blue and mottled)
     let room = vec3<f32>(dot(amb, vec3<f32>(0.333)));
     col = albedo.rgb * (1.0 - 0.55 * surf_metal) * lit + g.sun_col.rgb * spc * sh * ndl + (f0 + (1.0 - f0) * fres * (1.0 - r_) + surf_coat * 0.04 * fres) * mix(amb, room, surf_metal) * (1.0 - 0.35 * r_) + m.emissive.rgb;
+    // a mirror (no environment to reflect here): the room's light by direction with a soft streak, from the view, so parts with no UVs read as glass too (they came out blank white)
+    if (surf_metal > 0.9 && surf_rough < 0.02) {
+      let rf = reflect(-vdir, n);
+      let streak = pow(0.5 + 0.5 * sin(9.0 * (rf.x + rf.y) + 6.0 * rf.z), 10.0);
+      col = mix(vec3<f32>(0.2, 0.2, 0.21), vec3<f32>(0.46, 0.48, 0.5), rf.z * 0.5 + 0.5) + 0.22 * streak;
+    }
   }
   var out: FOut;
   var a = 1.0;
