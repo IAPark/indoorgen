@@ -9,6 +9,7 @@ license = "GPL-3.0-or-later"
 pure_geom = []
 
 [dependencies]
+ig_shade = { path = "../ig_shade" }
 web-time = "1"
 i_overlay = "9"
 indexmap = { workspace = true }

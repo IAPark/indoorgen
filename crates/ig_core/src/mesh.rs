@@ -569,6 +569,20 @@ pub struct Light {
     pub name: String,
 }
 
+/// a node's size in its object frame (world size where it has no pose)
+fn node_extent(n: &Node) -> [f64; 3] {
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for p in &n.mesh.pos {
+        let q = match &n.pose {
+            // a rigid pose: the inverse turns by the transpose
+            Some(m) => { let d = [p[0] - m[0][3], p[1] - m[1][3], p[2] - m[2][3]]; [0, 1, 2].map(|i| m[0][i] * d[0] + m[1][i] * d[1] + m[2][i] * d[2]) }
+            None => *p,
+        };
+        for d in 0..3 { lo[d] = lo[d].min(q[d]); hi[d] = hi[d].max(q[d]); }
+    }
+    [0, 1, 2].map(|d| (hi[d] - lo[d]).max(0.0))
+}
+
 #[derive(Default, Clone)]
 pub struct Scene {
     pub materials: Vec<Material>,
@@ -733,11 +747,26 @@ impl Scene {
             })
             .collect();
         assert!(bin % 4 == 0);
-        let nodes_json: Vec<_> = self.nodes.iter().map(|n| json!({"name": n.name, "class": n.class, "material": self.materials[n.material].name, "spec": self.materials[n.material].spec, "pose": n.pose})).collect();
+        // the material graphs Rust owns (ig_shade), shared between nodes; a node without one runs its Python class in Blender
+        let mut graphs: Vec<serde_json::Value> = vec![];
+        let mut graph_ids: std::collections::HashMap<String, usize> = Default::default();
+        let nodes_json: Vec<_> = self.nodes.iter().map(|n| {
+            let mt = &self.materials[n.material];
+            let mut j = json!({"name": n.name, "class": n.class, "material": mt.name, "spec": mt.spec, "pose": n.pose});
+            if let Some(spec) = &mt.spec {
+                let g = ig_shade::for_material(spec, &mt.name, &n.name, node_extent(n), [mt.color[0], mt.color[1], mt.color[2]]);
+                if let Some(g) = g {
+                    let key = g.to_string();
+                    let id = *graph_ids.entry(key).or_insert_with(|| { graphs.push(g); graphs.len() - 1 });
+                    j["graph"] = json!(id);
+                }
+            }
+            j
+        }).collect();
         // the plain (non-spec) material values, for importers that take geometry only (usdc)
         let materials_json: Vec<_> = self.materials.iter().map(|m| json!({"name": m.name, "color": m.color, "metallic": m.metallic, "roughness": m.roughness, "emissive": m.emissive, "emissive_strength": m.emissive_strength})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
-        let mut sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json});
+        let mut sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json, "graphs": graphs});
         if !self.lights_off.is_empty() {
             sidecar["lights_off"] = self.lights_off.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
         }

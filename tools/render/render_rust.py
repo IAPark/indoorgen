@@ -291,6 +291,12 @@ for o in list(bpy.data.objects):
     if nm is None: continue
     spec = specs[nm].get("spec")
     if not spec: continue
+    # the material graph Rust built (ig_shade); nodes without one run their Python class below
+    if specs[nm].get("graph") is not None and not os.environ.get("NO_GRAPHS"):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import shade_graph
+        _gi = specs[nm]["graph"]; _gk = "graph:%d" % _gi
+        if _gk not in cache: cache[_gk] = shade_graph.build(sidecar["graphs"][_gi])
+        o.data.materials.clear(); o.data.materials.append(cache[_gk]); continue
     if not os.environ.get("RAW_CERAMIC") and spec.get("cls") == "ceramic.Ceramic" and str(specs[nm].get("material", "")).split(":")[0] in ("toilet_ceramic", "tub_ceramic", "sink_ceramic"):
         # sanitary ware is white: infinigen's shader_ceramic draws a random hue at value 0.3-0.6 80 % of the time (mauve / mint toilets)
         spec = {"cls": "shader.ceramic.ceramic.shader_ceramic", "kwargs": {"clear": True, "roughness_max": 0.3}, "seed": spec.get("seed", 0), "whiten": True}
@@ -391,7 +397,7 @@ for o in list(bpy.data.objects):
         o.data.materials.clear(); o.data.materials.append(_mm)
 phase("materials")
 # room shells: python's own room_walls/room_floors/room_ceilings sampling (roommats.py) replaces the Rust-side spec draws
-if not args.clay and not os.environ.get("NO_ROOMMATS"):
+if not args.clay and not os.environ.get("NO_ROOMMATS") and (os.environ.get("NO_GRAPHS") or not sidecar.get("graphs")):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
         import roommats
@@ -406,6 +412,7 @@ def _white_ceilings(amount=0.85):
         for sl in o.material_slots:
             m = sl.material
             if m is None or not m.use_nodes or m.name in done: continue
+            if m.name.startswith("rs_"): continue  # (a Rust graph already whitened it)
             done.add(m.name); nt = m.node_tree
             for b_ in [x for x in nt.nodes if x.type == "BSDF_PRINCIPLED"]:
                 inp = b_.inputs["Base Color"]; mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"

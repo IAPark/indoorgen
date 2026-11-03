@@ -1,3 +1,4 @@
+/*LIB*/
 struct G {
   viewproj: mat4x4<f32>,
   inv_viewproj: mat4x4<f32>,
@@ -15,7 +16,7 @@ struct G {
   lpos: array<vec4<f32>, 32>,
   lcol: array<vec4<f32>, 32>,
 };
-struct M { color: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32> }; // flags.x: 1 = alpha mask (hair), 2 = glass
+struct M { color: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32>, obj: mat4x4<f32>, p: array<vec4<f32>, 48> }; // flags.x: 1 = alpha mask (hair), 2 = glass; obj: world -> object frame; p: the material graph's numbers
 
 @group(0) @binding(0) var<uniform> g: G;
 @group(0) @binding(1) var shadow_tex: texture_depth_2d;
@@ -67,6 +68,18 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   }
   let vdir = normalize(g.cam_pos.xyz - v.wpos);
   if (dot(n, vdir) < 0.0) { n = -n; }
+  // the material graph, where the material has one (ig_shade)
+  var pbr = false; var surf_color = albedo.rgb; var surf_rough = 0.5; var surf_metal = 0.0; var surf_coat = 0.0; var surf_height = 0.0;
+  /*SURF*/
+  if (pbr) {
+    albedo = vec4<f32>(surf_color, 1.0);
+    // bump from the screen-space slope of the height (surface gradient)
+    let dpx = dpdx(v.wpos); let dpy = dpdy(v.wpos);
+    let r1 = cross(dpy, n); let r2 = cross(n, dpx);
+    let det = dot(dpx, r1);
+    let grad = sign(det) * (dpdx(surf_height) * r1 + dpdy(surf_height) * r2);
+    n = normalize(abs(det) * n - grad);
+  }
   let sun = g.sun_dir.xyz;
   let ndl = max(dot(n, sun), 0.0);
   let sh = select(1.0, shadow_at(v.wpos, n), ndl > 0.0);
@@ -85,6 +98,16 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   let h = normalize(sun + vdir);
   let spec = pow(max(dot(n, h), 0.0), 40.0) * 0.06 * sh * ndl;
   var col = albedo.rgb * lit + g.sun_col.rgb * spec + m.emissive.rgb;
+  if (pbr) {
+    // Blinn-Phong sized by roughness, and a dim reflection of the ambient light, stronger the smoother and the more metal
+    let r_ = clamp(surf_rough, 0.04, 1.0);
+    let pw = clamp(2.0 / (r_ * r_ * r_ * r_), 4.0, 4000.0);
+    let f0 = mix(vec3<f32>(0.04), albedo.rgb, surf_metal);
+    let ndh = max(dot(n, h), 0.0);
+    let fres = pow(1.0 - max(dot(n, vdir), 0.0), 5.0);
+    let spc = f0 * pow(ndh, pw) * (pw + 8.0) / 25.0 + surf_coat * 0.04 * pow(ndh, 1200.0) * 48.0;
+    col = albedo.rgb * (1.0 - surf_metal) * lit + g.sun_col.rgb * spc * sh * ndl + (f0 + (1.0 - f0) * fres * (1.0 - r_) + surf_coat * 0.04 * fres) * amb * (1.0 - 0.7 * r_) + m.emissive.rgb;
+  }
   var out: FOut;
   var a = 1.0;
   if (m.flags.x > 1.5) { a = 0.18; }

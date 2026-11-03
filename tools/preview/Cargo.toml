@@ -11,6 +11,7 @@ opt-level = 3
 debug = false
 
 [dependencies]
+ig_shade = { path = "../../crates/ig_shade" }
 bytemuck = "1.25.2"
 glam = "0.34.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }

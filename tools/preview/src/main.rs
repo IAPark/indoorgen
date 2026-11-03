@@ -20,7 +20,7 @@ struct Globals {
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4] }
+struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 4]; 4], p: [[f32; 4]; 48] }
 
 #[derive(Clone)]
 struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String)>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool }
@@ -72,12 +72,12 @@ fn parse_args() -> Opts {
 }
 
 // ---------------- scene on the GPU ----------------
-struct Draw { node: usize, pos: (usize, u64, u64), nrm: Option<(usize, u64, u64)>, uv: Option<(usize, u64, u64)>, idx: (usize, u64, u64), u16: bool, icount: u32, vcount: u32, mat_bg: usize, glass: bool, shadow: bool, bmin: Vec3, bmax: Vec3 }
+struct Draw { node: usize, pos: (usize, u64, u64), nrm: Option<(usize, u64, u64)>, uv: Option<(usize, u64, u64)>, idx: (usize, u64, u64), u16: bool, icount: u32, vcount: u32, mat_bg: usize, pipe: Option<usize>, glass: bool, shadow: bool, bmin: Vec3, bmax: Vec3 }
 struct Light { pos: Vec3, color: Vec3 }
 struct Scene {
     /// (azimuth deg, elevation deg, sun intensity, ambient) from the sidecar `variation.lighting` (--sidecar-lighting)
     lit: Option<(f32, f32, f32, f32)>,
-    name: String, bufs: Vec<wgpu::Buffer>, zeros: wgpu::Buffer, draws: Vec<Draw>, mat_bgs: Vec<wgpu::BindGroup>, lights: Vec<Light>,
+    name: String, bufs: Vec<wgpu::Buffer>, zeros: wgpu::Buffer, draws: Vec<Draw>, mat_bgs: Vec<wgpu::BindGroup>, pipes: Vec<wgpu::RenderPipeline>, lights: Vec<Light>,
     bmin: Vec3, bmax: Vec3, side: Value, glb: glb::Glb, sun_vp: Mat4, shadow_view: wgpu::TextureView, shadow_done: bool,
 }
 
@@ -208,7 +208,7 @@ fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> w
 
 struct Gpu { dev: wgpu::Device, q: wgpu::Queue }
 
-fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &wgpu::TextureView, smp: &wgpu::Sampler, opts: &Opts) -> Scene {
+fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &wgpu::BindGroupLayout, white: &wgpu::TextureView, smp: &wgpu::Sampler, opts: &Opts) -> Scene {
     let t = Instant::now();
     let mut glb = glb::load(path);
     // --cloth OVERLAY.glb (tools/cloth_only.py): nodes of the same name are replaced by the overlay's (Blender-simulated cloth, moved people parts)
@@ -244,7 +244,11 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
         if let Some(png) = &m.tex { if let Ok(img) = image::load_from_memory(png) { tex_views.insert(format!("glb:{mi}"), load_texture(&gpu.dev, &gpu.q, img.to_rgba8())); } }
     }
     // material bind groups keyed by (material, texture path)
-    let mut mat_bgs: Vec<wgpu::BindGroup> = vec![]; let mut bg_key: HashMap<(usize, String, u32), usize> = HashMap::new();
+    let mut mat_bgs: Vec<wgpu::BindGroup> = vec![]; let mut bg_key: HashMap<(usize, String, u32, usize), usize> = HashMap::new();
+    // material graphs (ig_shade): one pipeline per graph structure, the numbers in each material's uniforms
+    let emitted: Vec<Option<ig_shade::wgsl::Emitted>> = if std::env::var_os("PREVIEW_FLAT").is_some() { vec![] } else { side["graphs"].as_array().map(|a| a.iter().map(ig_shade::wgsl::emit).collect()).unwrap_or_default() };
+    let mut pipes: Vec<wgpu::RenderPipeline> = vec![]; let mut pipe_of: HashMap<String, usize> = HashMap::new();
+    let side_nodes: HashMap<&str, &serde_json::Value> = side["nodes"].as_array().map(|a| a.iter().filter_map(|n| Some((n["name"].as_str()?, n))).collect()).unwrap_or_default();
     let mut draws = vec![]; let mut bmin = Vec3::splat(1e9); let mut bmax = Vec3::splat(-1e9);
     for (ni, n) in glb.nodes.iter().enumerate() {
         let spec = specs.get(&n.name);
@@ -267,9 +271,26 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
                 k
             } else { tex };
             let flags = if cls == "people.hair" || m.mask { 1u32 } else if glass { 2 } else { 0 };
-            let key = (p.mat, tex.clone(), flags);
+            let sn = side_nodes.get(n.name.as_str());
+            let graph = if glass || shown || flags != 0 || m.tex.is_some() { None } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| emitted.get(i as usize)).and_then(|e| e.as_ref()) };
+            let pipe = graph.map(|e| *pipe_of.entry(e.code.clone()).or_insert_with(|| {
+                let src = SRC.replace("/*LIB*/", ig_shade::wgsl::LIB).replace("/*SURF*/", &format!("pbr = true;\n  let obj = (m.obj * vec4<f32>(v.wpos, 1.0)).xyz;\n{}", e.code));
+                let sm = gpu.dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(src.into()) });
+                pipes.push(make_main_pipe(&gpu.dev, &sm, g_bgl, mat_bgl, false));
+                pipes.len() - 1
+            }));
+            let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let u = MatU { color: if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, 0.0, 0.0, 0.0] };
+                let mut u = MatU { color: if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, 0.0, 0.0, 0.0], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                if let Some(e) = graph {
+                    for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
+                    // the object frame the graph's coordinates are in (the sidecar's pose, rows of a 4x4)
+                    if let Some(pr) = sn.and_then(|x| x["pose"].as_array()) {
+                        let g_ = |r: usize, c: usize| pr[r][c].as_f64().unwrap_or(0.0) as f32;
+                        let pm = Mat4::from_cols_array_2d(&[[g_(0, 0), g_(1, 0), g_(2, 0), g_(3, 0)], [g_(0, 1), g_(1, 1), g_(2, 1), g_(3, 1)], [g_(0, 2), g_(1, 2), g_(2, 2), g_(3, 2)], [g_(0, 3), g_(1, 3), g_(2, 3), g_(3, 3)]]);
+                        u.obj = pm.inverse().to_cols_array_2d();
+                    }
+                }
                 let ub = gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
                 let tv = tex_views.get(&tex).unwrap_or(white);
                 mat_bgs.push(gpu.dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: mat_bgl, entries: &[
@@ -282,7 +303,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
             if !is_ceil && !lname.starts_with("skirting_ceiling") { bmin = bmin.min(lo); bmax = bmax.max(hi); }
             let vw = |v: &glb::View| (v.chunk, v.off, v.len);
             draws.push(Draw { node: ni, pos: vw(&p.pos), nrm: p.nrm.as_ref().map(vw), uv: p.uv.as_ref().map(vw), idx: vw(&p.idx), u16: p.idx_u16, icount: p.icount, vcount: p.vcount,
-                mat_bg: bi, glass, shadow: !glass && !(opts.no_ceiling && is_ceil), bmin: lo, bmax: hi });
+                mat_bg: bi, pipe, glass, shadow: !glass && !(opts.no_ceiling && is_ceil), bmin: lo, bmax: hi });
         }
     }
     let lights: Vec<Light> = side["lights"].as_array().map(|ls| ls.iter().map(|l| {
@@ -304,7 +325,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
     let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: SHADOW, height: SHADOW, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] });
     if opts.verbose { eprintln!("  scene on GPU {:.2}s ({} draws, {} lights, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), draws.len(), lights.len(), bmin, bmax); }
-    Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, lights, bmin, bmax, side, glb,
+    Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, pipes, lights, bmin, bmax, side, glb,
         sun_vp: sp * sv, shadow_view: sh.create_view(&wgpu::TextureViewDescriptor::default()), shadow_done: false }
 }
 
@@ -730,6 +751,19 @@ fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets {
     Targets { hdr, nrm, depth, depth_tex, dbuf, dbpr, out, readback, w, h, bpr }
 }
 
+fn make_main_pipe(dev: &wgpu::Device, sm: &wgpu::ShaderModule, g_bgl: &wgpu::BindGroupLayout, mat_bgl: &wgpu::BindGroupLayout, glass: bool) -> wgpu::RenderPipeline {
+    let tgt = [Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: if glass { Some(wgpu::BlendState::ALPHA_BLENDING) } else { None }, write_mask: wgpu::ColorWrites::ALL }),
+               Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: if glass { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL } })];
+    let vl = vbuf_layouts();
+    let layout = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(g_bgl), Some(mat_bgl)], immediate_size: 0 });
+    dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&layout),
+        vertex: wgpu::VertexState { module: sm, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &vl.iter().cloned().map(Some).collect::<Vec<_>>() },
+        primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+        depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: Some(!glass), depth_compare: Some(wgpu::CompareFunction::Less), stencil: Default::default(), bias: Default::default() }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState { module: sm, entry_point: Some("fs_main"), compilation_options: Default::default(), targets: &tgt }), multiview_mask: None, cache: None })
+}
+
 fn init(o: &Opts) -> Renderer {
     let inst = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let ad = pollster::block_on(inst.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() })).expect("no adapter");
@@ -754,15 +788,7 @@ fn init(o: &Opts) -> Renderer {
     let shadow_pipe = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl(&[&sh_bgl])),
         vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_shadow"), compilation_options: Default::default(), buffers: &[Some(vl[0].clone())] },
         primitive: prim, depth_stencil: Some(ds(true, true)), multisample: Default::default(), fragment: None, multiview_mask: None, cache: None });
-    let mk_main = |glass: bool| {
-        let tgt = [Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: if glass { Some(wgpu::BlendState::ALPHA_BLENDING) } else { None }, write_mask: wgpu::ColorWrites::ALL }),
-                   Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: if glass { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL } })];
-        dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl(&[&g_bgl, &mat_bgl])),
-            vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &vl.iter().cloned().map(Some).collect::<Vec<_>>() },
-            primitive: prim, depth_stencil: Some(ds(!glass, false)), multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some("fs_main"), compilation_options: Default::default(), targets: &tgt }), multiview_mask: None, cache: None })
-    };
-    let main_pipe = mk_main(false); let glass_pipe = mk_main(true);
+    let main_pipe = make_main_pipe(&dev, &sm, &g_bgl, &mat_bgl, false); let glass_pipe = make_main_pipe(&dev, &sm, &g_bgl, &mat_bgl, true);
     let post_pipe = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl(&[&post_bgl])),
         vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
         primitive: Default::default(), depth_stencil: None, multisample: Default::default(),
@@ -807,7 +833,8 @@ fn cut_plane(eye: Option<Vec3>, lo: &Vec3, hi: &Vec3) -> (f32, f32, f32, f32) {
     let (sx, sy) = (if e.x < c.x { 1.0 } else { -1.0 }, if e.y < c.y { 1.0 } else { -1.0 });
     (sx, if sx > 0.0 { lo.x } else { -hi.x }, sy, if sy > 0.0 { lo.y } else { -hi.y })
 }
-fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String)>) {
+fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wgpu::RenderPipeline>, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String)>) {
+    let mut bound = None;
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
         if leaf_in_the_way(s, d, eye, cut) { continue; }
@@ -830,6 +857,7 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow
         }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
+        if let Some(b) = base { if bound != Some(d.pipe) { rp.set_pipeline(d.pipe.map_or(b, |i| &s.pipes[i])); bound = Some(d.pipe); } }
         if !shadow {
             match d.nrm { Some(n) => rp.set_vertex_buffer(1, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 12)), None => rp.set_vertex_buffer(1, s.zeros.slice(0..d.vcount as u64 * 12)) }
             match d.uv { Some(n) => rp.set_vertex_buffer(2, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 8)), None => rp.set_vertex_buffer(2, s.zeros.slice(0..d.vcount as u64 * 8)) }
@@ -871,7 +899,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &s.shadow_view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
             rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
-            draw_all(&mut rp, s, false, true, None, None, None, None);
+            draw_all(&mut rp, s, None, false, true, None, None, None, None);
         }
         s.shadow_done = true;
     }
@@ -887,8 +915,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.nrm, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
-        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
@@ -956,7 +984,7 @@ fn main() {
     let mut frames: Vec<(String, image::RgbaImage)> = vec![];
     for path in &o.inputs {
         let t = Instant::now();
-        let mut s = load_scene(&r.gpu, path, &r.mat_bgl, &r.white, &r.smp, &o);
+        let mut s = load_scene(&r.gpu, path, &r.mat_bgl, &r.g_bgl, &r.white, &r.smp, &o);
         let cams = resolve_cams(&s, &o);
         if o.verbose { eprintln!("scene {} ready {:.2}s, {} cams", s.name, t.elapsed().as_secs_f32(), cams.len()); }
         let mut best_detail: HashMap<String, f32> = HashMap::new();
