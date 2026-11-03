@@ -593,8 +593,9 @@ impl BedSpec {
             let mx = |k: usize| pts.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max);
             eprintln!("legs bounds x {} {} y {} {} z {} {}", mn(0), mx(0), mn(1), mx(1), mn(2), mx(2));
         }
-        if self.leg_decor_wrapped {
-            let d = c.leg_thickness / 2.0 + 1e-3;
+        // (a coiled panel goes outside the legs too: through their centres, the legs broke out of its dimples in a saw-tooth)
+        if self.leg_decor_wrapped || self.leg_decor == 0 {
+            let d = c.leg_thickness / 2.0 + if self.leg_decor == 0 { self.dot_depth + 0.006 } else { 1e-3 };
             x0 -= d;
             x1 += d;
             y0 -= d;
