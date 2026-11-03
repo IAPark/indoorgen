@@ -264,7 +264,7 @@ fn poses(room: &Room, it: &Item, v: &Variant, s: &Shape, state: &State) -> Vec<(
 }
 
 #[derive(Clone)]
-struct State { world: World, items: Vec<Placed>, score: f64, skipped: Vec<(String, u8)> }
+struct State { world: World, items: Vec<Placed>, score: f64, skipped: Vec<(String, u8)>, walk: std::rc::Rc<Vec<bool>>, seen: std::rc::Rc<Vec<bool>>, joined: bool, rings: Vec<std::rc::Rc<Vec<u32>>> }
 
 fn front_prism(s: &Shape, pose: &Pose, d: f64) -> Prism {
     let q = |x: f64, y: f64| pose.apply([x, y]);
@@ -345,7 +345,9 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
     let mut cache = HashMap::new();
     let mut w0 = World::new(room);
     w0.add(fixed);
-    let mut beam = vec![State { world: w0, items: vec![], score: 0.0, skipped: vec![] }];
+    let walk0 = w0.walk(&[]);
+    let (seen0, joined0) = w0.flood(&walk0, room);
+    let mut beam = vec![State { world: w0, items: vec![], score: 0.0, skipped: vec![], walk: std::rc::Rc::new(walk0), seen: std::rc::Rc::new(seen0), joined: joined0, rings: vec![] }];
     let mut report: Vec<ItemReport> = vec![];
     let mut why_item = vec![];
     let mut draw = 0u64;
@@ -405,24 +407,29 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
                 // the walk checked best first: the slowest test, on what could win
                 let mut kept = 0;
                 for (sc, pose, ps, terms) in first {
-                    let mut w2 = st.world.clone();
-                    w2.add(&ps);
-                    if it.front > 0.0 { let f = front_prism(&s, &pose, it.front); w2.add(&[f]); }
-                    let walk = w2.walk(&[]);
-                    let (seen, joined) = w2.flood(&walk, room);
+                    // one flood per layout, not per candidate: a piece only takes cells from the walk round itself, and if none of those were
+                    // reached from the doors, nothing has changed; otherwise flood once and look every item up
+                    let lost = st.world.walk_lost(&st.walk, &ps);
+                    let same = st.joined && !lost.iter().any(|k| st.seen[*k]);
+                    let walk2: std::rc::Rc<Vec<bool>> = if lost.is_empty() { st.walk.clone() } else { let mut w = (*st.walk).clone(); for k in &lost { w[*k] = false; } std::rc::Rc::new(w) };
+                    let (seen, joined) = if same { (st.seen.clone(), true) } else { let (a, b) = st.world.flood(&walk2, room); (std::rc::Rc::new(a), b) };
+                    let reached = |ring: &Vec<u32>| ring.iter().any(|k| seen[*k as usize]);
                     let mut fail = (!joined && room.doors.len() > 1).then_some(Why::Walk);
-                    if fail.is_none() && it.reach {
-                        // (the walk within 0.4 m of what is hard of it)
-                        if !ps.iter().filter(|p| p.role == HARD).any(|p| w2.near(&seen, &p.hull, 0.4)) { fail = Some(Why::Reach); }
-                    }
+                    let ring: std::rc::Rc<Vec<u32>> = std::rc::Rc::new(if it.reach { let mut r: Vec<u32> = ps.iter().filter(|p| p.role == HARD).flat_map(|p| st.world.ring(&p.hull, 0.4)).collect(); r.sort_unstable(); r.dedup(); r } else { vec![] });
+                    if fail.is_none() && it.reach && !reached(&ring) { fail = Some(Why::Reach); }
                     // (and what stands already stays reachable: a toilet placed first was boxed in by the tub and the basin that came after)
-                    if fail.is_none() && st.items.iter().filter(|p| p.reach).any(|p| !p.prisms.iter().filter(|q| q.role == HARD).any(|q| w2.near(&seen, &q.hull, 0.4))) { fail = Some(Why::Reach); }
+                    if fail.is_none() && !same && st.rings.iter().any(|r| !r.is_empty() && !reached(r)) { fail = Some(Why::Reach); }
                     if why_id == Some(it.id.as_str()) && next.is_empty() { let c = pose.apply([(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0]); why_item.push(Candidate { at: c, yaw: pose.yaw, why: fail, score: sc, variant: v.piece.clone(), side: v.side, prisms: ps.clone() }); }
                     if let Some(w) = fail { *rep.why.entry(format!("{w:?}")).or_default() += 1; continue }
                     any = true;
                     rep.placed = true;
                     rep.variant = format!("{}{}", v.piece, if v.side { "+side" } else { "" });
-                    let mut ns = State { world: w2, items: st.items.clone(), score: st.score + sc, skipped: st.skipped.clone() };
+                    let mut w2 = st.world.clone();
+                    w2.add(&ps);
+                    if it.front > 0.0 { let f = front_prism(&s, &pose, it.front); w2.add(&[f]); }
+                    let mut rings = st.rings.clone();
+                    rings.push(ring);
+                    let mut ns = State { world: w2, items: st.items.clone(), score: st.score + sc, skipped: st.skipped.clone(), walk: walk2, seen: seen.clone(), joined, rings };
                     let parent = match &it.place { Place::Beside { parent, .. } | Place::On { parent } | Place::Around { parent, .. } => Some(parent.clone()), _ => None };
                     ns.items.push(Placed { id: it.id.clone(), class: it.class.clone(), variant: v.piece.clone(), side: v.side, pose, piece_seed: s.seed, size: s.size, parent, cover: it.cover, reach: it.reach, lo: s.lo, hi: s.hi, prisms: ps, score: sc, terms });
                     next.push(ns);

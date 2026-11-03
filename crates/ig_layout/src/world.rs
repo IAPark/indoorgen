@@ -233,6 +233,55 @@ impl World {
         let r = (PERSON / CELL) as f32 + 1.0;
         d.iter().map(|v| *v >= r).collect()
     }
+    /// the cells a new piece takes out of `walk`, without working out the room again: only its own surroundings can change, so the distance map runs on
+    /// a window round it. Same answer as `walk` on the world with the piece added.
+    pub fn walk_lost(&self, walk: &[bool], ps: &[Prism]) -> Vec<usize> {
+        let body = mask([0.05, 1.9], 0.0);
+        let (nx, ny) = (self.nx as i64, self.ny as i64);
+        let r = (PERSON / CELL) as f32 + 1.0;
+        let reach = r as i64 + 2;
+        let mut lost = vec![];
+        for p in ps.iter().filter(|p| p.role == HARD && mask(p.z, 0.0) & body != 0) {
+            let (i0, i1, j0, j1) = self.range(&p.hull);
+            let (wi0, wj0, wi1, wj1) = ((i0 as i64 - reach).max(0), (j0 as i64 - reach).max(0), (i1 as i64 + reach).min(nx), (j1 as i64 + reach).min(ny));
+            let (w, h) = ((wi1 - wi0) as usize, (wj1 - wj0) as usize);
+            if w == 0 || h == 0 { continue }
+            const FAR: f32 = 1e6;
+            let mut d = vec![FAR; w * h];
+            for j in j0..j1 { for i in i0..i1 {
+                if in_hull(&p.hull, self.center(i, j), -CELL * 0.71) { d[(j as i64 - wj0) as usize * w + (i as i64 - wi0) as usize] = 0.0; }
+            } }
+            let (a, b) = (1.0f32, std::f32::consts::SQRT_2);
+            for j in 0..h { for i in 0..w {
+                let k = j * w + i;
+                if i > 0 { d[k] = d[k].min(d[k - 1] + a); }
+                if j > 0 { d[k] = d[k].min(d[k - w] + a); if i > 0 { d[k] = d[k].min(d[k - w - 1] + b); } if i + 1 < w { d[k] = d[k].min(d[k - w + 1] + b); } }
+            } }
+            for j in (0..h).rev() { for i in (0..w).rev() {
+                let k = j * w + i;
+                if i + 1 < w { d[k] = d[k].min(d[k + 1] + a); }
+                if j + 1 < h { d[k] = d[k].min(d[k + w] + a); if i + 1 < w { d[k] = d[k].min(d[k + w + 1] + b); } if i > 0 { d[k] = d[k].min(d[k + w - 1] + b); } }
+            } }
+            for j in 0..h { for i in 0..w {
+                if d[j * w + i] < r {
+                    let c = (j as i64 + wj0) as usize * self.nx + (i as i64 + wi0) as usize;
+                    if walk[c] { lost.push(c); }
+                }
+            } }
+        }
+        lost.sort_unstable();
+        lost.dedup();
+        lost
+    }
+    /// the cells within `d` of a shape: an item's reach, looked up rather than searched for at every placement
+    pub fn ring(&self, hull: &[Xy], d: f64) -> Vec<u32> {
+        let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in hull { for k in 0..2 { a[k] = a[k].min(p[k]); b[k] = b[k].max(p[k]); } }
+        let (i0, i1, j0, j1) = self.range(&[[a[0] - d, a[1] - d], [b[0] + d, b[1] + d]]);
+        let mut out = vec![];
+        for j in j0..j1 { for i in i0..i1 { if self.floor[j * self.nx + i] && dist_to_hull(hull, self.center(i, j)) <= d { out.push((j * self.nx + i) as u32); } } }
+        out
+    }
     /// the walkable cells reached from the first door; whether every door reaches them
     pub fn flood(&self, walk: &[bool], room: &Room) -> (Vec<bool>, bool) {
         let (nx, ny) = (self.nx, self.ny);
