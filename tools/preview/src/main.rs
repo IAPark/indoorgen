@@ -883,7 +883,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
-        sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.62 * ambient, 0.72 * ambient, 0.9 * ambient, 0.0], ground: [0.28 * ambient, 0.25 * ambient, 0.22 * ambient, 0.0],
+        sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.62 * ambient, 0.72 * ambient, 0.9 * ambient, 0.0], ground: [0.58 * ambient, 0.55 * ambient, 0.5 * ambient, 0.0],
         cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, sr],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }

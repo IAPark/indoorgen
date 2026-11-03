@@ -139,8 +139,9 @@ pub fn painted_from(name: &str, seed: u64, fallback_rgb: [f32; 3], pick: &[usize
 pub fn random_paint(seed: u64, max_sat: f64) -> [f32; 3] {
     let mut r = Rng::seeded(crate::int_hash(&["paint_hsv", &seed.to_string()]));
     let h = r.uniform(0.0, 1.0);
-    let s = if r.f64() < 0.85 { r.uniform(0.05, 0.35f64.min(max_sat)) } else { r.uniform(0.35f64.min(max_sat), max_sat) };
-    let v = match r.f64() { x if x < 0.15 => r.uniform(0.1, 0.22), x if x < 0.3 => r.uniform(0.85, 0.95), _ => r.uniform(0.3, 0.82) };
+    let max_sat = max_sat.min(0.42); // (fully saturated paint made mint and teal wardrobes)
+    let s = if r.f64() < 0.85 { r.uniform(0.05, 0.3f64.min(max_sat)) } else { r.uniform(0.3f64.min(max_sat), max_sat) };
+    let v = match r.f64() { x if x < 0.15 => r.uniform(0.24, 0.34), x if x < 0.3 => r.uniform(0.85, 0.95), _ => r.uniform(0.3, 0.82) };
     // hsv -> sRGB -> linear
     let i = (h * 6.0).floor();
     let f = h * 6.0 - i;
@@ -194,7 +195,7 @@ pub fn fallback_rgb(cls: &str, seed: u64) -> [f32; 3] {
         "ceramic.Brick" => pick(&mut r, &[[0.45, 0.20, 0.13], [0.52, 0.28, 0.18], [0.38, 0.22, 0.17]]),
         "ceramic.Concrete" => pick(&mut r, &[[0.50, 0.50, 0.48], [0.58, 0.57, 0.54]]),
         "fabric.Rug" => pick(&mut r, &[[0.55, 0.50, 0.44], [0.36, 0.40, 0.46], [0.48, 0.30, 0.26], [0.62, 0.60, 0.56], [0.30, 0.34, 0.30]]),
-        c if c.starts_with("wood.") => pick(&mut r, &[[0.62, 0.46, 0.30], [0.50, 0.34, 0.20], [0.36, 0.23, 0.14], [0.70, 0.56, 0.40], [0.55, 0.50, 0.44], [0.44, 0.30, 0.20]]),
+        c if c.starts_with("wood.") => pick(&mut r, &[[0.62, 0.46, 0.30], [0.50, 0.34, 0.20], [0.36, 0.23, 0.14], [0.70, 0.56, 0.40], [0.60, 0.48, 0.35], [0.44, 0.30, 0.20]]),
         _ => [0.8, 0.8, 0.8],
     }
 }

@@ -48,7 +48,11 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
             let mut e = ext;
             e.sort_by(|a, b| a.partial_cmp(b).unwrap());
             if e[1] > 0.35 && e[0] < 0.12 * e[1] {
-                shelves_wood(&mut r, crc32fast::hash(node.split('#').next().unwrap_or(node).as_bytes()) % 10 >= 7, ext[2] > e[0] + 1e-6)
+                {
+                    // (black veneer on tops only: on doors and wardrobes it made near-black slabs)
+                    let upright = ext[2] > e[0] + 1e-6;
+                    shelves_wood(&mut r, !upright && crc32fast::hash(node.split('#').next().unwrap_or(node).as_bytes()) % 10 >= 7, upright)
+                }
             } else {
                 // the grain runs along x: parts thin in x showed end grain, so they get it vertical
                 wood(&mut r, ext[0] < 0.5 * ext[1].max(ext[2]))
@@ -195,8 +199,10 @@ fn wood_on(g: &mut G, r: &mut R, v: &Value, tint: Option<[f64; 3]>) -> (Value, V
     let mx1 = g.mix(0.9, mr1, mx, "multiply");
     let mx1_soft = mx1.clone();
     let mx2 = g.mix(0.95, mr2, mx1, "multiply");
-    let dark = g.hsv_adjust(json!(color), 0.8, 0.2);
-    let col = g.mix(mx2.clone(), dark, json!(color), "mix");
+    // (grain darkening to 40 %, and only the darkest grain all the way: at the shader's 20 % over the whole range floors went blotchy)
+    let dark = g.hsv_adjust(json!(color), 0.85, 0.4);
+    let fac = g.map_range(&mx2, 0.0, 0.5, 0.35, 1.0);
+    let col = g.mix(fac, dark, json!(color), "mix");
     let rn = g.noise(&c_of(&g), r.log_uniform(40.0, 50.0), 2.0, 0.0, 0.0);
     let (r0, dr) = (r.uniform(0.0, 0.4), r.uniform(0.0, 0.8));
     let rough = g.map_range(&rn, 0.0, 1.0, r0, r0 + dr);
