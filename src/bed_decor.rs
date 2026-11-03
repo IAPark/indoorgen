@@ -166,8 +166,8 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         while sw > 0.4 && !inside(sw) { sw -= 0.05; }
         if !inside(sw) { continue }
         let shelf_box: Box3 = { let ps = [pt(-sw / 2.0, 0.0), pt(sw / 2.0, 0.0), pt(-sw / 2.0, sd), pt(sw / 2.0, sd)]; ([ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min), ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min), sz], [ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max), ps.iter().map(|p| p[1]).fold(f64::MIN, f64::max), sz + 0.4]) };
-        // 2 cm tolerance: neighbouring furniture boxes (the bed beside a nightstand) touch the shelf's footprint
-        let probe: Box3 = ([shelf_box.0[0] + 0.02, shelf_box.0[1] + 0.02, shelf_box.0[2] + 0.02], [shelf_box.1[0] - 0.02, shelf_box.1[1] - 0.02, shelf_box.1[2] - 0.02]);
+        // 5 mm tolerance: neighbouring furniture boxes touch the shelf's footprint (at 2 cm a shelf stood 1.6 cm into a wardrobe)
+        let probe: Box3 = ([shelf_box.0[0] + 0.005, shelf_box.0[1] + 0.005, shelf_box.0[2] + 0.005], [shelf_box.1[0] - 0.005, shelf_box.1[1] - 0.005, shelf_box.1[2] - 0.005]);
         let blocker = taken.iter().find(|t| overlaps(&probe, t));
         if std::env::var_os("WSHELF_DEBUG").is_some() { eprintln!("WSHELF {k} wall {wq:?} box {shelf_box:?} blocked {:?}", blocker); }
         if blocker.is_some() { continue }

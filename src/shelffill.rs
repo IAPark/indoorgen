@@ -97,7 +97,7 @@ pub fn fill(state: &mut State, visuals: &mut HashMap<String, Asset>, seed: u64, 
         if visuals.contains_key(k) { units.push((k.clone(), *front, room)) }
     }
     units.sort();
-    let mut added = vec![];
+    let mut added: Vec<String> = vec![];
     for (key, front, room) in units {
         let mut rng = Rng::seeded(crate::int_hash(&[&seed.to_string(), "shelffill", &key]));
         let p_fill = (share + rng.uniform(-0.25, 0.25)).clamp(0.0, 1.0);
@@ -249,5 +249,21 @@ pub fn fill(state: &mut State, visuals: &mut HashMap<String, Asset>, seed: u64, 
             }
         }
     }
+    // what stands proud of its shelf into a neighbour goes (a book over a sideboard's front, under a table top pushed up to it)
+    let world = |k: &str, st: &State, vs: &HashMap<String, Asset>| -> Option<(V3, V3)> {
+        let (o, a) = (st.objs.get(k)?, vs.get(k)?);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for p in &a.parts { for q in &p.mesh.pos { let w = o.pose.apply(*q); for d in 0..3 { lo[d] = lo[d].min(w[d]); hi[d] = hi[d].max(w[d]); } } }
+        (lo[0] < hi[0]).then_some((lo, hi))
+    };
+    let items: std::collections::HashSet<String> = added.iter().cloned().collect();
+    let others: Vec<(String, V3, V3)> = state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |g| !g.class.contains("Rug") && !g.class.contains("Ceiling") && g.class != "Door" && g.class != "Window") && !items.contains(k.as_str())).filter_map(|(k, _)| world(k, state, visuals).map(|(l, h)| (k.clone(), l, h))).collect();
+    added.retain(|k| {
+        let Some((l, h)) = world(k, state, visuals) else { return true };
+        let parent = state.objs[k.as_str()].relations.first().map(|r| r.target.clone()).unwrap_or_default();
+        let hit = others.iter().any(|(ok, ol, oh)| *ok != parent && (0..3).all(|d| l[d].max(ol[d]) < h[d].min(oh[d]) - 0.003));
+        if hit { state.objs.shift_remove(k.as_str()); visuals.remove(k.as_str()); }
+        !hit
+    });
     added
 }

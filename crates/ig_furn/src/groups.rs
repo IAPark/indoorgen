@@ -2568,7 +2568,7 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         let mid = (rlo[1] + rhi[1]) / 2.0;
         for k in 0..8 { let off = (k as f64 / 2.0).ceil() * 0.3 * if k % 2 == 0 { 1.0 } else { -1.0 }; ys.push(mid + off); }
         // (a planned run: the plan's spot, near enough. The run's box takes in its wall cabinet's reach into a corner, and "the middle" of that put a sink through the corner leg)
-        if let Some((_, at)) = plan.as_ref().filter(|(r, _)| *r == run) { let y = inv([at[0], at[1], 0.0])[1]; ys = vec![y, y + 0.05, y - 0.05, y + 0.1, y - 0.1]; }
+        if let Some((_, at)) = plan.as_ref().filter(|(r, _)| *r == run) { let y = inv([at[0], at[1], 0.0])[1]; let hw = (shi[1] - slo[1]) / 2.0 + 0.06; let (a, b) = (rlo[1] + hw, (rhi[1] - hw).max(rlo[1] + hw)); let y = y.clamp(a, b); ys = vec![y, y + 0.05, y - 0.05, y + 0.1, y - 0.1, y + 0.2, y - 0.2, y + 0.3, y - 0.3, y + 0.45, y - 0.45]; ys = ys.into_iter().filter(|v| *v >= a - 1e-6 && *v <= b + 1e-6).collect(); }
         let sd = shi[0] - slo[0];
         let mut ok = false;
         // counter to work on between the sink and the range: 0.4 m or more first, then any free spot
