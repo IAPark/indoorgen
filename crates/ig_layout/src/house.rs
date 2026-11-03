@@ -51,8 +51,14 @@ pub fn edge_dist(ring: &[[f64; 2]], p: [f64; 2]) -> f64 {
 
 pub fn load(path: &str) -> Vec<Room> {
     let h: HouseFile = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"))).unwrap_or_else(|e| panic!("{path}: {e}"));
-    h.rooms.iter().map(|(name, wkt)| {
-        let outline = ring(wkt);
+    h.rooms.iter().map(|(name, wkt)| room_from(name, ring(wkt), &h.cutters, h.wall_thickness, h.wall_height)).collect()
+}
+
+/// one room from the plan's outline and openings
+pub fn room_from(name: &str, outline: Vec<[f64; 2]>, cutters: &[Cutter], wall_thickness: f64, wall_height: f64) -> Room {
+    {
+        struct H<'a> { wall_thickness: f64, wall_height: f64, cutters: &'a [Cutter] }
+        let h = H { wall_thickness, wall_height, cutters };
         let area = (0..outline.len()).map(|i| { let (a, b) = (outline[i], outline[(i + 1) % outline.len()]); a[0] * b[1] - b[0] * a[1] }).sum::<f64>().abs() / 2.0;
         let half = h.wall_thickness / 2.0;
         let mut walls = vec![];
@@ -77,6 +83,6 @@ pub fn load(path: &str) -> Vec<Room> {
             if c.kind == "Window" { windows.push(o) } else { doors.push(o) }
         }
         let kind = name.split('_').next().unwrap_or("").to_string();
-        Room { name: name.clone(), kind, outline, wall_t: h.wall_thickness, height: h.wall_height, area, walls, doors, windows }
-    }).collect()
+        Room { name: name.to_string(), kind, outline, wall_t: h.wall_thickness, height: h.wall_height, area, walls, doors, windows }
+    }
 }

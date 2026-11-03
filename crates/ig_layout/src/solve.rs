@@ -10,7 +10,7 @@ const BEAM: usize = 6;
 const KEEP_PER_STATE: usize = 8;
 
 #[derive(Clone, serde::Serialize)]
-pub struct Placed { pub id: String, pub class: String, pub variant: String, pub side: bool, pub pose: Pose, pub lo: [f64; 3], pub hi: [f64; 3], pub prisms: Vec<Prism>, pub score: f64, pub terms: Vec<(String, f64)> }
+pub struct Placed { pub id: String, pub class: String, pub variant: String, pub side: bool, pub pose: Pose, pub piece_seed: u64, pub size: Option<[f64; 3]>, pub parent: Option<String>, pub cover: bool, pub lo: [f64; 3], pub hi: [f64; 3], pub prisms: Vec<Prism>, pub score: f64, pub terms: Vec<(String, f64)> }
 
 #[derive(Clone, serde::Serialize)]
 pub struct Candidate { pub at: Xy, pub yaw: f64, pub why: Option<Why>, pub score: f64, pub variant: String, pub side: bool, pub prisms: Vec<Prism> }
@@ -21,7 +21,16 @@ pub struct ItemReport { pub id: String, pub tier: u8, pub tried: usize, pub why:
 #[derive(serde::Serialize)]
 pub struct Solution { pub room: Room, pub placed: Vec<Placed>, pub report: Vec<ItemReport>, pub score: f64, pub ms: f64, pub walk: Vec<u8>, pub nx: usize, pub ny: usize, pub ox: f64, pub oy: f64, pub why_item: Vec<Candidate>, pub doors_joined: bool }
 
-struct Shape { vols: Vec<Volume>, lo: [f64; 3], hi: [f64; 3], back: f64, side: f64 }
+struct Shape { vols: Vec<Volume>, lo: [f64; 3], hi: [f64; 3], back: f64, side: f64, seed: u64, size: Option<[f64; 3]> }
+
+/// the piece a placement stands for, as the solver saw it
+pub fn build_piece(p: &Placed) -> Option<Box<dyn Piece>> {
+    let mut x = ig_kit::piece::make_piece(&p.class, p.piece_seed)?;
+    if let Some(sz) = p.size { x = x.resize(sz)?; }
+    if p.variant != "as_is" { x = x.tucked()?; }
+    if p.variant == "compact" { x = x.tucked()?; }
+    Some(x)
+}
 
 /// what stands against a wall: its rigid and soft parts (a plant's foliage reaches past its pot), not what swings out
 fn shape_of(vols: Vec<Volume>) -> Shape {
@@ -29,7 +38,7 @@ fn shape_of(vols: Vec<Volume>) -> Shape {
     let solid: Vec<_> = vols.iter().filter(|v| !matches!(v.role, ig_kit::piece::Role::Opening(_))).map(|v| v.bounds()).collect();
     let back = solid.iter().map(|b| b.0[0]).fold(lo[0], f64::min);
     let side = solid.iter().map(|b| b.0[1]).fold(lo[1], f64::min);
-    Shape { vols, lo, hi, back, side }
+    Shape { vols, lo, hi, back, side, seed: 0, size: None }
 }
 
 fn hash(s: &str, seed: u64) -> u64 { let mut h = 0xcbf29ce484222325u64 ^ seed; for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(0x100000001b3); } h }
@@ -45,7 +54,9 @@ fn shape(it: &Item, seed: u64, v: &Variant, cache: &mut HashMap<(String, u64, St
         if v.piece != "as_is" { p = p.and_then(|x| x.tucked()); }
         if v.piece == "compact" { p = p.and_then(|x| x.tucked()); }
         let Some(mut p) = p else { continue };
-        let s = std::rc::Rc::new(shape_of(p.collision()));
+        let mut sh = shape_of(p.collision());
+        sh.seed = seed.wrapping_add(d.wrapping_mul(0x9E3779B97F4A7C15));
+        let s = std::rc::Rc::new(sh);
         let (lo, hi) = (s.lo, s.hi);
         if it.fit.as_ref().map_or(true, |f| hi[1] - lo[1] <= f.max_w && hi[2] - lo[2] <= f.max_h) { out = Some(s); break }
     }
@@ -60,7 +71,10 @@ fn sized_under(it: &Item, seed: u64, parent: &Placed) -> Option<std::rc::Rc<Shap
     let (rw, rd) = ((pw + add_w).clamp(w[0], w[1]), (pl * share).clamp(d[0], d[1]));
     let p = ig_kit::piece::make_piece(&it.class, seed)?;
     let mut p = p.resize([rw, rd, *t])?;
-    Some(std::rc::Rc::new(shape_of(p.collision())))
+    let mut sh = shape_of(p.collision());
+    sh.seed = seed;
+    sh.size = Some([rw, rd, *t]);
+    Some(std::rc::Rc::new(sh))
 }
 
 fn poses(room: &Room, it: &Item, v: &Variant, s: &Shape, state: &State) -> Vec<(Pose, f64, f64)> {
@@ -150,12 +164,17 @@ fn term_value(tm: &crate::rules::Term, room: &Room, c: Xy, t: f64, len: f64, st:
 fn noise(seed: u64, i: u64) -> f64 { let x = hash(&i.to_string(), seed); (x >> 11) as f64 / (1u64 << 53) as f64 }
 
 /// `seed`: the house's and the run's (the same room in another house draws other pieces)
-pub fn solve(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>) -> Solution {
+pub fn solve(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>) -> Solution { solve_with(room, rules, seed, why_id, &[]) }
+
+/// `fixed`: what already stands in the room (built-ins)
+pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>, fixed: &[Prism]) -> Solution {
     let t0 = std::time::Instant::now();
     let mut order: Vec<&Item> = rules.program.iter().filter(|i| room.area >= i.min_area).collect();
     order.sort_by_key(|i| i.tier);
     let mut cache = HashMap::new();
-    let mut beam = vec![State { world: World::new(room), items: vec![], score: 0.0, skipped: vec![] }];
+    let mut w0 = World::new(room);
+    w0.add(fixed);
+    let mut beam = vec![State { world: w0, items: vec![], score: 0.0, skipped: vec![] }];
     let mut report: Vec<ItemReport> = vec![];
     let mut why_item = vec![];
     let mut draw = 0u64;
@@ -173,8 +192,9 @@ pub fn solve(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>) ->
                     rep.tried += 1;
                     let mut ps = prisms(&s.vols, &pose);
                     if it.cover { for p in ps.iter_mut() { p.role = COVER; } }
+                    if it.soft_blocks { for p in ps.iter_mut() { if p.role == SOFT { p.role = HARD; } } }
                     let mut fail = st.world.voxel(&ps).or_else(|| st.world.exact(&ps, room));
-                    if fail.is_none() && it.avoid_window {
+                    if fail.is_none() && it.avoid_window && !v.over_window {
                         let z_of = |i: usize| ps.iter().filter(|p| p.role == HARD).map(move |p| p.z[i]);
                         let (bot, top) = (z_of(0).fold(f64::MAX, f64::min), z_of(1).fold(f64::MIN, f64::max));
                         let blocks = room.windows.iter().any(|w| top > w.z[0] + 0.02 && bot < w.z[1] - 0.02 && { let hull = hull2(vec![[w.at[0] - w.u[0] * w.hw, w.at[1] - w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw, w.at[1] + w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] + w.u[1] * w.hw + w.n[1] * 0.1], [w.at[0] - w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] - w.u[1] * w.hw + w.n[1] * 0.1]]); ps.iter().any(|p| p.role == HARD && sat(&p.hull, &hull) < 0.0) });
@@ -216,7 +236,8 @@ pub fn solve(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>) ->
                     rep.placed = true;
                     rep.variant = format!("{}{}", v.piece, if v.side { "+side" } else { "" });
                     let mut ns = State { world: w2, items: st.items.clone(), score: st.score + sc, skipped: st.skipped.clone() };
-                    ns.items.push(Placed { id: it.id.clone(), class: it.class.clone(), variant: v.piece.clone(), side: v.side, pose, lo: s.lo, hi: s.hi, prisms: ps, score: sc, terms });
+                    let parent = match &it.place { Place::Beside { parent, .. } => Some(parent.clone()), _ => None };
+                    ns.items.push(Placed { id: it.id.clone(), class: it.class.clone(), variant: v.piece.clone(), side: v.side, pose, piece_seed: s.seed, size: s.size, parent, cover: it.cover, lo: s.lo, hi: s.hi, prisms: ps, score: sc, terms });
                     next.push(ns);
                     kept += 1;
                     if kept >= KEEP_PER_STATE { break }

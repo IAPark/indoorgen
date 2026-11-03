@@ -7,7 +7,7 @@ pub const CELL: f64 = 0.05;
 pub const LAYER: f64 = 0.05;
 const INSET: f64 = 0.03;
 /// half a person: the walk stays this far from what is hard, m
-pub const PERSON: f64 = 0.25;
+pub const PERSON: f64 = 0.30;
 
 pub type Xy = [f64; 2];
 
@@ -96,6 +96,7 @@ pub struct World {
     pub floor: Vec<bool>,
     pub hard: Vec<u64>,
     pub open: Vec<u64>,
+    pub soft: Vec<u64>,
     pub keep: Vec<u64>,
     /// the exact shapes behind the grids
     pub placed: Vec<Prism>,
@@ -115,7 +116,7 @@ impl World {
         let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
         for p in &room.outline { for d in 0..2 { lo[d] = lo[d].min(p[d]); hi[d] = hi[d].max(p[d]); } }
         let (nx, ny) = (((hi[0] - lo[0]) / CELL).ceil() as usize + 1, ((hi[1] - lo[1]) / CELL).ceil() as usize + 1);
-        let mut w = World { ox: lo[0], oy: lo[1], nx, ny, floor: vec![false; nx * ny], hard: vec![0; nx * ny], open: vec![0; nx * ny], keep: vec![0; nx * ny], placed: vec![], keep_prisms: vec![], inner_d: room.wall_t / 2.0 };
+        let mut w = World { ox: lo[0], oy: lo[1], nx, ny, floor: vec![false; nx * ny], hard: vec![0; nx * ny], open: vec![0; nx * ny], soft: vec![0; nx * ny], keep: vec![0; nx * ny], placed: vec![], keep_prisms: vec![], inner_d: room.wall_t / 2.0 };
         for j in 0..ny { for i in 0..nx {
             let c = w.center(i, j);
             w.floor[j * nx + i] = house::inside(&room.outline, c) && house::edge_dist(&room.outline, c) >= room.wall_t / 2.0;
@@ -146,7 +147,7 @@ impl World {
         for j in j0..j1 { for i in i0..i1 {
             if !in_hull(&p.hull, self.center(i, j), -CELL * 0.71) { continue }
             let k = j * self.nx + i;
-            match p.role { HARD => self.hard[k] |= m, OPENING => self.open[k] |= m, KEEP => self.keep[k] |= m, _ => {} }
+            match p.role { HARD => self.hard[k] |= m, OPENING => self.open[k] |= m, KEEP => self.keep[k] |= m, SOFT => self.soft[k] |= m, _ => {} }
         } }
     }
     /// the voxel test of a piece's prisms; the first refusal
@@ -171,8 +172,10 @@ impl World {
     /// the exact test: the prisms against the walls and what is placed
     pub fn exact(&self, ps: &[Prism], room: &Room) -> Option<Why> {
         for p in ps {
+            // (a thin thing on the floor keeps a little further off: the skirting's foot, a rug's edge read as through the wall)
+            let clear = if p.role == COVER { 0.03 } else { 0.0 };
             for q in &p.hull {
-                if !house::inside(&room.outline, *q) || house::edge_dist(&room.outline, *q) < self.inner_d - 0.002 { return Some(Why::Outside) }
+                if !house::inside(&room.outline, *q) || house::edge_dist(&room.outline, *q) < self.inner_d + clear - 0.002 { return Some(Why::Outside) }
             }
             // a wall's corner inside the shape (a notch)
             if room.outline.iter().any(|c| in_hull(&p.hull, *c, 0.002)) { return Some(Why::Outside) }
@@ -191,7 +194,8 @@ impl World {
     pub fn walk(&self, extra: &[Prism]) -> Vec<bool> {
         let body = mask([0.05, 1.9], 0.0);
         let (nx, ny) = (self.nx, self.ny);
-        let mut blocked: Vec<bool> = (0..nx * ny).map(|k| !self.floor[k] || self.hard[k] & body != 0).collect();
+        // (bedding and foliage too: soft parts may lie over furniture and door clearances, not over the walk)
+        let mut blocked: Vec<bool> = (0..nx * ny).map(|k| !self.floor[k] || (self.hard[k] | self.soft[k]) & body != 0).collect();
         for p in extra.iter().filter(|p| p.role == HARD) {
             if p.z[0] >= 1.9 || p.z[1] <= 0.05 { continue }
             let (i0, i1, j0, j1) = self.range(&p.hull);
@@ -211,20 +215,30 @@ impl World {
             if i + 1 < nx { d[k] = d[k].min(d[k + 1] + a); }
             if j + 1 < ny { d[k] = d[k].min(d[k + nx] + a); if i + 1 < nx { d[k] = d[k].min(d[k + nx + 1] + b); } if i > 0 { d[k] = d[k].min(d[k + nx - 1] + b); } }
         } }
-        let r = (PERSON / CELL) as f32;
+        // (measured from cell centres: a cell's width more, or a corridor passes a few cm under what the exact check wants)
+        let r = (PERSON / CELL) as f32 + 1.0;
         d.iter().map(|v| *v >= r).collect()
     }
     /// the walkable cells reached from the first door; whether every door reaches them
     pub fn flood(&self, walk: &[bool], room: &Room) -> (Vec<bool>, bool) {
         let (nx, ny) = (self.nx, self.ny);
-        let cell = |p: Xy| -> Option<usize> { let (i, j) = (((p[0] - self.ox) / CELL) as i64, ((p[1] - self.oy) / CELL) as i64); (i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize) };
-        // a door's spot: the nearest walkable cell in front of it
+        // a door's spot: a walkable cell within 0.35 m of the middle of its clearance (the room is joined up at the door, not somewhere past it)
         let start = |d: &house::Opening| -> Option<usize> {
-            for st in 0..16 { let t = 0.1 + st as f64 * 0.05; for s in [0.0, -0.1, 0.1, -0.2, 0.2] {
-                let q = [d.at[0] + d.n[0] * t + d.u[0] * s, d.at[1] + d.n[1] * t + d.u[1] * s];
-                if let Some(k) = cell(q) { if walk[k] { return Some(k) } }
+            let dep = (d.hw * 2.0).min(0.9) / 2.0;
+            let c = [d.at[0] + d.n[0] * dep, d.at[1] + d.n[1] * dep];
+            let mut best: Option<(f64, usize)> = None;
+            let r = (0.35 / CELL) as i64 + 1;
+            let (ci, cj) = (((c[0] - self.ox) / CELL) as i64, ((c[1] - self.oy) / CELL) as i64);
+            for dj in -r..=r { for di in -r..=r {
+                let (i, j) = (ci + di, cj + dj);
+                if i < 0 || j < 0 || i as usize >= nx || j as usize >= ny { continue }
+                let k = j as usize * nx + i as usize;
+                if !walk[k] { continue }
+                let q = self.center(i as usize, j as usize);
+                let e = (q[0] - c[0]).hypot(q[1] - c[1]);
+                if e < 0.35 && best.map_or(true, |b| e < b.0) { best = Some((e, k)); }
             } }
-            None
+            best.map(|b| b.1)
         };
         let mut seen = vec![false; nx * ny];
         let Some(d0) = room.doors.first() else { return (walk.to_vec(), true) };

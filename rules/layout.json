@@ -20,6 +20,15 @@
      {
       "piece": "compact",
       "side": true
+     },
+     {
+      "piece": "compact",
+      "over_window": true
+     },
+     {
+      "piece": "compact",
+      "side": true,
+      "over_window": true
      }
     ],
     "terms": [
@@ -35,7 +44,8 @@
       "name": "far_from_door",
       "w": 1.0
      }
-    ]
+    ],
+    "avoid_window": true
    },
    {
     "id": "stand_a",
@@ -102,7 +112,8 @@
       "name": "apart",
       "w": 0.5
      }
-    ]
+    ],
+    "soft_blocks": true
    },
    {
     "id": "rug",

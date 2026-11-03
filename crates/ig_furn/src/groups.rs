@@ -1657,6 +1657,23 @@ fn place_on_wall_step(state: &mut State, name: &str, room: &str, score: &dyn Fn(
     ok
 }
 
+/// a piece the unified solver placed, as a state object standing on the floor at `floor_z` under its pose; `rel`: the relation to copy (the room's
+/// floor), `parent`: the object it belongs with (a nightstand's bed)
+pub fn insert_piece(state: &mut State, name: &str, class: &str, piece: Box<dyn crate::piece::Piece>, t: [f64; 3], yaw_: f64, rel: Option<&RelState>, parent: Option<&str>, no_collide: bool) {
+    let pr = PieceRef::new(piece);
+    let (geom, fb) = super::solver::piece_geom(&pr);
+    let size = pr.size();
+    let mut tags = TagSet::from([Tag::sem("Object"), Tag::sem("Furniture"), Tag::gen(class), Tag::obj(name)]);
+    if no_collide { tags.insert(Tag::sem("NoCollision")); }
+    let mut o = ObjState::new(Arc::new(geom), super::geom::Pose::from_euler(t, [0.0, 0.0, yaw_]), tags);
+    o.generator = Some(GenRef { class: class.to_string(), factory_seed: 0, inst_seed: 0, unseeded: None, fit_box: Some(fb), size: Some(size), join: None, piece: Some(pr) });
+    if let Some(r) = rel { o.relations.push(r.clone()); }
+    if let (Some(p), Some(r)) = (parent, rel) { let mut r = r.clone(); r.target = p.to_string(); o.relations.push(r); }
+    o.active = true;
+    state.objs.insert(name.to_string(), o);
+    state.touch(name);
+}
+
 /// a bed's long side against a wall, its head at neither: the last resort of a room whose doors leave no wall to back a bed on
 fn place_along_wall(state: &mut State, name: &str, room: &str) -> bool {
     let (lo, hi) = lohi(state, name);

@@ -1474,6 +1474,7 @@ dependencies = [
  "ig_geom",
  "ig_gn",
  "ig_kit",
+ "ig_layout",
  "ig_mess",
  "ig_outdoor",
  "ig_people",

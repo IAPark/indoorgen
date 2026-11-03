@@ -248,6 +248,8 @@ pub fn build_scene(p: &Params) -> Built {
         // (a built-in the repair took out is not built)
         g.features.retain(|pf| g.state.objs.contains_key(&pf.key));
     }
+    // LAYOUT=unified: the rooms the rules cover are furnished by the unified solver instead (crates/ig_layout)
+    if std::env::var("LAYOUT").map_or(false, |v| v == "unified") { for l in indoorgen::unified::apply(&mut g, seed) { eprintln!("UNIFIED {l}"); } }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {

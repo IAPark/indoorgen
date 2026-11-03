@@ -24,6 +24,8 @@ pub struct Item {
     #[serde(default)] pub avoid_window: bool,
     /// the walk must reach its front
     #[serde(default)] pub reach: bool,
+    /// its soft parts keep to the walk and the doors like hard ones (foliage; bedding may spread over them)
+    #[serde(default)] pub soft_blocks: bool,
     /// it lies on the floor under what stands there: only the walls limit it (a rug)
     #[serde(default)] pub cover: bool,
     /// the piece is drawn again until it fits these
@@ -36,11 +38,12 @@ pub struct Item {
 pub struct Fit { #[serde(default = "big")] pub max_w: f64, #[serde(default = "big")] pub max_h: f64, #[serde(default = "eight")] pub draws: u32 }
 fn big() -> f64 { 1e9 }
 fn eight() -> u32 { 8 }
-fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false }] }
+fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false, over_window: false }] }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct Variant { pub piece: String, #[serde(default)] pub side: bool }
+pub struct Variant { pub piece: String, #[serde(default)] pub side: bool, /// a last resort: it may stand before a window after all
+    #[serde(default)] pub over_window: bool }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +63,12 @@ fn thick() -> f64 { 0.015 }
 #[derive(Deserialize, Clone, Debug)]
 pub struct Term { pub name: String, #[serde(default = "one")] pub w: f64, #[serde(default)] pub of: Option<String> }
 fn one() -> f64 { 1.0 }
+
+/// the rules built in (LAYOUT_RULES names a file to read instead)
+pub fn default_rules() -> HashMap<String, RoomRules> {
+    if let Some(p) = std::env::var_os("LAYOUT_RULES") { return load(&p.to_string_lossy()) }
+    serde_json::from_str(include_str!("../../../rules/layout.json")).expect("rules/layout.json")
+}
 
 pub fn load(path: &str) -> HashMap<String, RoomRules> {
     let txt = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));

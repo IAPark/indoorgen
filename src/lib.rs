@@ -20,6 +20,7 @@ pub mod config;
 pub mod features;
 pub mod rules;
 pub mod openings;
+pub mod unified;
 pub mod pipeline;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod snapshot;

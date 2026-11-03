@@ -56,6 +56,7 @@ ig_people = { path = "crates/ig_people", default-features = false }
 ig_cams = { path = "crates/ig_cams" }
 ig_features = { path = "crates/ig_features" }
 ig_outdoor = { path = "crates/ig_outdoor" }
+ig_layout = { path = "crates/ig_layout" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 geos = { workspace = true }
