@@ -902,7 +902,7 @@
     "place": "wall",
     "min_door": 1.0,
     "reach": true,
-    "front": 0.3,
+    "front": 0.6,
     "terms": [
      {
       "name": "far_from_door",
@@ -921,7 +921,7 @@
     "place": "wall",
     "avoid_window": true,
     "reach": true,
-    "front": 0.3,
+    "front": 0.55,
     "terms": [
      {
       "name": "center_on_wall",
@@ -945,7 +945,8 @@
       "name": "far_from_door",
       "w": 0.7
      }
-    ]
+    ],
+    "front": 0.4
    },
    {
     "id": "shower",
@@ -966,7 +967,8 @@
       "name": "far_from_door",
       "w": 0.7
      }
-    ]
+    ],
+    "front": 0.4
    },
    {
     "id": "mirror",
@@ -1185,7 +1187,13 @@
         "gap": 0.4,
         "width_share": 0.75
        }
-      }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ]
      },
      {
       "id": "armchair_a",
@@ -1206,6 +1214,9 @@
         "name": "ideal",
         "w": 1.0
        }
+      ],
+      "requires": [
+       "coffee"
       ]
      },
      {
@@ -1226,6 +1237,32 @@
        {
         "name": "ideal",
         "w": 1.0
+       }
+      ],
+      "requires": [
+       "coffee"
+      ]
+     },
+     {
+      "id": "armchair_wall",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "unless": [
+       "coffee"
+      ],
+      "place": "wall",
+      "reach": true,
+      "avoid_window": false,
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "corner",
+        "w": 0.3
        }
       ]
      },
@@ -1462,7 +1499,13 @@
         "gap": 0.4,
         "width_share": 0.75
        }
-      }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ]
      },
      {
       "id": "armchair_a",
@@ -1482,6 +1525,32 @@
        {
         "name": "ideal",
         "w": 1.0
+       }
+      ],
+      "requires": [
+       "coffee"
+      ]
+     },
+     {
+      "id": "armchair_wall",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 26.0,
+      "unless": [
+       "coffee"
+      ],
+      "place": "wall",
+      "reach": true,
+      "avoid_window": false,
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "corner",
+        "w": 0.3
        }
       ]
      },
@@ -1665,9 +1734,28 @@
       ]
      },
      {
+      "id": "coffee",
+      "class": "CoffeeTableFactory",
+      "tier": 1,
+      "reach": true,
+      "place": {
+       "front": {
+        "parent": "sofa",
+        "gap": 0.4,
+        "width_share": 0.75
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ]
+     },
+     {
       "id": "armchair_a",
       "class": "ArmChairFactory",
-      "tier": 1,
+      "tier": 2,
       "reach": true,
       "place": {
        "flank": {
@@ -1682,6 +1770,9 @@
         "name": "ideal",
         "w": 1.0
        }
+      ],
+      "requires": [
+       "coffee"
       ]
      },
      {
@@ -1702,20 +1793,33 @@
         "name": "ideal",
         "w": 1.0
        }
+      ],
+      "requires": [
+       "coffee"
       ]
      },
      {
-      "id": "coffee",
-      "class": "CoffeeTableFactory",
-      "tier": 1,
+      "id": "armchair_wall",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 0.0,
+      "unless": [
+       "coffee"
+      ],
+      "place": "wall",
       "reach": true,
-      "place": {
-       "front": {
-        "parent": "sofa",
-        "gap": 0.4,
-        "width_share": 0.75
+      "avoid_window": false,
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "corner",
+        "w": 0.3
        }
-      }
+      ]
      },
      {
       "id": "rug",

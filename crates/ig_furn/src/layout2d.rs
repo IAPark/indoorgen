@@ -437,6 +437,7 @@ pub fn walk_status(state: &State, room: &str) -> (bool, Vec<String>) {
 }
 
 /// walkway status counting only the pieces `keep` accepts, without `skip`
+// (a person is round: the walk is the free floor shrunk with round corners. Square ones closed a diagonal gap 0.75 m wide)
 pub fn walk_status_f(state: &State, room: &str, keep: &dyn Fn(&str) -> bool, skip: Option<&str>) -> (bool, Vec<String>) {
     let nc = Tag::sem("NoCollision");
     let floor = room_floor(state, room);
@@ -475,7 +476,7 @@ pub fn walk_status_f(state: &State, room: &str, keep: &dyn Fn(&str) -> bool, ski
         return (true, vec![]);
     }
     let free = if blocks.is_empty() { (*floor).clone() } else { shp::difference(&floor, &shp::union_all(&blocks)) };
-    let walk = shp::buffer_mitre(&free, -0.3);
+    let walk = shp::buffer_quad(&free, -0.3, 4);
     let comps: Vec<shp::G> = if shp::is_empty(&walk) { vec![] } else { shp::parts(&walk).into_iter().filter(|g| !shp::is_empty(g)).collect() };
     let hits: Vec<Vec<usize>> = doors.iter().map(|d| { let p = shp::point(d[0], d[1]); comps.iter().enumerate().filter(|(_, c)| shp::distance(c, &p) < 0.35).map(|(i, _)| i).collect() }).collect();
     let common: Vec<usize> = (0..comps.len()).filter(|i| hits.iter().all(|h| h.contains(i))).collect();
@@ -493,7 +494,7 @@ pub fn walk_status_f(state: &State, room: &str, keep: &dyn Fn(&str) -> bool, ski
     // (no chair-like pieces: the same walkable floor as above)
     let comps2: Vec<shp::G> = if reach_blocks.len() == blocks.len() { comps.clone() } else {
         let free2 = if reach_blocks.is_empty() { (*floor).clone() } else { shp::difference(&floor, &shp::union_all(&reach_blocks)) };
-        let walk2 = shp::buffer_mitre(&free2, -0.3);
+        let walk2 = shp::buffer_quad(&free2, -0.3, 4);
         if shp::is_empty(&walk2) { vec![] } else { shp::parts(&walk2).into_iter().filter(|g| !shp::is_empty(g)).collect() }
     };
     let reach_set: Vec<usize> = (0..comps2.len()).filter(|&i| doors.iter().any(|d| shp::distance(&comps2[i], &shp::point(d[0], d[1])) < 0.35)).collect();
@@ -519,7 +520,7 @@ fn base_connected(state: &State, room: &str) -> bool {
         let p = prisms(state, k);
         p.first().map(|p| { let n = p.poly.len() as f64; [p.poly.iter().map(|v| v[0]).sum::<f64>() / n, p.poly.iter().map(|v| v[1]).sum::<f64>() / n] })
     }).collect();
-    let walk = shp::buffer_mitre(&floor, -0.3);
+    let walk = shp::buffer_quad(&floor, -0.3, 4);
     let comps: Vec<shp::G> = if shp::is_empty(&walk) { vec![] } else { shp::parts(&walk) };
     let ok = doors.is_empty() || (0..comps.len()).any(|i| doors.iter().all(|d| shp::distance(&comps[i], &shp::point(d[0], d[1])) < 0.35));
     BASE.with(|c| c.borrow_mut().insert(room.to_string(), ok));

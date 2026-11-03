@@ -10,7 +10,7 @@ const BEAM: usize = 6;
 const KEEP_PER_STATE: usize = 8;
 
 #[derive(Clone, serde::Serialize)]
-pub struct Placed { pub id: String, pub class: String, pub variant: String, pub side: bool, pub pose: Pose, pub piece_seed: u64, pub size: Option<[f64; 3]>, pub parent: Option<String>, pub cover: bool, pub lo: [f64; 3], pub hi: [f64; 3], pub prisms: Vec<Prism>, pub score: f64, pub terms: Vec<(String, f64)> }
+pub struct Placed { pub id: String, pub class: String, pub variant: String, pub side: bool, pub pose: Pose, pub piece_seed: u64, pub size: Option<[f64; 3]>, pub parent: Option<String>, pub cover: bool, pub reach: bool, pub lo: [f64; 3], pub hi: [f64; 3], pub prisms: Vec<Prism>, pub score: f64, pub terms: Vec<(String, f64)> }
 
 #[derive(Clone, serde::Serialize)]
 pub struct Candidate { pub at: Xy, pub yaw: f64, pub why: Option<Why>, pub score: f64, pub variant: String, pub side: bool, pub prisms: Vec<Prism> }
@@ -160,8 +160,11 @@ fn poses(room: &Room, it: &Item, v: &Variant, s: &Shape, state: &State) -> Vec<(
             let (sn, cs) = p.pose.yaw.sin_cos();
             let c = [(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0];
             let ra = [cs * c[0] - sn * c[1], sn * c[0] + cs * c[1]];
-            let tgt = p.pose.apply([p.hi[0] + gap + l / 2.0, (p.lo[1] + p.hi[1]) / 2.0]);
-            out.push((Pose { yaw: p.pose.yaw, t: [tgt[0] - ra[0], tgt[1] - ra[1]], z }, 0.0, 1.0));
+            // (the wanted gap, then a little closer or further)
+            for (dg, off) in [(0.0, 0.0), (-0.1, 0.0), (0.1, 0.0), (0.0, 0.15), (0.0, -0.15), (-0.1, 0.15), (-0.1, -0.15), (0.15, 0.0)] {
+                let tgt = p.pose.apply([p.hi[0] + gap + dg + l / 2.0, (p.lo[1] + p.hi[1]) / 2.0 + off]);
+                out.push((Pose { yaw: p.pose.yaw, t: [tgt[0] - ra[0], tgt[1] - ra[1]], z }, f64::abs(dg) + f64::abs(off), 1.0));
+            }
         },
         Place::Flank { parent, side, gap, forward } => if let Some(p) = state.items.iter().find(|p| &p.id == parent) {
             let yaw = p.pose.yaw - *side as f64 * std::f64::consts::FRAC_PI_2;
@@ -354,7 +357,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
         for st in &beam {
             let mut any = false;
             // (another took its place: not wanted, not missing)
-            if it.unless.iter().any(|u| st.items.iter().any(|p| &p.id == u)) { next.push(st.clone()); rep.not_wanted = true; continue }
+            if it.unless.iter().any(|u| st.items.iter().any(|p| &p.id == u)) || it.requires.iter().any(|u| !st.items.iter().any(|p| &p.id == u)) { next.push(st.clone()); rep.not_wanted = true; continue }
             for (vi, v) in it.variants.iter().enumerate() {
                 let sized = match &it.place {
                     Place::Under { parent, .. } | Place::Front { parent, width_share: Some(_), .. } => st.items.iter().find(|p| &p.id == parent).and_then(|p| sized_under(it, pseed, p)),
@@ -371,7 +374,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
                     if fail.is_none() && it.avoid_window && !v.over_window {
                         let z_of = |i: usize| ps.iter().filter(|p| p.role == HARD).map(move |p| p.z[i]);
                         let (bot, top) = (z_of(0).fold(f64::MAX, f64::min), z_of(1).fold(f64::MIN, f64::max));
-                        let blocks = room.windows.iter().any(|w| top > w.z[0] + 0.02 && bot < w.z[1] - 0.02 && { let hull = hull2(vec![[w.at[0] - w.u[0] * w.hw, w.at[1] - w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw, w.at[1] + w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] + w.u[1] * w.hw + w.n[1] * 0.1], [w.at[0] - w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] - w.u[1] * w.hw + w.n[1] * 0.1]]); ps.iter().any(|p| p.role == HARD && sat(&p.hull, &hull) < 0.0) });
+                        let blocks = room.windows.iter().any(|w| top > w.z[0] && bot < w.z[1] && { let hull = hull2(vec![[w.at[0] - w.u[0] * w.hw, w.at[1] - w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw, w.at[1] + w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] + w.u[1] * w.hw + w.n[1] * 0.1], [w.at[0] - w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] - w.u[1] * w.hw + w.n[1] * 0.1]]); ps.iter().any(|p| p.role == HARD && sat(&p.hull, &hull) < 0.0) });
                         if blocks { fail = Some(Why::Window); }
                     }
                     if fail.is_none() && it.min_door > 0.0 {
@@ -412,6 +415,8 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
                         // (the walk within 0.4 m of what is hard of it)
                         if !ps.iter().filter(|p| p.role == HARD).any(|p| w2.near(&seen, &p.hull, 0.4)) { fail = Some(Why::Reach); }
                     }
+                    // (and what stands already stays reachable: a toilet placed first was boxed in by the tub and the basin that came after)
+                    if fail.is_none() && st.items.iter().filter(|p| p.reach).any(|p| !p.prisms.iter().filter(|q| q.role == HARD).any(|q| w2.near(&seen, &q.hull, 0.4))) { fail = Some(Why::Reach); }
                     if why_id == Some(it.id.as_str()) && next.is_empty() { let c = pose.apply([(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0]); why_item.push(Candidate { at: c, yaw: pose.yaw, why: fail, score: sc, variant: v.piece.clone(), side: v.side, prisms: ps.clone() }); }
                     if let Some(w) = fail { *rep.why.entry(format!("{w:?}")).or_default() += 1; continue }
                     any = true;
@@ -419,7 +424,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
                     rep.variant = format!("{}{}", v.piece, if v.side { "+side" } else { "" });
                     let mut ns = State { world: w2, items: st.items.clone(), score: st.score + sc, skipped: st.skipped.clone() };
                     let parent = match &it.place { Place::Beside { parent, .. } | Place::On { parent } | Place::Around { parent, .. } => Some(parent.clone()), _ => None };
-                    ns.items.push(Placed { id: it.id.clone(), class: it.class.clone(), variant: v.piece.clone(), side: v.side, pose, piece_seed: s.seed, size: s.size, parent, cover: it.cover, lo: s.lo, hi: s.hi, prisms: ps, score: sc, terms });
+                    ns.items.push(Placed { id: it.id.clone(), class: it.class.clone(), variant: v.piece.clone(), side: v.side, pose, piece_seed: s.seed, size: s.size, parent, cover: it.cover, reach: it.reach, lo: s.lo, hi: s.hi, prisms: ps, score: sc, terms });
                     next.push(ns);
                     kept += 1;
                     if kept >= KEEP_PER_STATE { break }
@@ -453,7 +458,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
     let which = (noise(hash(&room.name, seed), 2) * close as f64) as usize;
     let best = beam.into_iter().nth(which.min(close - 1)).unwrap();
     // (an item another stood in for is no fault)
-    for r in report.iter_mut() { r.placed = best.items.iter().any(|p| p.id == r.id) || (r.not_wanted && order.iter().find(|i| i.id == r.id).map_or(false, |i| i.unless.iter().any(|u| best.items.iter().any(|p| &p.id == u)))); if let Some(p) = best.items.iter().find(|p| p.id == r.id) { r.variant = format!("{}{}", p.variant, if p.side { "+side" } else { "" }); } }
+    for r in report.iter_mut() { r.placed = best.items.iter().any(|p| p.id == r.id) || (r.not_wanted && order.iter().find(|i| i.id == r.id).map_or(false, |i| i.unless.iter().any(|u| best.items.iter().any(|p| &p.id == u)) || i.requires.iter().any(|u| !best.items.iter().any(|p| &p.id == u)))); if let Some(p) = best.items.iter().find(|p| p.id == r.id) { r.variant = format!("{}{}", p.variant, if p.side { "+side" } else { "" }); } }
     let walk = best.world.walk(&[]);
     let (seen, joined) = best.world.flood(&walk, room);
     let w: Vec<u8> = (0..walk.len()).map(|k| if seen[k] { 2 } else if walk[k] { 1 } else { 0 }).collect();

@@ -66,6 +66,19 @@ pub fn in_hull(h: &[Xy], p: Xy, inset: f64) -> bool {
     true
 }
 
+/// true distance from a point to a convex shape, 0 inside (not the shape grown by its edges: that reaches further at its corners)
+pub fn dist_to_hull(h: &[Xy], p: Xy) -> f64 {
+    if in_hull(h, p, 0.0) { return 0.0 }
+    let mut best = f64::MAX;
+    for i in 0..h.len() {
+        let (a, b) = (h[i], h[(i + 1) % h.len()]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-12)).clamp(0.0, 1.0);
+        best = best.min((a[0] + dx * t - p[0]).hypot(a[1] + dy * t - p[1]));
+    }
+    best
+}
+
 /// a posed piece: yaw about z, then translation
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct Pose { pub yaw: f64, pub t: Xy, pub z: f64 }
@@ -259,7 +272,7 @@ impl World {
         let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
         for p in hull { for k in 0..2 { a[k] = a[k].min(p[k]); b[k] = b[k].max(p[k]); } }
         let (i0, i1, j0, j1) = self.range(&[[a[0] - d, a[1] - d], [b[0] + d, b[1] + d]]);
-        for j in j0..j1 { for i in i0..i1 { if seen[j * self.nx + i] && in_hull(hull, self.center(i, j), -d) { return true } } }
+        for j in j0..j1 { for i in i0..i1 { if seen[j * self.nx + i] && dist_to_hull(hull, self.center(i, j)) <= d { return true } } }
         false
     }
     pub fn cell_of(&self, p: Xy) -> Option<usize> {
