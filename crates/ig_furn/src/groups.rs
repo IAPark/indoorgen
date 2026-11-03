@@ -83,7 +83,9 @@ pub fn free_ok(state: &State, name: &str) -> bool {
             continue;
         }
         // art and mirrors hang on the wall over furniture
-        if matches!(class_of(b), "WallArtFactory" | "MirrorFactory") {
+        // (but a full-length mirror comes down to the floor: a nightstand stood 2 cm into one)
+        let full_length = class_of(b) == "MirrorFactory" && b.geom.hi[2] - b.geom.lo[2] >= 1.2 && b.pose.t[2] + b.geom.lo[2] < top - 0.02;
+        if matches!(class_of(b), "WallArtFactory" | "MirrorFactory") && !full_length {
             continue;
         }
         // a door's cutter box reaches 1 m into each room (2 m deep: it cuts the walls); the door clearances (doorclear/..., from the
@@ -1818,13 +1820,23 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
         // a living room left without anywhere to sit (the living group seated no sofa in an angled room): a sofa against the longest
         // free wall, else an armchair
         if rt == "living-room" && !has(state, "SofaFactory") && !has(state, "ArmChairFactory") {
-            for cls in ["SofaFactory", "ArmChairFactory"] {
-                let name = format!("{room}_seat").replace('/', "_");
-                if !new_piece(ctx, state, rng, cls, &room, &name) { continue }
-                let dd = door_d.clone();
-                let score = move |_: &State, c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| len - (t - len / 2.0).abs() + dd(c).min(1.5);
-                if place_on_wall(state, &name, &room, &score) { log.push(format!("{room}: added a {cls}")); break }
-                state.objs.shift_remove(&name);
+            // (what crowds the room gives way, one at a time: a coffee table and a TV left with no seat to go with them, then storage)
+            let mut crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "CoffeeTableFactory" | "LargePlantContainerFactory" | "SideTableFactory" | "SingleCabinetFactory" | "SimpleBookcaseFactory" | "CellShelfFactory" | "LargeShelfFactory" | "TVStandFactory")
+                && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+            crowd.sort_by_key(|k| match class_of(&state.objs[k.as_str()]) { "CoffeeTableFactory" | "LargePlantContainerFactory" | "SideTableFactory" => 0, "TVStandFactory" => 2, _ => 1 });
+            let mut crowd = crowd.into_iter();
+            'seat: loop {
+                for cls in ["SofaFactory", "ArmChairFactory"] {
+                    let name = format!("{room}_seat").replace('/', "_");
+                    if !new_piece(ctx, state, rng, cls, &room, &name) { continue }
+                    let dd = door_d.clone();
+                    let score = move |_: &State, c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| len - (t - len / 2.0).abs() + dd(c).min(1.5);
+                    if place_on_wall(state, &name, &room, &score) { log.push(format!("{room}: added a {cls}")); break 'seat }
+                    state.objs.shift_remove(&name);
+                }
+                let Some(k) = crowd.next() else { break };
+                layout2d::remove_tree(state, &k);
+                log.push(format!("{room}: removed {k} to fit a seat"));
             }
         }
         // a bathroom the solver left without a toilet (a 1.5 x 1.5 m room): one on the wall farthest from the door, the shelving and
