@@ -135,11 +135,26 @@ def build(graph):
     nodes = []
     for nd in graph["nodes"]:
         nodes.append(_node(nt, nd, nodes))
-    bs = nt.nodes.new("ShaderNodeBsdfPrincipled")
     out = graph["out"]
-    for key, name in (("color", "Base Color"), ("roughness", "Roughness"), ("metallic", "Metallic"), ("coat", "Coat Weight"), ("coat_roughness", "Coat Roughness"), ("specular", "Specular IOR Level")):
-        if key in out: _set(nt, bs.inputs[name], out[key], nodes)
     mo = nt.nodes.new("ShaderNodeOutputMaterial")
+    if out.get("glass"):
+        # thin glass: light passes straight through with a faint reflection (a refracting glass shader blocks direct light with caustics off: rooms
+        # behind windows went dark, and the denoiser smeared what was left into blotches)
+        tr = nt.nodes.new("ShaderNodeBsdfTransparent")
+        tr.inputs["Color"].default_value = tuple(out["color"]) + (1.0,)
+        gy = nt.nodes.new("ShaderNodeBsdfGlossy")
+        gy.inputs["Roughness"].default_value = out.get("roughness", 0.02)
+        fr = nt.nodes.new("ShaderNodeFresnel")
+        fr.inputs["IOR"].default_value = max(out.get("ior", 1.5), 1.3)
+        mx = nt.nodes.new("ShaderNodeMixShader")
+        nt.links.new(fr.outputs[0], mx.inputs[0])
+        nt.links.new(tr.outputs[0], mx.inputs[1])
+        nt.links.new(gy.outputs[0], mx.inputs[2])
+        nt.links.new(mx.outputs[0], mo.inputs["Surface"])
+        return m
+    bs = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    for key, name in (("color", "Base Color"), ("roughness", "Roughness"), ("metallic", "Metallic"), ("coat", "Coat Weight"), ("coat_roughness", "Coat Roughness"), ("specular", "Specular IOR Level"), ("transmission", "Transmission Weight")):
+        if key in out: _set(nt, bs.inputs[name], out[key], nodes)
     nt.links.new(bs.outputs["BSDF"], mo.inputs["Surface"])
     if "height" in out:
         d = nt.nodes.new("ShaderNodeDisplacement")

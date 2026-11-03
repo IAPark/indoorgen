@@ -60,7 +60,21 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
                 wood(&mut r, ext[0] < 0.5 * ext[1].max(ext[2]))
             }
         }
-        _ => return None,
+        // glass, with no parts of its own to see: Blender's glass shader, the previewer's glass pass
+        "ceramic.Glass" | "ceramic.ColoredGlass" | "ceramic.GlassVolume" | "shader.ceramic.glass.shader_glass" | "window.glass" => glass(&mut r, cls, base, mat),
+        "metal.Mirror" => G::default().done("shader_mirror", json!({"color": [0.95, 0.95, 0.95], "metallic": 1.0, "roughness": 0.0})),
+        "metal.WhiteMetal" => metal(&mut r, [0.85, 0.85, 0.85], false),
+        "lamp_shaders.shader_black" => G::default().done("shader_black", json!({"color": base, "roughness": 0.5})),
+        "lamp_shaders.shader_lamp_bulb_nonemissive" => G::default().done("shader_bulb", json!({"color": base, "roughness": 0.3})),
+        "lamp_shaders.LampShade" => G::default().done("shader_lampshade", json!({"color": base, "roughness": r.uniform(0.5, 0.8), "transmission": r.uniform(0.05, 0.2)})),
+        "plastic.Plastic" => rough_plastic(&mut r, &json!({"base_color": base, "scale": 1.0})),
+        "plastic.PlasticTranslucent" => G::default().done("shader_translucent_plastic", json!({"color": base, "roughness": 0.2, "transmission": 0.6})),
+        "ceramic.VaseCeramic" => ceramic(&mut r, Some(base), 0.5),
+        "art.ArtRug" => fabric(&mut r, base, 70.0, 0.003, 0.97),
+        // people have their own textures (tools/render/people_mats.py)
+        c if c.starts_with("people.") => return None,
+        // everything else (labels, covers, plants, soil, trinkets, terrain): the part's colour with a natural unevenness
+        _ => mottled(&mut r, base),
     };
     // a painted finish over the material
     if let Some(p) = spec.get("paint") {
@@ -368,6 +382,24 @@ fn marble(r: &mut R, rgb: [f64; 3]) -> Value {
     let k = r.uniform(0.62, 0.8);
     let color = g.mix(vein, json!(rgb), json!([rgb[0] * k, rgb[1] * k, rgb[2] * k]), "mix");
     g.done("shader_marble", json!({"color": color, "roughness": r.uniform(0.08, 0.2), "coat": 0.5}))
+}
+
+/// ceramic/glass.py: `glass` selects Blender's glass shader; window panes refract nothing (a plane, not a slab)
+fn glass(r: &mut R, cls: &str, rgb: [f64; 3], mat: &str) -> Value {
+    let tint = if cls == "ceramic.ColoredGlass" { rgb } else if mat.starts_with("shower_glass") { [0.94, 0.97, 0.96] } else { [0.98, 0.98, 0.98] };
+    let ior = if cls == "window.glass" || mat.ends_with(".glass") { 1.01 } else { r.uniform(1.45, 1.52) };
+    G::default().done("shader_glass", json!({"color": tint, "roughness": if mat.starts_with("shower_glass") { 0.04 } else { 0.02 }, "glass": true, "ior": ior}))
+}
+
+/// a part's colour with a soft unevenness and a little relief
+fn mottled(r: &mut R, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let n = g.noise(&c, r.uniform(8.0, 20.0), 5.0, 0.0, 0.0);
+    let tone = g.map_range(&n, 0.3, 0.7, 0.88, 1.04);
+    let color = g.mix(1.0, json!(rgb), tone, "multiply");
+    let h = g.mul(&n, 0.0015);
+    g.done("shader_plain", json!({"color": color, "roughness": r.uniform(0.5, 0.85), "height": h}))
 }
 
 /// metal/metal_basic.py and brushed_metal.py, in the part's own colour; the galvanized, hammered and grained metals are plain for now

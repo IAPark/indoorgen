@@ -1,4 +1,4 @@
-"""Render a Rust-generated scene (glb + sidecar json) with Infinigen's own materials/lighting.
+"""Render a Rust-generated scene (glb + sidecar json): materials from the sidecar's graphs (crates/ig_shade), a physical sky.
 usage: render_rust.py scene.glb out.png --cam camera.json [--samples N] [--top]"""
 import os, sys, json, math, time, argparse
 import bpy, mathutils
@@ -140,84 +140,7 @@ if os.environ.get("DUMPSIG_EARLY"):
     _dumpsig(os.environ["DUMPSIG_EARLY"])
 
 sidecar = json.load(open(args.glb.replace(".glb", ".json")))
-if sidecar.get("cloth") and not args.no_cloth:
-    # Rust exported the exact pre-sim cloth + python's cloth_sim settings: redo the sims with Blender's solver (tools/cloth_jobs.py)
-    import numpy as _np
-    for _t in (os.environ.get("INDOORGEN_TOOLS"), os.path.dirname(os.path.dirname(os.path.realpath(__file__)))):
-        if _t and os.path.exists(os.path.join(_t, "cloth_jobs.py")):
-            sys.path.insert(0, _t); break
-    import cloth_jobs
-    def _world_mesh(name):
-        o = bpy.data.objects[name]
-        dg = bpy.context.evaluated_depsgraph_get(); e = o.evaluated_get(dg); me = e.to_mesh()
-        M = _np.array(o.matrix_world)
-        v = _np.array([tuple(x.co) for x in me.vertices]).reshape(-1, 3)
-        v = v @ M[:3, :3].T + M[:3, 3]
-        f = [list(p.vertices) for p in me.polygons]
-        e.to_mesh_clear()
-        return v, f
-    def _set_mesh(name, v, f):
-        o = bpy.data.objects[name]
-        Mi = _np.array(o.matrix_world.inverted())
-        lv = _np.asarray(v) @ Mi[:3, :3].T + Mi[:3, 3]
-        o.data.clear_geometry()
-        o.data.from_pydata([tuple(x) for x in lv], [], [list(map(int, p)) for p in f])
-        o.data.update()
-        bpy.ops.object.select_all(action='DESELECT'); o.select_set(True); bpy.context.view_layer.objects.active = o
-        bpy.ops.object.shade_smooth_by_angle(angle=math.radians(35))
-    try:
-        cloth_jobs.run_jobs(sidecar["cloth"], _world_mesh, _set_mesh)
-    except Exception as _e:
-        import traceback; traceback.print_exc(); print("CLOTH JOBS FAILED, keeping the Rust cloth:", repr(_e))
 specs = {n["name"]: n for n in sidecar["nodes"]}
-from infinigen.core.util.math import FixedSeed, int_hash
-import importlib
-from infinigen.assets.materials import ceramic, wood, fabric, metal, plastic, terrain, art, lamp_shaders, text
-phase("infinigen import")
-if not os.environ.get("RAW_PLANTS"):
-    # potted plants: leafy houseplant kinds only (matches crates/ig_plants monocot kind_for_seed) in green hues (infinigen's monocot hues
-    # reach straw yellow 0.15; houseplants are green 0.22-0.33)
-    try:
-        from infinigen.assets.objects.monocot import generate as _mg, growth as _mgr
-        _mi0 = _mg.MonocotFactory.__init__
-        def _mi(self, factory_seed, coarse=False, factory_method=None, grass=None): _mi0(self, factory_seed, coarse, factory_method, False if grass is None else grass)
-        _mg.MonocotFactory.__init__ = _mi
-        import numpy as _npp
-        for _c in [_mgr.MonocotGrowthFactory] + _mgr.MonocotGrowthFactory.__subclasses__():
-            _c.build_base_hue = staticmethod(lambda: _npp.random.uniform(0.22, 0.33))
-    except Exception as _e:
-        print("plant patch skipped", repr(_e))
-if not os.environ.get("RAW_METALS"):
-    # infinigen's metal_hsv gives 80% of metals a random saturated hue (teal fridges, purple microwaves); real interiors are mostly
-    # natural metals: 85% natural, the rest infinigen's draw (RAW_METALS=1 keeps infinigen's mix)
-    from infinigen.assets import colors as _colors
-    _metal_hsv0 = _colors.metal_hsv
-    import numpy as _np
-    _colors.metal_hsv = lambda: _colors.metal_natural_hsv() if _np.random.uniform() < 0.85 else _metal_hsv0()
-    # fabric_hsv (sofas, knits, plaid) draws any hue at saturation 0.3-0.8, value 0.6-0.9: pastel pink / lime / purple upholstery
-    # everywhere. Real homes: mostly neutrals (greys, beiges, oatmeal, charcoal), some muted colours (navy, olive, rust, teal), rarely
-    # bright: 60 % neutral, 25 % muted, 15 % infinigen's draw. textile_hsv (velvet, darker) likewise.
-    _fabric_hsv0, _textile_hsv0 = _colors.fabric_hsv, _colors.textile_hsv
-    def _home_fabric(v_lo, v_hi, orig):
-        u = _np.random.uniform()
-        if u < 0.6: return (_np.random.uniform(0.05, 0.13) if _np.random.uniform() < 0.7 else _np.random.uniform(0, 1), _np.random.uniform(0.02, 0.22), _np.random.uniform(v_lo, v_hi))
-        if u < 0.85: return (_np.random.choice([0.0, 0.06, 0.1, 0.25, 0.45, 0.58, 0.62, 0.95]) + _np.random.uniform(-0.02, 0.02), _np.random.uniform(0.25, 0.5), _np.random.uniform(v_lo * 0.8, v_hi * 0.85))
-        return orig()
-    _colors.fabric_hsv = lambda: _home_fabric(0.3, 0.85, _fabric_hsv0)
-    _colors.textile_hsv = lambda: _home_fabric(0.1, 0.45, _textile_hsv0)
-    # the knits draw "_color" as three uniform RGB channels (random saturated bedding): same palette, as RGB
-    import importlib as _il
-    for _mn in ("fine_knit_fabric", "coarse_knit_fabric"):
-        try:
-            _m = _il.import_module("infinigen.assets.materials.fabric." + _mn)
-            def _wrap(f0):
-                def f():
-                    d = f0(); d["_color"] = list(_colors.hsv2rgba(_home_fabric(0.25, 0.85, _fabric_hsv0))[:3]); return d
-                return f
-            _m.get_texture_params = _wrap(_m.get_texture_params)
-        except Exception as _e:
-            print("fabric palette patch skipped for", _mn, repr(_e))
-import bl5compat; bl5compat.install()  # Blender 5: geometry-nodes modifier sockets via mod.properties (no-op on 4.x)
 # CYCLES_DEVICE=GPU: Metal (Apple) when available; CPU otherwise
 import os as _osd
 _DEVICE = "CPU"
@@ -232,23 +155,6 @@ if _osd.environ.get("CYCLES_DEVICE", "CPU").upper() == "GPU":
                     _DEVICE = "GPU"; print("CYCLES GPU", _t); break
             except Exception: pass
     except Exception as e: print("CYCLES GPU FAIL", repr(e))
-mods = {"ceramic": ceramic, "wood": wood, "fabric": fabric, "metal": metal, "plastic": plastic, "terrain": terrain, "art": art, "lamp_shaders": lamp_shaders, "text": text}
-for _n in ("plant", "creature", "dev"):  # extra material modules for specs ("plant.SpiderPlant", ...)
-    try:
-        mods[_n] = importlib.import_module("infinigen.assets.materials." + _n)
-    except Exception as _e:
-        print("MATERIAL MODULE FAIL", _n, repr(_e))
-def _as_material(inst, **kw):
-    """callable material class -> inst(**kw); apply-style class (terrain.Mud, plant.SpiderPlant) -> apply to a temp mesh and take its material; bpy Material -> itself"""
-    if isinstance(inst, bpy.types.Material): return inst
-    if callable(inst): return inst(**kw)
-    me = bpy.data.meshes.new("_tmpmat"); me.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
-    ob = bpy.data.objects.new("_tmpmat", me); bpy.context.collection.objects.link(ob)
-    inst.apply(ob, **kw)
-    m = ob.data.materials[0] if len(ob.data.materials) else None
-    if m is not None: m.use_fake_user = True
-    bpy.data.objects.remove(ob)
-    return m
 cache = {}
 clay = None
 if args.clay:
@@ -291,145 +197,30 @@ for o in list(bpy.data.objects):
     if nm is None: continue
     spec = specs[nm].get("spec")
     if not spec: continue
-    # the material graph Rust built (ig_shade); nodes without one run their Python class below
-    if specs[nm].get("graph") is not None and not os.environ.get("NO_GRAPHS"):
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import shade_graph
-        _gi = specs[nm]["graph"]; _gk = "graph:%d" % _gi
-        if _gk not in cache: cache[_gk] = shade_graph.build(sidecar["graphs"][_gi])
-        o.data.materials.clear(); o.data.materials.append(cache[_gk]); continue
-    if not os.environ.get("RAW_CERAMIC") and spec.get("cls") == "ceramic.Ceramic" and str(specs[nm].get("material", "")).split(":")[0] in ("toilet_ceramic", "tub_ceramic", "sink_ceramic"):
-        # sanitary ware is white: infinigen's shader_ceramic draws a random hue at value 0.3-0.6 80 % of the time (mauve / mint toilets)
-        spec = {"cls": "shader.ceramic.ceramic.shader_ceramic", "kwargs": {"clear": True, "roughness_max": 0.3}, "seed": spec.get("seed", 0), "whiten": True}
-    if not os.environ.get("RAW_BEDFRAME") and spec.get("cls") in ("metal.HammeredMetal", "metal.GalvanizedMetal") and str(specs[nm].get("material", "")).split(":")[0] == "bed_frame":
-        # hammered / galvanized bumps on a 1.5 m footboard read as crumpled paper; bed frames are powder-coated or brushed
-        spec = dict(spec, cls="metal.BrushedBlackMetal")
-    if spec.get("cls") == "ceramic.Marble" and not os.environ.get("RAW_MARBLE"):
-        # ceramic.Marble is a grey camouflage blotch (reviewers: "camo / agate counters"); MarbleRegular is veined stone
-        spec = dict(spec, cls="ceramic.MarbleRegular")
-    if spec.get("cls") == "wood.Wood" and not os.environ.get("RAW_WOOD"):
-        # large flat tops (table / desk / counter boards): shader_wood's noise-warped grain reads as burl / contour lines there;
-        # straight-grain veneer (plywood) instead, 70 % blonde, 30 % dark
-        _bb0 = [mathutils.Vector(c) for c in o.bound_box]
-        _e0 = sorted([max(v[i] for v in _bb0) - min(v[i] for v in _bb0) for i in range(3)])
-        _ez = max(v[2] for v in _bb0) - min(v[2] for v in _bb0)
-        if _e0[1] > 0.35 and _ez <= _e0[0] + 1e-6 and _ez < 0.12 * _e0[1]:
-            import zlib as _z
-            spec = dict(spec, cls="wood.BlondePlywood" if _z.crc32(o.name.split("#")[0].encode()) % 10 < 7 else "wood.BlackPlywood")
-
-        # wood.Wood stretches its grain along object x; on parts thin in x (headboards, cabinet doors, panels facing x) the visible
-        # faces showed end grain (marble-like swirls): those get the shader's vertical grain instead
-        _bb = [mathutils.Vector(c) for c in o.bound_box]
-        _ext = [max(v[i] for v in _bb) - min(v[i] for v in _bb) for i in range(3)]
-        if _ext[0] < 0.5 * max(_ext[1], _ext[2]):
-            spec = {"cls": "shader.wood.wood.shader_wood", "kwargs": {"vertical": True}, "seed": spec.get("seed", 0)}
-    if spec.get("cls") == "art.ArtRug" and not os.environ.get("RAW_ART"):
-        # printed-noise rugs (saturated blobs) read as synthetic: most become woven rugs (fabric.Rug: tufted pile, muted hue)
-        import zlib
-        if zlib.crc32(("%s:rug:%s" % (args.seed, o.name.split("#")[0])).encode()) % 100 < 90: spec = dict(spec, cls="fabric.Rug")
+    # framed art: a photographic print where the files are there
     if spec.get("cls") in ("art.Art", "art.DarkArt") and not os.environ.get("RAW_ART"):
         _pm = _photo_art(o)
         if _pm is not None:
             o.data.materials.clear(); o.data.materials.append(_pm); continue
-    ck = json.dumps(spec, sort_keys=True)
-    if ck not in cache:
-        mod, cls = spec["cls"].split(".", 1)
-        with FixedSeed(int(spec.get("seed", 0)) % 2**32):
-            try:
-                if spec.get("skip"):  # replay the generator position of the python draw stream (cabinet drawer materials): burn `skip` 32-bit words
-                    import numpy as _np; _np.random.randint(0, 2**32, size=int(spec["skip"]), dtype=_np.uint32)
-                if mod == "people":  # Rocketbox avatars (ig_people): people.skin / people.cloth / people.hair, kwargs = texture paths
-                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import people_mats
-                    cache[ck] = people_mats.make(spec)
-                elif mod == "shader":  # generic: "shader.<module under infinigen.assets.materials>.<func>"
-                    from infinigen.core import surface as _surf
-                    _mp, _fn = cls.rsplit(".", 1)
-                    cache[ck] = _surf.shaderfunc_to_material(getattr(importlib.import_module("infinigen.assets.materials." + _mp), _fn), **spec.get("kwargs", {}))
-                elif mod == "lamp_shaders" and cls.startswith("shader_"):
-                    from infinigen.core import surface as _surf
-                    cache[ck] = _surf.shaderfunc_to_material(getattr(lamp_shaders, cls))
-                elif mod == "window" and cls == "glass":
-                    from infinigen.assets.objects.windows.window import shader_window_glass
-                    from infinigen.core import surface as _surf
-                    cache[ck] = _surf.shaderfunc_to_material(shader_window_glass)
-                elif mod == "factory":  # "factory.<module under infinigen.assets.objects>.<Class>", kwargs.attr = dotted attribute path of the material (or apply-style material)
-                    _mp, _cn = cls.rsplit(".", 1)
-                    _o = getattr(importlib.import_module("infinigen.assets.objects." + _mp), _cn)(int(spec.get("seed", 0)) % 2**32)
-                    for _a in spec["kwargs"]["attr"].split("."): _o = getattr(_o, _a)
-                    cache[ck] = _as_material(_o, **{k: v for k, v in spec["kwargs"].items() if k != "attr"})
-                else:
-                    inst = getattr(mods[mod], cls)()
-                    kw = dict(spec.get("kwargs", {}))
-                    if mod == "ceramic" and cls == "Tile" and "shader" in kw:  # tile glaze by name (ig_features): "ceramic" | "marble" | "stone"
-                        from infinigen.assets.materials.ceramic import ceramic as _cer, tile as _tile
-                        kw["shader_func"] = {"ceramic": _cer.shader_ceramic, "marble": _tile.shader_marble}.get(kw.pop("shader"))
-                        if kw["shader_func"] is None: kw.pop("shader_func")
-                    cache[ck] = _as_material(inst, **kw)
-                if spec.get("whiten") and cache[ck] is not None:  # clear=True gives grey value 0.3-0.6: lift to porcelain white
-                    _m = cache[ck].copy(); _nt = _m.node_tree
-                    for _bs in [n for n in _nt.nodes if n.type == 'BSDF_PRINCIPLED']:
-                        _inp = _bs.inputs['Base Color']
-                        for _l in list(_inp.links): _nt.links.remove(_l)
-                        _inp.default_value = (0.9, 0.9, 0.88, 1.0)
-                    cache[ck] = _m
-                if spec.get("paint") and cache[ck] is not None:  # painted / whitewashed surface: mix the base colour toward paint.rgb by paint.amount
-                    _m = cache[ck].copy(); _nt = _m.node_tree
-                    for _bs in [n for n in _nt.nodes if n.type == 'BSDF_PRINCIPLED']:
-                        _inp = _bs.inputs['Base Color']; _mix = _nt.nodes.new('ShaderNodeMix'); _mix.data_type = 'RGBA'
-                        _mix.inputs['Factor'].default_value = float(spec["paint"]["amount"])
-                        _mix.inputs[7].default_value = tuple(spec["paint"]["rgb"]) + (1.0,)
-                        if _inp.is_linked: _nt.links.new(_inp.links[0].from_socket, _mix.inputs[6])
-                        else: _mix.inputs[6].default_value = _inp.default_value
-                        _nt.links.new(_mix.outputs[2], _inp)
-                    cache[ck] = _m
-            except Exception as e:
-                print("MATERIAL FAIL", spec, repr(e)); cache[ck] = None
-    if cache[ck] is not None:
-        _mm = cache[ck]
-        if not os.environ.get("RAW_GLASS") and str(specs[nm].get("material", "")).split(":")[0] == "shower_glass":
-            # perfectly clear 8 mm panels vanished (reviewers: "shower is frame rods only, no glass"): real shower glass shows a
-            # faint green-grey tint, edge darkening and soft reflections
-            _mm = _mm.copy()
-            for _b in [n for n in _mm.node_tree.nodes if n.type in ("BSDF_PRINCIPLED", "BSDF_GLASS")]:
-                _ci = _b.inputs["Base Color"] if "Base Color" in _b.inputs else _b.inputs["Color"]
-                if not _ci.is_linked: _ci.default_value = (0.80, 0.90, 0.88, 1.0)
-                if not _b.inputs["Roughness"].is_linked: _b.inputs["Roughness"].default_value = max(_b.inputs["Roughness"].default_value, 0.04)
-            cache[ck + ":shower"] = _mm
-        o.data.materials.clear(); o.data.materials.append(_mm)
-phase("materials")
-# room shells: python's own room_walls/room_floors/room_ceilings sampling (roommats.py) replaces the Rust-side spec draws
-if not args.clay and not os.environ.get("NO_ROOMMATS") and (os.environ.get("NO_GRAPHS") or not sidecar.get("graphs")):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    try:
-        import roommats
-        print("ROOMMATS", roommats.apply_room_materials(args.seed, [n['name'] for n in sidecar['nodes']]))
-    except Exception as _e:
-        import traceback; traceback.print_exc(); print("ROOMMATS FAILED, keeping the Rust spec materials:", repr(_e))
-def _white_ceilings(amount=0.85):
-    """ceilings: infinigen's plaster draws any hue (pink / green ceilings); mix the base colour toward an off-white (texture kept)"""
-    done = set(); n = 0
-    for o in bpy.data.objects:
-        if o.type != "MESH" or not o.name.endswith(".ceiling"): continue
-        for sl in o.material_slots:
-            m = sl.material
-            if m is None or not m.use_nodes or m.name in done: continue
-            if m.name.startswith("rs_"): continue  # (a Rust graph already whitened it)
-            done.add(m.name); nt = m.node_tree
-            for b_ in [x for x in nt.nodes if x.type == "BSDF_PRINCIPLED"]:
-                inp = b_.inputs["Base Color"]; mix = nt.nodes.new("ShaderNodeMix"); mix.data_type = "RGBA"
-                mix.inputs["Factor"].default_value = amount; mix.inputs[7].default_value = (0.88, 0.87, 0.84, 1.0)
-                if inp.is_linked: nt.links.new(inp.links[0].from_socket, mix.inputs[6])
-                else: mix.inputs[6].default_value = inp.default_value
-                nt.links.new(mix.outputs[2], inp); n += 1
-    return n
-if not args.clay and not os.environ.get("RAW_CEILING"):
-    print("CEILINGS", _white_ceilings(), "ceiling shaders whitened")
+    if specs[nm].get("graph") is not None:
+        # the material graph Rust built (crates/ig_shade)
+        import shade_graph
+        _gi = specs[nm]["graph"]; _gk = "graph:%d" % _gi
+        if _gk not in cache: cache[_gk] = shade_graph.build(sidecar["graphs"][_gi])
+        o.data.materials.clear(); o.data.materials.append(cache[_gk])
+    elif spec.get("cls", "").startswith("people."):
+        # Rocketbox avatars (ig_people), kwargs = texture paths
+        import people_mats
+        ck = json.dumps(spec, sort_keys=True)
+        if ck not in cache: cache[ck] = people_mats.make(spec)
+        if cache[ck] is not None: o.data.materials.clear(); o.data.materials.append(cache[ck])
+phase("materials")
 DS = None
 if args.dataset:
     DS = json.load(open(args.dataset))
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dataset")); import dscap
     print("DSWALLS", dscap.apply_walls(DS.get("variation")))
-if os.environ.get("DUMPMATS"):
-    import roommats; json.dump(roommats.dump_room_materials(), open(os.environ["DUMPMATS"], "w")); print("DUMPMATS done"); sys.exit(0)
 def _wood_depth(m):
     """infinigen shader_wood: grain relief scaled by log_uniform(0.0002, 0.01) (usually invisible) under a clear coat of up to 100 % (plastic
     look). Deeper relief (>= 0.0015) with fine pores stretched along the grain, none on end-grain faces; the varnish is kept."""
@@ -665,28 +456,27 @@ if not os.environ.get("RAW_FLOORS"):
                 _done[_m.name] = True
 phase("room materials")
 sc = bpy.context.scene
-# lighting: Infinigen's sky (same seed convention as the reference)
-from infinigen.core import init
-import infinigen_examples.generate_indoors
-init.apply_gin_configs(configs=["base_indoors.gin", "fast_solve.gin", "singleroom.gin"], overrides=["compose_indoors.terrain_enabled=False"],
-    config_folders=["infinigen_examples/configs_indoor", "infinigen_examples/configs_nature"])
+# lighting: a physical sky, drawn from the seed (the ranges of infinigen's nishita_lighting)
+import random as _sr, zlib as _sz
 w = bpy.data.worlds.new("World"); w.use_nodes = True; bpy.context.scene.world = w
-try:
-    if args.top or args.showcase: raise RuntimeError('skip sky')
-    from infinigen.assets import lighting
-    if bpy.app.version >= (5, 0, 0):
-        # Blender 5 renamed the sky model (NISHITA -> SINGLE_SCATTERING, same model) and dust_density -> aerosol_density;
-        # re-exec infinigen's sky_lighting source with those names in this process only (same RNG draws, infinigen repo untouched)
-        import inspect as _insp
-        _sl = lighting.sky_lighting
-        _src = _insp.getsource(_sl).replace('sky_type = "NISHITA"', 'sky_type = "SINGLE_SCATTERING"').replace(".dust_density", ".aerosol_density")
-        import gin as _gin
-        _gin.enter_interactive_mode()
-        exec(compile(_src, _sl.__file__, "exec"), _sl.__dict__)
-    with FixedSeed(int_hash((args.seed, "sky_lighting"))):
-        lighting.sky_lighting.add_lighting()
-except Exception as e:
-    print("SKY FAIL", repr(e))
+if not (args.top or args.showcase):
+    _r = _sr.Random(_sz.crc32(("%s:sky" % args.seed).encode()))
+    _clip = lambda mu, sd, lo, hi: min(hi, max(lo, _r.gauss(mu, sd)))
+    _wt = w.node_tree; _wt.nodes.clear()
+    _sky = _wt.nodes.new("ShaderNodeTexSky")
+    _sky.sky_type = "SINGLE_SCATTERING" if bpy.app.version >= (5, 0, 0) else "NISHITA"
+    _sky.sun_size = math.radians(_clip(0.5, 0.3, 0.25, 5))
+    _sky.sun_intensity = _r.uniform(0.8, 1.0)
+    _sky.sun_elevation = math.asin(_r.uniform(math.sin(math.radians(10)), 1.0))
+    _sky.sun_rotation = _r.uniform(0, 2 * math.pi)
+    _sky.altitude = _clip(100, 400, 0, 2000)
+    _sky.air_density = _clip(1, 0.2, 0.7, 1.3)
+    if hasattr(_sky, "aerosol_density"): _sky.aerosol_density = _clip(1, 1, 0.1, 2)
+    else: _sky.dust_density = _clip(1, 1, 0.1, 2)
+    _sky.ozone_density = _clip(1, 1, 0.1, 10)
+    _bg = _wt.nodes.new("ShaderNodeBackground"); _bg.inputs["Strength"].default_value = _r.uniform(0.18, 0.22)
+    _wo = _wt.nodes.new("ShaderNodeOutputWorld")
+    _wt.links.new(_sky.outputs[0], _bg.inputs["Color"]); _wt.links.new(_bg.outputs[0], _wo.inputs["Surface"])
 if DS:
     print("DSLIGHT", dscap.apply_lighting(sc, DS.get("variation")), "lamp meshes", dscap.switch_lamp_meshes(DS.get("variation"), sidecar))
     _hd = os.environ.get("HDRI_DIR", os.path.expanduser("~/work/hdri"))
@@ -731,35 +521,7 @@ if args.showcase:
 def add_outdoor(sc, side):
     import os, subprocess
     if not side.get("outdoor") or os.environ.get("NO_OUTDOOR"): return
-    # (Rust trees are scene geometry and leave `props` empty: grass and the lawn tint still apply)
-    props = (side.get("outdoor") or {}).get("props") or []
-    if not props:
-        add_grass(side)
-        return
-    cache = os.environ.get("TREE_CACHE", os.path.expanduser("~/work/bench/tree_cache")); os.makedirs(cache, exist_ok=True)
-    py42 = os.environ.get("IG42_PYTHON", os.path.expanduser("~/work/infinigen-ref/.venv/bin/python"))
-    src = os.environ.get("IG_REF_SRC", os.path.expanduser("~/work/infinigen-ref/src"))
-    here = os.path.dirname(os.path.abspath(__file__))
-    colls = {}
-    for kind, variant in sorted({(p["kind"], int(p["variant"])) for p in props}):
-        path = os.path.join(cache, f"{kind}_{variant}.blend")
-        if not os.path.exists(path):
-            r = subprocess.run([py42, os.path.join(here, "tree_cache.py"), kind, str(variant), path], cwd=src, capture_output=True, text=True)
-            print("TREECACHE build", kind, variant, r.returncode, [l for l in r.stdout.splitlines() if l.startswith("TREECACHE")])
-            if r.returncode != 0 or not os.path.exists(path): print("TREECACHE FAIL", r.stderr[-800:]); continue
-        name = f"outdoor_{kind}_{variant}"
-        with bpy.data.libraries.load(path, link=False) as (src_d, dst_d):
-            dst_d.collections = [c for c in src_d.collections if c == name]
-        if dst_d.collections: colls[(kind, variant)] = dst_d.collections[0]
-    n = 0
-    for i, p in enumerate(props):
-        c = colls.get((p["kind"], int(p["variant"])))
-        if c is None: continue
-        e = bpy.data.objects.new(f"outdoor_{p['kind']}_inst{i}", None)
-        e.instance_type = "COLLECTION"; e.instance_collection = c
-        e.location = p["loc"]; e.rotation_euler = (0, 0, p["rot"]); e.scale = (p["scale"],) * 3
-        sc.collection.objects.link(e); n += 1
-    print("OUTDOOR", n, "instances of", len(colls), "variants")
+    # (trees are scene geometry from Rust: grass and the lawn tint are what is left here)
     add_grass(side)
 
 def tint_lawn(o):

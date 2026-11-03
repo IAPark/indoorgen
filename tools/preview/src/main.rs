@@ -257,7 +257,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
         let lname = n.name.to_lowercase();
         let is_ceil = lname.contains("ceiling");
         // (a shower's panes too: drawn solid, a shower looked like a white wardrobe)
-        let glass = (lname.ends_with(".glass") && !lname.contains("wineglass")) || n.prims.iter().any(|p| glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))].name.starts_with("shower_glass"));
+        let glass = (lname.ends_with(".glass") && !lname.contains("wineglass")) || n.prims.iter().any(|p| glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))].name.starts_with("shower_glass"))
+            || side_nodes.get(n.name.as_str()).and_then(|x| x["graph"].as_u64()).map_or(false, |i| side["graphs"][i as usize]["out"]["glass"].as_bool() == Some(true) && !lname.contains("wineglass"));
         for p in &n.prims {
             let m = &glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))];
             let mi = p.mat.min(glb.mats.len().saturating_sub(1));

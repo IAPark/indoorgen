@@ -98,6 +98,8 @@ impl E {
 
 /// statements setting `surf_color`, `surf_rough`, `surf_metal`, `surf_coat`, `surf_height` from `obj`; None for an op this backend lacks
 pub fn emit(graph: &Value) -> Option<Emitted> {
+    // (glass is the previewer's own pass)
+    if graph["out"]["glass"].as_bool() == Some(true) { return None }
     let mut e = E { params: vec![], types: vec![], code: String::new() };
     for (k, n) in graph["nodes"].as_array()?.iter().enumerate() { e.node(k, n)?; }
     let o = &graph["out"];

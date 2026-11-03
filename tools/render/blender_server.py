@@ -1,5 +1,4 @@
-"""blender_server.py [QUEUE_DIR]: a long-running Blender (bpy) process that renders jobs with render_rust.py, so Blender's startup and the
-Infinigen imports (~15-25 s of every render_rust.py run) are paid once. Jobs are files in QUEUE_DIR/jobs/<id>.json:
+"""blender_server.py [QUEUE_DIR]: a long-running Blender (bpy) process that renders jobs with render_rust.py, so Blender's startup is paid once. Jobs are files in QUEUE_DIR/jobs/<id>.json:
     {"argv": [render_rust.py arguments...], "env": {"NAME": "value", ...}}
 For each job the scene is reset (factory settings, empty), the job's environment is applied (and restored after), render_rust.py runs in
 this process, its output goes to QUEUE_DIR/done/<id>.log and the result to QUEUE_DIR/done/<id>.json ({"rc", "seconds"}).
@@ -21,15 +20,6 @@ t0 = time.time()
 import bpy  # noqa: E402
 
 sys.path.insert(0, HERE)
-# warm the imports render_rust.py makes (infinigen materials, lighting, the Blender 5 shims)
-_warm = io.StringIO()
-with contextlib.redirect_stdout(_warm), contextlib.redirect_stderr(_warm):
-    try:
-        import bl5compat  # noqa: F401
-        import infinigen.assets.materials  # noqa: F401
-        from infinigen.assets.lighting import sky_lighting  # noqa: F401
-    except Exception as e:
-        print("warm import", repr(e))
 print("BSRV ready in %.1fs, queue %s" % (time.time() - t0, QUEUE), flush=True)
 with open(os.path.join(QUEUE, "ready"), "w") as f:
     f.write(str(os.getpid()))
