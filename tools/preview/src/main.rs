@@ -275,7 +275,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let dark_glass = glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else { 0.0 }, 0.0], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if m.name.starts_with("table_top") { 0.45 } else { 0.0 }, 0.0], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
                 if let Some(e) = graph {
                     for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
                     // the object frame the graph's coordinates are in (the sidecar's pose, rows of a 4x4)
@@ -756,7 +756,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                                 let v: f32 = (-4..=4).map(|h| { let a_ = (h as f32 * 8.0).to_radians(); let dir = Vec3::new(f.x * a_.cos() - f.y * a_.sin(), f.x * a_.sin() + f.y * a_.cos(), 0.0);
                                     let mut w = ray_dist(&sh.walls, e, dir, 8.0);
                                     for b in &sh.boxes { let (mut t0, mut t1) = (0f32, w); let mut hit = true; for ax in 0..2 { let (o_, r_) = (e[ax], dir[ax]); if r_.abs() < 1e-5 { if o_ < b.0[ax] || o_ > b.1[ax] { hit = false; } } else { let (a2, b2) = ((b.0[ax] - o_) / r_, (b.1[ax] - o_) / r_); t0 = t0.max(a2.min(b2)); t1 = t1.min(a2.max(b2)); } } if hit && t0 <= t1 { w = w.min(t0); } }
-                                    let mut d_ = 0f32; while d_ < w && on(e + dir * (d_ + 0.1)) { d_ += 0.1; } d_ }).sum();
+                                    let mut d_ = 0f32; while d_ < w && on(e + dir * (d_ + 0.1)) { d_ += 0.1; } d_ }).sum::<f32>();
                                 if v > best { best = v; pick = Some((e, f)); }
                             }
                         }
