@@ -612,7 +612,13 @@ impl BedSpec {
                     let j = serde_json::json!({"verts": g.pos, "polys": g.faces});
                     std::fs::write(p, j.to_string()).ok();
                 }
-                coil(&g, self, r)
+                // (a cap from the panel in past the legs: standing outside them, it left a gap under the frame with the legs showing)
+                let mut out = coil(&g, self, r);
+                let (t, w) = (0.012, c.leg_thickness + self.dot_depth + 0.02);
+                for (l, h) in [([x0, y0, -t], [x1, y0 + w, 0.0]), ([x0, y1 - w, -t], [x1, y1, 0.0]), ([x0, y0, -t], [x0 + w, y1, 0.0]), ([x1 - w, y0, -t], [x1, y1, 0.0])] {
+                    out.append(&Mesh::cuboid(l, h));
+                }
+                out
             }
             1 => {
                 let g = divide(&m, self.panel_distance, r);
