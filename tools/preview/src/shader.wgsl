@@ -139,7 +139,7 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
     let rot = hash(vec2<f32>(px)) * 6.2831853;
     let R = g.params.w;
     var occ = 0.0;
-    let N = 14;
+    let N = 24;
     for (var i = 0; i < N; i++) {
       let fi = (f32(i) + 0.5) / f32(N);
       let ang = rot + f32(i) * 2.399963;

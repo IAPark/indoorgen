@@ -778,6 +778,38 @@ impl Factory for Bed {
         let _ = &mut limbs;
         let mut frame_all = Mesh::new();
         let mut frame_idx: Vec<usize> = vec![];
+        // a headboard's back gets a board: on a bed with its side to the wall the head stands out in the room, and its bare rear showed a fan of triangles with gaps
+        {
+            let (sl, sh) = seat.bounds();
+            let top = sh[2];
+            let mut backs = vec![];
+            for g in panels.iter().filter(|g| g.bounds().1[2] > top + 0.2) {
+                let (l, h) = g.bounds();
+                let thin = if h[0] - l[0] < h[1] - l[1] { 0 } else { 1 };
+                let long = 1 - thin;
+                let out = if (l[thin] + h[thin]) / 2.0 < (sl[thin] + sh[thin]) / 2.0 { l[thin] - 0.002 } else { h[thin] + 0.002 };
+                let mut pts: Vec<[f64; 2]> = g.pos.iter().map(|q| [q[long], q[2]]).collect();
+                pts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5);
+                let cr = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+                let mut hull: Vec<[f64; 2]> = vec![];
+                for pass in 0..2 {
+                    let start = hull.len();
+                    let it: Vec<[f64; 2]> = if pass == 0 { pts.clone() } else { pts.iter().rev().cloned().collect() };
+                    for q in it {
+                        while hull.len() >= start + 2 && cr(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 1e-9 { hull.pop(); }
+                        hull.push(q);
+                    }
+                    hull.pop();
+                }
+                if hull.len() < 3 { continue }
+                let mut b = Mesh::new();
+                let face: Vec<V3> = hull.iter().map(|q| { let mut v = [0.0; 3]; v[thin] = out; v[long] = q[0]; v[2] = q[1]; v }).collect();
+                b.add_face(&face);
+                backs.push(b);
+            }
+            panels.extend(backs);
+        }
         for (g, mt) in [(vec![seat], &surf), (limbs, &limb), (panels, &panel)] {
             let mut j = join(&g);
             if j.is_empty() {
@@ -949,7 +981,9 @@ impl Factory for Bed {
         let (sheet_part, cover_part) = (sheet_idx, a.parts.len() - 1);
         let np = r.randint(2, 4) as usize;
         let pc = pillow_ctor(&mut r);
-        let pspec = PillowSpec::from_ctor(&pc);
+        let mut pspec = PillowSpec::from_ctor(&pc);
+        // (a ring cushion is no bed pillow: it read as a hole in the pillow)
+        if pspec.shape == 3 { pspec.shape = 0; }
         let pillow = pspec.build(&mut inst_rng(c.fseed, inst));
         let pill_mat = m("pillow", "fabric.FineKnitFabric", 10, [0.9, 0.9, 0.92]);
         let xs: Vec<f64> = (0..10).map(|_| r.uniform(0.1, 0.4) * c.size).collect();

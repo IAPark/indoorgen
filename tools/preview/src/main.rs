@@ -646,8 +646,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
             let f = Vec3::new(sx, sy, 0.0).normalize();
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
-            let dist = 0.95 * r / 0.5625 + 0.9;
-            let target = Vec3::new(c.x, c.y, z0 + 0.5);
+            let dist = 1.15 * r / 0.5625 + 1.6;
+            let target = Vec3::new(c.x, c.y, z0 + 1.0);
             let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
             let mut cm = cam_look(e, target, 18.0);
             cm.near = Some(0.3);
