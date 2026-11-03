@@ -1075,6 +1075,8 @@ impl KitchenSpace {
         let mut dims = [f(r.uniform(0.7, 1.0)), f(r.uniform(1.7, 5.0)), f(r.uniform(2.3, 2.5))];
         if island {
             dims[0] = f(dims[0] * r.uniform(1.5, 2.0));
+            // (dense: an island of real size, 0.6-0.9 m deep and 0.9-1.8 m long (in whole cabinets), not 2 x 5 m; from its own stream, the rest draws as ever)
+            if crate::dense() { let mut q = Rng::seeded(factory_seed ^ 0x151a); dims[0] = f(q.uniform(0.6, 0.9)); dims[1] = f(q.uniform(1.2, 2.0)); }
         } else if let Some(h) = crate::api::size_hint() {
             // the solver's chosen size (furn::sizes): run length = width, depth, height incl. the top cabinets
             dims = [f(h[1]), f(h[0]), f(h[2])];

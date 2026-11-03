@@ -40,8 +40,9 @@ pub fn door_zone(state: &State, k: &str) -> Option<Vec<[f64; 2]>> {
 }
 
 fn hits(a: &[[f64; 2]], prs: &[Prism]) -> bool {
-    // (floor-standing parts: above the slab, starting below head height -- not a ceiling light or a wall cabinet over the zone)
-    prs.iter().any(|p| p.z[1] > 0.3 && p.z[0] < 1.4 && layout2d::poly_dist(a, &p.poly) <= 0.0)
+    // (floor-standing parts: above the slab, starting below head height -- not a ceiling light or a wall cabinet over the zone; and solid: a
+    // neighbour's door swinging over this floor is every kitchen, they are not both open at once)
+    prs.iter().any(|p| p.role == super::geom::ROLE_HARD && p.z[1] > 0.3 && p.z[0] < 1.4 && layout2d::poly_dist(a, &p.poly) <= 0.0)
 }
 
 /// a loose piece standing in an appliance's door zone, or an appliance whose zone holds a loose piece (free_ok's hard rule; the
@@ -69,6 +70,8 @@ pub fn zone_clash(state: &State, name: &str) -> bool {
 pub struct Eval {
     pub score: f64,
     pub broken: Vec<String>,
+    /// appliances that cannot be opened (door zone blocked, a fridge in a corner)
+    pub unusable: usize,
 }
 
 /// the front centre of a piece (world xy)
@@ -164,6 +167,7 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
     let lr = super::layout_rules::get();
     let mut score = 0.0;
     let mut broken = vec![];
+    let mut unusable = 0;
     let rings = layout2d::rings(&layout2d::room_floor(state, room));
     let in_room = |c: &str| -> Vec<String> { state.objs.iter().filter(|(k, o)| class_of(o) == c && room_of(state, k).as_deref() == Some(room)).map(|(k, _)| k.clone()).collect() };
     let (fridges, ranges, sinks) = (in_room("FridgeFactory"), in_room("OvenFactory"), in_room("SinkFactory"));
@@ -183,11 +187,12 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
             && hits(&z, &layout2d::prisms(state, kk))).map(|(kk, _)| kk.clone());
         if out > 2 || blocker.is_some() {
             score -= 4.0;
+            unusable += 1;
             broken.push(format!("door zone of {k}: {}", blocker.map_or("outside the room".to_string(), |b| format!("{b} in it"))));
         }
     }
     for f in &fridges {
-        if fridge_cornered(state, f, &rings) { score -= 5.0; broken.push(format!("{f} in a corner")); }
+        if fridge_cornered(state, f, &rings) { score -= 5.0; unusable += 1; broken.push(format!("{f} in a corner")); }
     }
     // the counter line unbroken: no slot narrower than `counter_gap_max` beside a range or dishwasher
     for k in ranges.iter().chain(in_room("DishwasherFactory").iter()) {
@@ -208,5 +213,5 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
         if bad > 0.05 { broken.push(format!("work triangle {:.2}/{:.2}/{:.2} m", legs[0], legs[1], legs[2])); }
         score -= 1.5 * bad;
     }
-    Eval { score, broken }
+    Eval { score, broken, unusable }
 }

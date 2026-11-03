@@ -25,6 +25,11 @@ impl Plan {
     pub fn missing(&self) -> usize { self.rooms.iter().map(|(_, s)| s.report.iter().filter(|r| r.tier == 0 && !r.placed).count()).sum() }
 }
 
+/// what makes a plan not worth keeping: must items with no place, and kitchen appliances that cannot be opened
+pub fn unfit(g: &Generated, plan: &Plan) -> usize {
+    plan.missing() + g.room_polys.iter().filter(|(n, _)| n.starts_with("kitchen")).map(|(n, _)| crate::furn::kitchen_rules::eval(&g.state, n, None).unusable).sum::<usize>()
+}
+
 pub fn solve_house(g: &Generated, seed: u64) -> Plan {
     let rs = rules::default_rules();
     let mut rooms = vec![];

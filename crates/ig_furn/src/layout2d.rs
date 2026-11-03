@@ -349,7 +349,8 @@ fn house_rings(state: &State) -> Arc<Vec<Vec<[f64; 2]>>> {
 pub fn outside_depth(state: &State, name: &str) -> f64 {
     let rs = house_rings(state);
     let mut best = 0.0f64;
-    for p in prisms(state, name).iter() {
+    // (what stands there: a cabinet door's swing at a wall's end is not through the wall)
+    for p in prisms(state, name).iter().filter(|p| p.role == ROLE_HARD) {
         for v in &p.poly {
             if !in_rings(&rs, *v) {
                 best = best.max(ring_dist(&rs, *v));
@@ -372,7 +373,7 @@ pub fn outside_depth(state: &State, name: &str) -> f64 {
 pub fn outside_room_depth(state: &State, name: &str, room: &str) -> f64 {
     let rs = rings(&room_floor(state, room));
     let mut best = 0.0f64;
-    for p in prisms(state, name).iter() {
+    for p in prisms(state, name).iter().filter(|p| p.role == ROLE_HARD) {
         for v in &p.poly {
             if !in_rings(&rs, *v) {
                 best = best.max(ring_dist(&rs, *v));

@@ -232,15 +232,18 @@ pub fn build_scene(p: &Params) -> Built {
     } else if ig_core::envx::var_os("LAYERDBG").is_some() {
         eprintln!("LAYERS {} hard / {} soft complaints", g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
     }
-    // a plan with a room the solver cannot furnish (a triangle with doors on both legs and no wall for a bed) is planned again: at most twice, the plan missing fewest wins
+    // a plan with a room that cannot work (no place for a must item, a kitchen whose appliances cannot open) is planned again: at most twice, the plan with fewest such faults wins
     let mut plan = unified.then(|| indoorgen::unified::solve_house(&g, seed));
+    let mut faults = plan.as_ref().map_or(0, |p| indoorgen::unified::unfit(&g, p));
     for attempt in 1..=2 {
-        let Some(p) = &plan else { break };
-        if p.missing() == 0 { break }
+        if faults == 0 || plan.is_none() { break }
+        // (the caches are keyed by name and version, which a new house starts over)
+        crate::furn::dof::reset_caches(); crate::furn::col::reset_caches(); crate::furn::layout2d::reset_caches(); crate::furn::eval::reset_caches(); crate::furn::solver::reset_caches();
         let g2 = generate(&mk_at(vec![], attempt), &assets, prog);
         let p2 = indoorgen::unified::solve_house(&g2, seed);
-        eprintln!("PLAN again {attempt}: {} must items had no place, {} now", p.missing(), p2.missing());
-        if p2.missing() < p.missing() { g = g2; plan = Some(p2); }
+        let f2 = indoorgen::unified::unfit(&g2, &p2);
+        eprintln!("PLAN again {attempt}: {faults} faults, {f2} now");
+        if f2 < faults { g = g2; plan = Some(p2); faults = f2; }
     }
     if cfg.program.realism && !orig_prog {
         if let Some(spec) = &rules {

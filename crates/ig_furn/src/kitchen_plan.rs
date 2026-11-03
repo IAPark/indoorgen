@@ -54,11 +54,15 @@ struct Kit {
     corners: Vec<Vec<(usize, usize)>>,
     rings: Vec<Vec<[f64; 2]>>,
     obstacles: Vec<Arc<Vec<Prism>>>,
+    /// door clearances (among the obstacles): an aisle may cross them, a piece may not
+    doors: Vec<Arc<Vec<Prism>>>,
     d_counter: f64,
     d: [f64; 5],
     w: [f64; 5],
     has: [bool; 5],
     area: f64,
+    /// floor kept for an island and the aisle round it: no counter stands on it
+    reserved: Option<Vec<[f64; 2]>>,
     lr: super::layout_rules::LayoutRules,
 }
 
@@ -75,7 +79,7 @@ fn ov(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool { layout2d::poly_dist(a, b) <= 0.0
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 { (a[0] - b[0]).hypot(a[1] - b[1]) }
 
 impl Kit {
-    fn new(state: &State, room: &str, d: [f64; 5], w: [f64; 5], has: [bool; 5]) -> Kit {
+    fn new(state: &State, room: &str, d: [f64; 5], w: [f64; 5], has: [bool; 5], reserved: Option<Vec<[f64; 2]>>) -> Kit {
         let lr = super::layout_rules::get();
         let rings = layout2d::rings(&layout2d::room_floor(state, room));
         let nc = Tag::sem("NoCollision");
@@ -130,7 +134,7 @@ impl Kit {
             let free: Vec<bool> = (0..nc_).map(|i| {
                 let r = rect(&probe, i as f64 * cell + 0.005, (i + 1) as f64 * cell - 0.005, dmax);
                 let rw = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, dmax + 0.15);
-                !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) && !doors.iter().any(|p| hits(&rw, p, -1.0, 2.0)) && !passages.iter().any(|q| ov(&r, q))
+                !obstacles.iter().any(|p| hits(&r, p, -1.0, 2.0)) && !doors.iter().any(|p| hits(&rw, p, -1.0, 2.0)) && !passages.iter().any(|q| ov(&r, q)) && !reserved.as_ref().map_or(false, |q| ov(&r, q))
             }).collect();
             let wcell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell, (i + 1) as f64 * cell, 0.2); windows.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
             let icell: Vec<bool> = (0..nc_).map(|i| { let r = rect(&probe, i as f64 * cell - 0.15, (i + 1) as f64 * cell + 0.15, 0.25); intents.iter().any(|p| hits(&r, p, -1.0, 9.0)) }).collect();
@@ -164,7 +168,7 @@ impl Kit {
         }
         if ig_core::env_on!("KPLANDBG") { for (i, l) in lines.iter().enumerate() { eprintln!("KPLAN line {i}: {:.2} m from {:?} n {:?} corners {:?} windows {:?}", l.len, l.a, l.n, l.corner, l.win); } }
         let area = state.objs[room].polygon.as_ref().map_or(10.0, |p| crate::shp::area(p));
-        Kit { lines, banned: vec![], corners, rings, obstacles, d_counter: d[0], d, w, has, area, lr }
+        Kit { lines, banned: vec![], corners, rings, obstacles, doors, d_counter: d[0], d, w, has, area, reserved, lr }
     }
 
     /// the usable stretch of a line under the plan's corner owners: [start, end]
@@ -224,8 +228,9 @@ impl Kit {
         }
         // counter length up to what the room calls for
         let counter: f64 = ps.iter().filter(|p| is_counter(p.kind)).map(|p| p.t1 - p.t0).sum();
-        let target = (1.5 + 0.22 * self.area).min(7.0);
-        s += counter.min(target) + 0.15 * (counter - target).max(0.0);
+        // (past it still worth having: the walls lined with counter, as far as the aisles and door zones below allow)
+        let target = (2.0 + 0.3 * self.area).min(10.0);
+        s += counter.min(target) + 0.6 * (counter - target).max(0.0);
         // runs: adjacent counters on a line; fewer, and none narrower than 0.6 m
         for (li, lp) in plan.lines.iter().enumerate() {
             if lp.items.is_empty() { continue }
@@ -248,6 +253,10 @@ impl Kit {
                     pen(&mut s, 2.0, &|| format!("{gap:.2} m slot at the end of line {li}"));
                 }
             }
+            // and open floor at a wall's end: a run that stops short of the corner reads as unfinished
+            for (gap, it) in [(first.t0 - s0, first), (s1 - last.t1, last)] {
+                if gap >= lr.counter_gap_max && it.kind != Kind::Fridge { pen(&mut s, gap.min(1.5), &|| format!("{gap:.2} m of wall left at the end of line {li}")); }
+            }
             // a fridge never stands in front of a window; a range under one is poor (the curtain, the draught)
             for p in &on {
                 let ov_win = self.lines[li].win.iter().any(|(a, b)| p.t1 - 0.02 > *a && p.t0 + 0.02 < *b);
@@ -267,10 +276,16 @@ impl Kit {
             for e in 0..2 {
                 let Some(ci) = l.corner[e] else { continue };
                 let used_other = self.corners[ci].iter().any(|(o, _)| *o != li && !plan.lines[*o].items.is_empty());
-                if !used_other || plan.owner[ci] != li { continue }
+                if !used_other { continue }
+                // (the other leg too: its sink's bowl and tap reach past the module, into the corner leg butted against its end)
+                if plan.owner[ci] != li {
+                    let (s0, s1) = self.span(plan, li);
+                    if ps.iter().any(|p| p.line == li && p.kind == Kind::Sink && if e == 0 { p.t0 - s0 < 0.2 } else { s1 - p.t1 < 0.2 }) { return None }
+                    continue
+                }
                 let (b0, b1) = if e == 0 { (0.0, self.d_counter) } else { (l.len - self.d_counter, l.len) };
                 for p in ps.iter().filter(|p| p.line == li && p.kind != Kind::Counter) {
-                    let m = if p.kind == Kind::Sink { 0.05 } else { 0.0 };
+                    let m = if p.kind == Kind::Sink { 0.2 } else { 0.0 };
                     if p.t1 > b0 - m + 0.005 && p.t0 < b1 + m - 0.005 { return None }
                 }
                 // the counter run through the corner shows past the square: a sliver there (two cabinets squeezed into 25 cm) read
@@ -290,6 +305,16 @@ impl Kit {
                 let shown = reach - self.d_counter;
                 if shown > 0.02 && shown < 0.4 { pen(&mut s, 3.0, &|| format!("{shown:.2} m of cabinet past the corner of line {li}")); }
             }
+        }
+        // where two used walls meet the counters join (build makes the pair one L); anything else at the corner is a gap or a boxed-in appliance
+        for ends in &self.corners {
+            let used: Vec<&(usize, usize)> = ends.iter().filter(|(l, _)| !plan.lines[*l].items.is_empty()).collect();
+            if used.len() < 2 { continue }
+            let joined = used.iter().all(|&&(li, e)| {
+                let (s0, s1) = self.span(plan, li);
+                ps.iter().any(|p| p.line == li && is_counter(p.kind) && if e == 0 { p.t0 - s0 < 0.01 } else { s1 - p.t1 < 0.01 })
+            });
+            if joined { s += 2.0 } else { pen(&mut s, 3.0, &|| "corner not joined".into()); }
         }
         // footprints: inside the room, clear of the fixed pieces and of each other (corners)
         for (i, p) in ps.iter().enumerate() {
@@ -388,8 +413,8 @@ impl Kit {
         for k in [Kind::Sink, Kind::Range, Kind::Dish, Kind::Fridge] {
             if self.has[ki(k)] { put(&mut lines, Item { kind: k, w: self.w[ki(k)] }, rng); }
         }
-        for _ in 0..rng.randint(2, 6) { put(&mut lines, Item { kind: Kind::Counter, w: Self::module(rng) }, rng); }
-        for l in lines.iter_mut() { if !l.items.is_empty() && rng.f64() < 0.6 { l.fill = l.items.iter().position(|i| i.kind == Kind::Counter); } }
+        for _ in 0..rng.randint(3, 9) { put(&mut lines, Item { kind: Kind::Counter, w: Self::module(rng) }, rng); }
+        for l in lines.iter_mut() { if !l.items.is_empty() && rng.f64() < 0.8 { l.fill = l.items.iter().position(|i| i.kind == Kind::Counter); } }
         Plan { lines, owner: self.corners.iter().map(|c| c[rng.randint(0, c.len() as i64) as usize].0).collect() }
     }
 
@@ -468,6 +493,14 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
             name
         }
     };
+    // every kitchen has a fridge and a range, and mostly a dishwasher, whether or not the solver found them a spot: the plan places them
+    let mut ar = Rng::seeded(ig_core::int_hash(&["kitchen_appliances", room]));
+    let mut wanted = |state: &mut State, have: Option<String>, class: &str, tag: &str| -> Option<String> {
+        have.or_else(|| { let n = format!("{room}_{tag}").replace('/', "_"); new_piece(ctx, state, &mut ar, class, room, &n).then_some(n) })
+    };
+    let fridge = wanted(state, fridge, "FridgeFactory", "kfridge");
+    let range = wanted(state, range, "OvenFactory", "krange");
+    let dish = if dish.is_some() { dish } else if Rng::seeded(ig_core::int_hash(&["kitchen_dish", room])).f64() < 0.7 { wanted(state, None, "DishwasherFactory", "kdish").filter(|k| { let (l, h) = lohi(state, k); h[1] - l[1] <= 0.7 && h[0] - l[0] <= 0.85 }) } else { None };
     // the room's kitchen pieces out: other runs, cabinets, sinks, second appliances, what stands on any of them
     let keep: Vec<String> = [Some(proto.clone()), fridge.clone(), range.clone(), dish.clone()].into_iter().flatten().collect();
     for c in ["KitchenSpaceFactory", "KitchenCabinetFactory", "SinkFactory", "FridgeFactory", "OvenFactory", "DishwasherFactory"] {
@@ -491,16 +524,43 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     let mut rng = Rng::seeded(ig_core::int_hash(&["kitchen_plan", room]));
     let sink_w = if rng.f64() < 0.5 { 0.6 } else { 0.8 };
     // (appliance slots 1 cm wider than the appliance: 5 mm play each side)
-    let mut kit = Kit::new(state, room, [dc, dc, od, dd, fd], [0.0, sink_w, ow + 0.01, dw + 0.01, fw + 0.01], [true, true, range.is_some(), dish.is_some(), fridge.is_some()]);
+    let (kd, kw, khas) = ([dc, dc, od, dd, fd], [0.0, sink_w, ow + 0.01, dw + 0.01, fw + 0.01], [true, true, range.is_some(), dish.is_some(), fridge.is_some()]);
+    let mut kit = Kit::new(state, room, kd, kw, khas, None);
     if kit.lines.is_empty() { restore(state); return None }
+    // most kitchens with the floor for it keep room for an island: a metre's aisle round 0.8 x 1.3 m
+    if rng.f64() < 0.7 {
+        let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for q in kit.rings.iter().flatten() { for d in 0..2 { a[d] = a[d].min(q[d]); b[d] = b[d].max(q[d]); } }
+        let aisle = kit.lr.kitchen_aisle;
+        let solid = |k: &Kit, r: &[[f64; 2]]| k.obstacles.iter().filter(|o| !k.doors.iter().any(|d| Arc::ptr_eq(d, o))).any(|o| hits(r, o, -1.0, 1.4));
+        // (either way round; in the middle, or pushed to a wall so the counters keep the other sides. The spot leaving most wall for counters, among those that hold the kitchen)
+        let need: f64 = kw.iter().zip(khas.iter()).filter(|(_, h)| **h).map(|(w, _)| *w).sum::<f64>() + 1.0;
+        let mut best: Option<(f64, Kit)> = None;
+        for (ix, iy) in [(0.65, 0.4), (0.4, 0.65)] {
+            let (hx, hy) = (ix + aisle, iy + aisle);
+            for cx in [(a[0] + b[0]) / 2.0, a[0] + hx + 0.02, b[0] - hx - 0.02] { for cy in [(a[1] + b[1]) / 2.0, a[1] + hy + 0.02, b[1] - hy - 0.02] {
+                let r = vec![[cx - hx, cy - hy], [cx + hx, cy - hy], [cx + hx, cy + hy], [cx - hx, cy + hy]];
+                let core = vec![[cx - ix, cy - iy], [cx + ix, cy - iy], [cx + ix, cy + iy], [cx - ix, cy + iy]];
+                let inside = (0..=6).all(|i| (0..=6).all(|j| layout2d::in_rings(&kit.rings, [cx - hx + hx * i as f64 / 3.0, cy - hy + hy * j as f64 / 3.0])));
+                if !inside || solid(&kit, &r) || kit.doors.iter().any(|o| hits(&core, o, -1.0, 1.4)) { continue }
+                let k2 = Kit::new(state, room, kd, kw, khas, Some(r));
+                let wall: f64 = k2.lines.iter().map(|l| l.len).sum();
+                if wall >= need && best.as_ref().map_or(true, |(w, _)| wall + 0.3 * rng.f64() > *w) { best = Some((wall, k2)); }
+            } }
+        }
+        if dbg { eprintln!("KPLAN island spot: {:?} of wall left", best.as_ref().map(|b| b.0)); }
+        if let Some((_, k2)) = best { kit = k2; }
+    }
     // anneal, then build the best plans; a line every built plan fails on (a run cutting the walkway) is banned and the
     // annealing run again (three rounds)
     let mut log = vec![];
-    for round in 0..6 {
+    for round in 0..8 {
         if kit.banned.len() >= kit.lines.len() { break }
         let best = anneal(&kit, &mut rng);
         if best.is_empty() {
             if dbg { eprintln!("KPLAN {room}: {} lines, no plan fits (round {round})", kit.lines.len()); }
+            // (an island is the first thing to give up)
+            if kit.reserved.is_some() { let has = kit.has; kit = Kit::new(state, room, kd, kw, has, None); continue }
             // a kitchen too short for everything does without, the dishwasher first: a counter and a sink matter most
             let Some(i) = [ki(Kind::Dish), ki(Kind::Fridge), ki(Kind::Range)].into_iter().find(|&i| kit.has[i]) else { break };
             kit.has[i] = false;
@@ -519,6 +579,7 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
             for k in &keep { state.objs.shift_remove(k); }
             match build(ctx, state, room, &kit, plan, &parked, &proto, fridge.as_deref(), range.as_deref(), dish.as_deref(), &mut rng, dbg) {
                 Ok(()) => {
+                    place_island(ctx, state, room, &kit, plan, &mut rng, &mut log);
                     log.push(format!("{room}: kitchen planned (score {s:.2}{}):\n{}", if broken.is_empty() { String::new() } else { format!(", breaks {broken:?}") }, describe(&kit, plan)));
                     return Some(log);
                 }
@@ -526,6 +587,8 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
             }
         }
         // the line most plans failed on
+        // (none of them built: the walls without the island first)
+        if kit.reserved.is_some() { let has = kit.has; kit = Kit::new(state, room, kd, kw, has, None); continue }
         let Some(worst) = (0..kit.lines.len()).max_by_key(|l| fails.iter().filter(|f| *f == l).count()) else { break };
         if !fails.contains(&worst) { break }
         kit.banned.push(worst);
@@ -533,6 +596,78 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     }
     restore(state);
     None
+}
+
+/// an island where the room has the floor for one: an aisle on every side, its cabinets facing the longest counter wall, stools on the far side.
+/// Kept only if the room can still be walked and every appliance still opens.
+fn place_island(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, rng: &mut Rng, log: &mut Vec<String>) {
+    if ig_core::env_on!("KPLANDBG") { eprintln!("KPLAN island: reserved {:?}", kit.reserved); }
+    if kit.reserved.is_none() { return }
+    let name = format!("{room}_island").replace('/', "_");
+    let nc = Tag::sem("NoCollision");
+    let aisle = kit.lr.kitchen_aisle;
+    let floors: Vec<Arc<Vec<Prism>>> = state.objs.iter().filter(|(k, o)| o.generator.is_some() && !o.tags.contains(nc.clone()) && !layout2d::is_room(o) && layout2d::room_of(state, k).as_deref() == Some(room)).map(|(k, _)| layout2d::prisms(state, k)).collect();
+    let blocked = |a: &[[f64; 2]]| kit.obstacles.iter().filter(|o| !kit.doors.iter().any(|d| Arc::ptr_eq(d, o))).chain(floors.iter()).any(|o| o.iter().any(|p| p.role == super::geom::ROLE_HARD && p.z[1] > 0.3 && p.z[0] < 1.4 && layout2d::poly_dist(a, &p.poly) <= 0.0));
+    let ok0 = (layout2d::walk_status(state, room).0, super::kitchen_rules::eval(state, room, None).unusable);
+    // (the longest counter walls first)
+    let mut lines: Vec<(f64, usize)> = plan.lines.iter().enumerate().filter(|(_, l)| !l.items.is_empty()).map(|(i, l)| (l.items.iter().map(|x| x.w).sum::<f64>(), i)).collect();
+    lines.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    // (a few pieces: their sizes differ, a smaller one may fit)
+    for _ in 0..4 {
+        super::solver::forget_placeholder("KitchenIslandFactory");
+        if !new_piece(ctx, state, rng, "KitchenIslandFactory", room, &name) { return }
+        let (lo, hi) = lohi(state, &name);
+        let (dx, dy) = (hi[0] - lo[0], hi[1] - lo[1]);
+        let mut cands: Vec<(f64, usize, f64, f64)> = vec![];
+        for &(_, li) in &lines {
+            let l = &kit.lines[li];
+            let (s0, s1) = kit.span(plan, li);
+            let mid = (s0 + s1) / 2.0;
+            for gi in 0..20 {
+                let gap = aisle + 0.1 * gi as f64;
+                let e0 = kit.d_counter + gap;
+                let mut t = s0 - 1.0;
+                while t + dy < s1 + 1.0 {
+                    // the island's box and, around it, the aisle: all room floor, nothing standing in it
+                    let p = |a: f64, b: f64| [l.a[0] + l.u[0] * a + l.n[0] * b, l.a[1] + l.u[1] * a + l.n[1] * b];
+                    let outer = [p(t - aisle, e0 - aisle + 0.02), p(t + dy + aisle, e0 - aisle + 0.02), p(t + dy + aisle, e0 + dx + aisle), p(t - aisle, e0 + dx + aisle)];
+                    let inside = (0..=8).all(|i| (0..=8).all(|j| { let (u, v) = (i as f64 / 8.0, j as f64 / 8.0); layout2d::in_rings(&kit.rings, p(t - aisle + (dy + 2.0 * aisle) * u, e0 + dx + aisle - (dx + aisle + 0.02) * v)) }));
+                    let reach_ok = layout2d::in_rings(&kit.rings, p(t + dy / 2.0, e0 + dx + aisle));
+                    if inside && reach_ok && !blocked(&outer) { cands.push((-(gap - aisle) - 0.3 * (t + dy / 2.0 - mid).abs() + 0.2 * rng.f64(), li, e0, t)); }
+                    t += 0.1;
+                }
+            }
+        }
+        if ig_core::env_on!("KPLANDBG") { eprintln!("KPLAN island piece {dx:.2} x {dy:.2}: {} spots", cands.len()); }
+        cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        for &(_, li, e0, t) in cands.iter().take(8) {
+            let l = &kit.lines[li];
+            // (its front toward the wall, so its back is the far side from it)
+            let c = [l.a[0] + l.n[0] * (e0 + dx), l.a[1] + l.n[1] * (e0 + dx)];
+            let inward = [-l.n[0], -l.n[1]];
+            if !place_along(state, &name, c, l.u, inward, t) { continue }
+            let now = (layout2d::walk_status(state, room).0, super::kitchen_rules::eval(state, room, None).unusable);
+            if ig_core::env_on!("KPLANDBG") { eprintln!("KPLAN island try: free {} walk/unusable {now:?} before {ok0:?}", free_ok(state, &name)); }
+            if !free_ok(state, &name) || now.0 < ok0.0 || now.1 > ok0.1 { continue }
+            state.objs.get_mut(&name).unwrap().tags.insert(Tag::sem("KitchenPlanned"));
+            // stools on the far side, each kept only if the walk still holds
+            let n = ((dy / 0.7).floor() as usize).clamp(1, 3);
+            let mut seats = 0;
+            for i in 0..n {
+                let st = format!("{name}_stool{i}");
+                if !new_piece(ctx, state, rng, "BarChairFactory", room, &st) { break }
+                let (sl, sh) = lohi(state, &st);
+                let (sd, sw) = (sh[0] - sl[0], sh[1] - sl[1]);
+                let cs = [l.a[0] + l.n[0] * (e0 + dx + 0.03 + sd), l.a[1] + l.n[1] * (e0 + dx + 0.03 + sd)];
+                let at = t + dy * (i as f64 + 0.5) / n as f64 - sw / 2.0;
+                let good = place_along(state, &st, cs, l.u, inward, at) && free_ok(state, &st) && layout2d::walk_status(state, room).0 >= ok0.0;
+                if good { seats += 1; } else { layout2d::remove_tree(state, &st); }
+            }
+            log.push(format!("{room}: island {dx:.2} x {dy:.2} m on line {li}, {seats} stools"));
+            return
+        }
+        layout2d::remove_tree(state, &name);
+    }
 }
 
 /// random starts, then annealing steps from the best (temperature 2 -> 0.03); the best few distinct plans, best first
@@ -615,7 +750,13 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
                 }
                 state.objs.get_mut(&name).unwrap().tags.insert(planned.clone());
                 if dbg { let (a, b) = lohi(state, &name); eprintln!("KPLAN build: run {name} asked {:.3} built {:.3} (size {:?})", t1 - t0, b[1] - a[1], state.objs[&name].generator.as_ref().and_then(super::solver::cur_size)); }
-                if !place_along(state, &name, l.a, l.u, l.n, t0) { if dbg { eprintln!("KPLAN build: run {name} at line {li} {t0:.2} does not fit"); } return Err(li) }
+                // (the plan's other runs do not count yet, past a joint's few cm below: a corner's two legs overlap until the L joint takes the square, a run's built depth varying by a cm or two)
+                let nc = Tag::sem("NoCollision");
+                let others: Vec<String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && o.tags.contains(planned.clone()) && class_of(o) == "KitchenSpaceFactory" && !o.tags.contains(nc.clone())).map(|(k, _)| k.clone()).collect();
+                for k in &others { state.objs.get_mut(k).unwrap().tags.insert(nc.clone()); state.touch(k); }
+                let fits = place_along(state, &name, l.a, l.u, l.n, t0);
+                for k in &others { state.objs.get_mut(k).unwrap().tags.remove(nc.clone()); state.touch(k); }
+                if !fits || others.iter().any(|k| layout2d::depth(state, &name, k) > 0.04) { if dbg { eprintln!("KPLAN build: run {name} at line {li} {t0:.2} does not fit"); } return Err(li) }
                 if let Some(sk) = on[j0..i].iter().find(|q| q.kind == Kind::Sink) {
                     let m = (sk.t0 + sk.t1) / 2.0;
                     sink_on = Some((name.clone(), [l.a[0] + l.u[0] * m, l.a[1] + l.u[1] * m]));
@@ -690,6 +831,13 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
             set(state, &lrun, &|j| if j[2] == 0.0 { j[2] = js; j[3] = reach; } else if j[2] != js { j[2] = 2.0; j[3] = j[3].min(reach); });
             if dbg { eprintln!("KPLAN L joint at corner {ci}: {orun} blind {bs:+} {leg_depth:.2} m, {lrun} reach {js:+} {reach:.2} m"); }
         }
+    }
+    // every run reachable, the doors still joined: else the next plan (the line of a run left out is the one to give up)
+    let (joined, cut) = layout2d::walk_status(state, room);
+    if !joined || !cut.is_empty() {
+        if dbg { eprintln!("KPLAN build: walk joined {joined} cut off {cut:?}"); }
+        let li = run_of.iter().find(|(_, r)| cut.contains(r)).map_or(usize::MAX, |((l, _), _)| *l);
+        return Err(li)
     }
     // the sink: its run and spot, for the sinks pass (it builds sinks after the furniture stages, which rebuild placeholders)
     if let Some((run, at)) = sink_on { PLANNED_SINK.with(|m| { m.borrow_mut().insert(room.to_string(), (run, at)); }); }
