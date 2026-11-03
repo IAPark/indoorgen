@@ -679,7 +679,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let (mx, my): (f32, f32) = (missing.iter().map(|q| q.0).sum(), missing.iter().map(|q| q.1).sum());
         let aim = (!missing.is_empty() && missing.len() <= 2 && !(missing.len() == 2 && mx == 0.0 && my == 0.0)).then(|| (if mx != 0.0 { mx.signum() } else if rm.subj.x >= c.x { 1.0 } else { -1.0 }, if my != 0.0 { my.signum() } else if rm.subj.y >= c.y { 1.0 } else { -1.0 }));
         if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("SHAPE {} area {:.2} size {:?} fill {fill:.2} missing {}", rm.name, rm.area, (hi - lo).truncate(), missing.len()); }
-        if (rect && rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8) || (!rect && rm.area < 12.0 && (hi - lo).truncate().max_element() < 6.0 && fill > 0.55 && aim.is_some()) {
+        // (not a hallway: its long look below says more, and an overhead view of one was skipped for a bare corner that scored above zero)
+        if !rm.name.starts_with("hallway") && ((rect && rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8) || (!rect && rm.area < 12.0 && (hi - lo).truncate().max_element() < 6.0 && fill > 0.55 && aim.is_some())) {
             let (sx, sy) = if let (false, Some(q)) = (rect, aim) { q } else { (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 }) };
             let f = Vec3::new(sx, sy, 0.0).normalize();
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
