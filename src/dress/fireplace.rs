@@ -113,15 +113,15 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
                 let (zy0, zy1) = (if sx - rad < breast[1] && sx + rad > breast[0] { h.0[1].max(depth_b + 0.01) } else { h.0[1] }, h.1[1]);
                 if zx1 - zx0 >= 2.0 * rad && zy1 - zy0 >= 2.0 * rad * 0.9 {
                     let sy = (zy0 + zy1) / 2.0;
-                    // the slab's mesh top under the footprint (its support box lay 1 cm under a bevelled top: the stand's base sank)
-                    let mut zt = h.1[2];
-                    for p in &pf.asset.parts { for f in &p.mesh.faces {
-                        let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]);
-                        for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } }
-                        if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt && u[2] < h.1[2] + 0.06 { zt = u[2]; }
-                    }}
+                    // the slab's mesh top under the whole footprint, which must be level (its support box lay 1 cm under a bevelled top and a stand's
+                    // base sank; the highest face under it was a raised edge at one side, and a log basket floated 5 cm)
+                    let tris = super::tris_of(&pf.asset);
+                    let g = [-1.0, -0.5, 0.0, 0.5, 1.0];
+                    let zs: Vec<f64> = g.iter().flat_map(|a| g.iter().map(move |b| (*a, *b))).map(|(a, b)| super::heights(&tris, sx + a * rad, sy + b * rad).into_iter().filter(|z| *z < h.1[2] + 0.06).fold(h.0[2], f64::max)).collect();
+                    let (z0, zt) = zs.iter().fold((f64::MAX, f64::MIN), |m, z| (m.0.min(*z), m.1.max(*z)));
+                    let level = zt - z0 < 0.012;
                     if std::env::var_os("FIREDBG").is_some() { eprintln!("FIREDBG k={k} slab h={h:?} spot=({sx:.3},{sy:.3},{zt:.3}) rad={rad:.3} depth_b={depth_b:.3} item=({dx:.3},{dy:.3}) fx={fx:?} breast={breast:?}"); for p in &pf.asset.parts { for f in &p.mesh.faces { let (mut l, mut u) = ([f64::MAX; 3], [f64::MIN; 3]); for &i in f { let q = p.mesh.pos[i as usize]; for d in 0..3 { l[d] = l[d].min(q[d]); u[d] = u[d].max(q[d]); } } if l[0] < sx + rad && u[0] > sx - rad && l[1] < sy + rad && u[1] > sy - rad && u[2] > zt - 0.001 && l[2] < zt + 0.3 { eprintln!("  face lo={l:.3?} hi={u:.3?}"); } }} }
-                    spots.push([sx, sy, zt]);
+                    if level { spots.push([sx, sy, zt]); }
                 }
             }
             // floor beside the breast, against the wall-side of the room
