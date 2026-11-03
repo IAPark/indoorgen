@@ -1449,7 +1449,13 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         // the hem's length waves with the folds
         let s = stretch * s0 * (1.0 + 0.06 * pl.at(u * 0.37 + 11.0));
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
-        let (h, z, nh, nz) = g.profile(s, gap, 0.0);
+        // (round the mattress's edge a thick layer's outer face travels further than its centre: at 3.5 cm radius a comforter's cells stretched fivefold into slivers,
+        // and its quilting folded them into a saw. Each point goes round by its own arc)
+        let arc = std::f64::consts::FRAC_PI_2 * DRAPE_R;
+        let grow = 1.0 + off.max(0.0) / DRAPE_R;
+        // (and makes it up over the next 30 cm of the drop: the layers reach the hem together, or it came out torn)
+        let se = if s < arc * grow { s / grow } else { let t = ((s - arc * grow) / 0.3).min(1.0); s - arc * (grow - 1.0) * (1.0 - t) };
+        let (h, z, nh, nz) = g.profile(se, gap, 0.0);
         let ramp = (s / 0.2).min(1.0);
         // toward the head (where side tables stand against the frame) it hangs close: no flare, folds or fill standing out
         let free = if g.tuck { 0.0 } else if ny == 0.0 { 1.0 } else { (((x - g.x0) - 0.55) / 0.35).clamp(0.0, 1.0) };
