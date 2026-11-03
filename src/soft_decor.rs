@@ -64,13 +64,34 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
             let seat = a.parts.iter().flat_map(|p| p.mesh.pos.iter()).filter(|q| q[0] > fx0 && q[0] < fx1 && (q[1] - y).abs() < cw / 2.0 && q[2] < seat + 0.12).map(|q| q[2]).fold(seat, f64::max);
             let mut c = cushion(ct, cw, cw);
             for q in c.pos.iter_mut() {
-                // lean back (top toward -x), small twist, then into the sofa frame, then world
+                // lean back (top toward -x), small twist, then into the sofa frame
                 let (x, yy, z) = (q[0], q[1], q[2]);
                 let (x1, z1) = (x * tilt.cos() - z * tilt.sin(), x * tilt.sin() + z * tilt.cos());
                 let (x2, y2) = (x1 * yaw.cos() - yy * yaw.sin(), x1 * yaw.sin() + yy * yaw.cos());
                 let (cx, cz) = (back + ct / 2.0 + 0.02 + cw / 2.0 * tilt.sin(), seat + cw / 2.0 * tilt.cos() + 0.005);
-                *q = o.pose.apply([cx + x2, y + y2, cz + z1]);
+                *q = [cx + x2, y + y2, cz + z1];
             }
+            // down onto what is really under its lowest points (the height above came from any point near the seat, and the backrest's slope
+            // left cushions hovering 8 cm over it)
+            let drop = {
+                let (cl, ch) = c.bounds();
+                let tris: Vec<[[f64; 3]; 3]> = a.parts.iter().flat_map(|p| p.mesh.faces.iter().flat_map(move |f| (1..f.len().saturating_sub(1)).map(move |k| [p.mesh.pos[f[0] as usize], p.mesh.pos[f[k] as usize], p.mesh.pos[f[k + 1] as usize]]))).filter(|t| t.iter().any(|v| v[2] < ch[2]) && t.iter().map(|v| v[0]).fold(f64::MIN, f64::max) > cl[0] && t.iter().map(|v| v[0]).fold(f64::MAX, f64::min) < ch[0] && t.iter().map(|v| v[1]).fold(f64::MIN, f64::max) > cl[1] && t.iter().map(|v| v[1]).fold(f64::MAX, f64::min) < ch[1]).collect();
+                let mut best = f64::INFINITY;
+                for q in c.pos.iter().filter(|q| q[2] < cl[2] + 0.04) {
+                    let hit = tris.iter().filter_map(|[p0, p1, p2]| {
+                        let d = (p1[1] - p2[1]) * (p0[0] - p2[0]) + (p2[0] - p1[0]) * (p0[1] - p2[1]);
+                        if d.abs() < 1e-10 { return None }
+                        let u = ((p1[1] - p2[1]) * (q[0] - p2[0]) + (p2[0] - p1[0]) * (q[1] - p2[1])) / d;
+                        let v = ((p2[1] - p0[1]) * (q[0] - p2[0]) + (p0[0] - p2[0]) * (q[1] - p2[1])) / d;
+                        if u < 0.0 || v < 0.0 || u + v > 1.0 { return None }
+                        let z = u * p0[2] + v * p1[2] + (1.0 - u - v) * p2[2];
+                        (z <= q[2] + 0.02).then_some(z)
+                    }).fold(f64::NEG_INFINITY, f64::max);
+                    if hit.is_finite() { best = best.min(q[2] - hit); }
+                }
+                if best.is_finite() { (best + 0.003).clamp(-0.02, 0.2) } else { 0.0 }
+            };
+            for q in c.pos.iter_mut() { q[2] -= drop; *q = o.pose.apply(*q); }
             scene.add(&format!("cushion_{}_{i}#0", k.replace('/', "_")), "CushionFactory", c, mi);
         }
         log.push(format!("{n} cushion(s) on {k}"));

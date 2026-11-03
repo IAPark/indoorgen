@@ -136,7 +136,8 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
     }
     let t = normalize(select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.8) - n * dot(select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.8), n));
     let b = cross(n, t);
-    let rot = hash(vec2<f32>(px)) * 6.2831853;
+    // (interleaved gradient noise, not white: it averages out over a few pixels, where a random angle per pixel showed as grain on flat surfaces)
+    let rot = fract(52.9829189 * fract(dot(vec2<f32>(px % vec2<i32>(64, 64)), vec2<f32>(0.06711056, 0.00583715)))) * 6.2831853;
     let R = g.params.w;
     var occ = 0.0;
     let N = 24;
@@ -145,7 +146,7 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
       let ang = rot + f32(i) * 2.399963;
       let rr = sqrt(fi);
       let h = sqrt(max(1.0 - fi, 0.0));
-      let lenk = mix(0.15, 1.0, fract(fi * 7.31 + hash(vec2<f32>(px) + f32(i))));
+      let lenk = mix(0.15, 1.0, fract(fi * 7.31));
       let dirv = (t * cos(ang) * rr + b * sin(ang) * rr + n * h * 0.9 + n * 0.1) * lenk * R;
       let sp = p + dirv;
       let c = g.viewproj * vec4<f32>(sp, 1.0);
