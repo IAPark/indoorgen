@@ -2793,10 +2793,12 @@ pub fn kitchen_style(state: &mut State) -> Vec<String> {
     let mut by_room: std::collections::BTreeMap<(String, String), Vec<(String, f64)>> = Default::default();
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
-        if !matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenCabinetFactory") { continue }
+        if !matches!(g.class.as_str(), "KitchenSpaceFactory" | "KitchenCabinetFactory" | "KitchenIslandFactory") { continue }
         let Some(room) = layout2d::room_of(state, k) else { continue };
         let w = super::solver::cur_size(g).map_or(0.0, |c| c[0]);
-        by_room.entry((room, g.class.clone())).or_default().push((k.clone(), w));
+        // (an island is styled with the room's counter runs)
+        let cls = if g.class == "KitchenIslandFactory" { "KitchenSpaceFactory".to_string() } else { g.class.clone() };
+        by_room.entry((room, cls)).or_default().push((k.clone(), w));
     }
     for ((room, cls), runs) in by_room {
         if runs.len() < 2 { continue }

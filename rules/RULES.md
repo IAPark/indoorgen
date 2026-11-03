@@ -277,6 +277,27 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | glass3 | Wineglass | may | 0.6 |  | on `table`: at the place of `chair_b#1`, 0.37 m in from the edge, 0.14 m along it |  |  |  |
 | vase | Vase | may | 0.3 |  | on `table`: in the middle |  |  |  |
 
+## utility: shelving (weight 2.0)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| shelf | LargeShelf | must | 1 |  | back to a wall | not before a window; walk reaches it; depth ≤ 0.45 m | 0.9 m wide, 0.6 m wide | far_from_door 0.7 |
+| shelf_b | LargeShelf | should | 1 |  | back to a wall | not before a window; depth ≤ 0.45 m | 0.9 m wide, 0.6 m wide | near 1.0 |
+
+## utility: shelves_and_cabinet (weight 2.0)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| shelf | LargeShelf | must | 1 |  | back to a wall | not before a window; walk reaches it; depth ≤ 0.45 m | 0.9 m wide, 0.6 m wide | far_from_door 0.7 |
+| cabinet | SingleCabinet | should | 1 |  | back to a wall | not before a window; walk reaches it; depth ≤ 0.5 m | 0.9 m wide, 0.6 m wide | near 1.0 |
+
+## utility: cabinets (weight 1.0)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| cabinet | SingleCabinet | must | 1 |  | back to a wall | not before a window; walk reaches it; depth ≤ 0.5 m | 0.9 m wide, 0.6 m wide | far_from_door 0.7 |
+| cabinet_b | SingleCabinet | should | 0.7 |  | back to a wall | not before a window; walk reaches it; depth ≤ 0.5 m | 0.9 m wide, 0.6 m wide | near 1.0 |
+
 ## Not ported yet
 
 From `LayoutRules` (reviewed values, which keep their numbers), `groups::cap` and `realism.rs`:

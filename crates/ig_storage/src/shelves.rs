@@ -1498,10 +1498,13 @@ impl Factory for KitchenSpace {
             self.apply_join(&mut parts);
         }
         let g = hwexact::join_fwd(&parts);
-        let kind = fixed_kind(self.factory_seed, &[0.4, 0.3, 0.3]);
-        let mut mats = vec![plywood(kind, true, 0), plywood(kind, false, 0), cls_spec("counter_marble", "ceramic.Marble", self.factory_seed + 7, [0.85, 0.85, 0.85])];
+        // (a kitchen's runs all in the lead run's style, whatever seed each was built from)
+        let style = crate::api::kitchen_style().unwrap_or(self.factory_seed);
+        let kind = fixed_kind(style, &[0.4, 0.3, 0.3]);
+        let mut mats = vec![plywood(kind, true, 0), plywood(kind, false, 0), cls_spec("counter_marble", "ceramic.Marble", style + 7, [0.85, 0.85, 0.85])];
         // one door / drawer front material for the whole run (each front drew its own of 5 shaders: patchwork kitchens)
-        if let Some((p0, s0)) = dr.first() { let m0 = drawer_material(p0, *s0); mats.extend(dr.iter().map(|_| m0.clone())); }
+        // (and in the run's own material in a house: tan frames with dark drawers beside plain doors read as a mismatch)
+        if let Some((p0, s0)) = dr.first() { let m0 = if crate::dense() { plywood(kind, true, 0) } else { drawer_material(p0, *s0) }; mats.extend(dr.iter().map(|_| m0.clone())); }
         Some(with_knob(&g.tag, mats))
     }
     fn asset(&self, i: u64) -> Asset {

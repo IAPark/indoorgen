@@ -637,6 +637,7 @@ fn solve_stages(opt: &Options, assets: &dyn Assets, prog: &Program, usage: &Usag
             eprintln!("KRULES {k} {:.2} {:?}", e.score, e.broken);
         }
     }
+    if crate::furn::layout2d::knobs::groups() { crate::furn::kitchen_plan::stray_stools(state, only_room); }
     if crate::furn::layout2d::knobs::groups() { for l in crate::furn::groups::orphans(state) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("GROUP {l}"); } } }
     let ts = t.elapsed().as_secs_f64();
     (tl, tm, ts)

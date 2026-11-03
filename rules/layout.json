@@ -4585,5 +4585,242 @@
     ]
    }
   ]
+ },
+ "utility": {
+  "also": [
+   {
+    "id": "light",
+    "class": "CeilingLightFactory",
+    "tier": 2,
+    "repeat": 4,
+    "per_area": 4.0,
+    "place": {
+     "ceiling": {
+      "wall_clear": 0.3
+     }
+    },
+    "reach": false,
+    "terms": [
+     {
+      "name": "apart",
+      "of": "light",
+      "w": 3.0
+     },
+     {
+      "name": "center_room",
+      "w": 0.5
+     }
+    ]
+   }
+  ],
+  "arrangements": [
+   {
+    "name": "shelving",
+    "weight": 2.0,
+    "program": [
+     {
+      "id": "shelf",
+      "class": "LargeShelfFactory",
+      "tier": 0,
+      "place": "wall",
+      "avoid_window": true,
+      "fit": {
+       "max_d": 0.45,
+       "draws": 16
+      },
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 0.6
+       }
+      ],
+      "terms": [
+       {
+        "name": "far_from_door",
+        "w": 0.7
+       }
+      ],
+      "reach": true
+     },
+     {
+      "id": "shelf_b",
+      "class": "LargeShelfFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "fit": {
+       "max_d": 0.45,
+       "draws": 16
+      },
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 0.6
+       }
+      ],
+      "terms": [
+       {
+        "name": "near",
+        "of": "shelf",
+        "w": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "shelves_and_cabinet",
+    "weight": 2.0,
+    "program": [
+     {
+      "id": "shelf",
+      "class": "LargeShelfFactory",
+      "tier": 0,
+      "place": "wall",
+      "avoid_window": true,
+      "fit": {
+       "max_d": 0.45,
+       "draws": 16
+      },
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 0.6
+       }
+      ],
+      "terms": [
+       {
+        "name": "far_from_door",
+        "w": 0.7
+       }
+      ],
+      "reach": true
+     },
+     {
+      "id": "cabinet",
+      "class": "SingleCabinetFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 0.6
+       }
+      ],
+      "fit": {
+       "max_d": 0.5,
+       "draws": 16
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "shelf",
+        "w": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "cabinets",
+    "weight": 1.0,
+    "program": [
+     {
+      "id": "cabinet",
+      "class": "SingleCabinetFactory",
+      "tier": 0,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 0.6
+       }
+      ],
+      "fit": {
+       "max_d": 0.5,
+       "draws": 16
+      },
+      "terms": [
+       {
+        "name": "far_from_door",
+        "w": 0.7
+       }
+      ]
+     },
+     {
+      "id": "cabinet_b",
+      "class": "SingleCabinetFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 0.6
+       }
+      ],
+      "fit": {
+       "max_d": 0.5,
+       "draws": 16
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "cabinet",
+        "w": 1.0
+       }
+      ],
+      "chance": 0.7
+     }
+    ]
+   }
+  ]
  }
 }

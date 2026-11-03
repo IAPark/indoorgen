@@ -268,12 +268,35 @@ fn ray_hit(tris: &[Tri], o: Vec3, dir: Vec3, maxd: f32) -> bool {
     }
     false
 }
+/// distance to the nearest triangle along a ray, up to `maxd`
+fn ray_dist(tris: &[Tri], o: Vec3, dir: Vec3, maxd: f32) -> f32 {
+    let mut best = maxd;
+    for t in tris {
+        let e1 = t[1] - t[0]; let e2 = t[2] - t[0]; let pv = dir.cross(e2); let det = e1.dot(pv);
+        if det.abs() < 1e-9 { continue; }
+        let inv = 1.0 / det; let tv = o - t[0]; let u = tv.dot(pv) * inv; if !(0.0..=1.0).contains(&u) { continue; }
+        let qv = tv.cross(e1); let v = dir.dot(qv) * inv; if v < 0.0 || u + v > 1.0 { continue; }
+        let tt = e2.dot(qv) * inv; if tt > 0.01 && tt < best { best = tt; }
+    }
+    best
+}
+/// how open a view is: rays across the frame, each worth its free depth up to 3 m; a wall or a door leaf close before the lens costs most
+fn view_quality(near: &[Tri], e: Vec3, f: Vec3, half: f32) -> f32 {
+    let (mut sum, n) = (0.0, 15);
+    for k in 0..n {
+        let a = -half + 2.0 * half * k as f32 / (n - 1) as f32;
+        let d = Vec3::new(f.x * a.cos() - f.y * a.sin(), f.x * a.sin() + f.y * a.cos(), 0.0);
+        let t = ray_dist(near, e, d, 3.0);
+        sum += t - if t < 0.8 { 3.0 } else { 0.0 };
+    }
+    sum / n as f32
+}
 fn in_tri2(p: Vec3, t: &Tri) -> bool {
     let s = |a: Vec3, b: Vec3, c: Vec3| (a.x - c.x) * (b.y - c.y) - (b.x - c.x) * (a.y - c.y);
     let d1 = s(p, t[0], t[1]); let d2 = s(p, t[1], t[2]); let d3 = s(p, t[2], t[0]);
     !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
 }
-struct Shell { walls: Vec<Tri>, boxes: Vec<(Vec3, Vec3)> }
+struct Shell { walls: Vec<Tri>, leaves: Vec<Tri>, boxes: Vec<(Vec3, Vec3)> }
 fn shell_of(s: &Scene) -> Shell {
     // (the cameras stand in this house: only what is near its floors can block them, not the neighbours' houses)
     let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
@@ -284,7 +307,9 @@ fn shell_of(s: &Scene) -> Shell {
     if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("SHELL {} wall triangles", walls.len()); }
     let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.starts_with("outdoor") || nm.contains("rug");
     let boxes = s.draws.iter().filter(|d| !skip(&s.glb.nodes[d.node].name) && d.bmax.z > 0.3 && d.bmin.z < 1.9 && (d.bmax - d.bmin).length() > 0.5).map(|d| (d.bmin, d.bmax)).collect();
-    Shell { walls, boxes }
+    // (door leaves: walls to a view, though not to a person)
+    let leaves = node_tris(s, |n| n.starts_with("door") && !n.contains("frame"));
+    Shell { walls, leaves, boxes }
 }
 impl Shell {
     fn blocked(&self, eye: Vec3, tgt: Vec3) -> bool { let d = tgt - eye; ray_hit(&self.walls, eye, d.normalize(), d.length() - 0.15) }
@@ -330,36 +355,53 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
         for t in &rm.tris { for v in t { lo = lo.min(*v); hi = hi.max(*v); } }
         let mut cands: Vec<(f32, Vec3)> = vec![];
-        let step = 0.6; let mut y = lo.y + step / 2.0;
+        let step = if rm.area < 7.0 { 0.3 } else { 0.6 }; let mut y = lo.y + step / 2.0;
         while y < hi.y { let mut x = lo.x + step / 2.0; while x < hi.x {
             let p = Vec3::new(x, y, z0);
             if rm.tris.iter().any(|t| in_tri2(p, t)) {
                 let e = Vec3::new(x, y, z0 + 1.5); let dist = (e - tgt).truncate().length();
-                if dist > 1.8 && !sh.blocked(e, tgt) { cands.push((dist, e)); }
+                if dist > (if rm.area < 7.0 { 0.9 } else { 1.8 }) && !sh.blocked(e, tgt) { cands.push((dist, e)); }
             }
             x += step; } y += step; }
         cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
         // (not inside or right behind a piece: cameras stood in a fridge, behind a wardrobe, in a door leaf)
         let boxes: Vec<(Vec3, Vec3)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !(nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.contains("exterior") || nm.starts_with("outdoor") || nm.contains("rug") || nm.contains("Ceiling")) && (d.bmax - d.bmin).max_element() > 0.25 }).map(|d| (d.bmin, d.bmax)).collect();
-        let inside = |p: Vec3, m: f32| boxes.iter().any(|(l, h)| p.x > l.x - m && p.x < h.x + m && p.y > l.y - m && p.y < h.y + m && p.z > l.z - m && p.z < h.z + m);
-        cands.retain(|(_, e)| !inside(*e, 0.15) && ![0.3f32, 0.6, 0.9].iter().any(|t| inside(*e + (tgt - *e).normalize_or_zero() * *t, 0.0)));
+        // (a piece standing on the floor counts all the way up: a camera does not hover over a counter or a bed)
+        let inside = |p: Vec3, m: f32| boxes.iter().any(|(l, h)| { let top = if l.z < z0 + 1.0 { f32::MAX } else { h.z + m }; p.x > l.x - m && p.x < h.x + m && p.y > l.y - m && p.y < h.y + m && p.z > l.z - m && p.z < top });
+        cands.retain(|(_, e)| !inside(*e, 0.2) && ![0.3f32, 0.6, 0.9].iter().any(|t| { let q = *e + (tgt - *e).normalize_or_zero() * *t; boxes.iter().any(|(l, h)| q.x > l.x && q.x < h.x && q.y > l.y && q.y < h.y && q.z > l.z && q.z < h.z) }));
         // (nor a door leaf filling the view: a hallway's camera saw nothing but the open door)
         let leaves: Vec<(Vec3, Vec3)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; nm.starts_with("door") && !nm.contains("frame") }).map(|d| (d.bmin, d.bmax)).collect();
         let leaf_blocks = |e: Vec3, t: Vec3| { let f = (t - e).normalize_or_zero(); [0.25f32, 0.5, 0.75, 1.0, 1.5].iter().any(|k| { let q = e + f * *k; leaves.iter().any(|(l, h)| q.x > l.x - 0.03 && q.x < h.x + 0.03 && q.y > l.y - 0.03 && q.y < h.y + 0.03) }) };
         cands.retain(|(_, e)| !leaf_blocks(*e, tgt));
-        let mut chosen: Vec<Vec3> = vec![]; let mut tried = 0;
-        for (dist, e) in cands {
-            if chosen.len() >= 2 || tried > 60 { break; }
-            if chosen.iter().any(|c| (*c - e).truncate().length() < 3.0 && chosen.len() < 2 && false) { continue; }
-            tried += 1;
-            if dist > 7.5 { continue; }
-            let cl = sh.clearance(e); if cl < 0.45 { continue; }
-            if sh.openness(e, tgt, 1.2) < 7 { continue; }
-            if chosen.iter().any(|c| (*c - e).truncate().length() < 2.5) { continue; }
-            chosen.push(e);
+        // the most open views: for each spot the best of a few headings around the subject, a farther spot a little better
+        let mut tall: Vec<Tri> = vec![];
+        for (l, h) in &boxes { if h.z > z0 + 1.45 && l.z < z0 + 1.55 { let c = [Vec3::new(l.x, l.y, z0 + 1.5), Vec3::new(h.x, l.y, z0 + 1.5), Vec3::new(h.x, h.y, z0 + 1.5), Vec3::new(l.x, h.y, z0 + 1.5)]; let up = Vec3::new(0.0, 0.0, 0.5); let dn = -up; for k in 0..4 { let (a, b) = (c[k], c[(k + 1) % 4]); tall.push([a + dn, b + dn, b + up]); tall.push([a + dn, b + up, a + up]); } } }
+        let near: Vec<Tri> = sh.walls.iter().chain(sh.leaves.iter()).chain(tall.iter()).filter(|t| { let (l, h) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2])); h.x > lo.x - 3.5 && l.x < hi.x + 3.5 && h.y > lo.y - 3.5 && l.y < hi.y + 3.5 }).cloned().collect();
+        let half = 42f32.to_radians();
+        let mut scored: Vec<(f32, Vec3, Vec3)> = vec![];
+        let n_cands = cands.len(); let every = (n_cands / 40).max(1);
+        for (dist, e) in cands.iter().step_by(every) {
+            if *dist > 7.5 { continue; }
+            let f0 = (tgt - *e).truncate().normalize_or_zero().extend(0.0);
+            let mut best: Option<(f32, Vec3)> = None;
+            for deg in [0.0f32, -20.0, 20.0, -35.0, 35.0] {
+                let a = deg.to_radians();
+                let f = Vec3::new(f0.x * a.cos() - f0.y * a.sin(), f0.x * a.sin() + f0.y * a.cos(), 0.0);
+                let q = view_quality(&near, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist;
+                if best.map_or(true, |b| q > b.0) { best = Some((q, f)); }
+            }
+            if let Some((q, f)) = best { scored.push((q, *e, f)); }
+        }
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        let mut chosen: Vec<Vec3> = vec![]; let mut heads: Vec<Vec3> = vec![];
+        for (q, e, f) in &scored {
+            if chosen.len() >= 2 { break; }
+            // (a second view only if it is good and elsewhere)
+            if !chosen.is_empty() && (*q < 1.5 || (chosen[0] - *e).truncate().length() < 2.5) { continue; }
+            chosen.push(*e); heads.push(*f);
         }
         // (every room gets a view: a closet or a hallway fails the rules above, so it takes the farthest clear spot in it and a wider lens)
-        let mut lens = 18.0;
+        let mut lens = if rm.area < 7.0 { 14.0 } else { 18.0 };
         if chosen.is_empty() {
             let mut best: Option<(f32, Vec3)> = None;
             let step = 0.2; let mut y = lo.y + step / 2.0;
@@ -373,9 +415,10 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             if let Some((_, e)) = best { chosen.push(e); lens = 13.0; }
         }
         for (k, e) in chosen.iter().enumerate() {
-            let mut cm = cam_look(*e, tgt, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" });
+            let look = heads.get(k).map_or(tgt, |f| *e + *f * (tgt - *e).truncate().length().max(1.0) + Vec3::new(0.0, 0.0, tgt.z - e.z));
+            let mut cm = cam_look(*e, look, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" });
             // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
-            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, tgt.x, tgt.y, tgt.z, lens); }
+            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, look.x, look.y, look.z, lens); }
             out.push(cm);
             if out.len() >= n { return out; }
         }
@@ -507,9 +550,18 @@ fn visible(f: &[Vec4; 6], lo: Vec3, hi: Vec3) -> bool {
     true
 }
 
-fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>) {
+/// a door leaf right before the lens fills the frame and shows nothing of the room: not drawn for that view
+fn leaf_in_the_way(s: &Scene, d: &Draw, eye: Option<Vec3>) -> bool {
+    let Some(e) = eye else { return false };
+    let nm = &s.glb.nodes[d.node].name;
+    if !nm.starts_with("door") || nm.contains("frame") { return false }
+    let q = e.clamp(d.bmin, d.bmax);
+    (q - e).truncate().length() < 1.0
+}
+fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>) {
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
+        if leaf_in_the_way(s, d, eye) { continue; }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
         if !shadow {
@@ -552,7 +604,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaIm
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &s.shadow_view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
             rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
-            draw_all(&mut rp, s, false, true, None);
+            draw_all(&mut rp, s, false, true, None, None);
         }
         s.shadow_done = true;
     }
@@ -568,8 +620,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts) -> image::RgbaIm
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.nrm, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr));
-        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr));
+        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye));
+        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye));
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },

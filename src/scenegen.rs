@@ -472,6 +472,7 @@ pub fn build_scene(p: &Params) -> Built {
     // one object's visual: built to its size / fitted to its layout box, the geometry budget applied (the parallel build below and
     // the closed-door rebuild of wardrobes)
     let build_visual = |k: &String, gen: &indoorgen::furn::state::GenRef, round: bool| -> indoorgen::assets::Asset {
+            ig_kit::api::set_kitchen_style((gen.class == "KitchenSpaceFactory" || gen.class == "KitchenIslandFactory").then_some(gen.factory_seed));
             // a piece builds itself, at its own size and in its collision's frame
             if let Some(p) = &gen.piece {
                 let mut a = p.mesh();

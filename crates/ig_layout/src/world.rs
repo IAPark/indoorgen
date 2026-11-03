@@ -104,6 +104,8 @@ pub enum Why { Outside, Hard, Door, Opening, Window, Walk, Reach, Exact }
 
 #[derive(Clone)]
 pub struct World {
+    /// what is built into the room
+    pub builtin: std::rc::Rc<Vec<Prism>>,
     pub ox: f64, pub oy: f64, pub nx: usize, pub ny: usize,
     /// inside the room, clear of the walls
     pub floor: Vec<bool>,
@@ -129,7 +131,7 @@ impl World {
         let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
         for p in &room.outline { for d in 0..2 { lo[d] = lo[d].min(p[d]); hi[d] = hi[d].max(p[d]); } }
         let (nx, ny) = (((hi[0] - lo[0]) / CELL).ceil() as usize + 1, ((hi[1] - lo[1]) / CELL).ceil() as usize + 1);
-        let mut w = World { ox: lo[0], oy: lo[1], nx, ny, floor: vec![false; nx * ny], hard: vec![0; nx * ny], open: vec![0; nx * ny], soft: vec![0; nx * ny], keep: vec![0; nx * ny], placed: vec![], keep_prisms: vec![], inner_d: room.wall_t / 2.0 };
+        let mut w = World { builtin: Default::default(), ox: lo[0], oy: lo[1], nx, ny, floor: vec![false; nx * ny], hard: vec![0; nx * ny], open: vec![0; nx * ny], soft: vec![0; nx * ny], keep: vec![0; nx * ny], placed: vec![], keep_prisms: vec![], inner_d: room.wall_t / 2.0 };
         for j in 0..ny { for i in 0..nx {
             let c = w.center(i, j);
             w.floor[j * nx + i] = house::inside(&room.outline, c) && house::edge_dist(&room.outline, c) >= room.wall_t / 2.0;
@@ -193,6 +195,8 @@ impl World {
             }
             // a wall's corner inside the shape (a notch)
             if room.outline.iter().any(|c| in_hull(&p.hull, *c, 0.002)) { return Some(Why::Outside) }
+            // (a rug lies under what the room is furnished with, not under what is built in: a hearth, a shelf wall)
+            if p.role == COVER && self.builtin.iter().any(|o| sat(&p.hull, &o.hull) < -0.002) { return Some(Why::Hard) }
             for o in self.placed.iter().chain(self.keep_prisms.iter()) {
                 let clash = match (p.role, o.role) { (HARD, HARD) | (HARD, OPENING) | (HARD, KEEP) | (OPENING, HARD) => true, _ => false };
                 if clash && p.z[0] < o.z[1] - 0.002 && o.z[0] < p.z[1] - 0.002 && sat(&p.hull, &o.hull) < -0.002 {

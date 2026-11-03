@@ -670,6 +670,12 @@ fn place_island(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &
     }
 }
 
+/// a kitchen's bar stools are its island's: those the program scattered go
+pub fn stray_stools(state: &mut State, only_room: Option<&str>) {
+    let gone: Vec<String> = state.objs.iter().filter(|(k, o)| class_of(o) == "BarChairFactory" && !k.contains("_stool") && layout2d::room_of(state, k).map_or(false, |r| room_type_of(&r) == "kitchen" && only_room.map_or(true, |x| x == r))).map(|(k, _)| k.clone()).collect();
+    for k in gone { layout2d::remove_tree(state, &k); }
+}
+
 /// random starts, then annealing steps from the best (temperature 2 -> 0.03); the best few distinct plans, best first
 fn anneal(kit: &Kit, rng: &mut Rng) -> Vec<(f64, Plan)> {
     let mut best: Vec<(f64, Plan)> = vec![];

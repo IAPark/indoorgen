@@ -671,6 +671,10 @@ thread_local! {
     static KITCHEN_JOIN: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
 }
 /// the next counter run built is one leg of an L (furn::kitchen_plan): [blind end, blind width, joined end, wall-cabinet reach]
+thread_local! { static KITCHEN_STYLE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) }; }
+/// the seed whose materials a kitchen's runs all take (furn::groups::kitchen_style), while one is being built
+pub fn set_kitchen_style(s: Option<u64>) { KITCHEN_STYLE.with(|c| c.set(s)); }
+pub fn kitchen_style() -> Option<u64> { KITCHEN_STYLE.with(|c| c.get()) }
 pub fn set_kitchen_join(j: Option<[f64; 4]>) {
     KITCHEN_JOIN.with(|c| c.set(j));
 }

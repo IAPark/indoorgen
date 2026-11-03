@@ -391,6 +391,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
     let mut cache = HashMap::new();
     let mut w0 = World::new(room);
     w0.add(fixed);
+    w0.builtin = std::rc::Rc::new(fixed.to_vec());
     let walk0 = w0.walk(&[]);
     let (seen0, joined0) = w0.flood(&walk0, room);
     // (the built-ins stay reachable too, as any placed item: each one the empty room can reach)
