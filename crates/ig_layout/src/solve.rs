@@ -169,7 +169,8 @@ pub fn solve(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>) ->
 /// `fixed`: what already stands in the room (built-ins)
 pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>, fixed: &[Prism]) -> Solution {
     let t0 = std::time::Instant::now();
-    let mut order: Vec<&Item> = rules.program.iter().filter(|i| room.area >= i.min_area).collect();
+    let wanted = |i: &Item| i.chance >= 1.0 || noise(hash(&format!("{}/{}/chance", room.name, i.id), seed), 0) < i.chance;
+    let mut order: Vec<&Item> = rules.program.iter().filter(|i| room.area >= i.min_area && wanted(i)).collect();
     order.sort_by_key(|i| i.tier);
     let mut cache = HashMap::new();
     let mut w0 = World::new(room);

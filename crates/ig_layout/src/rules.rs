@@ -14,6 +14,8 @@ pub struct Item {
     #[serde(default)] pub tier: u8,
     /// the room's size for it to be wanted, m2
     #[serde(default)] pub min_area: f64,
+    /// how often the room wants it at all, drawn per room (rooms of one house differ)
+    #[serde(default = "one")] pub chance: f64,
     /// how it stands: wall / beside
     pub place: Place,
     /// tried in order until one has a place: as_is, tucked, compact (Piece::tucked once, twice); `side` turns the long side to the wall
