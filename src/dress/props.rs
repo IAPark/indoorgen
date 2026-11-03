@@ -144,7 +144,7 @@ pub fn utensil_crock(seed: u64) -> Asset {
         part(&mut a, limb([x0, y0, 0.02], [x1, y1, top], 0.006, 0.006, true), m);
         match i % 3 {
             0 => part(&mut a, Mesh::ellipsoid([x1, y1, top + 0.03], [0.022, 0.012, 0.035], 10, 6), m), // spoon bowl
-            1 => part(&mut a, Mesh::cuboid([x1 - 0.03, y1 - 0.003, top], [x1 + 0.03, y1 + 0.003, top + 0.07]), m), // spatula blade
+            1 => part(&mut a, Mesh::ellipsoid([x1, y1, top + 0.035], [0.032, 0.004, 0.042], 16, 8), m), // spatula blade
             _ => part(&mut a, Mesh::ellipsoid([x1, y1, top + 0.015], [0.035, 0.035, 0.02], 12, 6), m), // ladle
         }
     }

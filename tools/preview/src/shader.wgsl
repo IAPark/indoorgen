@@ -109,7 +109,9 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     let ndh = max(dot(n, h), 0.0);
     let fres = pow(1.0 - max(dot(n, vdir), 0.0), 5.0);
     let spc = f0 * pow(ndh, pw) * (pw + 8.0) / 25.0 + surf_coat * 0.04 * pow(ndh, 1200.0) * 48.0;
-    col = albedo.rgb * (1.0 - surf_metal) * lit + g.sun_col.rgb * spc * sh * ndl + (f0 + (1.0 - f0) * fres * (1.0 - r_) + surf_coat * 0.04 * fres) * amb * (1.0 - 0.7 * r_) + m.emissive.rgb;
+    // (no environment to reflect here: metal keeps part of its colour as diffuse, and sees neutral room light, or ovens came out dark blue and mottled)
+    let room = vec3<f32>(dot(amb, vec3<f32>(0.333)));
+    col = albedo.rgb * (1.0 - 0.55 * surf_metal) * lit + g.sun_col.rgb * spc * sh * ndl + (f0 + (1.0 - f0) * fres * (1.0 - r_) + surf_coat * 0.04 * fres) * mix(amb, room, surf_metal) * (1.0 - 0.35 * r_) + m.emissive.rgb;
   }
   var out: FOut;
   var a = 1.0;

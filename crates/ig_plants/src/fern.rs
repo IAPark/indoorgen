@@ -131,6 +131,8 @@ impl FernFactory {
                     let cl = (cr[0] * cr[0] + cr[1] * cr[1] + cr[2] * cr[2]).sqrt().max(1e-9);
                     let up = [cr[0] / cl, cr[1] / cl, cr[2] / cl];
                     let fwd = [0.0, 0.0, 1.0];
+                    // (leaflets wide enough to overlap: narrower, a frond was a row of dots)
+                    let wd = wd * 2.6;
                     let tip = [p1[0] + fwd[0] * wd * 1.2, p1[1] + fwd[1] * wd * 1.2, p1[2] + fwd[2] * wd * 1.2];
                     let a = [p0[0], p0[1], p0[2]];
                     m.add_tri(a, [p1[0] + up[0] * wd * 0.5, p1[1] + up[1] * wd * 0.5, p1[2] + up[2] * wd * 0.5], tip);

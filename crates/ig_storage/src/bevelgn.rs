@@ -275,6 +275,7 @@ impl Factory for BevFactory {
         let mut a = Asset::default();
         a.parts = parts_of(&g, &|n| {
             let n = if n.is_empty() { "gn" } else { n };
+            if n == "GrateIron" { return mat("grate_iron", [0.035, 0.035, 0.038], 0.55) }
             self.slot_mats.iter().find(|x| x.0 == n).map(|x| x.1.clone()).unwrap_or_else(|| mat(n, [0.6, 0.6, 0.62], 0.4))
         });
         a
@@ -537,13 +538,8 @@ fn add_gas_grates_uncached(body: &GMesh, s: &Sampled) -> Result<GMesh, String> {
         eprintln!("gas oven add_gas_grates total {:?}", tg.elapsed());
     }
     let mut mats = body.mats.clone();
-    let white = match mats.iter().position(|m| m == "WhiteMetal") {
-        Some(i) => i,
-        None => {
-            mats.push("WhiteMetal".to_string());
-            mats.len() - 1
-        }
-    };
+    // (cast iron: in the range's own white the grates did not read at all)
+    let white = { mats.push("GrateIron".to_string()); mats.len() - 1 };
     let body_mi: Vec<i32> = (0..body.nf()).map(|f| body.attrs.get("material_index").map(|a| a.data[f].i()).unwrap_or(0)).collect();
     let mut mi: Vec<Val> = r.face_orig.iter().map(|&(_, f)| Val::I(body_mi[f])).collect();
     let mut pos = r.verts.clone();
