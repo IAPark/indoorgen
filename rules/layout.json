@@ -1980,6 +1980,287 @@
       ]
      }
     ]
+   },
+   {
+    "name": "hearth",
+    "weight": 6.0,
+    "needs": [
+     "FireplaceFeature"
+    ],
+    "program": [
+     {
+      "id": "sofa",
+      "class": "SofaFactory",
+      "tier": 0,
+      "place": {
+       "facing": {
+        "parent": "FireplaceFeature",
+        "min": 1.4,
+        "max": 4.0,
+        "lateral": 0.5
+       }
+      },
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.8
+       },
+       {
+        "piece": "as_is",
+        "width": 1.4
+       },
+       {
+        "piece": "as_is",
+        "width": 1.0
+       }
+      ],
+      "terms": [
+       {
+        "name": "backed",
+        "w": 1.0
+       },
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ],
+      "all_variants": true,
+      "avoid_window": true,
+      "min_area": 0.0
+     },
+     {
+      "id": "coffee",
+      "class": "CoffeeTableFactory",
+      "tier": 1,
+      "reach": true,
+      "place": {
+       "front": {
+        "parent": "sofa",
+        "gap": 0.4,
+        "width_share": 0.75
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ],
+      "min_area": 0.0
+     },
+     {
+      "id": "armchair_a",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "reach": true,
+      "place": {
+       "flank": {
+        "parent": "sofa",
+        "side": 1,
+        "gap": 0.1,
+        "forward": 0.5
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ],
+      "requires": [
+       "coffee"
+      ]
+     },
+     {
+      "id": "armchair_b",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 30.0,
+      "reach": true,
+      "place": {
+       "flank": {
+        "parent": "sofa",
+        "side": -1,
+        "gap": 0.1,
+        "forward": 0.5
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ],
+      "requires": [
+       "coffee"
+      ]
+     },
+     {
+      "id": "armchair_wall",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "unless": [
+       "coffee"
+      ],
+      "place": "wall",
+      "reach": true,
+      "avoid_window": false,
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "corner",
+        "w": 0.3
+       }
+      ]
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "sofa",
+        "add_w": 0.6,
+        "share": 2.2,
+        "past": 1.3,
+        "w": [
+         1.6,
+         3.4
+        ],
+        "d": [
+         1.4,
+         2.6
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "min_area": 0.0
+     },
+     {
+      "id": "bookcase",
+      "class": "SimpleBookcaseFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "chance": 0.7,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "terms": [
+       {
+        "name": "apart",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.3
+       }
+      ]
+     },
+     {
+      "id": "plant",
+      "class": "LargePlantContainerFactory",
+      "tier": 2,
+      "chance": 0.5,
+      "soft_blocks": true,
+      "place": "wall",
+      "avoid_window": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 0.5
+       }
+      ],
+      "min_area": 0.0
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "chance": 0.9,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ],
+      "min_area": 0.0
+     },
+     {
+      "id": "art_b",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "chance": 0.5,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ],
+      "min_area": 0.0
+     }
+    ]
    }
   ]
  },
@@ -2222,6 +2503,318 @@
         "w": 0.3
        }
       ]
+     },
+     {
+      "id": "plate0",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork0",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife0",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass0",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate1",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork1",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife1",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass1",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate2",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork2",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife2",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass2",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate3",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork3",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife3",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass3",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "vase",
+      "class": "VaseFactory",
+      "tier": 2,
+      "chance": 0.3,
+      "unless": [],
+      "place": {
+       "setting": {
+        "parent": "table"
+       }
+      }
      }
     ]
    },
@@ -2459,6 +3052,318 @@
         "w": 0.3
        }
       ]
+     },
+     {
+      "id": "plate0",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork0",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife0",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass0",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate1",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork1",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife1",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass1",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate2",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork2",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife2",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass2",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate3",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork3",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife3",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass3",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "vase",
+      "class": "VaseFactory",
+      "tier": 2,
+      "chance": 0.3,
+      "unless": [],
+      "place": {
+       "setting": {
+        "parent": "table"
+       }
+      }
      }
     ]
    },
@@ -2646,6 +3551,318 @@
         "w": 0.3
        }
       ]
+     },
+     {
+      "id": "plate0",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork0",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife0",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass0",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate1",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork1",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife1",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass1",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate2",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork2",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife2",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass2",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate3",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork3",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife3",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass3",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "vase",
+      "class": "VaseFactory",
+      "tier": 2,
+      "chance": 0.3,
+      "unless": [],
+      "place": {
+       "setting": {
+        "parent": "table"
+       }
+      }
      }
     ]
    }

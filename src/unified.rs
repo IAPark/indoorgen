@@ -22,7 +22,12 @@ pub fn apply(g: &mut Generated, seed: u64) -> Vec<String> {
             let hull = world::hull2([[l[0], l[1]], [h[0], l[1]], [h[0], h[1]], [l[0], h[1]]].iter().map(|c| { let q = o.pose.apply([c[0], c[1], 0.0]); [q[0], q[1]] }).collect());
             world::Prism { hull, z: [0.0, h[2] - l[2]], role: world::HARD }
         }).collect();
-        let s = solve::solve_with(&room, rr, seed ^ 0x1a70, None, &fixed);
+        // and the rules can name them: a built-in's frame runs along its wall with y into the room; as an item, +x is out into the room
+        let named: Vec<solve::Placed> = g.features.iter().filter(|f| f.room == name).map(|f| {
+            let (l, h) = f.asset.bounds();
+            solve::fixed_item(f.class, f.class, world::Pose { yaw: f.yaw + std::f64::consts::FRAC_PI_2, t: [f.origin[0], f.origin[1]], z: 0.0 }, [l[1], -h[0], l[2]], [h[1], -l[0], h[2]])
+        }).collect();
+        let s = solve::solve_with(&room, rr, seed ^ 0x1a70, None, &fixed, &named);
         if s.report.iter().any(|r| r.tier == 0 && !r.placed) {
             log.push(format!("{name}: a must has no place, the old layout stays ({:?})", s.report.iter().filter(|r| r.tier == 0 && !r.placed).map(|r| &r.why).collect::<Vec<_>>()));
             continue;

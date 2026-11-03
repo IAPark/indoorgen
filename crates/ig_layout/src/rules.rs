@@ -23,6 +23,8 @@ pub struct Arrangement {
     #[serde(default = "one")] pub weight: f64,
     #[serde(default)] pub min_area: f64,
     #[serde(default = "big")] pub max_area: f64,
+    /// built-ins the room must have for this (a seating group facing a fireplace); they stand as items the program can name
+    #[serde(default)] pub needs: Vec<String>,
     pub program: Vec<Item>,
 }
 
@@ -37,6 +39,8 @@ pub struct Item {
     #[serde(default)] pub min_area: f64,
     /// how often the room wants it at all, drawn per room (rooms of one house differ)
     #[serde(default = "one")] pub chance: f64,
+    /// items with the same key share one `chance` draw (the places at a table: all laid or none)
+    #[serde(default)] pub chance_key: Option<String>,
     /// items of one set draw one piece (the chairs around a table)
     #[serde(default)] pub set: Option<String>,
     /// wanted only with all of these placed (an armchair in a group around a coffee table)
@@ -94,6 +98,8 @@ pub enum Place {
     Hang { #[serde(default)] centers: Vec<f64>, #[serde(default = "big")] tall_from: f64, #[serde(default)] tall_bottom: f64 },
     /// on the wall behind `parent`, centred over it: centred at `center`, or higher to stand `gap` over its top (a mirror over a basin)
     Over { parent: String, center: f64, gap: f64 },
+    /// on `parent`'s top: `inset` in from its edge in front of the item `towards` (a place at a table), `side` along that edge; its middle with no `towards`
+    Setting { parent: String, #[serde(default)] towards: Option<String>, #[serde(default)] inset: f64, #[serde(default)] side: f64 },
     /// sized from `parent` and lying under it: as wide as it plus `add_w`, `share` of its length, reaching `past` beyond its foot; both clamped
     /// (`add_d`: as long as it plus this, centred under it, instead)
     Under { parent: String, add_w: f64, #[serde(default)] share: f64, #[serde(default)] past: f64, #[serde(default)] add_d: Option<f64>, w: [f64; 2], d: [f64; 2], #[serde(default = "thick")] t: f64 },
