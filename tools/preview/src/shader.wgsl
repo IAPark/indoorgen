@@ -9,6 +9,7 @@ struct G {
   cam_pos: vec4<f32>,
   cam_fwd: vec4<f32>,
   params: vec4<f32>,       // x = number of lights, y = exposure, z = ao strength, w = ao radius (m)
+  clip2: vec4<f32>,
   clip: vec4<f32>,         // a cutaway: what lies behind this vertical plane is not drawn (xyz normal, w offset; all 0: none)
   params2: vec4<f32>,      // x = shadow texel (1/size), y = ss factor, z = fill light strength
   lpos: array<vec4<f32>, 32>,
@@ -53,6 +54,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
 
 @fragment fn fs_main(v: VOut, @builtin(front_facing) ff: bool) -> FOut {
   if (dot(g.clip.xyz, g.clip.xyz) > 0.5 && dot(g.clip.xyz, v.wpos) < g.clip.w) { discard; }
+  if (dot(g.clip2.xyz, g.clip2.xyz) > 0.5 && dot(g.clip2.xyz, v.wpos) < g.clip2.w) { discard; }
   var albedo = m.color;
   let tex = textureSample(base_tex, base_smp, v.uv);
   // alpha-masked cards: coverage from the full-resolution level (mip averaging dropped the leaves below the cutoff at a distance)

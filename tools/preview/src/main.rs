@@ -16,14 +16,14 @@ const SRC: &str = include_str!("shader.wgsl");
 struct Globals {
     viewproj: [[f32; 4]; 4], inv_viewproj: [[f32; 4]; 4], sun_vp: [[f32; 4]; 4],
     sun_dir: [f32; 4], sun_col: [f32; 4], sky: [f32; 4], ground: [f32; 4], cam_pos: [f32; 4], cam_fwd: [f32; 4],
-    params: [f32; 4], clip: [f32; 4], params2: [f32; 4], lpos: [[f32; 4]; 32], lcol: [[f32; 4]; 32],
+    params: [f32; 4], clip2: [f32; 4], clip: [f32; 4], params2: [f32; 4], lpos: [[f32; 4]; 32], lcol: [[f32; 4]; 32],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4] }
 
 #[derive(Clone)]
-struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool }
+struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String)>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
@@ -311,7 +311,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
 fn cam_look(eye: Vec3, tgt: Vec3, lens: f32) -> Cam {
     let f = (tgt - eye).normalize(); let r = f.cross(Vec3::Z).normalize(); let u = r.cross(f);
     let m = Mat4::from_cols(r.extend(0.0), u.extend(0.0), (-f).extend(0.0), eye.extend(1.0));
-    Cam { name: String::new(), view: m, fov_x: 2.0 * (18.0f32 / lens).atan(), ortho: None, near: None, clip: [0.0; 4], shown: 0.0, key: true }
+    Cam { name: String::new(), view: m, fov_x: 2.0 * (18.0f32 / lens).atan(), ortho: None, near: None, clip: [0.0; 4], clip2: [0.0; 4], only: None, shown: 0.0, key: true }
 }
 fn mat_from_json(v: &Value) -> Mat4 {
     let mut c = [0f32; 16];
@@ -320,7 +320,7 @@ fn mat_from_json(v: &Value) -> Mat4 {
 }
 fn cam_json(v: &Value, name: &str) -> Cam {
     let lens = v["lens"].as_f64().unwrap_or(18.0) as f32; let sw = v["sensor_width"].as_f64().unwrap_or(36.0) as f32;
-    Cam { name: name.to_string(), view: mat_from_json(&v["matrix"]), fov_x: 2.0 * (sw / (2.0 * lens)).atan(), ortho: None, near: None, clip: [0.0; 4], shown: 0.0, key: true }
+    Cam { name: name.to_string(), view: mat_from_json(&v["matrix"]), fov_x: 2.0 * (sw / (2.0 * lens)).atan(), ortho: None, near: None, clip: [0.0; 4], clip2: [0.0; 4], only: None, shown: 0.0, key: true }
 }
 fn person_pos(s: &Scene, idx: usize) -> Option<Vec3> {
     let mut seen: Vec<String> = vec![];
@@ -639,6 +639,26 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             out.push(cm);
             if out.iter().filter(|c| !c.name.contains('~')).count() >= n { return out; }
         }
+        // the last word: a view from above the walls, ceiling and near walls gone, nothing but this room. Not as if standing in it, but the whole room always shows.
+        // (rectangular rooms only: an angled wall has no plane to cut it away)
+        // (and rooms holding little: with a bathroom's fittings, a wall-coloured slab stood through the picture, not yet explained)
+        let few = { let mut ids: Vec<String> = vec![]; for d in &s.draws { let nm = &s.glb.nodes[d.node].name; if skip(nm) || nm.contains("Ceiling") || nm.contains("_light") || nm.contains("urtain") { continue } let c = (d.bmin + d.bmax) * 0.5; if !rm.tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, z0), t)) { continue } let id = nm.split(|ch| ch == '#' || ch == '.').next().unwrap_or(nm).to_string(); if !ids.contains(&id) { ids.push(id); } } ids.len() <= 3 };
+        if few && rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01) > 0.9 {
+            let c = (lo + hi) * 0.5;
+            let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
+            let f = Vec3::new(sx, sy, 0.0).normalize();
+            let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
+            let dist = 0.95 * r / 0.5625 + 0.9;
+            let target = Vec3::new(c.x, c.y, z0 + 0.5);
+            let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
+            let mut cm = cam_look(e, target, 18.0);
+            cm.near = Some(0.3);
+            cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { lo.x + 0.02 } else { -hi.x + 0.02 }];
+            cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { lo.y + 0.02 } else { -hi.y + 0.02 }];
+            cm.only = Some((lo, hi, rm.name.clone()));
+            cm.name = format!("{}_A~h", rm.name);
+            out.push(cm);
+        }
     }
     out
 }
@@ -781,10 +801,24 @@ fn leaf_in_the_way(s: &Scene, d: &Draw, eye: Option<Vec3>, cut: Option<(Vec3, f3
     let id = nm.split('.').next().unwrap_or(nm);
     s.draws.iter().any(|o| { let n2 = &s.glb.nodes[o.node].name; n2.split('.').next() == Some(id) && !n2.contains("frame") && !n2.contains("casing") && { let d = (e.clamp(o.bmin, o.bmax) - e).truncate().length(); let w = (o.bmax - o.bmin).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) } })
 }
-fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>) {
+/// the near walls of a view from above, as (sx, x offset, sy, y offset): what lies under them goes with them
+fn cut_plane(eye: Option<Vec3>, lo: &Vec3, hi: &Vec3) -> (f32, f32, f32, f32) {
+    let e = eye.unwrap_or(Vec3::ZERO); let c = (*lo + *hi) * 0.5;
+    let (sx, sy) = (if e.x < c.x { 1.0 } else { -1.0 }, if e.y < c.y { 1.0 } else { -1.0 });
+    (sx, if sx > 0.0 { lo.x } else { -hi.x }, sy, if sy > 0.0 { lo.y } else { -hi.y })
+}
+fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String)>) {
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
         if leaf_in_the_way(s, d, eye, cut) { continue; }
+        if let Some((lo, hi, room)) = only {
+            let nm = s.glb.nodes[d.node].name.replace('/', "_");
+            let low = nm.to_lowercase();
+            if low.contains(".ceiling") || low.contains("ceiling") || low.starts_with("outdoor") || low.starts_with("exterior") || low.contains("skirting") || low.contains("pendant") || low.contains("_light") || low.starts_with("beam") { continue; }
+            if low.contains(".wall") || low.contains(".floor") { if !nm.starts_with(&format!("{room}.")) { continue; } }
+            else if (low.starts_with("door") || low.starts_with("window") || low.contains("curtain")) && { let c = (d.bmin + d.bmax) * 0.5; let n = [cut_plane(eye, lo, hi)]; n[0].0 * c.x < n[0].1 + 0.3 * 1.0 && n[0].0 != 0.0 || n[0].2 * c.y < n[0].3 + 0.3 && n[0].2 != 0.0 } { continue; }
+            else { let c = (d.bmin + d.bmax) * 0.5; if c.x < lo.x - 0.15 || c.x > hi.x + 0.15 || c.y < lo.y - 0.15 || c.y > hi.y + 0.15 { continue; } }
+        }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
         if !shadow {
@@ -813,7 +847,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
         sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.62 * ambient, 0.72 * ambient, 0.9 * ambient, 0.0], ground: [0.28 * ambient, 0.25 * ambient, 0.22 * ambient, 0.0],
-        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, sr],
+        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, sr],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }
     q.write_buffer(&r.ubuf, 0, bytemuck::bytes_of(&gl));
@@ -828,7 +862,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &s.shadow_view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
             rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
-            draw_all(&mut rp, s, false, true, None, None, None);
+            draw_all(&mut rp, s, false, true, None, None, None, None);
         }
         s.shadow_done = true;
     }
@@ -844,8 +878,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.nrm, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }));
-        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }));
+        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
@@ -919,7 +953,7 @@ fn main() {
         let mut best_detail: HashMap<String, f32> = HashMap::new();
         for (i, c) in cams.iter().enumerate() {
             // (only a poor view looks further)
-            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
+            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.45 } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
             let t = Instant::now();
             let mut img = render(&mut r, &mut s, c, &o, 1.0);
             // a view too bright or too dark for its lights: exposed again to suit, as a camera would
@@ -941,10 +975,10 @@ fn main() {
             // (nor a close-up: book spines filling the frame are detail, and show no room)
             let close = r.last_depth.as_ref().map_or(0.0, |d| { let (mut n, mut c) = (0f32, 0f32); for v in d.iter().step_by(11) { c += 1.0; if *v > 0.0 && *v < 1.5 { n += 1.0; } } n / c.max(1.0) });
             let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.5).min(1.0) - 1.2 * flat_columns(&img) - if c.key { 0.0 } else { 0.8 } - 2.0 * (close - 0.45).max(0.0);
-            if let Some((base, _)) = nm.split_once('~') {
+            if let Some((base, alt)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {
-                    if detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
+                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
                 }
                 if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2}"); }
                 continue;
