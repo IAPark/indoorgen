@@ -104,6 +104,49 @@ fn blackbody(t: f32) -> Vec3 {
     Vec3::new(r, g, b) / 255.0
 }
 
+/// a small abstract painting, its own for each frame (by name)
+fn painting(name: &str) -> image::RgbaImage {
+    let mut h = 0xcbf29ce484222325u64; for b in name.bytes() { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
+    let mut next = move || { h ^= h << 13; h ^= h >> 7; h ^= h << 17; (h >> 11) as f32 / (1u64 << 53) as f32 };
+    const PAL: [[[f32; 3]; 4]; 6] = [
+        [[0.86, 0.80, 0.68], [0.72, 0.40, 0.28], [0.25, 0.33, 0.38], [0.91, 0.72, 0.38]],
+        [[0.84, 0.86, 0.84], [0.33, 0.47, 0.50], [0.15, 0.22, 0.30], [0.80, 0.55, 0.45]],
+        [[0.93, 0.89, 0.80], [0.52, 0.58, 0.40], [0.28, 0.35, 0.22], [0.78, 0.65, 0.35]],
+        [[0.20, 0.23, 0.30], [0.80, 0.42, 0.32], [0.90, 0.78, 0.60], [0.40, 0.55, 0.62]],
+        [[0.90, 0.85, 0.82], [0.70, 0.50, 0.55], [0.38, 0.28, 0.40], [0.85, 0.70, 0.60]],
+        [[0.78, 0.84, 0.88], [0.40, 0.56, 0.70], [0.92, 0.88, 0.76], [0.20, 0.30, 0.44]]];
+    let pal = PAL[(next() * 6.0) as usize % 6];
+    let style = (next() * 4.0) as usize;
+    let mut shapes: Vec<[f32; 5]> = (0..7).map(|_| [next(), next(), 0.08 + 0.3 * next(), 0.08 + 0.3 * next(), (next() * 3.99).floor()]).collect();
+    if style == 1 { shapes.truncate(3); }
+    let (ph, amp) = (next() * 6.28, 0.04 + 0.1 * next());
+    let n = 128u32;
+    image::RgbaImage::from_fn(n, n, |x, y| {
+        let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
+        let mut c = pal[0];
+        match style {
+            // a horizon and hills
+            0 => { let hz = 0.45 + amp * (u * 7.0 + ph).sin(); let hz2 = 0.65 + amp * (u * 4.0 + ph * 2.0).sin(); if v > hz2 { c = pal[2]; } else if v > hz { c = pal[1]; } else { let k = v / hz.max(0.01); for i in 0..3 { c[i] = pal[0][i] * (1.0 - k) + pal[3][i] * k; } } }
+            // colour fields
+            1 => { let b = (v * 3.0 + amp * (u * 9.0 + ph).sin()).floor() as usize % 3; c = pal[b + 1]; }
+            // blocks
+            2 => for s in &shapes { if (u - s[0]).abs() < s[2] && (v - s[1]).abs() < s[3] { c = pal[s[4] as usize]; } },
+            // discs
+            _ => for s in &shapes { if (u - s[0]).hypot(v - s[1]) < s[2] { c = pal[s[4] as usize]; } },
+        }
+        image::Rgba([(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, 255])
+    })
+}
+/// a mirror's look without reflections: cool silver, lighter toward the top, one soft diagonal band
+fn mirror_sheen() -> image::RgbaImage {
+    let n = 64u32;
+    image::RgbaImage::from_fn(n, n, |x, y| {
+        let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
+        let band = (-((u + v - 0.9) * 7.0).powi(2)).exp() * 0.12;
+        let t = 0.52 + 0.22 * (1.0 - v) + band;
+        image::Rgba([(t * 235.0) as u8, (t * 245.0) as u8, (t * 255.0).min(255.0) as u8, 255])
+    })
+}
 fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> wgpu::TextureView {
     let mut img = img;
     if img.width().max(img.height()) > 1024 { let s = 1024.0 / img.width().max(img.height()) as f32; img = image::imageops::resize(&img, (img.width() as f32 * s) as u32, (img.height() as f32 * s) as u32, image::imageops::FilterType::Triangle); }
@@ -172,10 +215,18 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
             let m = &glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))];
             let mi = p.mat.min(glb.mats.len().saturating_sub(1));
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
+            // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
+            let is_art = m.name == "art" || m.name.starts_with("gallery_art");
+            let shown = is_art || m.name == "mirror";
+            let tex = if shown {
+                let k = format!("{}:{}", m.name, n.name);
+                if !tex_views.contains_key(&k) { let img = if is_art { painting(&format!("{}:{}", path.display(), n.name)) } else { mirror_sheen() }; tex_views.insert(k.clone(), load_texture(&gpu.dev, &gpu.q, img)); }
+                k
+            } else { tex };
             let flags = if cls == "people.hair" || m.mask { 1u32 } else if glass { 2 } else { 0 };
             let key = (p.mat, tex.clone(), flags);
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let u = MatU { color: m.color, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, 0.0, 0.0, 0.0] };
+                let u = MatU { color: if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, 0.0, 0.0, 0.0] };
                 let ub = gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
                 let tv = tex_views.get(&tex).unwrap_or(white);
                 mat_bgs.push(gpu.dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: mat_bgl, entries: &[
@@ -281,13 +332,16 @@ fn ray_dist(tris: &[Tri], o: Vec3, dir: Vec3, maxd: f32) -> f32 {
     best
 }
 /// how open a view is: rays across the frame, each worth its free depth up to 3 m; a wall or a door leaf close before the lens costs most
-fn view_quality(near: &[Tri], e: Vec3, f: Vec3, half: f32) -> f32 {
+fn view_quality(near: &[Tri], low: &[Tri], e: Vec3, f: Vec3, half: f32) -> f32 {
     let (mut sum, n) = (0.0, 15);
     for k in 0..n {
         let a = -half + 2.0 * half * k as f32 / (n - 1) as f32;
         let d = Vec3::new(f.x * a.cos() - f.y * a.sin(), f.x * a.sin() + f.y * a.cos(), 0.0);
         let t = ray_dist(near, e, d, 3.0);
         sum += t - if t < 0.8 { 3.0 } else { 0.0 };
+        // (a counter, a bed or a plant right under the lens: seen from above, huge, cut by the frame)
+        let lo_o = Vec3::new(e.x, e.y, low.first().map_or(e.z, |t| t[0].z + 0.25));
+        if ray_dist(low, lo_o, d, 1.3) < 1.3 { sum -= 5.0; }
     }
     sum / n as f32
 }
@@ -359,7 +413,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         while y < hi.y { let mut x = lo.x + step / 2.0; while x < hi.x {
             let p = Vec3::new(x, y, z0);
             if rm.tris.iter().any(|t| in_tri2(p, t)) {
-                let e = Vec3::new(x, y, z0 + 1.5); let dist = (e - tgt).truncate().length();
+                let e = Vec3::new(x, y, z0 + 1.4); let dist = (e - tgt).truncate().length();
                 if dist > (if rm.area < 7.0 { 0.9 } else { 1.8 }) && !sh.blocked(e, tgt) { cands.push((dist, e)); }
             }
             x += step; } y += step; }
@@ -377,6 +431,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let mut tall: Vec<Tri> = vec![];
         for (l, h) in &boxes { if h.z > z0 + 1.45 && l.z < z0 + 1.55 { let c = [Vec3::new(l.x, l.y, z0 + 1.5), Vec3::new(h.x, l.y, z0 + 1.5), Vec3::new(h.x, h.y, z0 + 1.5), Vec3::new(l.x, h.y, z0 + 1.5)]; let up = Vec3::new(0.0, 0.0, 0.5); let dn = -up; for k in 0..4 { let (a, b) = (c[k], c[(k + 1) % 4]); tall.push([a + dn, b + dn, b + up]); tall.push([a + dn, b + up, a + up]); } } }
         let near: Vec<Tri> = sh.walls.iter().chain(sh.leaves.iter()).chain(tall.iter()).filter(|t| { let (l, h) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2])); h.x > lo.x - 3.5 && l.x < hi.x + 3.5 && h.y > lo.y - 3.5 && l.y < hi.y + 3.5 }).cloned().collect();
+        let mut low: Vec<Tri> = vec![];
+        for (l, h) in &boxes { if l.z < z0 + 0.7 && h.z > z0 + 0.6 { let z = z0 + 0.45; let c = [Vec3::new(l.x, l.y, z), Vec3::new(h.x, l.y, z), Vec3::new(h.x, h.y, z), Vec3::new(l.x, h.y, z)]; let up = Vec3::new(0.0, 0.0, 0.5); for k in 0..4 { let (a, b) = (c[k], c[(k + 1) % 4]); low.push([a, b, b + up]); low.push([a, b + up, a + up]); } } }
         let half = 42f32.to_radians();
         let mut scored: Vec<(f32, Vec3, Vec3)> = vec![];
         let n_cands = cands.len(); let every = (n_cands / 40).max(1);
@@ -387,7 +443,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             for deg in [0.0f32, -20.0, 20.0, -35.0, 35.0] {
                 let a = deg.to_radians();
                 let f = Vec3::new(f0.x * a.cos() - f0.y * a.sin(), f0.x * a.sin() + f0.y * a.cos(), 0.0);
-                let q = view_quality(&near, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist;
+                let q = view_quality(&near, &low, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist;
                 if best.map_or(true, |b| q > b.0) { best = Some((q, f)); }
             }
             if let Some((q, f)) = best { scored.push((q, *e, f)); }
@@ -408,14 +464,16 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             while y < hi.y { let mut x = lo.x + step / 2.0; while x < hi.x {
                 let p = Vec3::new(x, y, z0);
                 if rm.tris.iter().any(|t| in_tri2(p, t)) {
-                    let e = Vec3::new(x, y, z0 + 1.5); let dist = (e - tgt).truncate().length();
+                    let e = Vec3::new(x, y, z0 + 1.4); let dist = (e - tgt).truncate().length();
                     if !sh.blocked(e, tgt) && !inside(e, 0.05) && sh.clearance(e) > 0.12 && !leaf_blocks(e, tgt) && best.map_or(true, |b| dist > b.0) { best = Some((dist, e)); }
                 }
                 x += step; } y += step; }
             if let Some((_, e)) = best { chosen.push(e); lens = 13.0; }
         }
         for (k, e) in chosen.iter().enumerate() {
-            let look = heads.get(k).map_or(tgt, |f| *e + *f * (tgt - *e).truncate().length().max(1.0) + Vec3::new(0.0, 0.0, tgt.z - e.z));
+            // (a level view, tilted down 8 degrees whatever the distance: walls stay upright, as an interior photograph's)
+            let f = heads.get(k).copied().unwrap_or_else(|| (tgt - *e).truncate().normalize_or_zero().extend(0.0));
+            let look = *e + f * 2.0 + Vec3::new(0.0, 0.0, -0.28);
             let mut cm = cam_look(*e, look, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" });
             // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, look.x, look.y, look.z, lens); }
@@ -554,9 +612,10 @@ fn visible(f: &[Vec4; 6], lo: Vec3, hi: Vec3) -> bool {
 fn leaf_in_the_way(s: &Scene, d: &Draw, eye: Option<Vec3>) -> bool {
     let Some(e) = eye else { return false };
     let nm = &s.glb.nodes[d.node].name;
-    if !nm.starts_with("door") || nm.contains("frame") { return false }
-    let q = e.clamp(d.bmin, d.bmax);
-    (q - e).truncate().length() < 1.0
+    if !nm.starts_with("door") || nm.contains("frame") || nm.contains("casing") { return false }
+    // (the whole door goes with its leaf: a handle left behind floated on the wall)
+    let id = nm.split('.').next().unwrap_or(nm);
+    s.draws.iter().any(|o| { let n2 = &s.glb.nodes[o.node].name; n2.split('.').next() == Some(id) && !n2.contains("frame") && !n2.contains("casing") && (e.clamp(o.bmin, o.bmax) - e).truncate().length() < 1.5 })
 }
 fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>) {
     for d in &s.draws {

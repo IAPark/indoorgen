@@ -755,6 +755,13 @@ pub fn bathroom_template(state: &mut State, only_room: Option<&str>) -> Vec<Stri
 
 /// a new piece of `class` standing in `room`: the solver's placeholder for the class (size from the class density), its usage tags
 /// and a floor relation copied from a piece standing in that room; inserted at the origin (the caller places it)
+/// standing on a room's floor: the relation the checks and the dressers look for
+pub fn floor_relation(room: &str) -> super::state::RelState {
+    let child = TagSet::from([Tag::sub("Bottom"), Tag::sub("Front").negated(), Tag::sub("Top").negated(), Tag::sub("Back").negated()]);
+    let parent = TagSet::from([Tag::sub("SupportSurface"), Tag::sub("Visible"), Tag::sub("Ceiling").negated(), Tag::sub("Wall").negated()]);
+    super::state::RelState { relation: super::relations::Relation::Geometry(super::relations::Geo { kind: super::relations::GeoKind::StableAgainst, child, parent, margin: 0.0, check_z: true, rev_normal: false }), target: room.to_string(), child_plane: 0, parent_plane: 1 }
+}
+
 pub(crate) fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: &str, room: &str, name: &str) -> bool {
     let Some((geom, gen)) = sample_rand_placeholder(ctx, rng, class) else { return false };
     let mut tags = TagSet::from([Tag::sem("Object"), Tag::sem("Furniture"), Tag::gen(class), Tag::obj(name)]);
@@ -775,6 +782,7 @@ pub(crate) fn new_piece(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, class: 
     if o.relations.is_empty() {
         let fz = state.objs.iter().filter(|(k, _)| k.starts_with("door") && !k.starts_with("doorclear")).map(|(k, _)| layout2d::lohi_world(state, k).0[2]).fold(f64::INFINITY, f64::min);
         if fz.is_finite() { let t = o.pose.t; o.pose.set_loc([t[0], t[1], fz.max(0.0) - o.geom.lo[2]]); }
+        o.relations.push(floor_relation(room));
     }
     o.active = true;
     state.objs.insert(name.to_string(), o);
@@ -2559,7 +2567,8 @@ pub fn sinks(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room: Option<
         }).collect();
         let mid = (rlo[1] + rhi[1]) / 2.0;
         for k in 0..8 { let off = (k as f64 / 2.0).ceil() * 0.3 * if k % 2 == 0 { 1.0 } else { -1.0 }; ys.push(mid + off); }
-        if let Some((_, at)) = plan.as_ref().filter(|(r, _)| *r == run) { ys.insert(0, inv([at[0], at[1], 0.0])[1]); }
+        // (a planned run: the plan's spot, near enough. The run's box takes in its wall cabinet's reach into a corner, and "the middle" of that put a sink through the corner leg)
+        if let Some((_, at)) = plan.as_ref().filter(|(r, _)| *r == run) { let y = inv([at[0], at[1], 0.0])[1]; ys = vec![y, y + 0.05, y - 0.05, y + 0.1, y - 0.1]; }
         let sd = shi[0] - slo[0];
         let mut ok = false;
         // counter to work on between the sink and the range: 0.4 m or more first, then any free spot

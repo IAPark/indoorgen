@@ -1,8 +1,5 @@
 //! Furnish the rooms the rules cover with the unified solver (crates/ig_layout); the old passes leave those rooms empty (`Options::solver_rooms`).
 //! Built-ins, doors and windows are already there. A room whose must items have no place gets what the solver did place, and says so.
-use crate::furn::relations::{Geo, GeoKind, Relation};
-use crate::furn::state::RelState;
-use crate::furn::tags::{Tag, TagSet};
 use crate::furn::{groups, layout2d};
 use crate::pipeline::Generated;
 use ig_layout::{house, rules, solve, world};
@@ -10,12 +7,6 @@ use ig_layout::{house, rules, solve, world};
 /// the room kinds the rules cover
 pub fn kinds() -> Vec<String> { rules::default_rules().into_keys().collect() }
 
-/// standing on the room's floor (the relation the checks and dressers look for)
-fn floor_relation(room: &str) -> RelState {
-    let child = TagSet::from([Tag::sub("Bottom"), Tag::sub("Front").negated(), Tag::sub("Top").negated(), Tag::sub("Back").negated()]);
-    let parent = TagSet::from([Tag::sub("SupportSurface"), Tag::sub("Visible"), Tag::sub("Ceiling").negated(), Tag::sub("Wall").negated()]);
-    RelState { relation: Relation::Geometry(Geo { kind: GeoKind::StableAgainst, child, parent, margin: 0.0, check_z: true, rev_normal: false }), target: room.to_string(), child_plane: 0, parent_plane: 1 }
-}
 
 /// the solver's answer for every covered room of a house, before anything is placed: the plan layer can still ask for another plan
 pub struct Plan { rooms: Vec<(String, solve::Solution)> }
@@ -27,7 +18,7 @@ impl Plan {
 
 /// what makes a plan not worth keeping: must items with no place, and kitchen appliances that cannot be opened
 pub fn unfit(g: &Generated, plan: &Plan) -> usize {
-    plan.missing() + g.room_polys.iter().filter(|(n, _)| n.starts_with("kitchen")).map(|(n, _)| crate::furn::kitchen_rules::eval(&g.state, n, None).unusable).sum::<usize>()
+    plan.missing() + g.room_polys.iter().filter(|(n, _)| n.starts_with("kitchen")).map(|(n, _)| { let e = crate::furn::kitchen_rules::eval(&g.state, n, None); if e.unusable > 0 { let cl: Vec<&str> = g.state.objs.iter().filter(|(k, _)| layout2d::room_of(&g.state, k).as_deref() == Some(n.as_str())).filter_map(|(_, o)| o.generator.as_ref().map(|gg| gg.class.as_str())).collect(); eprintln!("PLAN fault {n}: {:?} holds {cl:?}", e.broken); } e.unusable }).sum::<usize>()
 }
 
 pub fn solve_house(g: &Generated, seed: u64) -> Plan {
@@ -64,7 +55,7 @@ pub fn apply(g: &mut Generated, plan: Plan, seed: u64) -> Vec<String> {
     for (name, s) in plan.rooms {
         let missing: Vec<&str> = s.report.iter().filter(|r| r.tier == 0 && !r.placed).map(|r| r.id.as_str()).collect();
         if !missing.is_empty() { log.push(format!("{name}: a must has no place: {missing:?}")); }
-        let rel = floor_relation(&name);
+        let rel = groups::floor_relation(&name);
         let key = |id: &str| format!("{}_{}", name.replace('/', "_"), id.replace('#', "_"));
         for p in &s.placed {
             let Some(piece) = solve::build_piece(p) else { log.push(format!("{name}: {} has no piece", p.id)); continue };

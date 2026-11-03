@@ -56,6 +56,8 @@ struct Kit {
     obstacles: Vec<Arc<Vec<Prism>>>,
     /// door clearances (among the obstacles): an aisle may cross them, a piece may not
     doors: Vec<Arc<Vec<Prism>>>,
+    /// what actually stands in the room (the openings' cutter boxes among the obstacles reach a metre in, and only stop counters)
+    solid: Vec<Arc<Vec<Prism>>>,
     d_counter: f64,
     d: [f64; 5],
     w: [f64; 5],
@@ -89,6 +91,7 @@ impl Kit {
         let floor_z = if floor_z.is_finite() { floor_z } else { 0.15 };
         let kitchen_kids = |o: &ObjState| o.relations.iter().any(|r| state.objs.get(&r.target).map_or(false, |t| built_in(class_of(t))));
         let mut obstacles = vec![];
+        let mut solid = vec![];
         let mut windows = vec![];
         // door clearances: the line keeps 15 cm more off them along the wall (a run ending at the jamb stood in the door's passage)
         let mut doors: Vec<Arc<Vec<Prism>>> = vec![];
@@ -116,6 +119,7 @@ impl Kit {
             if !mine { continue }
             let prs = layout2d::prisms(state, k);
             if prs.iter().all(|p| (p.bb[0] > 1e8)) { continue }
+            if o.generator.is_some() || o.tags.contains(Tag::sem("FeatureKeepout")) && !k.starts_with("doorclear/") { solid.push(prs.clone()); }
             // (a window with its sill under the counter top stops the counter like a wall: the floor's height is the room's)
             let low = o.tags.contains(win.clone()) && prs.iter().map(|p| p.z[0]).fold(f64::INFINITY, f64::min) < floor_z + 0.97;
             if o.tags.contains(win.clone()) && !low { windows.push(prs) } else if k.starts_with("doorclear/") { doors.push(prs.clone()); obstacles.push(prs) } else { obstacles.push(prs) }
@@ -168,7 +172,7 @@ impl Kit {
         }
         if ig_core::env_on!("KPLANDBG") { for (i, l) in lines.iter().enumerate() { eprintln!("KPLAN line {i}: {:.2} m from {:?} n {:?} corners {:?} windows {:?}", l.len, l.a, l.n, l.corner, l.win); } }
         let area = state.objs[room].polygon.as_ref().map_or(10.0, |p| crate::shp::area(p));
-        Kit { lines, banned: vec![], corners, rings, obstacles, doors, d_counter: d[0], d, w, has, area, reserved, lr }
+        Kit { lines, banned: vec![], corners, rings, obstacles, doors, solid, d_counter: d[0], d, w, has, area, reserved, lr }
     }
 
     /// the usable stretch of a line under the plan's corner owners: [start, end]
@@ -211,6 +215,41 @@ impl Kit {
             }
         }
         Some(out)
+    }
+
+    /// can a person (0.3 m round) get from every door to every door and to the front of every counter and appliance? On a 10 cm grid, the same
+    /// rule the build is held to (layout2d::walk_status): a plan that fails it is not worth building, and building it only blamed whichever wall came last
+    fn walk_ok(&self, plan: &Plan) -> bool {
+        let Some(ps) = self.place(plan) else { return false };
+        let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for q in self.rings.iter().flatten() { for d in 0..2 { a[d] = a[d].min(q[d]); b[d] = b[d].max(q[d]); } }
+        let c = 0.1;
+        let (nx, ny) = (((b[0] - a[0]) / c).ceil() as usize + 1, ((b[1] - a[1]) / c).ceil() as usize + 1);
+        let at = |i: usize, j: usize| [a[0] + c * i as f64, a[1] + c * j as f64];
+        let solid: Vec<&Prism> = self.solid.iter().flat_map(|o| o.iter()).filter(|p| p.role == super::geom::ROLE_HARD && p.z[0] < 1.2).collect();
+        let dseg = |q: [f64; 2], r: &[[f64; 2]]| layout2d::poly_dist(&[[q[0] - 1e-3, q[1] - 1e-3], [q[0] + 1e-3, q[1] - 1e-3], [q[0] + 1e-3, q[1] + 1e-3], [q[0] - 1e-3, q[1] + 1e-3]], r);
+        let free: Vec<bool> = (0..ny).flat_map(|j| (0..nx).map(move |i| (i, j))).map(|(i, j)| {
+            let q = at(i, j);
+            layout2d::in_rings(&self.rings, q) && layout2d::ring_dist(&self.rings, q) >= 0.3 && !ps.iter().any(|p| dseg(q, &p.rect) < 0.3) && !solid.iter().any(|p| dseg(q, &p.poly) < 0.3)
+        }).collect();
+        let doors: Vec<[f64; 2]> = self.doors.iter().filter_map(|o| o.first()).map(|p| [(p.bb[0] + p.bb[2]) / 2.0, (p.bb[1] + p.bb[3]) / 2.0]).collect();
+        let near = |q: [f64; 2], r: f64, seen: &[bool]| (0..ny).any(|j| (0..nx).any(|i| seen[j * nx + i] && dist(at(i, j), q) <= r));
+        let Some(start) = doors.first().and_then(|d| (0..free.len()).filter(|k| free[*k]).find(|k| dist(at(k % nx, k / nx), *d) <= 0.35)) else { return doors.is_empty() };
+        let mut seen = vec![false; free.len()];
+        let mut st = vec![start];
+        seen[start] = true;
+        while let Some(k) = st.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for (x, y) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                if x < nx && y < ny && free[y * nx + x] && !seen[y * nx + x] { seen[y * nx + x] = true; st.push(y * nx + x); }
+            }
+        }
+        let d_ok = doors.iter().filter(|d| !near(**d, 0.35, &seen)).count();
+        // (appliances and the sink each; a counter run anywhere along it: its module in an inside corner has the other leg before it)
+        let mut f_ok: Vec<String> = ps.iter().filter(|p| p.kind != Kind::Counter && !near(p.front, 0.45, &seen)).map(|p| format!("{:?}", p.kind)).collect();
+        for li in 0..plan.lines.len() { if ps.iter().any(|p| p.line == li) && !ps.iter().any(|p| p.line == li && near(p.front, 0.45, &seen)) { f_ok.push(format!("line {li}")); } }
+        if ig_core::env_on!("KPLANDBG") { eprintln!("KPLAN walk: {} doors of {} cut off, fronts {f_ok:?}", d_ok, doors.len()); }
+        d_ok == 0 && f_ok.is_empty()
     }
 
     /// the plan's score (higher is better) and what it breaks; None when it does not fit
@@ -334,7 +373,7 @@ impl Kit {
             let Some(z) = zone(p) else { continue };
             let off = z.iter().filter(|q| !layout2d::in_rings(&self.rings, **q)).count();
             let blocked = ps.iter().any(|q| q.line != p.line && ov(&z, &q.rect)) || self.obstacles.iter().any(|o| hits(&z, o, -1.0, 1.4));
-            if off > 0 || blocked { pen(&mut s, 4.0, &|| format!("door zone of the {:?}", p.kind)); }
+            if off > 0 || blocked { pen(&mut s, 12.0, &|| format!("door zone of the {:?}", p.kind)); }
         }
         // aisle: facing lines' fronts at least the aisle apart where they overlap
         for p in &ps {
@@ -354,7 +393,7 @@ impl Kit {
                 let q = { let tt = t + sg * lr.fridge_corner_gap; let e = p.depth * 0.75; [l.a[0] + l.u[0] * tt + l.n[0] * e, l.a[1] + l.u[1] * tt + l.n[1] * e] };
                 let walled = !layout2d::in_rings(&self.rings, q) || self.obstacles.iter().any(|o| o.iter().any(|pr| pr.z[1] > 0.5 && layout2d::in_rings(&[pr.poly.clone()], q)));
                 let turned = ps.iter().any(|r| r.line != p.line && layout2d::in_rings(&[r.rect.clone()], q));
-                if walled || turned { pen(&mut s, if p.kind == Kind::Fridge { 5.0 } else { 4.0 }, &|| format!("{:?} in a corner", p.kind)); }
+                if walled || turned { pen(&mut s, if p.kind == Kind::Fridge { 12.0 } else { 4.0 }, &|| format!("{:?} in a corner", p.kind)); }
             }
         }
         // neighbours along a line
@@ -413,7 +452,7 @@ impl Kit {
         for k in [Kind::Sink, Kind::Range, Kind::Dish, Kind::Fridge] {
             if self.has[ki(k)] { put(&mut lines, Item { kind: k, w: self.w[ki(k)] }, rng); }
         }
-        for _ in 0..rng.randint(3, 9) { put(&mut lines, Item { kind: Kind::Counter, w: Self::module(rng) }, rng); }
+        for _ in 0..rng.randint(0, 9) { put(&mut lines, Item { kind: Kind::Counter, w: Self::module(rng) }, rng); }
         for l in lines.iter_mut() { if !l.items.is_empty() && rng.f64() < 0.8 { l.fill = l.items.iter().position(|i| i.kind == Kind::Counter); } }
         Plan { lines, owner: self.corners.iter().map(|c| c[rng.randint(0, c.len() as i64) as usize].0).collect() }
     }
@@ -532,7 +571,7 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
         let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
         for q in kit.rings.iter().flatten() { for d in 0..2 { a[d] = a[d].min(q[d]); b[d] = b[d].max(q[d]); } }
         let aisle = kit.lr.kitchen_aisle;
-        let solid = |k: &Kit, r: &[[f64; 2]]| k.obstacles.iter().filter(|o| !k.doors.iter().any(|d| Arc::ptr_eq(d, o))).any(|o| hits(r, o, -1.0, 1.4));
+        let solid = |k: &Kit, r: &[[f64; 2]]| k.solid.iter().any(|o| hits(r, o, -1.0, 1.4));
         // (either way round; in the middle, or pushed to a wall so the counters keep the other sides. The spot leaving most wall for counters, among those that hold the kitchen)
         let need: f64 = kw.iter().zip(khas.iter()).filter(|(_, h)| **h).map(|(w, _)| *w).sum::<f64>() + 1.0;
         let mut best: Option<(f64, Kit)> = None;
@@ -554,7 +593,7 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
     // anneal, then build the best plans; a line every built plan fails on (a run cutting the walkway) is banned and the
     // annealing run again (three rounds)
     let mut log = vec![];
-    for round in 0..8 {
+    for round in 0..12 {
         if kit.banned.len() >= kit.lines.len() { break }
         let best = anneal(&kit, &mut rng);
         if best.is_empty() {
@@ -589,8 +628,10 @@ fn plan_room(ctx: &mut Ctx, state: &mut State, room: &str) -> Option<Vec<String>
         // the line most plans failed on
         // (none of them built: the walls without the island first)
         if kit.reserved.is_some() { let has = kit.has; kit = Kit::new(state, room, kd, kw, has, None); continue }
-        let Some(worst) = (0..kit.lines.len()).max_by_key(|l| fails.iter().filter(|f| *f == l).count()) else { break };
-        if !fails.contains(&worst) { break }
+        // (a walkway with no one wall to blame: the shortest wall in use goes, which opens the floor most for least counter)
+        let blamed = fails.iter().any(|f| *f != usize::MAX);
+        let shortest = best[0].1.lines.iter().enumerate().filter(|(_, l)| !l.items.is_empty()).map(|(i, _)| i).min_by(|a, b| kit.lines[*a].len.partial_cmp(&kit.lines[*b].len).unwrap());
+        let Some(worst) = (if blamed { (0..kit.lines.len()).max_by_key(|l| fails.iter().filter(|f| *f == l).count()) } else { shortest }) else { break };
         kit.banned.push(worst);
         if dbg { eprintln!("KPLAN {room}: line {worst} banned"); }
     }
@@ -607,7 +648,7 @@ fn place_island(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &
     let nc = Tag::sem("NoCollision");
     let aisle = kit.lr.kitchen_aisle;
     let floors: Vec<Arc<Vec<Prism>>> = state.objs.iter().filter(|(k, o)| o.generator.is_some() && !o.tags.contains(nc.clone()) && !layout2d::is_room(o) && layout2d::room_of(state, k).as_deref() == Some(room)).map(|(k, _)| layout2d::prisms(state, k)).collect();
-    let blocked = |a: &[[f64; 2]]| kit.obstacles.iter().filter(|o| !kit.doors.iter().any(|d| Arc::ptr_eq(d, o))).chain(floors.iter()).any(|o| o.iter().any(|p| p.role == super::geom::ROLE_HARD && p.z[1] > 0.3 && p.z[0] < 1.4 && layout2d::poly_dist(a, &p.poly) <= 0.0));
+    let blocked = |a: &[[f64; 2]]| kit.solid.iter().chain(floors.iter()).any(|o| o.iter().any(|p| p.role == super::geom::ROLE_HARD && p.z[1] > 0.3 && p.z[0] < 1.4 && layout2d::poly_dist(a, &p.poly) <= 0.0));
     let ok0 = (layout2d::walk_status(state, room).0, super::kitchen_rules::eval(state, room, None).unusable);
     // (the longest counter walls first)
     let mut lines: Vec<(f64, usize)> = plan.lines.iter().enumerate().filter(|(_, l)| !l.items.is_empty()).map(|(i, l)| (l.items.iter().map(|x| x.w).sum::<f64>(), i)).collect();
@@ -683,14 +724,18 @@ fn anneal(kit: &Kit, rng: &mut Rng) -> Vec<(f64, Plan)> {
         if best.iter().any(|(b, _)| (b - s).abs() < 1e-6) { return }
         best.push((s, p.clone()));
         best.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-        best.truncate(6);
+        best.truncate(30);
     };
     let mut cur: Option<(f64, Plan)> = None;
-    for _ in 0..300 {
+    // (until one fits, up to 3000: everything wanted on few short walls is rarely drawn, and giving up too soon cost kitchens their fridge)
+    for i in 0..3000 {
+        if i >= 300 && cur.is_some() { break }
         let p = kit.random(rng);
         if let Some((s, _)) = kit.score(&p, false) { keep_best(&mut best, s, &p); if cur.as_ref().map_or(true, |c| s > c.0) { cur = Some((s, p)); } }
     }
     let Some(mut cur) = cur else { return best };
+    // (none walkable: the best as they are, for the build's own check to judge, before anything is given up)
+    let walkable = |b: Vec<(f64, Plan)>| -> Vec<(f64, Plan)> { let w: Vec<(f64, Plan)> = b.iter().filter(|(_, p)| kit.walk_ok(p)).take(6).cloned().collect(); if w.is_empty() { b.into_iter().take(6).collect() } else { w } };
     let steps = 6000;
     for i in 0..steps {
         let temp = 2.0 * (0.015f64).powf(i as f64 / steps as f64);
@@ -698,7 +743,7 @@ fn anneal(kit: &Kit, rng: &mut Rng) -> Vec<(f64, Plan)> {
         let Some((s, _)) = kit.score(&q, false) else { continue };
         if s > cur.0 || rng.f64() < ((s - cur.0) / temp).exp() { cur = (s, q.clone()); keep_best(&mut best, s, &q); }
     }
-    best
+    walkable(best)
 }
 
 /// the counter depth: the first run's size (its depth), else its box
@@ -714,6 +759,19 @@ fn describe(kit: &Kit, plan: &Plan) -> String {
         out.push(format!("  line {li} ({:.2} m usable of {:.2}, normal {:?}, from the {}): {}", s1 - s0, l.len, [l.n[0].round(), l.n[1].round()], if lp.at_end { "end" } else { "start" }, items.join(" | ")));
     }
     out.join("\n")
+}
+
+/// a piece of the plan at its spot. The plan's other pieces count by their solid parts only, and past a joint's few cm: a corner's two legs overlap until the L
+/// joint takes the square, a run's built depth varies by a cm or two, and a cabinet door swinging over a neighbour's floor is every kitchen
+fn place_planned(state: &mut State, name: &str, l: &Line, t: f64, planned: &Tag) -> bool {
+    let nc = Tag::sem("NoCollision");
+    let others: Vec<String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && o.tags.contains(planned.clone()) && !o.tags.contains(nc.clone())).map(|(k, _)| k.clone()).collect();
+    for k in &others { state.objs.get_mut(k).unwrap().tags.insert(nc.clone()); state.touch(k); }
+    let fits = place_along(state, name, l.a, l.u, l.n, t);
+    for k in &others { state.objs.get_mut(k).unwrap().tags.remove(nc.clone()); state.touch(k); }
+    // (in plan, boxes: the walls here are axis-aligned)
+    let (l0, h0) = layout2d::lohi_world(state, name);
+    fits && !others.iter().any(|k| { let (l1, h1) = layout2d::lohi_world(state, k); (0..2).all(|d| l0[d].max(l1[d]) < h0[d].min(h1[d]) - 0.04) && l0[2].max(l1[2]) < h0[2].min(1.2).min(h1[2]) })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -756,13 +814,7 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
                 }
                 state.objs.get_mut(&name).unwrap().tags.insert(planned.clone());
                 if dbg { let (a, b) = lohi(state, &name); eprintln!("KPLAN build: run {name} asked {:.3} built {:.3} (size {:?})", t1 - t0, b[1] - a[1], state.objs[&name].generator.as_ref().and_then(super::solver::cur_size)); }
-                // (the plan's other runs do not count yet, past a joint's few cm below: a corner's two legs overlap until the L joint takes the square, a run's built depth varying by a cm or two)
-                let nc = Tag::sem("NoCollision");
-                let others: Vec<String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && o.tags.contains(planned.clone()) && class_of(o) == "KitchenSpaceFactory" && !o.tags.contains(nc.clone())).map(|(k, _)| k.clone()).collect();
-                for k in &others { state.objs.get_mut(k).unwrap().tags.insert(nc.clone()); state.touch(k); }
-                let fits = place_along(state, &name, l.a, l.u, l.n, t0);
-                for k in &others { state.objs.get_mut(k).unwrap().tags.remove(nc.clone()); state.touch(k); }
-                if !fits || others.iter().any(|k| layout2d::depth(state, &name, k) > 0.04) { if dbg { eprintln!("KPLAN build: run {name} at line {li} {t0:.2} does not fit"); } return Err(li) }
+                if !place_planned(state, &name, l, t0, &planned) { if dbg { eprintln!("KPLAN build: run {name} at line {li} {t0:.2} does not fit"); } return Err(li) }
                 if let Some(sk) = on[j0..i].iter().find(|q| q.kind == Kind::Sink) {
                     let m = (sk.t0 + sk.t1) / 2.0;
                     sink_on = Some((name.clone(), [l.a[0] + l.u[0] * m, l.a[1] + l.u[1] * m]));
@@ -773,7 +825,7 @@ fn build(ctx: &mut Ctx, state: &mut State, room: &str, kit: &Kit, plan: &Plan, p
             let Some(k) = k else { i += 1; continue };
             put(state, k);
             state.objs.get_mut(k).unwrap().tags.insert(planned.clone());
-            if !place_along(state, k, l.a, l.u, l.n, p.t0 + 0.005) { if dbg { eprintln!("KPLAN build: {k} at line {li} {:.2} does not fit", p.t0); } return Err(li) }
+            if !place_planned(state, k, l, p.t0 + 0.005, &planned) { if dbg { eprintln!("KPLAN build: {k} at line {li} {:.2} does not fit", p.t0); } return Err(li) }
             // a range or dishwasher in line with the counter front (they are shallower than the counter; a fridge stays on the wall)
             // (the fridge too: set back against the wall it stood 9-14 cm behind the counter front)
             if matches!(p.kind, Kind::Range | Kind::Dish | Kind::Fridge) {

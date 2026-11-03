@@ -70,7 +70,7 @@ pub fn zone_clash(state: &State, name: &str) -> bool {
 pub struct Eval {
     pub score: f64,
     pub broken: Vec<String>,
-    /// appliances that cannot be opened (door zone blocked, a fridge in a corner)
+    /// appliances missing, or that cannot be opened (door zone blocked)
     pub unusable: usize,
 }
 
@@ -172,6 +172,8 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
     let in_room = |c: &str| -> Vec<String> { state.objs.iter().filter(|(k, o)| class_of(o) == c && room_of(state, k).as_deref() == Some(room)).map(|(k, _)| k.clone()).collect() };
     let (fridges, ranges, sinks) = (in_room("FridgeFactory"), in_room("OvenFactory"), in_room("SinkFactory"));
     let nc = Tag::sem("NoCollision");
+    // (a kitchen without its fridge or range is no use either)
+    unusable += fridges.is_empty() as usize + ranges.is_empty() as usize;
     // door zones: inside the room and clear of every other piece standing on the floor (the built-in line included)
     for k in fridges.iter().chain(ranges.iter()).chain(in_room("DishwasherFactory").iter()) {
         let Some(z) = door_zone(state, k) else { continue };
@@ -192,7 +194,7 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
         }
     }
     for f in &fridges {
-        if fridge_cornered(state, f, &rings) { score -= 5.0; unusable += 1; broken.push(format!("{f} in a corner")); }
+        if fridge_cornered(state, f, &rings) { score -= 5.0; broken.push(format!("{f} in a corner")); }
     }
     // the counter line unbroken: no slot narrower than `counter_gap_max` beside a range or dishwasher
     for k in ranges.iter().chain(in_room("DishwasherFactory").iter()) {

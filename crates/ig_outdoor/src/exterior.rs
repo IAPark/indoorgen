@@ -261,12 +261,17 @@ fn rect_roof(p: &mut Parts, rc: [f64; 4], ze: f64, st: &Style, gable_walls: &mut
 }
 
 /// a fascia board under a roof edge from a to b
+thread_local! {
+    /// how low a fascia may hang: above the ceilings (a cross gable's board crosses the house, and 2 cm under the ceiling it showed through every room below)
+    static FASCIA_FLOOR: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::MIN) };
+}
 fn fascia(m: &mut Mesh, a: V3, b: V3) {
     let d = [b[0] - a[0], b[1] - a[1]];
     let l = d[0].hypot(d[1]);
     if l < 1e-6 { return }
     let n = [d[1] / l * 0.03, -d[0] / l * 0.03];
-    let lo = |p: V3| [p[0], p[1], p[2] - 0.18];
+    let floor = FASCIA_FLOOR.with(|c| c.get());
+    let lo = |p: V3| [p[0], p[1], (p[2] - 0.18).max(floor).min(p[2] - 0.01)];
     m.add_quad(lo(a), lo(b), b, a);
     m.add_quad(add(lo(b), [n[0], n[1], 0.0]), add(lo(a), [n[0], n[1], 0.0]), add(a, [n[0], n[1], 0.0]), add(b, [n[0], n[1], 0.0]));
     m.add_quad(lo(a), add(lo(a), [n[0], n[1], 0.0]), add(lo(b), [n[0], n[1], 0.0]), lo(b));
@@ -286,6 +291,7 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
     // (the eaves, which run down the pitch past the wall, clear of the ceilings: the footprint's roof rectangles overlap, so an eave can lie over a
     // room, and it came through the ceiling as a dark band along the wall's top)
     let ze = wall_top + 0.05 + st.overhang * st.pitch_deg.to_radians().tan();
+    FASCIA_FLOOR.with(|c| c.set(wall_top + 0.02));
     let zs = floor_z + 0.1; // siding starts above the foundation band
     for k in 0..ring.len() {
         let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);

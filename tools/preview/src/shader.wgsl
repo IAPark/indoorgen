@@ -120,7 +120,16 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
   var ao = 1.0;
   if (d < 1.0 && g.params.z > 0.0) {
     let p = world_at(px, dims);
-    let n = textureLoad(nrm_tex, px, 0).xyz;
+    // (a pixel on a crack between two triangles has no normal of its own, and its occlusion came out as a bright line: a neighbour's)
+    var n = textureLoad(nrm_tex, px, 0).xyz;
+    if (dot(n, n) < 0.25) {
+      for (var o = 0; o < 4; o++) {
+        let q = px + array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1))[o];
+        let m = textureLoad(nrm_tex, q, 0).xyz;
+        if (dot(m, m) >= 0.25) { n = m; break; }
+      }
+      if (dot(n, n) < 0.25) { n = -g.cam_fwd.xyz; }
+    }
     let t = normalize(select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.8) - n * dot(select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.8), n));
     let b = cross(n, t);
     let rot = hash(vec2<f32>(px)) * 6.2831853;

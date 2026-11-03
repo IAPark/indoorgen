@@ -178,6 +178,14 @@ pub fn fans(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp:
             // (0.25 m: curved blade tips reach past the span radius)
             span = span.min(dx.hypot(dy) - 0.25);
         }
+        // (and clear of the doors' passages: a light's spot can be near one, and blades reach lower than a door's head zone allows)
+        for (k, o) in &state.objs {
+            if !(k.starts_with("door") || k.starts_with("passage") || k.starts_with("entrance")) || k.starts_with("doorclear") || o.generator.is_some() { continue }
+            let (lo, hi) = crate::furn::layout2d::lohi_world(state, k);
+            let dx = (lo[0] - c[0]).max(0.0).max(c[0] - hi[0]);
+            let dy = (lo[1] - c[1]).max(0.0).max(c[1] - hi[1]);
+            span = span.min(dx.hypot(dy) - 0.25);
+        }
         if span < 0.4 { log.push(format!("{room}: no fan (no room for the blades: {span:.2} m)")); continue }
         fan = fan.clone_with_span(span);
         let (asset, bulbs, dims) = fan.build();
