@@ -809,6 +809,8 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
         if leaf_in_the_way(s, d, eye, cut) { continue; }
+        // (PREVIEW_HIDE=a,b: parts not drawn, to see which one a fault is in)
+        if let Ok(h) = std::env::var("PREVIEW_HIDE") { let nm = &s.glb.nodes[d.node].name; if h.split(',').any(|x| x == nm) { continue; } }
         if let Some((lo, hi, room)) = only {
             let nm = s.glb.nodes[d.node].name.replace('/', "_");
             let low = nm.to_lowercase();
