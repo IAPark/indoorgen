@@ -27,6 +27,14 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
         "wood.HardwoodFloor" => hardwood(&mut r, base),
         "ceramic.Tile" => tile(&mut r, &kw, None, base),
         "ceramic.Brick" => brick(&mut r, base),
+        "ceramic.Concrete" => concrete(&mut r, base),
+        "ceramic.Marble" | "ceramic.MarbleRegular" | "ceramic.MarbleVoronoi" => marble(&mut r, base),
+        "fabric.FineKnitFabric" => fabric(&mut r, base, 250.0, 0.0006, 0.9),
+        "fabric.CoarseKnitFabric" | "fabric.LinedFabric" => fabric(&mut r, base, 90.0, 0.0015, 0.95),
+        "fabric.SofaFabric" | "fabric.PlaidFabric" => fabric(&mut r, base, 160.0, 0.001, 0.92),
+        "fabric.Velvet" => fabric(&mut r, base, 400.0, 0.0004, 0.75),
+        "fabric.Rug" => fabric(&mut r, base, 70.0, 0.003, 0.97),
+        "fabric.Leather" => leather(&mut r, base),
         "wood.StaggeredWoodTile" => tile(&mut r, &json!({"shape": "staggered"}), Some(()), base),
         "wood.SquareWoodTile" | "wood.CrossedWoodTile" => tile(&mut r, &json!({"shape": "square"}), Some(()), base),
         "wood.CompositeWoodTile" => tile(&mut r, &json!({"shape": "rectangle"}), Some(()), base),
@@ -35,11 +43,12 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
         "metal.BrushedMetal" => metal(&mut r, base, true),
         "metal.BrushedBlackMetal" => metal(&mut r, [0.02, 0.02, 0.022], true),
         "wood.Wood" => {
-            // large flat tops: straight-grain veneer (the noise-warped grain read as burl or contour lines there)
+            // large flat panels of any orientation: straight-grain veneer (the noise-warped grain read as burl or contour lines there), the grain
+            // up the face on upright ones
             let mut e = ext;
             e.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            if e[1] > 0.35 && ext[2] <= e[0] + 1e-6 && ext[2] < 0.12 * e[1] {
-                shelves_wood(&mut r, crc32fast::hash(node.split('#').next().unwrap_or(node).as_bytes()) % 10 >= 7, false)
+            if e[1] > 0.35 && e[0] < 0.12 * e[1] {
+                shelves_wood(&mut r, crc32fast::hash(node.split('#').next().unwrap_or(node).as_bytes()) % 10 >= 7, ext[2] > e[0] + 1e-6)
             } else {
                 // the grain runs along x: parts thin in x showed end grain, so they get it vertical
                 wood(&mut r, ext[0] < 0.5 * ext[1].max(ext[2]))
@@ -139,7 +148,8 @@ fn shelves_wood(r: &mut R, black: bool, z_axis: bool) -> Value {
         let (d, m) = (r.uniform(0.0, 0.01), r.uniform(0.01, 0.03));
         [(0.15, [d; 3]), (0.5, [m; 3]), (1.0, [r.uniform(0.015, 0.035), r.uniform(0.0, 0.01), r.uniform(0.0, 0.01)])]
     } else {
-        let (b_, m_, d_) = (hsv(r.uniform(0.03, 0.09), r.uniform(0.5, 0.7), r.uniform(0.7, 1.0)), hsv(r.uniform(0.02, 0.06), r.uniform(0.6, 1.0), r.uniform(0.3, 0.6)), hsv(r.uniform(0.03, 0.05), r.uniform(0.6, 1.0), r.uniform(0.1, 0.3)));
+        // (the bright end less saturated than the shader's: in linear colour it came out peach)
+        let (b_, m_, d_) = (hsv(r.uniform(0.07, 0.11), r.uniform(0.32, 0.45), r.uniform(0.7, 1.0)), hsv(r.uniform(0.02, 0.06), r.uniform(0.6, 1.0), r.uniform(0.3, 0.6)), hsv(r.uniform(0.03, 0.05), r.uniform(0.6, 1.0), r.uniform(0.1, 0.3)));
         [(0.02, d_), (0.11, m_), (0.8, b_)]
     };
     let (wave, rough) = (r.uniform(1.0, 3.0), r.uniform(0.75, 1.0));
@@ -292,6 +302,58 @@ fn brick(r: &mut R, rgb: [f64; 3]) -> Value {
     let color = g.mix(mortar.clone(), col, json!([0.5, 0.48, 0.45]), "mix");
     let h = g.mul(&mortar, -0.004);
     g.done("shader_brick", json!({"color": color, "roughness": r.uniform(0.8, 0.95), "height": h}))
+}
+
+/// cloth in the part's own colour (white bedding stays white, where the shaders draw any colour): a fine weave as relief, and the cm-scale
+/// unevenness that keeps it from reading as plastic. Compact graphs, not ports of fabric/*.py
+fn fabric(r: &mut R, rgb: [f64; 3], threads: f64, depth: f64, rough: f64) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let mottle = g.noise(&c, r.uniform(20.0, 35.0), 4.0, 0.0, r.uniform(0.0, 10.0));
+    let tone = g.map_range(&mottle, 0.3, 0.7, 0.93, 1.0);
+    let color = g.mix(1.0, json!(rgb), tone, "multiply");
+    let wx = g.mapping(&c, [1.0, 0.25, 0.25], [0.0; 3]);
+    let wy = g.mapping(&c, [0.25, 1.0, 0.25], [0.0; 3]);
+    let a = g.noise(&wx, threads, 2.0, 0.0, 0.0);
+    let b = g.noise(&wy, threads, 2.0, 0.0, 0.0);
+    let weave = g.mix(0.5, a, b, "mix");
+    let h = g.mul(&weave, depth);
+    g.done("shader_fabric", json!({"color": color, "roughness": rough, "height": h}))
+}
+
+/// a fine pebbled grain in the part's colour
+fn leather(r: &mut R, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let n = g.noise(&c, r.uniform(150.0, 300.0), 3.0, 0.5, 0.0);
+    let m = g.noise(&c, r.uniform(8.0, 14.0), 3.0, 0.0, 0.0);
+    let tone = g.map_range(&m, 0.3, 0.7, 0.85, 1.0);
+    let color = g.mix(1.0, json!(rgb), tone, "multiply");
+    let h = g.mul(&n, 0.0012);
+    g.done("shader_leather", json!({"color": color, "roughness": r.uniform(0.35, 0.55), "height": h}))
+}
+
+/// cloudy grey-brown cast concrete in the part's colour
+fn concrete(r: &mut R, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let n = g.noise(&c, r.uniform(1.5, 3.0), 7.0, 0.5, 0.0);
+    let tone = g.map_range(&n, 0.3, 0.7, 0.8, 1.05);
+    let color = g.mix(1.0, json!(rgb), tone, "multiply");
+    let p = g.noise(&c, 200.0, 3.0, 0.0, 0.0);
+    let h = g.mul(&p, 0.001);
+    g.done("shader_concrete", json!({"color": color, "roughness": r.uniform(0.75, 0.95), "height": h}))
+}
+
+/// polished veined stone: thin dark lines where warped noise crosses its middle
+fn marble(r: &mut R, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let n = g.noise(&c, r.uniform(1.5, 3.0), 7.0, r.uniform(2.0, 5.0), 0.0);
+    let vein = g.ramp(&n, &[(0.47, [0.0; 3]), (0.5, [1.0; 3]), (0.53, [0.0; 3])]);
+    let k = r.uniform(0.25, 0.45);
+    let color = g.mix(vein, json!(rgb), json!([rgb[0] * k, rgb[1] * k, rgb[2] * k]), "mix");
+    g.done("shader_marble", json!({"color": color, "roughness": r.uniform(0.08, 0.2), "coat": 0.5}))
 }
 
 /// metal/metal_basic.py and brushed_metal.py, in the part's own colour; the galvanized, hammered and grained metals are plain for now
