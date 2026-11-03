@@ -966,35 +966,15 @@ pub fn build_scene(p: &Params) -> Built {
             m.transform(&pose_m);
             if let Some(cs) = cutters.get(k) {
                 for c in cs {
-                    let (mlo, mhi) = m.bounds();
                     let (clo, chi) = c.bounds();
-                    // only cut parts that have horizontal surfaces inside the cutter (countertop, cabinet top boards); door and
-                    // drawer fronts below the counter are vertical panels: cutting them exposed the basin from the front
-                    let horiz_area: f64 = m.faces.iter().map(|f| {
-                        let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
-                        let c: V3 = [0, 1, 2].map(|d| ps.iter().map(|p| p[d]).sum::<f64>() / ps.len() as f64);
-                        // (the face's box against the cutter's, not its centre: a long counter's top is one big face, whose centre lay far from a sink near its end, and the basin stayed filled)
-                        let _ = c;
-                        let (fl, fh) = ps.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), q| ([l[0].min(q[0]), l[1].min(q[1]), l[2].min(q[2])], [h[0].max(q[0]), h[1].max(q[1]), h[2].max(q[2])]));
-                        if !(0..3).all(|d| fl[d] < chi[d] && fh[d] > clo[d]) { return 0.0 }
-                        let overlap = (fh[0].min(chi[0]) - fl[0].max(clo[0])) * (fh[1].min(chi[1]) - fl[1].max(clo[1]));
-                        let mut nrm = [0.0; 3];
-                        for i in 0..ps.len() { let (a, b) = (ps[i], ps[(i + 1) % ps.len()]); nrm[0] += (a[1] - b[1]) * (a[2] + b[2]); nrm[1] += (a[2] - b[2]) * (a[0] + b[0]); nrm[2] += (a[0] - b[0]) * (a[1] + b[1]); }
-                        let area = 0.5 * dot(nrm, nrm).sqrt();
-                        if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 { area.min(overlap) } else { 0.0 }
-                    }).sum();
-                    // (or a board standing well inside it, a cabinet's divider: left whole it stood up through the basin. A door front lies at the footprint's edge and stays whole)
-                    let board_inside = m.faces.iter().any(|f| {
-                        let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
-                        let (fl, fh) = ps.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), q| ([l[0].min(q[0]), l[1].min(q[1]), l[2].min(q[2])], [h[0].max(q[0]), h[1].max(q[1]), h[2].max(q[2])]));
-                        let ins = 0.04;
-                        (0..2).all(|d| fl[d] < chi[d] - ins && fh[d] > clo[d] + ins) && fl[2] < chi[2] && fh[2] > clo[2] + 0.02 && (fh[2] - fl[2]) > 0.1
-                    });
-                    // (a good part of the cutter's footprint: a door front's thin top edge counts as horizontal too, and cutting it tore holes in the door)
-                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && (horiz_area > 0.25 * (chi[0] - clo[0]) * (chi[1] - clo[1]) || board_inside) {
-                        let tb = web_time::Instant::now();
-                        let nv0 = m.pos.len();
-                        m = mesh_diff(&m, c);
+                    // piece by piece: a part can hold a whole cabinet run, and cutting it all tore the door fronts beside the sink
+                    let tb = web_time::Instant::now();
+                    let nv0 = m.pos.len();
+                    let (keep, cut) = split_for_cut(&m, clo, chi);
+                    if !cut.faces.is_empty() {
+                        let mut r = mesh_diff(&cut, c);
+                        r.append(&keep);
+                        m = r;
                         if ig_core::envx::var_os("CUTLOG").is_some() { eprintln!("CUT {k}#{pi} nv {nv0} -> {} cutter nv {} {:?}", m.pos.len(), c.pos.len(), tb.elapsed()); }
                     }
                 }
@@ -1159,6 +1139,51 @@ pub fn build_scene(p: &Params) -> Built {
 
 /// BSP boolean DIFFERENCE `a - b` on ig_core meshes (uv dropped: the exporter regenerates them). Only the faces of `a` near `b` go through
 /// the boolean; the others are copied unchanged (keeps big counter tops cheap).
+/// (what a cutter leaves alone, what it cuts), by connected piece. Cut: a piece with flat faces over a good part of the footprint (a countertop, a top board), or with
+/// a board standing well inside it (a divider, which would stand up through the basin). A door front lies at the footprint's edge, and stays whole
+fn split_for_cut(m: &Mesh, clo: V3, chi: V3) -> (Mesh, Mesh) {
+    let key = |p: V3| [(p[0] * 2e4).round() as i64, (p[1] * 2e4).round() as i64, (p[2] * 2e4).round() as i64];
+    let mut ids: std::collections::HashMap<[i64; 3], usize> = Default::default();
+    let mut parent: Vec<usize> = vec![];
+    fn find(p: &mut Vec<usize>, mut x: usize) -> usize { while p[x] != x { p[x] = p[p[x]]; x = p[x]; } x }
+    let face_roots: Vec<usize> = m.faces.iter().map(|f| {
+        let mut first = None;
+        for &i in f {
+            let n = parent.len();
+            let id = *ids.entry(key(m.pos[i as usize])).or_insert_with(|| n);
+            if id == n { parent.push(n); }
+            match first { None => first = Some(id), Some(a) => { let (x, y) = (find(&mut parent, a), find(&mut parent, id)); parent[x] = y; } }
+        }
+        first.unwrap_or(0)
+    }).collect();
+    let roots: Vec<usize> = face_roots.iter().map(|&r| find(&mut parent, r)).collect();
+    let mut wants: std::collections::HashMap<usize, f64> = Default::default();
+    let mut board: std::collections::HashSet<usize> = Default::default();
+    for (fi, f) in m.faces.iter().enumerate() {
+        let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
+        let (fl, fh) = ps.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), q| ([l[0].min(q[0]), l[1].min(q[1]), l[2].min(q[2])], [h[0].max(q[0]), h[1].max(q[1]), h[2].max(q[2])]));
+        if !(0..3).all(|d| fl[d] < chi[d] && fh[d] > clo[d]) { continue }
+        let ins = 0.04;
+        if (0..2).all(|d| fl[d] < chi[d] - ins && fh[d] > clo[d] + ins) && fh[2] > clo[2] + 0.02 && fh[2] - fl[2] > 0.1 { board.insert(roots[fi]); }
+        let mut nrm = [0.0; 3];
+        for i in 0..ps.len() { let (a, b) = (ps[i], ps[(i + 1) % ps.len()]); nrm[0] += (a[1] - b[1]) * (a[2] + b[2]); nrm[1] += (a[2] - b[2]) * (a[0] + b[0]); nrm[2] += (a[0] - b[0]) * (a[1] + b[1]); }
+        let area = 0.5 * dot(nrm, nrm).sqrt();
+        if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 {
+            let overlap = (fh[0].min(chi[0]) - fl[0].max(clo[0])) * (fh[1].min(chi[1]) - fl[1].max(clo[1]));
+            *wants.entry(roots[fi]).or_insert(0.0) += area.min(overlap);
+        }
+    }
+    let foot = (chi[0] - clo[0]) * (chi[1] - clo[1]);
+    let (mut keep, mut cut) = (Mesh::new(), Mesh::new());
+    keep.pos = m.pos.clone();
+    cut.pos = m.pos.clone();
+    for (fi, f) in m.faces.iter().enumerate() {
+        let r = roots[fi];
+        if board.contains(&r) || wants.get(&r).copied().unwrap_or(0.0) > 0.25 * foot { cut.faces.push(f.clone()); } else { keep.faces.push(f.clone()); }
+    }
+    (keep, cut)
+}
+
 fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
     use indoorgen::gn::geom::Mesh as GM;
     let (blo, bhi) = b.bounds();

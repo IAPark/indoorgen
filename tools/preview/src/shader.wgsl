@@ -121,7 +121,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   }
   var out: FOut;
   var a = 1.0;
-  if (m.flags.x > 1.5) { a = 0.18; }
+  if (m.flags.x > 1.5) { a = select(0.18, m.flags.z, m.flags.z > 0.0); }
   out.color = vec4<f32>(col, a);
   out.nrm = vec4<f32>(n, 1.0);
   return out;

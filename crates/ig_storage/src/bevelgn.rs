@@ -219,6 +219,14 @@ impl BevFactory {
     }
 }
 
+impl BevFactory {
+    fn slot_mat(&self, n: &str) -> Material {
+        let n = if n.is_empty() { "gn" } else { n };
+        if n == "GrateIron" { return mat("grate_iron", [0.035, 0.035, 0.038], 0.55) }
+        self.slot_mats.iter().find(|x| x.0 == n).map(|x| x.1.clone()).unwrap_or_else(|| mat(n, [0.6, 0.6, 0.62], 0.4))
+    }
+}
+
 impl Factory for BevFactory {
     /// collision from the sampled parameters (python's own placeholder formulas: appliances.rs): the body with its door and handle, the
     /// top (an oven: its cooktop, and the control panel turned back over it as its own box), and the door -- dropping down about its bottom
@@ -273,12 +281,17 @@ impl Factory for BevFactory {
         }
         let Ok(g) = self.cached_geometry(inst) else { return self.inner.asset(inst) };
         let mut a = Asset::default();
-        a.parts = parts_of(&g, &|n| {
-            let n = if n.is_empty() { "gn" } else { n };
-            if n == "GrateIron" { return mat("grate_iron", [0.035, 0.035, 0.038], 0.55) }
-            self.slot_mats.iter().find(|x| x.0 == n).map(|x| x.1.clone()).unwrap_or_else(|| mat(n, [0.6, 0.6, 0.62], 0.4))
-        });
+        a.parts = parts_of(&g, &|n| self.slot_mat(n));
         a
+    }
+    /// each face's material slot: without them the scene mesh goes by the nearest part's box, and a stove's grates, inside the range's box, took the range's material
+    fn exact_slots(&self, i: u64) -> Option<(Vec<u16>, Vec<Material>)> {
+        if (self.sample)(&self.rng).variant != 0 && !self.supports_variants { return None }
+        let g = self.cached_geometry(i).ok()?;
+        let m = g.mesh.as_ref()?;
+        let n = m.mats.len().max(1);
+        let slots = (0..m.nf()).map(|f| m.attrs.get("material_index").map_or(0, |a| a.data[f].i().max(0) as usize).min(n - 1) as u16).collect();
+        Some((slots, (0..n).map(|k| self.slot_mat(m.mats.get(k).map_or("", |x| x.as_str()))).collect()))
     }
     fn natural_size(&self, i: u64) -> Option<[f64; 3]> {
         self.inner.natural_size(i)
