@@ -27,6 +27,19 @@ fn wbox(pose: &crate::furn::geom::Pose, l: [f64; 3], h: [f64; 3]) -> ([f64; 3], 
     (lo, hi)
 }
 
+/// a hanging sheet of towel at local x, soft folds along its width: not the flat board a box reads as
+fn drape(x: f64, y0: f64, y1: f64, z0: f64, z1: f64, ph: f64, pose: &crate::furn::geom::Pose) -> Mesh {
+    let mut m = Mesh::new();
+    let n = 14;
+    let at = |i: usize, z: f64, off: f64| { let u = i as f64 / n as f64; let y = y0 + (y1 - y0) * u; let k = ((z1 - z) / (z1 - z0).max(1e-6)).clamp(0.0, 1.0); pose.apply([x + off + k * (0.008 + 0.008 * (u * 15.0 + ph).sin() + 0.003 * (u * 37.0 + ph).sin()), y, z - k * 0.012 * (u * 9.0 + ph).sin().abs()]) };
+    let rows = [z1, z1 + (z0 - z1) * 0.5, z0];
+    for r in 0..2 { for i in 0..n {
+        m.add_quad(at(i, rows[r], 0.0), at(i + 1, rows[r], 0.0), at(i + 1, rows[r + 1], 0.0), at(i, rows[r + 1], 0.0));
+        m.add_quad(at(i + 1, rows[r], 0.006), at(i, rows[r], 0.006), at(i, rows[r + 1], 0.006), at(i + 1, rows[r + 1], 0.006));
+    } }
+    m
+}
+
 fn bx(lo: [f64; 3], hi: [f64; 3], pose: &crate::furn::geom::Pose) -> Mesh {
     let mut m = Mesh::cuboid(lo, hi);
     for q in m.pos.iter_mut() { *q = pose.apply(*q) }
@@ -57,8 +70,10 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 let zt = hi[2] + 0.01;
                 let t = 0.012;
                 let mut mesh = bx([x0, yc - w / 2.0, zt - t], [x1, yc + w / 2.0, zt], &o.pose);
+                let ph = r.uniform(0.0, 6.28);
+                // (behind, flat against the wall; before, in folds, away from it and the rail)
                 mesh.append(&bx([x0, yc - w / 2.0, zt - drop], [x0 + t, yc + w / 2.0, zt], &o.pose));
-                mesh.append(&bx([x1 - t, yc - w / 2.0, zt - drop * r.uniform(0.6, 0.95)], [x1, yc + w / 2.0, zt], &o.pose));
+                mesh.append(&drape(x1, yc - w / 2.0, yc + w / 2.0, zt - drop * r.uniform(0.6, 0.95), zt, ph, &o.pose));
                 // (a towel hanging into the basin or the cistern below the rail: none)
                 let (ml, mh) = mesh.bounds();
                 // (nor over another fitting lower on the wall)

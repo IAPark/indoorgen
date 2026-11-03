@@ -217,7 +217,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
             // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
             let is_art = m.name == "art" || m.name.starts_with("gallery_art");
-            let shown = is_art || m.name == "mirror";
+            let shown = is_art || m.name == "mirror" || m.name == "wardrobe_mirror";
             let tex = if shown {
                 let k = format!("{}:{}", m.name, n.name);
                 if !tex_views.contains_key(&k) { let img = if is_art { painting(&format!("{}:{}", path.display(), n.name)) } else { mirror_sheen() }; tex_views.insert(k.clone(), load_texture(&gpu.dev, &gpu.q, img)); }
@@ -341,7 +341,7 @@ fn view_quality(near: &[Tri], low: &[Tri], e: Vec3, f: Vec3, half: f32) -> f32 {
         sum += t - if t < 0.8 { 3.0 } else { 0.0 };
         // (a counter, a bed or a plant right under the lens: seen from above, huge, cut by the frame)
         let lo_o = Vec3::new(e.x, e.y, low.first().map_or(e.z, |t| t[0].z + 0.25));
-        if ray_dist(low, lo_o, d, 1.3) < 1.3 { sum -= 5.0; }
+        if ray_dist(low, lo_o, d, 1.7) < 1.7 { sum -= 5.0; }
     }
     sum / n as f32
 }
@@ -433,6 +433,11 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let near: Vec<Tri> = sh.walls.iter().chain(sh.leaves.iter()).chain(tall.iter()).filter(|t| { let (l, h) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2])); h.x > lo.x - 3.5 && l.x < hi.x + 3.5 && h.y > lo.y - 3.5 && l.y < hi.y + 3.5 }).cloned().collect();
         let mut low: Vec<Tri> = vec![];
         for (l, h) in &boxes { if l.z < z0 + 0.7 && h.z > z0 + 0.6 { let z = z0 + 0.45; let c = [Vec3::new(l.x, l.y, z), Vec3::new(h.x, l.y, z), Vec3::new(h.x, h.y, z), Vec3::new(l.x, h.y, z)]; let up = Vec3::new(0.0, 0.0, 0.5); for k in 0..4 { let (a, b) = (c[k], c[(k + 1) % 4]); low.push([a, b, b + up]); low.push([a, b + up, a + up]); } } }
+        let near_views = near.clone();
+        // what the room holds: a view is for showing it
+        let pieces: Vec<(Vec3, f32)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !skip(nm) && !nm.contains("Ceiling") && !nm.starts_with("light") && !nm.contains("_light") && (d.bmax - d.bmin).max_element() > 0.2 }).filter_map(|d| { let c = (d.bmin + d.bmax) * 0.5; rm.tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, z0), t)).then(|| (c, (d.bmax - d.bmin).truncate().length() * 0.5)) }).collect();
+        // (how many of them a heading shows, and through what half angle all of those fit)
+        let shows = |e: Vec3, f: Vec3, half: f32| -> (usize, f32) { let (mut n, mut need) = (0, 0f32); for (c, r) in &pieces { let d = (*c - e).truncate(); let l = d.length().max(0.01); let a = (d / l).dot(f.truncate()).clamp(-1.0, 1.0).acos(); if a < half && !sh.blocked(e, Vec3::new(c.x, c.y, e.z)) { n += 1; need = need.max(a + (*r / l).atan().min(0.5)); } } (n, need) };
         let half = 42f32.to_radians();
         let mut scored: Vec<(f32, Vec3, Vec3)> = vec![];
         let n_cands = cands.len(); let every = (n_cands / 40).max(1);
@@ -443,7 +448,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             for deg in [0.0f32, -20.0, 20.0, -35.0, 35.0] {
                 let a = deg.to_radians();
                 let f = Vec3::new(f0.x * a.cos() - f0.y * a.sin(), f0.x * a.sin() + f0.y * a.cos(), 0.0);
-                let q = view_quality(&near, &low, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist;
+                let seen = shows(*e, f, half).0 as f32 / pieces.len().max(1) as f32;
+                let q = view_quality(&near, &low, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist + 3.0 * seen;
                 if best.map_or(true, |b| q > b.0) { best = Some((q, f)); }
             }
             if let Some((q, f)) = best { scored.push((q, *e, f)); }
@@ -474,7 +480,17 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             // (a level view, tilted down 8 degrees whatever the distance: walls stay upright, as an interior photograph's)
             let f = heads.get(k).copied().unwrap_or_else(|| (tgt - *e).truncate().normalize_or_zero().extend(0.0));
             let look = *e + f * 2.0 + Vec3::new(0.0, 0.0, -0.28);
-            let mut cm = cam_look(*e, look, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" });
+            // (the lens to the view: a narrow room's near walls leave the frame on a longer lens, as a photographer would frame it)
+            let free_half = { let mut h = 42f32; for deg in [42f32, 38.0, 34.0, 30.0, 26.0] { let side = |sg: f32| { let a = (deg * sg).to_radians(); let d = Vec3::new(f.x * a.cos() - f.y * a.sin(), f.x * a.sin() + f.y * a.cos(), 0.0); ray_dist(&near_views, *e, d, 1.0) }; if side(1.0) >= 1.0 && side(-1.0) >= 1.0 { h = deg; break } h = deg; } h };
+            let (seen_n, need) = shows(*e, f, 42f32.to_radians());
+            let fit_half = free_half.max((need.to_degrees() + 3.0).min(42.0));
+            let view_lens = if lens < 18.0 && fit_half >= 42.0 { lens } else { (18.0 / (fit_half.to_radians().tan())).max(18.0) };
+            // (the tilt: 8 degrees at wide angle; on a longer lens down to what the room holds, or its floor would leave the frame)
+            let reach = pieces.iter().map(|(c, _)| (*c - *e).truncate().length()).fold(9.0f32, f32::min).max(1.0);
+            let tilt = if fit_half >= 40.0 { 0.14f32 } else { ((e.z - z0 - 0.75) / reach).clamp(0.14, 0.42) };
+            let look = *e + f * 2.0 + Vec3::new(0.0, 0.0, -2.0 * tilt);
+            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("VIEW {}_{} shows {seen_n} of {} half {fit_half:.0}", rm.name, if k == 0 { "A" } else { "B" }, pieces.len()); }
+            let mut cm = cam_look(*e, look, view_lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" });
             // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, look.x, look.y, look.z, lens); }
             out.push(cm);
