@@ -1657,6 +1657,63 @@ fn place_on_wall_step(state: &mut State, name: &str, room: &str, score: &dyn Fn(
     ok
 }
 
+/// a bed's long side against a wall, its head at neither: the last resort of a room whose doors leave no wall to back a bed on
+fn place_along_wall(state: &mut State, name: &str, room: &str) -> bool {
+    let (lo, hi) = lohi(state, name);
+    let l = hi[0] - lo[0];
+    let start = state.objs[name].pose;
+    let mut best: Option<(f64, super::geom::Pose)> = None;
+    for (a, b, n) in wall_segments(state, room) {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < l + 0.05 { continue }
+        let u = [dx / len, dy / len];
+        let yaw_ = (-n[0]).atan2(n[1]);
+        let steps = ((len - l) / 0.05).floor() as usize;
+        for i in 0..=steps {
+            let t = l / 2.0 + 0.01 + (len - l - 0.02) * if steps == 0 { 0.5 } else { i as f64 / steps as f64 };
+            let at = [a[0] + u[0] * t + n[0] * 0.003, a[1] + u[1] * t + n[1] * 0.003, 0.0];
+            if !try_place(state, name, yaw_, [(lo[0] + hi[0]) / 2.0, lo[1], lo[2]], at) { continue }
+            let sc = -(t - len / 2.0).abs();
+            if best.as_ref().map_or(true, |(s, _)| sc > *s) { best = Some((sc, state.objs[name].pose)); }
+        }
+    }
+    let ok = best.is_some();
+    let p = best.map(|b| b.1).unwrap_or(start);
+    state.set_pose(name, p);
+    state.touch(name);
+    ok
+}
+
+/// `seats`: the living rooms' sofas and armchairs before the walkway repair. A room it left with none gets one back, on a wall that keeps its
+/// doors joined, what crowds the room giving way (a coffee table first, then storage)
+pub fn reseat_living_rooms(state: &mut State, seats: &[(String, ObjState)]) -> Vec<String> {
+    let mut log = vec![];
+    let rooms: Vec<String> = state.objs.iter().filter(|(k, o)| layout2d::is_room(o) && room_type_of(k) == "living-room").map(|(k, _)| k.clone()).collect();
+    for room in rooms {
+        let has_seat = state.objs.iter().any(|(k, o)| matches!(class_of(o), "SofaFactory" | "ArmChairFactory") && layout2d::room_of(state, k).as_deref() == Some(room.as_str()));
+        if has_seat { continue }
+        let mut crowd: Vec<String> = state.objs.iter().filter(|(k, o)| matches!(class_of(o), "CoffeeTableFactory" | "LargePlantContainerFactory" | "SideTableFactory" | "SingleCabinetFactory" | "SimpleBookcaseFactory" | "CellShelfFactory" | "LargeShelfFactory")
+            && layout2d::room_of(state, k).as_deref() == Some(room.as_str())).map(|(k, _)| k.clone()).collect();
+        crowd.sort_by_key(|k| match class_of(&state.objs[k.as_str()]) { "CoffeeTableFactory" | "LargePlantContainerFactory" | "SideTableFactory" => 0, _ => 1 });
+        let candidates: Vec<&(String, ObjState)> = seats.iter().filter(|(_, o)| o.relations.iter().any(|r| r.target == room)).collect();
+        let mut crowd = crowd.into_iter();
+        'seat: loop {
+            for (k, o) in &candidates {
+                state.objs.insert(k.clone(), o.clone());
+                state.touch(k);
+                let score = |_: &State, _c: [f64; 2], t: f64, len: f64, _n: [f64; 2]| len - (t - len / 2.0).abs();
+                if place_on_wall(state, k, &room, &score) { log.push(format!("{room}: {k} back on a free wall")); break 'seat }
+                state.objs.shift_remove(k);
+            }
+            let Some(k) = crowd.next() else { break };
+            layout2d::remove_tree(state, &k);
+            log.push(format!("{room}: removed {k} to fit a seat"));
+        }
+    }
+    log
+}
+
 /// living rooms without a TV stand get one (centred on a long wall away from the doors); bathrooms with neither a tub nor a shower
 /// get a shower in a corner
 /// (`only_room`: the room this solve furnishes; every room is solved on its own copy of the house, so the others look empty here)
@@ -1809,6 +1866,11 @@ pub fn missing_pieces(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
                     if !ok && super::solver::tuck_piece(state, &name) {
                         ok = place_on_wall_step(state, &name, &room, &score, 0.05);
                         if ok { log.push(format!("{room}: a compact bed to fit")); }
+                    }
+                    // (doors on every wall: its long side against one, which keeps them joined)
+                    if !ok {
+                        ok = place_along_wall(state, &name, &room);
+                        if ok { log.push(format!("{room}: a bed along the wall to fit")); }
                     }
                 }
                 if std::env::var_os("GROUPDBG").is_some() && !ok { let (a, b) = state.objs.get(room.as_str()).and_then(|r| r.polygon.as_ref()).map_or(([0.0; 2], [0.0; 2]), |g| { let b = crate::shp::bounds(g); ([b.0, b.1], [b.2, b.3]) }); eprintln!("GROUPDBG bedless {room} {:.2} x {:.2}", b[0] - a[0], b[1] - a[1]);

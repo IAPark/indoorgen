@@ -345,7 +345,7 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                 }
                 let cut = cut_keys.contains(&o.key) || o.class == "Throw";
                 let near_floor = o.lo[2] < wall_t / 2.0 + 0.10;
-                let on_rug = support.map_or(false, |(ni, _)| nodes[ni].name.contains("Rug") || nodes[ni].class.contains("Rug") || nodes[ni].name.contains("bathmat"));
+                let on_rug = support.map_or(false, |(ni, _)| nodes[ni].name.contains("Rug") || nodes[ni].class.contains("Rug"));
                 if cut {
                 } else if gap > 0.005 && ((parent.is_some() && gap < 1.0) || (near_floor && gap < 0.15)) {
                     issues.push(format!("floating {:.1}mm", gap * 1000.0));

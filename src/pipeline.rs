@@ -879,8 +879,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
                     "SimpleBookcaseFactory" | "LargeShelfFactory" | "CellShelfFactory" | "SingleCabinetFactory" if hi[2] - lo[2] < 1.3 => 0.5,
                     // (a wardrobe in front of the glass is never right, a bed under a sill is: at 10 a window went 11 cm behind a
                     // wardrobe's side rather than narrow beside it)
-                    "WardrobeFactory" | "ShowerFactory" | "FridgeFactory" => 40.0,
-                    "TVStandFactory" | "FireplaceFeature" | "BookshelfWallFeature" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" => 10.0,
+                    // (and a fireplace or a wall of shelves: at 10 a window went 12 cm behind a fireplace's side)
+                    "WardrobeFactory" | "ShowerFactory" | "FridgeFactory" | "FireplaceFeature" | "BookshelfWallFeature" => 40.0,
+                    "TVStandFactory" | "SimpleBookcaseFactory" | "LargeShelfFactory" | "KitchenSpaceFactory" | "KitchenCabinetFactory" => 10.0,
                     _ if tall => 5.0,
                     _ => 0.0,
                 };

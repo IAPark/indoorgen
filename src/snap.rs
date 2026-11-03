@@ -196,6 +196,12 @@ pub fn snap_children(state: &mut State, visuals: &HashMap<String, crate::assets:
             out.push(Snapped { key: k.clone(), dz, removed: false });
             continue;
         }
+        // (an item on a table landing on the bevel of its edge, tilted out of true: a wineglass stood on a 45 degree slope)
+        if removable && gap != f64::MAX && parent.get(k).and_then(|p| state.objs.get(p)).and_then(|p| p.generator.as_ref()).map_or(false, |g| g.class.contains("Table"))
+            && contacts.iter().any(|c| down_hit(&nodes, &bb, &cand, [c[0], c[1], c[2] + 0.03]).map_or(false, |h| (c[2] - h.0 - gap).abs() < 0.003 && h.2[2].abs() < 0.9)) {
+            drop_keys.push(k.clone());
+            continue;
+        }
         if gap.abs() < 1e-4 {
             continue;
         }

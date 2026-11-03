@@ -241,7 +241,10 @@ pub fn build_scene(p: &Params) -> Built {
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
+        // (a living room's only seat, taken out to join the doors up, goes back on a wall that leaves them joined)
+        let seats: Vec<(String, indoorgen::furn::state::ObjState)> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| gn.class == "SofaFactory" || gn.class == "ArmChairFactory") && indoorgen::furn::layout2d::room_of(&g.state, k).map_or(false, |r| r.starts_with("living-room"))).map(|(k, o)| (k.clone(), o.clone())).collect();
         for l in indoorgen::furn::layout2d::repair(&mut g.state) { eprintln!("WALKWAY {l}"); }
+        for l in indoorgen::furn::groups::reseat_living_rooms(&mut g.state, &seats) { eprintln!("WALKWAY {l}"); }
         // (a built-in the repair took out is not built)
         g.features.retain(|pf| g.state.objs.contains_key(&pf.key));
     }
@@ -546,6 +549,8 @@ pub fn build_scene(p: &Params) -> Built {
             if o.pose.apply([0.0, 0.0, lo[2]])[2] > wt / 2.0 + 0.15 { continue }
             let corners = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]];
             let out = corners.iter().any(|c| { let p = o.pose.apply([c[0], c[1], lo[2]]); !indoorgen::shp::contains_pt(poly, [p[0], p[1]]) });
+            // (a box corner past the wall is not the mesh past it: a round table's box in an angled room lost the room its table)
+            let out = out && a.parts.iter().enumerate().any(|(i, part)| !a.is_soft(i) && part.mesh.pos.iter().any(|q| { let p = o.pose.apply(*q); !indoorgen::shp::contains_pt(poly, [p[0], p[1]]) }));
             if out { bad.push(k.clone()); }
         }
         for k in bad {

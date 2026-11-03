@@ -139,7 +139,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         let wb = wbox(&o.pose, [x - 0.1, side - 0.06, lo[2]], [x + 0.1, side + 0.06, lo[2] + 0.62]);
                         let inside = floor.as_ref().map_or(true, |g| [[wb.0[0], wb.0[1]], [wb.1[0], wb.0[1]], [wb.1[0], wb.1[1]], [wb.0[0], wb.1[1]]].iter().all(|q| crate::shp::contains_pt(g, *q)));
                         // (and clear of the door keep-outs: a stand stood 12 cm into a doorway)
-                        inside && !state.objs.iter().any(|(kk, oo)| kk != k && (oo.generator.is_some() || kk.starts_with("doorclear/")) && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
+                        // (nor on a bath mat: its post stood through one)
+                        inside && !mats.iter().any(|(l, h)| (0..2).all(|d| wb.0[d] < h[d] + 0.02 && l[d] - 0.02 < wb.1[d])) && !state.objs.iter().any(|(kk, oo)| kk != k && (oo.generator.is_some() || kk.starts_with("doorclear/")) && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
                     };
                     let mut sides = [lo[1] - 0.14, hi[1] + 0.14];
                     if r2.f64() < 0.5 { sides.swap(0, 1) }
@@ -159,6 +160,9 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                             for q in roll.pos.iter_mut() { *q = o.pose.apply(*q) }
                             scene.add(&format!("tproll_{}_{j}#0", k.replace('/', "_")), "ToiletPaperFactory", roll, paper);
                         }
+                        // (a mat laid later keeps off it)
+                        let sb = wbox(&o.pose, [x - 0.1, side - 0.06, lo[2]], [x + 0.1, side + 0.06, lo[2] + 0.62]);
+                        mats.push((sb.0, sb.1));
                         log.push(format!("paper stand at {k}"));
                     }
                 }
