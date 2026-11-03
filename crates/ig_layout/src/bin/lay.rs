@@ -56,7 +56,7 @@ fn run(rules_p: &str, room: Option<&str>, seed: u64, why: Option<&str>, out: Opt
             if !miss.is_empty() { incomplete += 1; }
             let left: Vec<&str> = s.report.iter().filter(|x| !x.placed && x.tier >= 2).map(|x| x.id.as_str()).collect();
             let placed: Vec<String> = s.report.iter().filter(|x| x.placed).map(|x| if x.variant == "as_is" { x.id.clone() } else { format!("{}({})", x.id, x.variant) }).collect();
-            println!("{hname} {:<18} {:5.1} m2 {:6.1} ms {} | {}{}{}", rm.name, rm.area, s.ms, placed.join(" "), if miss.is_empty() { String::new() } else { format!("| MISSING {}", miss.join(" ")) }, if s.doors_joined { "" } else { " | DOORS CUT" }, if left.is_empty() { String::new() } else { format!(" (without {})", left.join(" ")) });
+            println!("{hname} {:<18} {:5.1} m2 {:6.1} ms [{}] {} | {}{}{}", rm.name, rm.area, s.ms, s.arrangement, placed.join(" "), if miss.is_empty() { String::new() } else { format!("| MISSING {}", miss.join(" ")) }, if s.doors_joined { "" } else { " | DOORS CUT" }, if left.is_empty() { String::new() } else { format!(" (without {})", left.join(" ")) });
             sols.push(serde_json::json!({ "house": hname, "sol": s }));
         }
     }

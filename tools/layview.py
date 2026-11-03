@@ -77,7 +77,7 @@ def draw_room(e):
             return both
     must = any(not x["placed"] and x["tier"] == 0 for x in s["report"])
     d.rectangle([0, 0, W, 32], fill=(255, 225, 225) if must or not s["doors_joined"] else (235, 235, 235))
-    d.text((3, 2), f'{e["house"]} {r["name"]} {r["area"]:.1f} m2 {s["ms"]:.0f} ms' + ("  DOORS CUT" if not s["doors_joined"] else ""), fill=(0, 0, 0))
+    d.text((3, 2), f'{e["house"]} {r["name"]} {r["area"]:.1f} m2 {s["ms"]:.0f} ms {s.get("arrangement", "")}' + ("  DOORS CUT" if not s["doors_joined"] else ""), fill=(0, 0, 0))
     d.text((3, 16), (("missing: " + " ".join(miss)) if miss else "complete") + tail, fill=(170, 0, 0) if miss else (0, 110, 0))
     return im
 ims = [draw_room(e) for e in sols]

@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct RoomRules {
-    pub program: Vec<Item>,
+    #[serde(default)] pub program: Vec<Item>,
+    /// other ways to furnish the room: one is drawn by weight from those the room is big enough for; when its must items have no place, the next
+    #[serde(default)] pub arrangements: Vec<Arrangement>,
     /// noise on every candidate's score (the terms are worth about 1)
     #[serde(default = "noise_d")] pub noise: f64,
     /// the finished layout is drawn from those within this of the best (a may item is worth 1, so under 1 none is given up for it)
@@ -13,6 +15,16 @@ pub struct RoomRules {
     #[serde(default)] pub jitter: f64,
 }
 fn noise_d() -> f64 { 0.15 }
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Arrangement {
+    pub name: String,
+    #[serde(default = "one")] pub weight: f64,
+    #[serde(default)] pub min_area: f64,
+    #[serde(default = "big")] pub max_area: f64,
+    pub program: Vec<Item>,
+}
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]

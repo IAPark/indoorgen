@@ -19,7 +19,7 @@ pub struct Candidate { pub at: Xy, pub yaw: f64, pub why: Option<Why>, pub score
 pub struct ItemReport { pub id: String, pub tier: u8, pub not_wanted: bool, pub tried: usize, pub why: HashMap<String, usize>, pub placed: bool, pub variant: String }
 
 #[derive(serde::Serialize)]
-pub struct Solution { pub room: Room, pub placed: Vec<Placed>, pub report: Vec<ItemReport>, pub score: f64, pub ms: f64, pub walk: Vec<u8>, pub nx: usize, pub ny: usize, pub ox: f64, pub oy: f64, pub why_item: Vec<Candidate>, pub doors_joined: bool }
+pub struct Solution { pub arrangement: String, pub room: Room, pub placed: Vec<Placed>, pub report: Vec<ItemReport>, pub score: f64, pub ms: f64, pub walk: Vec<u8>, pub nx: usize, pub ny: usize, pub ox: f64, pub oy: f64, pub why_item: Vec<Candidate>, pub doors_joined: bool }
 
 struct Shape { vols: Vec<Volume>, lo: [f64; 3], hi: [f64; 3], back: f64, side: f64, seed: u64, size: Option<[f64; 3]> }
 
@@ -313,9 +313,30 @@ pub fn solve(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>) ->
 
 /// `fixed`: what already stands in the room (built-ins)
 pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str>, fixed: &[Prism]) -> Solution {
+    if rules.arrangements.is_empty() { return solve_program(room, rules, &rules.program, "", seed, why_id, fixed) }
+    // the room's arrangements, drawn without replacement by weight; the first whose must items all find a place
+    let mut pool: Vec<&crate::rules::Arrangement> = rules.arrangements.iter().filter(|a| room.area >= a.min_area && room.area < a.max_area).collect();
+    if pool.is_empty() { pool = rules.arrangements.iter().collect(); }
+    let mut last = None;
+    let mut k = 0u64;
+    while !pool.is_empty() {
+        let total: f64 = pool.iter().map(|a| a.weight).sum();
+        let mut u = noise(hash(&format!("{}/arrangement", room.name), seed), k) * total;
+        let mut i = 0;
+        for (j, a) in pool.iter().enumerate() { i = j; u -= a.weight; if u <= 0.0 { break } }
+        let a = pool.remove(i);
+        let sol = solve_program(room, rules, &a.program, &a.name, seed, why_id, fixed);
+        if !sol.report.iter().any(|r| r.tier == 0 && !r.placed) { return sol }
+        last = Some(sol);
+        k += 1;
+    }
+    last.unwrap()
+}
+
+fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: &str, seed: u64, why_id: Option<&str>, fixed: &[Prism]) -> Solution {
     let t0 = std::time::Instant::now();
     let wanted = |i: &Item| i.chance >= 1.0 || noise(hash(&format!("{}/{}/chance", room.name, i.id), seed), 0) < i.chance;
-    let expanded: Vec<Item> = rules.program.iter().flat_map(|i| if i.repeat > 0 { (0..i.repeat).map(|k| { let mut c = i.clone(); c.id = format!("{}#{k}", i.id); c.repeat = 0; c }).collect::<Vec<_>>() } else { vec![i.clone()] }).collect();
+    let expanded: Vec<Item> = program.iter().flat_map(|i| if i.repeat > 0 { (0..i.repeat).map(|k| { let mut c = i.clone(); c.id = format!("{}#{k}", i.id); c.repeat = 0; c }).collect::<Vec<_>>() } else { vec![i.clone()] }).collect();
     let mut order: Vec<&Item> = expanded.iter().filter(|i| room.area >= i.min_area && wanted(i)).collect();
     order.sort_by_key(|i| i.tier);
     let mut cache = HashMap::new();
@@ -436,5 +457,5 @@ pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str
     let walk = best.world.walk(&[]);
     let (seen, joined) = best.world.flood(&walk, room);
     let w: Vec<u8> = (0..walk.len()).map(|k| if seen[k] { 2 } else if walk[k] { 1 } else { 0 }).collect();
-    Solution { room: room.clone(), placed: best.items, report, score: best.score, ms: t0.elapsed().as_secs_f64() * 1000.0, walk: w, nx: best.world.nx, ny: best.world.ny, ox: best.world.ox, oy: best.world.oy, why_item, doors_joined: joined }
+    Solution { arrangement: arrangement.to_string(), room: room.clone(), placed: best.items, report, score: best.score, ms: t0.elapsed().as_secs_f64() * 1000.0, walk: w, nx: best.world.nx, ny: best.world.ny, ox: best.world.ox, oy: best.world.oy, why_item, doors_joined: joined }
 }
