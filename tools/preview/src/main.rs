@@ -653,13 +653,13 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             // (a view of this room: looking mostly out through a doorway, the next room's bath stood in for a hallway)
             let out_share = { let hv = (18.0 / view_lens).atan(); let mut o = 0; for k in 0..9 { let a = -hv + 2.0 * hv * k as f32 / 8.0; let d = Vec3::new(f.x * a.cos() - f.y * a.sin(), f.x * a.sin() + f.y * a.cos(), 0.0); let t = ray_dist(&sh.walls, *e, d, 9.0); let q = *e + d * (t - 0.1).max(0.0); if !rm.tris.iter().any(|tr| in_tri2(Vec3::new(q.x, q.y, z0), tr)) { o += 1; } } o as f32 / 9.0 };
             let mut cm = cam_look(*e, look, view_lens);
-            // (a large piece or door within 2.6 m, cut off by the frame's edge: a fridge or a door leaf down one side of the picture, too far off for the depth check)
+            // (a large piece or door within 3.4 m, cut off by the frame's edge: a fridge or a door leaf down one side of the picture, too far off for the depth check)
             cm.slab = { let hv = (18.0 / view_lens).atan(); let mut w = 0f32; for d in &s.draws {
                 let nm = &s.glb.nodes[d.node].name; let leaf = nm.starts_with("door") && !nm.contains("frame") && !nm.contains("casing");
                 if (skip(nm) && !leaf) || d.bmin.z > z0 + 1.2 || nm.contains("urtain") || nm.contains("Ceiling") { continue }
                 let (mut a0, mut a1, mut dn) = (f32::MAX, f32::MIN, f32::MAX);
                 for q in [(d.bmin.x, d.bmin.y), (d.bmax.x, d.bmin.y), (d.bmin.x, d.bmax.y), (d.bmax.x, d.bmax.y)] { let v = Vec3::new(q.0 - e.x, q.1 - e.y, 0.0); let a = (f.x * v.y - f.y * v.x).atan2(f.dot(v)); a0 = a0.min(a); a1 = a1.max(a); dn = dn.min(v.length()); }
-                if dn > 2.6 || a1 - a0 > 3.0 || (a0 > -hv && a1 < hv) { continue }
+                if dn > 3.4 || a1 - a0 > 3.0 || (a0 > -hv && a1 < hv) { continue }
                 w = w.max((a1.min(hv) - a0.max(-hv)).max(0.0) / (2.0 * hv)); }
             if w > 0.12 { w } else { 0.0 } };
             cm.shown = share(*e, f, (18.0 / view_lens).atan()) - 2.0 * out_share; cm.key = key_seen(*e, f, (18.0 / view_lens).atan()); cm.name = if alt > n_normal { format!("{}_A~w{alt}", rm.name) } else if cut_done { format!("{}_A~{}", rm.name, 20 + alt + 8 * k) } else if alt > 0 { format!("{}_A~{alt}", rm.name) } else { format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }) };
@@ -696,6 +696,15 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
             let dist = 1.2 * r / 0.5625 + 0.9; // (filling the frame: further back the room floated small on the grey)
             let target = Vec3::new(c.x, c.y, z0 + 1.0);
+            let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
+            // (as near as the room still fits the frame: at a distance from its size alone it sat small on the grey)
+            let wall_h = 2.6f32;
+            let corners: Vec<Vec3> = [(tl.x, tl.y), (th.x, tl.y), (tl.x, th.y), (th.x, th.y)].iter().flat_map(|q| {
+                let far = (q.0 - c.x) * sx > 0.0 || (q.1 - c.y) * sy > 0.0;
+                let mut v = vec![Vec3::new(q.0, q.1, z0)]; if far { v.push(Vec3::new(q.0, q.1, z0 + wall_h)); } v }).collect();
+            let fits = |d: f32| { let cm = cam_look(target - f * d * 0.72 + Vec3::new(0.0, 0.0, d * 0.69), target, 18.0); let tx = (cm.fov_x * 0.5).tan(); let ty = tx * 9.0 / 16.0;
+                corners.iter().all(|q| { let p = cm.view.inverse().transform_point3(*q); p.z < -0.3 && (p.x / -p.z).abs() < tx * 0.94 && (p.y / -p.z).abs() < ty * 0.94 }) };
+            let mut dist = dist; { let mut t = dist; while t > 1.5 && fits(t - 0.1) { t -= 0.1; } if fits(t) { dist = t; } else { while !fits(dist) && dist < 30.0 { dist += 0.2; } } }
             let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
             let mut cm = cam_look(e, target, 18.0);
             cm.near = Some(0.3);
