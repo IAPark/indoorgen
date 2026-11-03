@@ -448,7 +448,7 @@ pub fn remove_overlapping_rugs(state: &mut State, visuals: &HashMap<String, crat
 /// Rugs under room features (fireplace hearths, built-in shelves, window seats): the solver never saw the features, so a rug could lie
 /// under the hearth with the fireplace drawn on top of it. Each such rug slides out along the axis of least overlap (at most `max_shift`)
 /// or is removed. Footprints are the world xy boxes of the features' parts within 0.3 m of the floor. Returns (key, "moved" | "removed").
-pub fn rugs_clear_of(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, keys: &[String], max_shift: f64) -> Vec<(String, &'static str)> {
+pub fn rugs_clear_of(state: &mut State, visuals: &HashMap<String, crate::assets::Asset>, keys: &[String], max_shift: f64, inside: &dyn Fn(&str, [f64; 2]) -> bool) -> Vec<(String, &'static str)> {
     let mat_of = |p: &Pose| Mat4([[p.r[0][0], p.r[0][1], p.r[0][2], p.t[0]], [p.r[1][0], p.r[1][1], p.r[1][2], p.t[1]], [p.r[2][0], p.r[2][1], p.r[2][2], p.t[2]], [0.0, 0.0, 0.0, 1.0]]);
     let mut feet: Vec<([f64; 2], [f64; 2])> = vec![];
     for k in keys {
@@ -482,6 +482,8 @@ pub fn rugs_clear_of(state: &mut State, visuals: &HashMap<String, crate::assets:
             shift[d] += v;
             if shift[0].hypot(shift[1]) > max_shift { dead = true; break }
         }
+        // (nor through a wall: slid clear of a hearth, a rug went 7 cm into the wall behind it)
+        if !dead && shift != [0.0, 0.0] { let (a, b) = ([lo[0] + shift[0], lo[1] + shift[1]], [hi[0] + shift[0], hi[1] + shift[1]]); dead = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]].iter().any(|c| !inside(&k, *c)); }
         if dead { state.objs.shift_remove(&k); out.push((k, "removed")); continue }
         if shift != [0.0, 0.0] {
             let o = state.objs.get_mut(&k).unwrap();
