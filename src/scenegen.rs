@@ -238,6 +238,8 @@ pub fn build_scene(p: &Params) -> Built {
     let mut faults = plan.as_ref().map_or(0, |p| indoorgen::unified::unfit(&g, p));
     for attempt in 1..=2 {
         if faults == 0 || plan.is_none() { break }
+        // (time: a third plan only for a room with a must missing)
+        if faults < 100 && t.elapsed().as_secs_f64() > 11.0 { break }
         // (the caches are keyed by name and version, which a new house starts over)
         crate::furn::dof::reset_caches(); crate::furn::col::reset_caches(); crate::furn::layout2d::reset_caches(); crate::furn::eval::reset_caches(); crate::furn::solver::reset_caches();
         let mut g2 = generate(&mk_at(vec![], attempt), &assets, prog);

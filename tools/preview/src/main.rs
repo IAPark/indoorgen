@@ -115,7 +115,8 @@ fn picture_detail(im: &image::RgbaImage) -> f32 {
             let l = 0.2126 * a + 0.7152 * b + 0.0722 * d; sum += l; sq += l * l; sat += a.max(b).max(d) - a.min(b).min(d); c += 1.0;
         } }
         let (m, v) = (sum / c, sq / c - (sum / c).powi(2));
-        if v.max(0.0).sqrt() > 0.022 || sat / c > 0.16 { busy += 1.0; }
+        // (edges only: a flat brown wardrobe side filling the frame is colourful, and shows nothing)
+        let _ = sat; if v.max(0.0).sqrt() > 0.022 { busy += 1.0; }
         let _ = m; n += 1.0;
     } }
     busy / n
@@ -425,6 +426,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let z0 = rm.tris[0][0].z; let tgt = Vec3::new(rm.subj.x, rm.subj.y, z0 + 0.9);
         let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
         for t in &rm.tris { for v in t { lo = lo.min(*v); hi = hi.max(*v); } }
+        let mut cut_done = false;
         // a narrow rectangular room has nowhere to stand: a cutaway, the camera behind the wall it faces away from, that wall clipped, and the frame at the cut no
         // wider than the room, so all that shows is the room. Far enough back that the far end fills the height.
         let (ex, ey) = (hi.x - lo.x, hi.y - lo.y);
@@ -462,10 +464,10 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 out.push(cm);
                 k += 1;
             }
-            // (every way cuts something: an ordinary view after all)
+            // (every way cuts something: an ordinary view after all. Else the ordinary spots stand by, should the cut show too little)
             if k > 0 {
+                cut_done = true;
             if out.iter().filter(|c| !c.name.contains('~')).count() >= n { return out; }
-            continue;
             }
         }
         let mut cands: Vec<(f32, Vec3)> = vec![];
@@ -518,7 +520,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let mut chosen: Vec<Vec3> = vec![]; let mut heads: Vec<Vec3> = vec![];
         // (other good spots, should the picture from the best turn out mostly bare wall)
         let mut spare: Vec<(Vec3, Vec3)> = vec![];
-        for (_, e, f) in &scored { if spare.len() < 3 && !spare.iter().any(|(s, _)| (*s - *e).truncate().length() < 1.0) && (scored[0].1 - *e).truncate().length() >= 1.0 { spare.push((*e, *f)); } }
+        for (_, e, f) in &scored { if spare.len() < 6 && !spare.iter().any(|(s, _)| (*s - *e).truncate().length() < 0.8) && (scored[0].1 - *e).truncate().length() >= 1.0 { spare.push((*e, *f)); } }
         for (q, e, f) in &scored {
             if chosen.len() >= 2 { break; }
             // (a second view only if it is good and elsewhere)
@@ -539,7 +541,9 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 x += step; } y += step; }
             if let Some((_, e)) = best { chosen.push(e); lens = 13.0; }
         }
-        let tries: Vec<(usize, usize, Vec3, Option<Vec3>)> = chosen.iter().enumerate().map(|(k, e)| (k, 0, *e, heads.get(k).copied())).chain(spare.iter().filter(|(e, _)| !chosen.iter().any(|c| (*c - *e).truncate().length() < 1.0)).enumerate().map(|(i, (e, f))| (0, i + 1, *e, Some(*f)))).collect();
+        // (the best spot's other headings too: a bare wall one way, the room's contents behind the lens)
+        if let (Some(e), Some(f)) = (chosen.first(), heads.first()) { for (a, b) in [(-f.y, f.x), (f.y, -f.x), (-f.x, -f.y)] { spare.push((*e, Vec3::new(a, b, 0.0))); } }
+        let tries: Vec<(usize, usize, Vec3, Option<Vec3>)> = chosen.iter().enumerate().map(|(k, e)| (k, 0, *e, heads.get(k).copied())).chain(spare.iter().filter(|(e, f)| !chosen.iter().zip(heads.iter()).any(|(c, h)| (*c - *e).truncate().length() < 1.0 && h.dot(*f) > 0.9)).enumerate().map(|(i, (e, f))| (0, i + 1, *e, Some(*f)))).collect();
         for &(k, alt, e0, h0) in &tries {
             let e = &e0;
             // (a level view, tilted down 8 degrees whatever the distance: walls stay upright, as an interior photograph's)
@@ -555,7 +559,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let tilt = if fit_half >= 40.0 { 0.14f32 } else { ((e.z - z0 - 0.75) / reach).clamp(0.14, 0.42) };
             let look = *e + f * 2.0 + Vec3::new(0.0, 0.0, -2.0 * tilt);
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("VIEW {}_{} shows {seen_n} of {} half {fit_half:.0}", rm.name, if k == 0 { "A" } else { "B" }, pieces.len()); }
-            let mut cm = cam_look(*e, look, view_lens); cm.name = if alt > 0 { format!("{}_A~{alt}", rm.name) } else { format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }) };
+            let mut cm = cam_look(*e, look, view_lens); cm.name = if cut_done { format!("{}_A~{}", rm.name, 20 + alt + 8 * k) } else if alt > 0 { format!("{}_A~{alt}", rm.name) } else { format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }) };
             // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, look.x, look.y, look.z, lens); }
             out.push(cm);
@@ -777,12 +781,12 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
     }
     enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &tg.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.bpr), rows_per_image: Some(o.res.1) } }, wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 });
-    if o.depth {
+    if true {
         enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.depth_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::DepthOnly },
             wgpu::TexelCopyBufferInfo { buffer: &tg.dbuf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.dbpr), rows_per_image: Some(tg.h) } }, wgpu::Extent3d { width: tg.w, height: tg.h, depth_or_array_layers: 1 });
     }
     q.submit([enc.finish()]);
-    if o.depth {
+    if true {
         let ds = tg.dbuf.slice(..); ds.map_async(wgpu::MapMode::Read, |_| {});
         dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let data = ds.get_mapped_range().unwrap();
@@ -850,7 +854,9 @@ fn main() {
             if o.verbose { eprintln!("  cam {} {:.3}s", c.name, t.elapsed().as_secs_f32()); }
             let nm = if c.name.is_empty() { format!("cam{i}") } else { c.name.clone() };
             // a view that is mostly bare: other spots for it are tried, the one with most to see kept; a second view only if it has something to show
-            let detail = picture_detail(&img);
+            // (what stands right before the lens counts against it: a wall, a door, a bottle on a shelf filling the frame)
+            let near = r.last_depth.as_ref().map_or(0.0, |d| { let (mut n, mut c) = (0f32, 0f32); for v in d.iter().step_by(11) { c += 1.0; if *v > 0.0 && *v < 0.9 { n += 1.0; } } n / c.max(1.0) });
+            let detail = picture_detail(&img) - 1.2 * near;
             if let Some((base, _)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {

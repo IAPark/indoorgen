@@ -283,6 +283,8 @@ impl Kit {
                 s -= 0.5;
                 if w < 0.45 { return None }
                 if w < 0.6 { pen(&mut s, 2.0, &|| format!("{w:.2} m counter on line {li}")); }
+                // (a sink's basin and tap run about 0.95 m whatever its module: on a shorter run it finds no place, and the kitchen has none)
+                if w < 1.1 && on[j0..i].iter().any(|p| p.kind == Kind::Sink) { pen(&mut s, 20.0, &|| format!("sink on a {w:.2} m run")); }
             }
             // the leftover at a wall end: open floor narrower than a cabinet reads as a mistake (beside a fridge: its door's room)
             let (s0, s1) = self.span(plan, li);
@@ -375,6 +377,16 @@ impl Kit {
             let blocked = ps.iter().any(|q| q.line != p.line && ov(&z, &q.rect)) || self.obstacles.iter().any(|o| hits(&z, o, -1.0, 1.4));
             if off > 0 || blocked { pen(&mut s, 12.0, &|| format!("door zone of the {:?}", p.kind)); }
         }
+        // an appliance at a step in the wall: beside a run on the next stretch, its front well off the run's (a range 47 cm behind the counter next to it)
+        for p in ps.iter().filter(|p| matches!(p.kind, Kind::Range | Kind::Dish | Kind::Fridge)) {
+            let n = self.lines[p.line].n;
+            for q in ps.iter().filter(|q| q.line != p.line && is_counter(q.kind)) {
+                let m = self.lines[q.line].n;
+                if n[0] * m[0] + n[1] * m[1] < 0.99 || layout2d::poly_dist(&p.rect, &q.rect) > 0.05 { continue }
+                let off = (p.front[0] - q.front[0]) * n[0] + (p.front[1] - q.front[1]) * n[1];
+                if off.abs() > if p.kind == Kind::Fridge { 0.16 } else { 0.08 } { pen(&mut s, 12.0, &|| format!("{:?} {off:.2} m off the counter beside it", p.kind)); }
+            }
+        }
         // aisle: facing lines' fronts at least the aisle apart where they overlap
         for p in &ps {
             for q in &ps {
@@ -393,7 +405,7 @@ impl Kit {
                 let q = { let tt = t + sg * lr.fridge_corner_gap; let e = p.depth * 0.75; [l.a[0] + l.u[0] * tt + l.n[0] * e, l.a[1] + l.u[1] * tt + l.n[1] * e] };
                 let walled = !layout2d::in_rings(&self.rings, q) || self.obstacles.iter().any(|o| o.iter().any(|pr| pr.z[1] > 0.5 && layout2d::in_rings(&[pr.poly.clone()], q)));
                 let turned = ps.iter().any(|r| r.line != p.line && layout2d::in_rings(&[r.rect.clone()], q));
-                if walled || turned { pen(&mut s, if p.kind == Kind::Fridge { 12.0 } else { 4.0 }, &|| format!("{:?} in a corner", p.kind)); }
+                if walled || turned { pen(&mut s, 12.0, &|| format!("{:?} in a corner", p.kind)); }
             }
         }
         // neighbours along a line

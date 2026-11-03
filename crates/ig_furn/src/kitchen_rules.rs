@@ -72,6 +72,8 @@ pub struct Eval {
     pub broken: Vec<String>,
     /// appliances missing, or that cannot be opened (door zone blocked)
     pub unusable: usize,
+    /// of those, the ones missing altogether: a kitchen without its fridge is as bad as a bedroom without its bed
+    pub absent: usize,
 }
 
 /// the front centre of a piece (world xy)
@@ -173,7 +175,8 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
     let (fridges, ranges, sinks) = (in_room("FridgeFactory"), in_room("OvenFactory"), in_room("SinkFactory"));
     let nc = Tag::sem("NoCollision");
     // (a kitchen without its fridge or range is no use either)
-    unusable += fridges.is_empty() as usize + ranges.is_empty() as usize;
+    let absent = fridges.is_empty() as usize + ranges.is_empty() as usize + sinks.is_empty() as usize;
+    unusable += absent;
     // door zones: inside the room and clear of every other piece standing on the floor (the built-in line included)
     for k in fridges.iter().chain(ranges.iter()).chain(in_room("DishwasherFactory").iter()) {
         let Some(z) = door_zone(state, k) else { continue };
@@ -215,5 +218,5 @@ pub fn eval(state: &State, room: &str, sink_at: Option<[f64; 2]>) -> Eval {
         if bad > 0.05 { broken.push(format!("work triangle {:.2}/{:.2}/{:.2} m", legs[0], legs[1], legs[2])); }
         score -= 1.5 * bad;
     }
-    Eval { score, broken, unusable }
+    Eval { score, broken, unusable, absent }
 }

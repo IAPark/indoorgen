@@ -18,7 +18,8 @@ impl Plan {
 
 /// what makes a plan not worth keeping: must items with no place, and kitchen appliances that cannot be opened
 pub fn unfit(g: &Generated, plan: &Plan) -> usize {
-    plan.missing() + g.room_polys.iter().filter(|(n, _)| n.starts_with("kitchen")).map(|(n, _)| { let e = crate::furn::kitchen_rules::eval(&g.state, n, None); if e.unusable > 0 { let cl: Vec<&str> = g.state.objs.iter().filter(|(k, _)| layout2d::room_of(&g.state, k).as_deref() == Some(n.as_str())).filter_map(|(_, o)| o.generator.as_ref().map(|gg| gg.class.as_str())).collect(); eprintln!("PLAN fault {n}: {:?} holds {cl:?}", e.broken); } e.unusable }).sum::<usize>()
+    // (a room without its bed outweighs any kitchen fault)
+    100 * plan.missing() + g.room_polys.iter().filter(|(n, _)| n.starts_with("kitchen")).map(|(n, _)| { let e = crate::furn::kitchen_rules::eval(&g.state, n, None); if e.unusable > 0 { let cl: Vec<&str> = g.state.objs.iter().filter(|(k, _)| layout2d::room_of(&g.state, k).as_deref() == Some(n.as_str())).filter_map(|(_, o)| o.generator.as_ref().map(|gg| gg.class.as_str())).collect(); eprintln!("PLAN fault {n}: {:?} holds {cl:?}", e.broken); } e.unusable + 99 * e.absent }).sum::<usize>()
 }
 
 /// alcove shelves standing in a window's way go, with their keep-outs and what stands on them (the old passes moved them with the room's group; the wall layer only
