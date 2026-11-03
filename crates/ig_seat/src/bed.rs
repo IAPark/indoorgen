@@ -1163,8 +1163,11 @@ fn fold(m: &Mesh, theta: f64, ym: f64) -> Mesh {
     let mut o = bisect_y(&o);
     for p in o.pos.iter_mut() {
         if p[1] > 0.0 {
+            // (the height turns over across 6 cm: at once, the two sides of the crease did not meet, and the shell gaped in grey lenses along it)
+            let t = (p[1] / 0.06).min(1.0);
+            let t = t * t * (3.0 - 2.0 * t);
+            p[2] += (0.05 - 2.0 * p[2]) * t;
             p[1] = -p[1];
-            p[2] = 0.05 - p[2];
         }
     }
     o.transform(&Mat4::translation([0.0, ym, 0.0]));
