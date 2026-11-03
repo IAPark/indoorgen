@@ -1130,7 +1130,7 @@ impl Factory for Bed {
             let lowz = pm.bounds().0[2];
             pm.transform(&Mat4::rot_z(rz));
             pm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
-            super::cloth::rest_and_wrap(&mut pm.pos, &rest_col, 0.07, 0.01, 0.15);
+            super::cloth::rest_and_wrap(&mut pm.pos, &rest_col, 0.07, 0.01, 0.05);
             let b = pm.bounds();
             a.followers.push(Follower { part: a.parts.len(), xy: [loc[0], loc[1]], z_used: loc[2], bases: vec![sheet_idx, mattress_idx] });
             // (pillows and the towel are bedding: soft, within the bed's soft volume)

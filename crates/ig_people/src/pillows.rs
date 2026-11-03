@@ -168,7 +168,7 @@ pub fn settle(people: &[Placement], scene: &mut Scene, floor_z: f64) {
                 if thin {
                     ig_kit::cloth::rest_and_wrap(&mut scene.nodes[ni].mesh.pos, &bed_col, 0.02, 0.005, 0.1);
                 } else {
-                    ig_kit::cloth::rest_and_wrap(&mut scene.nodes[ni].mesh.pos, &bed_col, 0.07, 0.01, 0.15);
+                    ig_kit::cloth::rest_and_wrap(&mut scene.nodes[ni].mesh.pos, &bed_col, 0.07, 0.01, 0.05);
                 }
             }
             for j in scene.cloth.iter_mut() {

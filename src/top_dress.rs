@@ -67,6 +67,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
         (lo, hi)
     };
     let mut taken: Vec<Box3> = scene.nodes.iter().filter(|n| ["mess_", "toiletry_", "cushion_", "towel_", "bathmat_", "dress_", "wshelf_", "wsitem_", "photo_", "wcshelf_", "wcbottle_", "tp"].iter().any(|p| n.name.starts_with(p))).map(|n| n.mesh.bounds()).collect();
+    // (a curtain hangs in front of what stands under its window: a vase stood inside one)
+    taken.extend(crate::dress::curtain_boxes(scene));
     let objs: Vec<(String, Box3)> = state.objs.iter().filter(|(_, o)| o.generator.is_some()).map(|(k, o)| (k.clone(), world_box(o))).collect();
     let mut n_items = 0usize;
     const POOL: usize = 5;

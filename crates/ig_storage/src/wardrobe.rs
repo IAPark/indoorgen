@@ -159,7 +159,13 @@ impl Wardrobe {
                 let (by0, by1) = (dw0 * bi as f64, dw0 * (bi + 1) as f64);
                 if by0 > 0.0 { cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, by0, h])); }
                 if by1 < w { cab.append(&Mesh::cuboid([0.0, by1, p], [x0, w, h])); }
-                cab.append(&Mesh::cuboid([0.0, by0, p], [x0, by1, p + 0.018])); // bay floor (bottom panel)
+                cab.append(&Mesh::cuboid([0.0, by0, p], [x0, by1, self.zd().max(p + 0.018)])); // the bay's floor, down to the plinth behind any drawers
+                // (a carcass round it: at an end bay only the white lining stood there, a pale side stopping in mid air over the drawers' level)
+                const SKIN: f64 = 0.012;
+                cab.append(&Mesh::cuboid([0.0, by0, p], [SKIN, by1, h]));
+                cab.append(&Mesh::cuboid([0.0, by0, h - SKIN], [x0 - 0.001, by1, h]));
+                cab.append(&Mesh::cuboid([0.0, by0, p], [x0 - 0.001, by0 + SKIN, h]));
+                cab.append(&Mesh::cuboid([0.0, by1 - SKIN, p], [x0 - 0.001, by1, h]));
             }
             None => cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, w, h])),
         }
@@ -309,11 +315,14 @@ impl Wardrobe {
         let inside = Material::diffuse("wardrobe_inside", [0.82, 0.8, 0.76], 0.8);
         // carve: the cabinet body is solid; paint its interior faces with an inner shell slightly inside the bay
         let mut shell = Mesh::new();
-        shell.append(&Mesh::cuboid([0.0, y0 + wall, zd + wall], [0.02, y1 - wall, h - wall])); // back
-        shell.append(&Mesh::cuboid([0.0, y0, zd], [x0, y0 + wall, h])); // sides
-        shell.append(&Mesh::cuboid([0.0, y1 - wall, zd], [x0, y1, h]));
-        shell.append(&Mesh::cuboid([0.0, y0, zd], [x0, y1, zd + wall])); // floor
-        shell.append(&Mesh::cuboid([0.0, y0, h - wall], [x0, y1, h])); // top
+        // (a millimetre inside the carcass, so only its inner faces and front edges show)
+        const IN: f64 = 0.001;
+        let (hi_z, xb) = (h - IN, IN);
+        shell.append(&Mesh::cuboid([xb, y0 + wall, zd + wall], [0.02, y1 - wall, h - wall])); // back
+        shell.append(&Mesh::cuboid([xb, y0 + IN, zd], [x0, y0 + wall, hi_z])); // sides
+        shell.append(&Mesh::cuboid([xb, y1 - wall, zd], [x0, y1 - IN, hi_z]));
+        shell.append(&Mesh::cuboid([xb, y0 + IN, zd], [x0, y1 - IN, zd + wall])); // floor
+        shell.append(&Mesh::cuboid([xb, y0 + IN, h - wall], [x0, y1 - IN, hi_z])); // top
         a.mesh(shell, &inside, None);
         let shelf_z = h - 0.32;
         a.mesh(Mesh::cuboid([0.02, y0 + wall, shelf_z], [x0 - 0.01, y1 - wall, shelf_z + 0.018]), &inside, None);

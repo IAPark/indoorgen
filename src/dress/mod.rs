@@ -152,6 +152,11 @@ pub fn plateau(a: &Asset, zlo: f64, zhi: f64, min_count: usize) -> Option<f64> {
     levels.iter().rev().find(|(_, c)| **c >= min_count).map(|(z, _)| *z as f64 / 100.0)
 }
 
+/// the space window curtains hang in
+pub fn curtain_boxes(scene: &Scene) -> Vec<Box3> {
+    scene.nodes.iter().filter(|n| n.class == "Window" && n.name.ends_with(".curtain") && !n.mesh.is_empty()).map(|n| n.mesh.bounds()).collect()
+}
+
 /// Occupied space for one dressing run: world boxes of every node already in the scene that is not room shell / skirting, plus what
 /// the dressers place.
 pub struct Occ { pub boxes: Vec<Box3>, pub names: Vec<String> }
@@ -162,6 +167,7 @@ impl Occ {
         let ns: Vec<&crate::mesh::Node> = scene.nodes.iter().filter(|n| n.class != "room" && n.class != "Window" && !n.name.starts_with("skirting") && !n.mesh.is_empty() && !skip_prefix.iter().any(|p| n.name.starts_with(p.as_str()))).collect();
         let mut o = Occ { boxes: ns.iter().map(|n| n.mesh.bounds()).collect(), names: ns.iter().map(|n| n.name.clone()).collect() };
         o.add_door_zones(scene);
+        for b in curtain_boxes(scene) { o.boxes.push(b); o.names.push("curtain".into()); }
         o
     }
     /// keep-outs in every door's passage (the QC's door zone: 0.6 m each side of the wall, the opening's width): no dresser puts an
