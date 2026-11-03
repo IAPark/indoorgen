@@ -749,14 +749,12 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                             for k in 0..16 {
                                 let a = k as f32 * std::f32::consts::TAU / 16.0;
                                 let f = Vec3::new(a.cos(), a.sin(), 0.0);
-                                // (a piece in the way ends the look)
-                                let mut d = ray_dist(&sh.walls, e, f, 12.0);
-                                for b in &sh.boxes { let m = (*b).0.min(b.1); let n = (*b).0.max(b.1); let (mut t0, mut t1) = (0f32, d); let mut hit = true; for ax in 0..2 { let (o_, r_) = (e[ax], f[ax]); if r_.abs() < 1e-5 { if o_ < m[ax] || o_ > n[ax] { hit = false; } } else { let (a_, b_) = ((m[ax] - o_) / r_, (n[ax] - o_) / r_); t0 = t0.max(a_.min(b_)); t1 = t1.min(a_.max(b_)); } } if hit && t0 <= t1 { d = d.min(t0); } }
-                                // (within the room: the longest look was often out through a doorway, and showed the next room)
-                                let mut inside_d = 0f32;
-                                while inside_d < d { let q = e + f * (inside_d + 0.1); if !rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t)) { break } inside_d += 0.1; }
-                                // (from the middle of the passage, not along a wall that fills half the frame)
-                                let v = inside_d + 2.5 * clear.min(0.7);
+                                // how much of this room's own floor the view takes in, ray by ray across the lens: a look out through a door sees little of it, and one along a wall half
+                                let on = |q: Vec3| rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t));
+                                let v: f32 = (-4..=4).map(|h| { let a_ = (h as f32 * 8.0).to_radians(); let dir = Vec3::new(f.x * a_.cos() - f.y * a_.sin(), f.x * a_.sin() + f.y * a_.cos(), 0.0);
+                                    let mut w = ray_dist(&sh.walls, e, dir, 8.0);
+                                    for b in &sh.boxes { let (mut t0, mut t1) = (0f32, w); let mut hit = true; for ax in 0..2 { let (o_, r_) = (e[ax], dir[ax]); if r_.abs() < 1e-5 { if o_ < b.0[ax] || o_ > b.1[ax] { hit = false; } } else { let (a2, b2) = ((b.0[ax] - o_) / r_, (b.1[ax] - o_) / r_); t0 = t0.max(a2.min(b2)); t1 = t1.min(a2.max(b2)); } } if hit && t0 <= t1 { w = w.min(t0); } }
+                                    let mut d_ = 0f32; while d_ < w && on(e + dir * (d_ + 0.1)) { d_ += 0.1; } d_ }).sum();
                                 if v > best { best = v; pick = Some((e, f)); }
                             }
                         }
@@ -766,7 +764,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 y += 0.25;
             }
             if let Some((e, f)) = pick {
-                if best > 2.5 {
+                if best > 0.0 {
                     let mut cm = cam_look(e, e + f * 2.0 + Vec3::new(0.0, 0.0, -0.28), 16.0);
                     cm.name = format!("{}_A~s", rm.name);
                     out.push(cm);
