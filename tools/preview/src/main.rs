@@ -461,7 +461,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         // a narrow rectangular room has nowhere to stand: a cutaway, the camera behind the wall it faces away from, that wall clipped, and the frame at the cut no
         // wider than the room, so all that shows is the room. Far enough back that the far end fills the height.
         let (ex, ey) = (hi.x - lo.x, hi.y - lo.y);
-        if rm.area / (ex * ey).max(0.01) > 0.85 && (ex.min(ey) < 2.3 || rm.area < 6.5) {
+        if rm.area / (ex * ey).max(0.01) > 0.985 && (ex.min(ey) < 2.3 || rm.area < 6.5) {
             let c = (lo + hi) * 0.5;
             let d = (rm.subj - c).truncate();
             // (a long room: down its length, a frame as wide as its long side would be taller than the room; a short one toward what it holds, then the other ways)
@@ -641,7 +641,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         }
         // the last word: a view from above the walls, ceiling and near walls gone, nothing but this room. Not as if standing in it, but the whole room always shows.
         // (true rectangles only: a notch's corner has no plane to cut it away, and stands through the picture as a slab)
-        if rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01) > 0.985 {
+        // (and small rooms: a larger one comes out tiny in the frame, and its standing views are better even when they score poorly)
+        if rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8 && rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01) > 0.985 {
             let c = (lo + hi) * 0.5;
             let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
             let f = Vec3::new(sx, sy, 0.0).normalize();
