@@ -668,7 +668,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let c = (lo + hi) * 0.5;
         let missing: Vec<(f32, f32)> = [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)].into_iter().filter(|(a, b)| { let q = Vec3::new(c.x + a * ((hi.x - lo.x) * 0.5 - 0.22), c.y + b * ((hi.y - lo.y) * 0.5 - 0.22), z0); !rm.tris.iter().any(|t| in_tri2(q, t)) }).collect();
         let fill = rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01);
-        let rect = fill > 0.985;
+        let rect = fill > 0.97;
         // the view's direction, toward the notches (none across from each other: one would stand before the lens)
         let (mx, my): (f32, f32) = (missing.iter().map(|q| q.0).sum(), missing.iter().map(|q| q.1).sum());
         let aim = (!missing.is_empty() && missing.len() <= 2 && !(missing.len() == 2 && mx == 0.0 && my == 0.0)).then(|| (if mx != 0.0 { mx.signum() } else if rm.subj.x >= c.x { 1.0 } else { -1.0 }, if my != 0.0 { my.signum() } else if rm.subj.y >= c.y { 1.0 } else { -1.0 }));
@@ -687,6 +687,44 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             cm.only = Some((lo, hi, rm.name.clone()));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
+        } else if rm.area < 14.0 && rm.name.starts_with("hallway") {
+            // the last word for a passage: from wherever it can be seen furthest, a long look down its length
+            let eye_z = z0 + 1.5;
+            let (mut best, mut pick) = (0f32, None);
+            let mut y = lo.y + 0.25;
+            while y < hi.y {
+                let mut x = lo.x + 0.25;
+                while x < hi.x {
+                    let p = Vec3::new(x, y, z0);
+                    if rm.tris.iter().any(|t| in_tri2(p, t)) {
+                        let e = Vec3::new(x, y, eye_z);
+                        let clear = (0..8).map(|k| { let a = k as f32 * std::f32::consts::FRAC_PI_4; ray_dist(&sh.walls, e, Vec3::new(a.cos(), a.sin(), 0.0), 3.0) }).fold(3.0f32, f32::min);
+                        let in_piece = sh.boxes.iter().any(|b| x > b.0.x - 0.2 && x < b.1.x + 0.2 && y > b.0.y - 0.2 && y < b.1.y + 0.2);
+                        if clear > 0.4 && !in_piece {
+                            for k in 0..16 {
+                                let a = k as f32 * std::f32::consts::TAU / 16.0;
+                                let f = Vec3::new(a.cos(), a.sin(), 0.0);
+                                // (a piece in the way ends the look)
+                                let mut d = ray_dist(&sh.walls, e, f, 12.0);
+                                for b in &sh.boxes { let m = (*b).0.min(b.1); let n = (*b).0.max(b.1); let (mut t0, mut t1) = (0f32, d); let mut hit = true; for ax in 0..2 { let (o_, r_) = (e[ax], f[ax]); if r_.abs() < 1e-5 { if o_ < m[ax] || o_ > n[ax] { hit = false; } } else { let (a_, b_) = ((m[ax] - o_) / r_, (n[ax] - o_) / r_); t0 = t0.max(a_.min(b_)); t1 = t1.min(a_.max(b_)); } } if hit && t0 <= t1 { d = d.min(t0); } }
+                                // (within the room: the longest look was often out through a doorway, and showed the next room)
+                                let mut inside_d = 0f32;
+                                while inside_d < d { let q = e + f * (inside_d + 0.1); if !rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t)) { break } inside_d += 0.1; }
+                                if inside_d > best { best = inside_d; pick = Some((e, f)); }
+                            }
+                        }
+                    }
+                    x += 0.25;
+                }
+                y += 0.25;
+            }
+            if let Some((e, f)) = pick {
+                if best > 2.0 {
+                    let mut cm = cam_look(e, e + f * 2.0 + Vec3::new(0.0, 0.0, -0.28), 16.0);
+                    cm.name = format!("{}_A~s", rm.name);
+                    out.push(cm);
+                }
+            }
         }
     }
     out
@@ -1016,7 +1054,7 @@ fn main() {
         let mut chosen: HashMap<String, usize> = HashMap::new();
         for (i, c) in cams.iter().enumerate() {
             // (only a poor view looks further)
-            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.45 } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
+            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.0 } else if alt == "s" { 0.3 } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
             let t = Instant::now();
             let img = exposed(&mut r, &mut s, c, &o);
             if o.verbose { eprintln!("  cam {} {:.3}s", c.name, t.elapsed().as_secs_f32()); }
@@ -1033,7 +1071,7 @@ fn main() {
             if let Some((base, alt)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {
-                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; chosen.insert(key.clone(), i); best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
+                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || alt == "s" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; chosen.insert(key.clone(), i); best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
                 }
                 if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2}"); }
                 continue;
