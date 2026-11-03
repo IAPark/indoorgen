@@ -240,6 +240,8 @@ pub fn build_scene(p: &Params) -> Built {
         }
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
+        // LAYOUT=unified: the rooms the rules cover are furnished by the unified solver instead (crates/ig_layout); tables are then set as ever
+        if std::env::var("LAYOUT").map_or(false, |v| v == "unified") { for l in indoorgen::unified::apply(&mut g, seed) { eprintln!("UNIFIED {l}"); } }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
         // (a living room's only seat, taken out to join the doors up, goes back on a wall that leaves them joined)
         let seats: Vec<(String, indoorgen::furn::state::ObjState)> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| gn.class == "SofaFactory" || gn.class == "ArmChairFactory") && indoorgen::furn::layout2d::room_of(&g.state, k).map_or(false, |r| r.starts_with("living-room"))).map(|(k, o)| (k.clone(), o.clone())).collect();
@@ -248,8 +250,6 @@ pub fn build_scene(p: &Params) -> Built {
         // (a built-in the repair took out is not built)
         g.features.retain(|pf| g.state.objs.contains_key(&pf.key));
     }
-    // LAYOUT=unified: the rooms the rules cover are furnished by the unified solver instead (crates/ig_layout)
-    if std::env::var("LAYOUT").map_or(false, |v| v == "unified") { for l in indoorgen::unified::apply(&mut g, seed) { eprintln!("UNIFIED {l}"); } }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
     if let Some(m) = indoorgen::furn::dof::PLACE_STATS.lock().unwrap().as_ref() {

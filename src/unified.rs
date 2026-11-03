@@ -17,7 +17,8 @@ pub fn apply(g: &mut Generated, seed: u64) -> Vec<String> {
         // the built-ins stand as they are
         let feature_keys: Vec<String> = g.features.iter().filter(|f| f.room == name).map(|f| f.key.clone()).collect();
         let fixed: Vec<world::Prism> = feature_keys.iter().filter_map(|k| g.state.objs.get(k)).map(|o| {
-            let (l, h) = (o.geom.lo, o.geom.hi);
+            // (a little past its layout box: a built-in's mesh runs over it)
+            let (l, h) = ([o.geom.lo[0] - 0.03, o.geom.lo[1] - 0.03, o.geom.lo[2]], [o.geom.hi[0] + 0.03, o.geom.hi[1] + 0.03, o.geom.hi[2]]);
             let hull = world::hull2([[l[0], l[1]], [h[0], l[1]], [h[0], h[1]], [l[0], h[1]]].iter().map(|c| { let q = o.pose.apply([c[0], c[1], 0.0]); [q[0], q[1]] }).collect());
             world::Prism { hull, z: [0.0, h[2] - l[2]], role: world::HARD }
         }).collect();
@@ -28,7 +29,7 @@ pub fn apply(g: &mut Generated, seed: u64) -> Vec<String> {
         }
         // the room's floor relation, from what stands there now
         let rel = g.state.objs.values().flat_map(|o| o.relations.iter()).find(|r| r.target == name && r.relation.geo().is_some()).cloned();
-        let gone: Vec<String> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| !gn.class.ends_with("Feature") && !matches!(gn.class.as_str(), "CeilingLightFactory" | "Door" | "Window") && (gn.class != "HardwareFactory" || rr.program.iter().any(|i| i.class == gn.class))) && layout2d::room_of(&g.state, k).as_deref() == Some(name.as_str()) && !feature_keys.contains(k)).map(|(k, _)| k.clone()).collect();
+        let gone: Vec<String> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| !gn.class.ends_with("Feature") && !matches!(gn.class.as_str(), "CeilingLightFactory" | "Door" | "Window") && (gn.class != "HardwareFactory" || rr.program.iter().any(|i| i.class == gn.class))) && (layout2d::room_of(&g.state, k).as_deref() == Some(name.as_str()) || (layout2d::room_of(&g.state, k).is_none() && house::inside(&room.outline, { let q = o.pose.apply([(o.geom.lo[0] + o.geom.hi[0]) / 2.0, (o.geom.lo[1] + o.geom.hi[1]) / 2.0, 0.0]); [q[0], q[1]] }))) && !feature_keys.contains(k)).map(|(k, _)| k.clone()).collect();
         for k in gone { if g.state.objs.contains_key(&k) { layout2d::remove_tree(&mut g.state, &k); } }
         let key = |id: &str| format!("{}_{id}", name.replace('/', "_"));
         for p in &s.placed {

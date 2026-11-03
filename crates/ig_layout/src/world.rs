@@ -153,7 +153,8 @@ impl World {
     /// the voxel test of a piece's prisms; the first refusal
     pub fn voxel(&self, ps: &[Prism]) -> Option<Why> {
         for p in ps {
-            let m = mask(p.z, 0.02);
+            // (a layer in from both ends: what stands on a top shares a rounded layer with it; the exact test decides)
+            let m = mask(p.z, LAYER + 0.001);
             let (i0, i1, j0, j1) = self.range(&p.hull);
             for j in j0..j1 { for i in i0..i1 {
                 let c = self.center(i, j);
@@ -252,6 +253,14 @@ impl World {
         }
         let all = room.doors.iter().all(|d| start(d).map_or(false, |k| seen[k]));
         (seen, all)
+    }
+    /// any of `seen` within `d` of a shape
+    pub fn near(&self, seen: &[bool], hull: &[Xy], d: f64) -> bool {
+        let (mut a, mut b) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for p in hull { for k in 0..2 { a[k] = a[k].min(p[k]); b[k] = b[k].max(p[k]); } }
+        let (i0, i1, j0, j1) = self.range(&[[a[0] - d, a[1] - d], [b[0] + d, b[1] + d]]);
+        for j in j0..j1 { for i in i0..i1 { if seen[j * self.nx + i] && in_hull(hull, self.center(i, j), -d) { return true } } }
+        false
     }
     pub fn cell_of(&self, p: Xy) -> Option<usize> {
         let (i, j) = (((p[0] - self.ox) / CELL) as i64, ((p[1] - self.oy) / CELL) as i64);

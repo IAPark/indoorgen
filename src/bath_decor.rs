@@ -161,7 +161,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         for (j, zz) in [zf + 0.5, zf + 0.3, zf + 0.18].iter().enumerate() {
                             let mut roll = ig_kit::geomkit::limb([x, side, *zz], [x, side, *zz + 0.1], 0.055, 0.055, true);
                             for q in roll.pos.iter_mut() { *q = o.pose.apply(*q) }
-                            scene.add(&format!("tproll_{}_{j}#0", k.replace('/', "_")), "ToiletPaperFactory", roll, paper);
+                            // (parts of one fixture: the post threads the rolls)
+                            scene.add(&format!("tpstand_{}#{}", k.replace('/', "_"), j + 1), "ToiletPaperFactory", roll, paper);
                         }
                         // (a mat laid later keeps off it)
                         let sb = wbox(&o.pose, [x - 0.1, side - 0.06, lo[2]], [x + 0.1, side + 0.06, lo[2] + 0.62]);
