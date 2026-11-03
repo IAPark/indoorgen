@@ -16,14 +16,14 @@ const SRC: &str = include_str!("shader.wgsl");
 struct Globals {
     viewproj: [[f32; 4]; 4], inv_viewproj: [[f32; 4]; 4], sun_vp: [[f32; 4]; 4],
     sun_dir: [f32; 4], sun_col: [f32; 4], sky: [f32; 4], ground: [f32; 4], cam_pos: [f32; 4], cam_fwd: [f32; 4],
-    params: [f32; 4], params2: [f32; 4], lpos: [[f32; 4]; 32], lcol: [[f32; 4]; 32],
+    params: [f32; 4], clip: [f32; 4], params2: [f32; 4], lpos: [[f32; 4]; 32], lcol: [[f32; 4]; 32],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4] }
 
 #[derive(Clone)]
-struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** the share of what the room holds in this view, by size */ shown: f32 }
+struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], /** the share of what the room holds in this view, by size */ shown: f32 }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
@@ -123,7 +123,8 @@ fn picture_detail(im: &image::RgbaImage) -> f32 {
 }
 
 /// a small abstract painting, its own for each frame (by name)
-fn painting(name: &str) -> image::RgbaImage {
+fn painting(name: &str) -> image::RgbaImage { painting_at(name, 0) }
+fn painting_at(name: &str, depth: u32) -> image::RgbaImage {
     let mut h = 0xcbf29ce484222325u64; for b in name.bytes() { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
     let mut next = move || { h ^= h << 13; h ^= h >> 7; h ^= h << 17; (h >> 11) as f32 / (1u64 << 53) as f32 };
     const PAL: [[[f32; 3]; 4]; 6] = [
@@ -138,8 +139,8 @@ fn painting(name: &str) -> image::RgbaImage {
     let mut shapes: Vec<[f32; 5]> = (0..7).map(|_| [next(), next(), 0.08 + 0.3 * next(), 0.08 + 0.3 * next(), (next() * 3.99).floor()]).collect();
     if style == 1 { shapes.truncate(3); }
     let (ph, amp) = (next() * 6.28, 0.04 + 0.1 * next());
-    let n = 128u32;
-    image::RgbaImage::from_fn(n, n, |x, y| {
+    let n = 768u32;
+    let img = image::RgbaImage::from_fn(n, n, |x, y| {
         let (u, v) = (x as f32 / n as f32, y as f32 / n as f32);
         let mut c = pal[0];
         match style {
@@ -153,7 +154,12 @@ fn painting(name: &str) -> image::RgbaImage {
             _ => for s in &shapes { if (u - s[0]).hypot(v - s[1]) < s[2] { c = pal[s[4] as usize]; } },
         }
         image::Rgba([(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, 255])
-    })
+    });
+    // (the shapes can all fall off the canvas, or a palette's background fill it: a painting that reads as a blank board. Then another)
+    let base = img.get_pixel(0, 0).0;
+    let other = img.pixels().filter(|p| (0..3).any(|k| (p[k] as i32 - base[k] as i32).abs() > 30)).count() as f32 / (n * n) as f32;
+    if (other < 0.2 || other > 0.97) && depth < 4 { return painting_at(&format!("{name}+"), depth + 1) }
+    img
 }
 /// a mirror's look without reflections: cool silver, lighter toward the top, one soft diagonal band
 fn mirror_sheen() -> image::RgbaImage {
@@ -287,7 +293,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
 fn cam_look(eye: Vec3, tgt: Vec3, lens: f32) -> Cam {
     let f = (tgt - eye).normalize(); let r = f.cross(Vec3::Z).normalize(); let u = r.cross(f);
     let m = Mat4::from_cols(r.extend(0.0), u.extend(0.0), (-f).extend(0.0), eye.extend(1.0));
-    Cam { name: String::new(), view: m, fov_x: 2.0 * (18.0f32 / lens).atan(), ortho: None, near: None, shown: 0.0 }
+    Cam { name: String::new(), view: m, fov_x: 2.0 * (18.0f32 / lens).atan(), ortho: None, near: None, clip: [0.0; 4], shown: 0.0 }
 }
 fn mat_from_json(v: &Value) -> Mat4 {
     let mut c = [0f32; 16];
@@ -296,7 +302,7 @@ fn mat_from_json(v: &Value) -> Mat4 {
 }
 fn cam_json(v: &Value, name: &str) -> Cam {
     let lens = v["lens"].as_f64().unwrap_or(18.0) as f32; let sw = v["sensor_width"].as_f64().unwrap_or(36.0) as f32;
-    Cam { name: name.to_string(), view: mat_from_json(&v["matrix"]), fov_x: 2.0 * (sw / (2.0 * lens)).atan(), ortho: None, near: None, shown: 0.0 }
+    Cam { name: name.to_string(), view: mat_from_json(&v["matrix"]), fov_x: 2.0 * (sw / (2.0 * lens)).atan(), ortho: None, near: None, clip: [0.0; 4], shown: 0.0 }
 }
 fn person_pos(s: &Scene, idx: usize) -> Option<Vec3> {
     let mut seen: Vec<String> = vec![];
@@ -459,12 +465,15 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 if in_the_way { continue }
                 let ratio = (2.7 / (0.5625 * w)).max(1.25);
                 let back = (l / (ratio - 1.0)).clamp(0.6, 4.0);
-                let half = ((w * 0.5 - 0.01) / back).atan().min(60f32.to_radians());
+                // (tilted, the frame's lower corners reach wider at the cut than its middle: inside the room still, or the house's outside shows at the edge)
+                let half = (0.8 * (w * 0.5 - 0.01) / back).atan().min(60f32.to_radians());
                 let e = Vec3::new(c.x, c.y, z0 + 1.3) - f * (l * 0.5 + back);
-                // (dead level: a tilted clip plane left the foot of the removed wall standing)
-                let look = e + f * 2.0;
+                // (a raised view, looking down into the room; the cut is a vertical plane, so the removed wall goes down to its foot)
+                let e = e + Vec3::new(0.0, 0.0, 0.75);
+                let look = e + f * 2.0 + Vec3::new(0.0, 0.0, -0.55);
                 let mut cm = cam_look(e, look, 18.0 / half.tan());
-                cm.near = Some(back + 0.08);
+                cm.near = Some(0.3);
+                { let d = c.dot(f) - l * 0.5 + 0.04; cm.clip = [f.x, f.y, f.z, d]; }
                 cm.shown = share(e, f, half);
                 cm.name = if k == 0 { format!("{}_A", rm.name) } else { format!("{}_A~{k}", rm.name) };
                 out.push(cm);
@@ -574,7 +583,9 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let tilt = if fit_half >= 40.0 { 0.14f32 } else { ((e.z - z0 - 0.75) / reach).clamp(0.14, 0.42) };
             let look = *e + f * 2.0 + Vec3::new(0.0, 0.0, -2.0 * tilt);
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("VIEW {}_{} shows {seen_n} of {} half {fit_half:.0}", rm.name, if k == 0 { "A" } else { "B" }, pieces.len()); }
-            let mut cm = cam_look(*e, look, view_lens); cm.shown = share(*e, f, (18.0 / view_lens).atan()); cm.name = if cut_done { format!("{}_A~{}", rm.name, 20 + alt + 8 * k) } else if alt > 0 { format!("{}_A~{alt}", rm.name) } else { format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }) };
+            // (a view of this room: looking mostly out through a doorway, the next room's bath stood in for a hallway)
+            let out_share = { let hv = (18.0 / view_lens).atan(); let mut o = 0; for k in 0..9 { let a = -hv + 2.0 * hv * k as f32 / 8.0; let d = Vec3::new(f.x * a.cos() - f.y * a.sin(), f.x * a.sin() + f.y * a.cos(), 0.0); let t = ray_dist(&sh.walls, *e, d, 9.0); let q = *e + d * (t - 0.1).max(0.0); if !rm.tris.iter().any(|tr| in_tri2(Vec3::new(q.x, q.y, z0), tr)) { o += 1; } } o as f32 / 9.0 };
+            let mut cm = cam_look(*e, look, view_lens); cm.shown = share(*e, f, (18.0 / view_lens).atan()) - 2.0 * out_share; cm.name = if cut_done { format!("{}_A~{}", rm.name, 20 + alt + 8 * k) } else if alt > 0 { format!("{}_A~{alt}", rm.name) } else { format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }) };
             // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, look.x, look.y, look.z, lens); }
             out.push(cm);
@@ -754,7 +765,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
         sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.62 * ambient, 0.72 * ambient, 0.9 * ambient, 0.0], ground: [0.28 * ambient, 0.25 * ambient, 0.22 * ambient, 0.0],
-        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { 0.0 } else { o.ao }, 0.6], params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, sr],
+        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { 0.0 } else { o.ao }, 0.6], clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, sr],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }
     q.write_buffer(&r.ubuf, 0, bytemuck::bytes_of(&gl));
@@ -785,8 +796,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.nrm, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye), cam.near.map(|n| (fwd, n)));
-        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye), cam.near.map(|n| (fwd, n)));
+        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }));
+        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }));
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
@@ -879,7 +890,7 @@ fn main() {
             // (and what matters most is that it shows the room: a detailed view of a curtain is still no view of a bathroom)
             // (a bare picture earns none of that: what the room holds may be behind the wall it shows)
             let raw = picture_detail(&img);
-            let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.35).min(1.0);
+            let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.5).min(1.0);
             if let Some((base, _)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {
