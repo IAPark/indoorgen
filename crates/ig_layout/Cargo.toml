@@ -1,0 +1,20 @@
+[package]
+name = "ig_layout"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "The unified layout solver: rules (data) over a voxel world"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ig_kit = { path = "../ig_kit" }
+ig_assets = { path = "../ig_assets" }
+
+[[bin]]
+name = "lay"
+path = "src/bin/lay.rs"
+
+[[bin]]
+name = "layvol"
+path = "src/bin/layvol.rs"
