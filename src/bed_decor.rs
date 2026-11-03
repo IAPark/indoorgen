@@ -48,6 +48,10 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
     // windows and doors (cutters, no generator) with their frames: nothing hangs over them
     taken.extend(state.objs.iter().filter(|(k, o)| o.generator.is_none() && ["window", "door", "entrance", "passage"].iter().any(|p| k.starts_with(p)))
         .map(|(_, o)| { let (l, h) = world_box(o, o.geom.lo, o.geom.hi); ([l[0] - 0.08, l[1] - 0.08, l[2] - 0.08], [h[0] + 0.08, h[1] + 0.08, h[2] + 0.08]) }));
+    // (what is really there: the dressers' shared occupancy -- every mesh placed so far and the door passages. Each dresser kept its own list,
+    // and a bench's blanket went into a wardrobe's door)
+    let solid = crate::dress::Occ::from_scene(scene, &[]);
+    let clear_of_others = |k: &str, b: &Box3| { let own = format!("{k}#"); !solid.boxes.iter().zip(solid.names.iter()).any(|(t, n)| !n.starts_with(&own) && overlaps(b, t)) };
     let fits = |taken: &[Box3], b: &Box3| -> bool {
         let corners = [[b.0[0], b.0[1]], [b.1[0], b.0[1]], [b.1[0], b.1[1]], [b.0[0], b.1[1]]];
         inner.iter().any(|g| corners.iter().all(|c| crate::shp::contains_pt(g, *c))) && !taken.iter().any(|t| overlaps(b, t))
@@ -70,7 +74,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             let yc = (lo[1] + hi[1]) / 2.0;
             // (up to the blanket folded on it: the box stopped at the seat, and a blanket went into a wardrobe's door above it)
             let wb = world_box(o, [x0, yc - bw / 2.0, fz], [x1, yc + bw / 2.0, fz + bh + 0.08]);
-            if fits(&others, &wb) {
+            if fits(&others, &wb) && clear_of_others(k, &wb) {
                 let cls = ["fabric.SofaFabric", "fabric.Velvet", "fabric.Leather", "fabric.CoarseKnitFabric"][r.randint(0, 4) as usize];
                 let fm = fab(scene, &format!("bench:{key}"), cls, r.next_u64(), [0.55, 0.5, 0.45]);
                 let legm = fab(scene, &format!("bench_leg:{key}"), "wood.Wood", r.next_u64(), [0.35, 0.25, 0.15]);
@@ -99,7 +103,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             let side = if r.f64() < 0.5 { lo[1] - 0.2 } else { hi[1] + 0.2 };
             let x = lo[0] + (hi[0] - lo[0]) * r.uniform(0.3, 0.55);
             let wb = world_box(o, [x - 0.15, side - 0.12, fz], [x + 0.15, side + 0.12, fz + 0.08]);
-            if fits(&others, &wb) {
+            if fits(&others, &wb) && clear_of_others(k, &wb) {
                 let pal: [[f32; 3]; 5] = [[0.85, 0.82, 0.78], [0.2, 0.22, 0.3], [0.6, 0.45, 0.45], [0.45, 0.45, 0.45], [0.55, 0.4, 0.3]];
                 let sm = fab(scene, &format!("slipper:{key}"), "fabric.FineKnitFabric", r.next_u64(), pal[r.randint(0, 5) as usize]);
                 let yaw = r.uniform(-0.4, 0.4);
@@ -249,7 +253,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         for (_, c) in cands {
             let fz = st.0[2];
             let wb: Box3 = ([c[0] - rad, c[1] - rad, fz], [c[0] + rad, c[1] + rad, fz + hgt]);
-            if !crate::shp::contains_pt(rp, c) || !fits(&taken, &wb) { continue }
+            if !crate::shp::contains_pt(rp, c) || !fits(&taken, &wb) || !clear_of_others(k, &wb) { continue }
             let wicker = scene.material({ let mut m = Material::diffuse(&format!("basket:{i}"), [0.62, 0.5, 0.33], 0.85); m.spec = Some(json!({"cls": "fabric.CoarseKnitFabric", "kwargs": {}, "seed": r.next_u64() % 1_000_000})); m });
             let mut m = limb([c[0], c[1], fz], [c[0], c[1], fz + hgt], rad * 0.9, rad, true);
             m.append(&limb([c[0], c[1], fz + hgt - 0.02], [c[0], c[1], fz + hgt + 0.01], rad + 0.01, rad + 0.01, true));

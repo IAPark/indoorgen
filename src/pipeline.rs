@@ -911,7 +911,9 @@ fn wall_layer_windows(c: &RoomConstants, state: &mut State, room_polys: &[(Strin
             let mut w = w0;
             // (down to 0.6 m: a short wall half taken by a wardrobe had no 0.9 m stretch beside it)
             // (down to 0.4 m: a narrow window beside a fireplace beat one behind it -- 312's only window stood 29 cm behind a breast)
-            while w >= (0.4f64).max(w0 * 0.3) - 1e-9 {
+            // (not tied to its first width: 30 % of a 2.92 m window stopped it at 0.88 m, too wide for the 0.6 m the room's one outside wall left, so
+            // it went behind the fireplace)
+            while w >= 0.4 - 1e-9 {
                 if len >= w + 2.0 * margin {
                     let steps = ((len - 2.0 * margin - w) / 0.1).floor() as usize;
                     for i in 0..=steps {

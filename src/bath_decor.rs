@@ -38,6 +38,9 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
     let in_bath = |o: &crate::furn::state::ObjState| o.relations.iter().any(|r| r.target.starts_with("bathroom"));
     // the mats laid so far (world xy boxes): a toilet's mat and a tub's laid one over the other
     let mut mats: Vec<([f64; 3], [f64; 3])> = vec![];
+    // (what is really there, door passages too: the dressers' shared occupancy)
+    let solid = crate::dress::Occ::from_scene(scene, &[]);
+    let clear_of_others = |k: &str, l: &[f64; 3], h: &[f64; 3]| { let own = format!("{}#", k.replace('/', "_")); let own2 = format!("{k}#"); !solid.boxes.iter().zip(solid.names.iter()).any(|(t, n)| !n.starts_with(&own) && !n.starts_with(&own2) && (0..3).all(|d| l[d] < t.1[d] && t.0[d] < h[d])) };
     for (k, o) in &state.objs {
         let Some(g) = &o.generator else { continue };
         let mut r = Rng::seeded(crate::int_hash(&[&seed.to_string(), "bath_decor", k]));
@@ -140,7 +143,7 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         let inside = floor.as_ref().map_or(true, |g| [[wb.0[0], wb.0[1]], [wb.1[0], wb.0[1]], [wb.1[0], wb.1[1]], [wb.0[0], wb.1[1]]].iter().all(|q| crate::shp::contains_pt(g, *q)));
                         // (and clear of the door keep-outs: a stand stood 12 cm into a doorway)
                         // (nor on a bath mat: its post stood through one)
-                        inside && !mats.iter().any(|(l, h)| (0..2).all(|d| wb.0[d] < h[d] + 0.02 && l[d] - 0.02 < wb.1[d])) && !state.objs.iter().any(|(kk, oo)| kk != k && (oo.generator.is_some() || kk.starts_with("doorclear/")) && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
+                        inside && clear_of_others(k, &wb.0, &wb.1) && !mats.iter().any(|(l, h)| (0..2).all(|d| wb.0[d] < h[d] + 0.02 && l[d] - 0.02 < wb.1[d])) && !state.objs.iter().any(|(kk, oo)| kk != k && (oo.generator.is_some() || kk.starts_with("doorclear/")) && { let b = wbox(&oo.pose, oo.geom.lo, oo.geom.hi); (0..3).all(|d| wb.0[d] < b.1[d] && b.0[d] < wb.1[d]) })
                     };
                     let mut sides = [lo[1] - 0.14, hi[1] + 0.14];
                     if r2.f64() < 0.5 { sides.swap(0, 1) }
@@ -180,7 +183,7 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                 // (on the room's own floor: a toilet facing a doorway had its mat out in the hall)
                 let floor = crate::furn::layout2d::room_of(state, k).and_then(|rm| state.objs.get(&rm).and_then(|ro| ro.polygon.clone())).map(|g| crate::shp::buffer_mitre(&g, -crate::bed_decor::wall_half()));
                 let off_floor = floor.as_ref().map_or(false, |f| [[hi[0] + 0.03, yc - mw / 2.0], [hi[0] + 0.03, yc + mw / 2.0], [hi[0] + 0.03 + md, yc - mw / 2.0], [hi[0] + 0.03 + md, yc + mw / 2.0]].iter().any(|q| { let p = o.pose.apply([q[0], q[1], 0.0]); !crate::shp::contains_pt(f, [p[0], p[1]]) }));
-                if hit || off_floor || mats.iter().any(|(l, h)| (0..2).all(|d| ml[d] < h[d] + 0.03 && l[d] - 0.03 < mh[d])) { continue }
+                if hit || off_floor || !clear_of_others(k, &ml, &mh) || mats.iter().any(|(l, h)| (0..2).all(|d| ml[d] < h[d] + 0.03 && l[d] - 0.03 < mh[d])) { continue }
                 mats.push((ml, mh));
                 scene.add(&format!("bathmat_{}#0", k.replace('/', "_")), "BathMatFactory", mesh, m);
                 log.push(format!("mat at {k}"));
