@@ -567,6 +567,11 @@ fn divide_dims(m: &Mesh, dims: [f64; 3], dist: f64, r: &mut Rng) -> Mesh {
 }
 
 impl BedSpec {
+    /// how far past the legs hanging bedding must stay: a coiled panel stands outside them by its offset and again by its dots (at a flat 1.5 cm it broke through the cloth)
+    fn cloth_clearance(&self) -> f64 {
+        if self.leg_decor == 0 { 2.0 * self.dot_depth + 0.006 + 0.015 } else if self.leg_decor_wrapped { 0.015 } else { 0.0 }
+    }
+
     pub fn legs_pub(&self) -> Vec<Vec<V3>> {
         self.legs()
     }
@@ -767,12 +772,14 @@ impl Factory for Bed {
         let c = &self.s.c;
         let g = 0.004;
         // (behind the frame: an upholstered headboard's padding up to 2.5 cm, the bedding pressed against it up to 5 cm -- one back plane
-        // for both, against the wall; the legs' decor panels 2 cm out at the sides)
-        let sd = 0.02;
-        let (lo, hi) = ([-0.05, -c.width / 2.0 - sd, -c.leg_height - g], [c.size + c.leg_thickness * 0.5 + g, c.width / 2.0 + sd, c.back_height * 1.2 + g]);
+        // for both, against the wall; the legs' decor panels out at the sides and foot, and the bedding hanging clear of them, even by the head where it stays close)
+        let clear = self.s.cloth_clearance();
+        let sd = 0.02 + clear;
+        let (lo, hi) = ([-0.05, -c.width / 2.0 - sd, -c.leg_height - g], [c.size + c.leg_thickness * 0.5 + clear + g, c.width / 2.0 + sd, c.back_height * 1.2 + g]);
         let mut v = vec![Volume::hard(lo, hi)];
         // (the headboard's panels can stand wider than the frame)
-        v.push(Volume::hard([lo[0], -c.width / 2.0 - 0.06, 0.0], [0.15, c.width / 2.0 + 0.06, hi[2]]));
+        let wide = c.width / 2.0 + sd.max(0.06);
+        v.push(Volume::hard([lo[0], -wide, 0.0], [0.15, wide, hi[2]]));
         if !self.frame_only {
             let mut r = bedding_rng(c.fseed, inst);
             let ms = bed_mattress(c, &mut r);
@@ -788,7 +795,9 @@ impl Factory for Bed {
             let tuck = crate::api::tuck_hint() > 0;
             let (side, foot) = if tuck { (hi[1] - mh[1], hi[0] - mh[0]) } else if sim_bedding() { (0.45, 0.45) } else {
                 let mut gm = DrapeGeom::of(c, &ms);
-                if self.s.leg_decor_wrapped || self.s.leg_decor == 0 { gm.gap_side += 0.015; gm.gap_foot += 0.015; }
+                let clear = self.s.cloth_clearance();
+                gm.gap_side += clear;
+                gm.gap_foot += clear;
                 let lift = drape_loft(self.s.sheet_type) + 0.012;
                 let (ov_s, ov_f) = ((wm - 1.0) / 2.0 * ms.width, (0.15 + sm * ms.size - gm.x1).max(0.0));
                 let ov = ov_s.hypot(ov_f);
@@ -988,8 +997,9 @@ impl Factory for Bed {
         pre.transform(&Mat4::translation([b.size / 2.0 + off, 0.0, z_sheet]));
         let sim = sim_bedding();
         let mut geom = DrapeGeom::of(c, &ms);
-        // (clear of a foot panel standing outside the legs: 6 mm off, its bevels came through the hanging cloth in black marks)
-        if s.leg_decor_wrapped || s.leg_decor == 0 { geom.gap_side += 0.015; geom.gap_foot += 0.015; }
+        let clear = s.cloth_clearance();
+        geom.gap_side += clear;
+        geom.gap_foot += clear;
         let pleats = Pleats::new(&mut r);
         let sheet = if !sim { drape(&pre, &geom, 0.0, drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 }, &pleats, drape_slide(c.fseed, inst, 0), 0.0, 1.0) } else {
         let mut p = ClothParams::default();
@@ -1140,7 +1150,11 @@ impl Factory for Bed {
             let rz = r.uniform(0.0, std::f64::consts::PI);
             let lowz = tm.bounds().0[2];
             tm.transform(&Mat4::rot_z(rz));
-            tm.transform(&Mat4::translation([loc[0], loc[1], loc[2] + 0.02 - lowz]));
+            // (within the mattress: on a narrow bed a long towel, turned across it, hung off the side)
+            let (tl, th) = tm.bounds();
+            let (hw, cx0) = (ms.width / 2.0 - 0.02, loc[0]);
+            let shift_y = { let (a_, b_) = (tl[1] + loc[1], th[1] + loc[1]); if b_ - a_ > 2.0 * hw { -(a_ + b_) / 2.0 } else if b_ > hw { hw - b_ } else if a_ < -hw { -hw - a_ } else { 0.0 } };
+            tm.transform(&Mat4::translation([cx0, loc[1] + shift_y, loc[2] + 0.02 - lowz]));
             super::cloth::rest_and_wrap(&mut tm.pos, &rest_col, 0.02, 0.005, 0.1);
             let tmat = m("towel", "fabric.FineKnitFabric", 20, [0.9, 0.9, 0.9]);
             let b = tm.bounds();
@@ -1491,6 +1505,18 @@ fn drape_loft(sheet_type: usize) -> f64 {
     if sheet_type == 0 { 0.0 } else { 0.07 }
 }
 
+/// where a point `s` along a layer standing `grow` times the edge's radius comes down the profile: slowly round the arc (`arc`), catching up over the next 30 cm.
+/// The two slopes meet in rounded knees: at a hard knee, whose place follows the layer's height, each quilted cell creased in a jagged line along the bed's edge
+fn arc_length(s: f64, arc: f64, grow: f64) -> f64 {
+    const CATCH: f64 = 0.3;
+    const KNEE: f64 = 0.05;
+    let (a, b) = (arc * grow, arc * grow + CATCH);
+    let (m0, m1) = (1.0 / grow, (CATCH + arc * (grow - 1.0)) / CATCH);
+    let line = if s < a { s * m0 } else if s < b { arc + (s - a) * m1 } else { s };
+    let knee = |at: f64, dm: f64| { let t = s - at; if t.abs() < KNEE { let u = t + KNEE; dm * u * u / (4.0 * KNEE) - if t > 0.0 { dm * t } else { 0.0 } } else { 0.0 } };
+    line + knee(a, m1 - m0) + knee(b, 1.0 - m1)
+}
+
 /// a flat cloth (lying at its lowest z, its layers and any fold above that) laid over the bed without simulating it. It is subdivided first,
 /// each point keeping which layer it is on; then a comforter's top layer stands `loft` over its bottom, easing to nothing at its edges and,
 /// a box comforter (`margin`, its seams' spacing), domed over each cell; then each point is laid: over the mattress it follows the top; past
@@ -1515,6 +1541,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let n = f.len();
         two_layers && (0..n).map(|i| { let (a, b) = (m.pos[f[i] as usize], m.pos[f[(i + 1) % n] as usize]); a[0] * b[1] - b[0] * a[1] }).sum::<f64>() < 1e-9
     }).collect();
+    let mut rounded = Vec::with_capacity(m.pos.len());
     for p in m.pos.iter_mut() {
         let d = p[2];
         let (layer, stack) = if !two_layers { (0.0, (d / 0.05).clamp(0.0, 1.0)) }
@@ -1522,11 +1549,13 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
             else if d < 0.06 { let t = (d - 0.01) / 0.05; (1.0 - t, t) }
             else { (((d - 0.06) / 0.01).min(1.0), 1.0) };
         let edge = (p[0] - lo[0]).min(hi[0] - p[0]).min(p[1] - lo[1]).min(hi[1] - p[1]).max(0.0);
-        let mut fill = (edge / 0.09).min(1.0).sqrt();
-        if margin > 0.0 { fill *= 0.15 + 0.85 * dome(p[0] - c0[0]) * dome(p[1] - c0[1]); }
+        let flat = (edge / 0.09).min(1.0).sqrt();
+        let fill = if margin > 0.0 { flat * (0.15 + 0.85 * dome(p[0] - c0[0]) * dome(p[1] - c0[1])) } else { flat };
         // (a throw's edge comes down onto what it lies on: floating, it showed a dark line)
         let settle = if lift < 0.02 { 0.3 + 0.7 * (edge / 0.06).min(1.0) } else { 1.0 };
         p[2] = lift * settle + 0.003 + loft * layer * fill + stack * (loft + 0.006);
+        // (the height the layer goes round the bed's edge at, without the cells' domes)
+        rounded.push(p[2] - loft * layer * (fill - flat));
     }
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (sy, cy) = slide[1].sin_cos();
@@ -1537,7 +1566,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         // (the same for every cloth with the usual overhang, so they nest: each on its own, the cover and the comforter crossed)
         (need * 1.08 / over).max(2.5)
     } else { 1.0 };
-    for p in m.pos.iter_mut() {
+    for (p, &lay) in m.pos.iter_mut().zip(&rounded) {
         let off = p[2];
         let (dx0, dy0) = (p[0] - c[0], p[1] - c[1]);
         let (x, y) = (c[0] + dx0 * cy - dy0 * sy + pull, c[1] + dx0 * sy + dy0 * cy + slide[0]);
@@ -1559,11 +1588,11 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let s = stretch * s0 * (1.0 + 0.06 * pl.at(u * 0.37 + 11.0));
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
         // (round the mattress's edge a thick layer's outer face travels further than its centre: at 3.5 cm radius a comforter's cells stretched fivefold into slivers,
-        // and its quilting folded them into a saw. Each point goes round by its own arc)
+        // and its quilting folded them into a saw. The layer goes round by its own arc. Not each point by its own: a cell's dome then stood up to 11 cm higher than its seam, folding over it in a jagged cliff)
         let arc = std::f64::consts::FRAC_PI_2 * DRAPE_R;
-        let grow = 1.0 + off.max(0.0) / DRAPE_R;
+        let grow = 1.0 + lay.max(0.0) / DRAPE_R;
         // (and makes it up over the next 30 cm of the drop: the layers reach the hem together, or it came out torn)
-        let se = if s < arc * grow { s / grow } else { let t = ((s - arc * grow) / 0.3).min(1.0); s - arc * (grow - 1.0) * (1.0 - t) };
+        let se = arc_length(s, arc, grow);
         let (h, z, nh, nz) = g.profile(se, gap, 0.0);
         let ramp = (s / 0.2).min(1.0);
         // toward the head (where side tables stand against the frame) it hangs close: no flare, folds or fill standing out
