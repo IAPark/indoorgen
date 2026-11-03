@@ -57,6 +57,10 @@ pub struct Options {
     /// shared-wall moves applied to the floor plan before the house is built: (room a, room b, metres a grows by) -- the plan layer's
     /// answers to the complaints of the layers below (scenegen, HIER=1)
     pub nudges: Vec<(String, String, f64)>,
+    /// room kinds the unified solver furnishes afterwards (scenegen): the passes here leave them empty
+    pub solver_rooms: Vec<String>,
+    /// the plan layer's retries: another floor plan of the same house when the last had rooms the solver could not furnish
+    pub plan_attempt: u32,
 }
 
 /// constraint program for a scene seed (params drawn from the global numpy stream like the python)
@@ -104,7 +108,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     let t = Instant::now();
     let cfg = PlanConfig { n_divide_trials: 25, iters_mult: 25, rooms: opt.rooms };
     let solver = FloorPlanSolver::new(seed, &c, cfg);
-    let mut a = Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"]));
+    let mut a = if opt.plan_attempt == 0 { Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms"])) } else { Rng::seeded(int_hash(&[&seed.to_string(), "solve_rooms", "again", &opt.plan_attempt.to_string()])) };
     #[allow(unused_mut)]
     let mut st = solver.solve(&mut a);
     // a plan with a room too small to furnish is planned again (a 2 x 2 m bedroom took no bed whatever the layout tried; the score only
@@ -488,7 +492,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer, nudges: vec![] }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer, nudges: vec![], solver_rooms: vec![], plan_attempt: 0 }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives
@@ -649,6 +653,7 @@ fn solve_whole_house(opt: &Options, assets: &dyn Assets, prog: &Program, usage: 
     use rayon::prelude::*;
     let no_limits = HashMap::default();
     let mut rooms: Vec<String> = iterate_assignments(&stages["on_floor_and_wall"], state, &["room"], &no_limits).into_iter().filter_map(|a| a.get("room").cloned()).collect();
+    rooms.retain(|r| !opt.solver_rooms.iter().any(|k| r.split('_').next() == Some(k.as_str())));
     rooms.sort();
     let target: Option<String> = opt.restrict_room.as_ref().and_then(|rt| {
         let want = Tag::sem(rt);

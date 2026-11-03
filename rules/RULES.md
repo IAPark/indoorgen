@@ -45,14 +45,26 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | art_a | WallArt | may | 0.85 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | near 1.0, center_on_wall 0.5 |
 | art_b | WallArt | may | 0.45 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | apart 0.5, center_on_wall 0.5 |
 
-## closet
+## closet: wardrobe (weight 3.0)
 
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
-| wardrobe | Wardrobe | should | 1 |  | back to a wall | front 0.5 m free; not before a window; walk reaches it | 1.4 m wide, 1.1 m wide, 0.9 m wide, 0.7 m wide, 0.55 m wide | far_from_door 1.0, long_wall 0.5 |
-| shelf | LargeShelf | should | 1 |  | back to a wall | not before a window; only without wardrobe; depth ≤ 0.45 m | 0.9 m wide, 0.6 m wide | far_from_door 0.7 |
+| wardrobe | Wardrobe | must | 1 |  | back to a wall | front 0.5 m free; not before a window; walk reaches it | 1.4 m wide, 1.1 m wide, 0.9 m wide, 0.7 m wide, 0.55 m wide | far_from_door 1.0, long_wall 0.5 |
 
-## hallway
+## closet: open_shelves (weight 1.0)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| shelf | LargeShelf | must | 1 |  | back to a wall | not before a window; depth ≤ 0.45 m | 0.9 m wide, 0.6 m wide | far_from_door 0.7 |
+
+## closet: wardrobe_and_shelves (weight 1.0, from 5.0 m²)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| wardrobe | Wardrobe | must | 1 |  | back to a wall | front 0.5 m free; not before a window; walk reaches it | 1.4 m wide, 1.1 m wide, 0.9 m wide, 0.7 m wide, 0.55 m wide | far_from_door 1.0, long_wall 0.5 |
+| shelf | LargeShelf | may | 1 |  | back to a wall | not before a window; depth ≤ 0.45 m | 0.9 m wide, 0.6 m wide | far_from_door 0.7 |
+
+## hallway: mixed (weight 2.0)
 
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
@@ -61,30 +73,70 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | art_b | WallArt | may | 0.5 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
 | console | SingleCabinet | may | 0.3 | 6.0 | back to a wall | not before a window; walk reaches it; depth ≤ 0.45 m |  | center_on_wall 0.5, far_from_door 0.5 |
 
-## bathroom
+## hallway: gallery (weight 1.0)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| art_a | WallArt | may | 1.0 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
+| art_b | WallArt | may | 1.0 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
+| art_c | WallArt | may | 0.7 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
+
+## hallway: entry (weight 1.0, from 5.0 m²)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| console | SingleCabinet | may | 1.0 |  | back to a wall | not before a window; walk reaches it; depth ≤ 0.45 m |  | center_on_wall 0.5, far_from_door 0.5 |
+| mirror | Mirror | may | 0.5 |  | on a wall, centre 1.55 m; 1.2 m+ tall: bottom at 0.2 m | not before a window; width ≤ 1.0 m |  | apart 0.3 |
+
+## bathroom: tub_room (weight 1.5)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| tub | Bathtub | must | 1 |  | back to a wall | front 0.4 m free; walk reaches it |  | corner 1.0, far_from_door 0.7 |
+| toilet | Toilet | must | 1 |  | back to a wall | front 0.6 m free; not before a window; walk reaches it; door ≥ 1.0 m | before window | far_from_door 1.5, corner 0.3 |
+| basin | StandingSink | must | 1 |  | back to a wall | front 0.55 m free; not before a window; walk reaches it |  | center_on_wall 0.7 |
+| mirror | Mirror | should | 1 |  | over `basin`: centre 1.55 m, at least 0.08 m above it | not before a window; width ≤ 1.0 m; height ≤ 1.0 m |  |  |
+| rail | Hardware | may | 0.8 |  | on a wall, centre 1.15 m | not before a window |  | near 0.5, apart 0.5 |
+
+## bathroom: shower_room (weight 1.5)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| shower | Shower | must | 1 |  | back to a wall | front 0.4 m free; not before a window; walk reaches it |  | corner 1.0, far_from_door 0.7 |
+| toilet | Toilet | must | 1 |  | back to a wall | front 0.6 m free; not before a window; walk reaches it; door ≥ 1.0 m | before window | far_from_door 1.5, corner 0.3 |
+| basin | StandingSink | must | 1 |  | back to a wall | front 0.55 m free; not before a window; walk reaches it |  | center_on_wall 0.7 |
+| mirror | Mirror | should | 1 |  | over `basin`: centre 1.55 m, at least 0.08 m above it | not before a window; width ≤ 1.0 m; height ≤ 1.0 m |  |  |
+| rail | Hardware | may | 0.8 |  | on a wall, centre 1.15 m | not before a window |  | near 0.5, apart 0.5 |
+
+## bathroom: tub_and_shower (weight 1.0, from 11.0 m²)
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| tub | Bathtub | must | 1 |  | back to a wall | front 0.4 m free; walk reaches it |  | corner 1.0, far_from_door 0.7 |
+| shower | Shower | must | 1 |  | back to a wall | front 0.4 m free; not before a window; walk reaches it |  | corner 1.0, far_from_door 0.7 |
+| toilet | Toilet | must | 1 |  | back to a wall | front 0.6 m free; not before a window; walk reaches it; door ≥ 1.0 m | before window | far_from_door 1.5, corner 0.3 |
+| basin | StandingSink | must | 1 |  | back to a wall | front 0.55 m free; not before a window; walk reaches it |  | center_on_wall 0.7 |
+| mirror | Mirror | should | 1 |  | over `basin`: centre 1.55 m, at least 0.08 m above it | not before a window; width ≤ 1.0 m; height ≤ 1.0 m |  |  |
+| rail | Hardware | may | 0.8 |  | on a wall, centre 1.15 m | not before a window |  | near 0.5, apart 0.5 |
+
+## bathroom: powder_room (weight 0.5, under 7.0 m²)
 
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
 | toilet | Toilet | must | 1 |  | back to a wall | front 0.6 m free; not before a window; walk reaches it; door ≥ 1.0 m | before window | far_from_door 1.5, corner 0.3 |
 | basin | StandingSink | must | 1 |  | back to a wall | front 0.55 m free; not before a window; walk reaches it |  | center_on_wall 0.7 |
-| tub | Bathtub | should | 0.6 |  | back to a wall | front 0.4 m free; walk reaches it |  | corner 1.0, far_from_door 0.7 |
-| shower | Shower | should | 1 |  | back to a wall | front 0.4 m free; not before a window; walk reaches it; only without tub |  | corner 1.0, far_from_door 0.7 |
 | mirror | Mirror | should | 1 |  | over `basin`: centre 1.55 m, at least 0.08 m above it | not before a window; width ≤ 1.0 m; height ≤ 1.0 m |  |  |
-| rail | Hardware | may | 0.8 |  | on a wall, centre 1.15 m | not before a window |  | near 0.5, apart 0.5 |
 
 ## living-room: tv (weight 3.0)
 
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
 | tv_stand | TVStand | must | 1 |  | back to a wall | not before a window; walk reaches it | 1.3 m wide, 1.0 m wide | center_on_wall 1.0, long_wall 0.7, far_from_door 0.5 |
-| sofa | Sofa | should | 1 |  | facing `tv_stand`, 1.3-4.0 m front to front, up to 0.5 m off centre | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide | backed 1.0, ideal 1.0 |
-| sofa_wall | Sofa | should | 1 |  | back to a wall | walk reaches it; only without sofa | 1.8 m wide, 1.4 m wide, 1.0 m wide | center_on_wall 0.5, long_wall 0.5 |
-| seat_only | ArmChair | should | 1 |  | back to a wall | walk reaches it; only without sofa, sofa_wall |  | center_on_wall 0.3 |
+| sofa | Sofa | must | 1 |  | facing `tv_stand`, 1.3-4.0 m front to front, up to 0.5 m off centre | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide, , 1.8 m wide, 1.4 m wide, 1.0 m wide,  | backed 1.0, ideal 1.0 |
 | tv | TV | must | 1 |  | on `tv_stand`, centred | width ≤ 1.6 m |  |  |
 | coffee | CoffeeTable | should | 1 |  | before `sofa`, 0.4 m clear, 0.75 of its width | walk reaches it |  | ideal 1.0 |
-| armchair_a | ArmChair | may | 1 | 20.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_b | ArmChair | may | 1 | 30.0 | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_wall | ArmChair | may | 1 | 20.0 | back to a wall | walk reaches it; only without coffee |  | near 1.0, corner 0.3 |
+| armchair_a | ArmChair | may | 1 | 20.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
+| armchair_b | ArmChair | may | 1 | 30.0 | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
 | rug | Rug | may | 0.8 |  | under `sofa`: its width + 0.6 m, 2.2 of its length, 1.3 m past its foot | under furniture |  | ideal 2.0 |
 | bookcase | SimpleBookcase | may | 0.7 | 20.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0, center_on_wall 0.3 |
 | plant | LargePlantContainer | may | 0.5 |  | back to a wall | not before a window; soft blocks |  | corner 1.0, apart 0.5 |
@@ -98,8 +150,7 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | sofa | Sofa | must | 1 |  | back to a wall | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide | center_on_wall 1.0, long_wall 0.7, far_from_door 0.3 |
 | sofa_b | Sofa | should | 1 |  | facing `sofa`, 1.3-2.8 m front to front, up to 0.3 m off centre | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide | backed 0.5, ideal 1.0 |
 | coffee | CoffeeTable | should | 1 |  | before `sofa`, 0.4 m clear, 0.75 of its width | walk reaches it |  | ideal 1.0 |
-| armchair_a | ArmChair | may | 1 | 26.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_wall | ArmChair | may | 1 | 26.0 | back to a wall | walk reaches it; only without coffee |  | near 1.0, corner 0.3 |
+| armchair_a | ArmChair | may | 1 | 26.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
 | rug | Rug | may | 0.8 |  | under `sofa`: its width + 0.6 m, 2.2 of its length, 1.3 m past its foot | under furniture |  | ideal 2.0 |
 | bookcase | SimpleBookcase | may | 0.7 | 20.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0, center_on_wall 0.3 |
 | plant | LargePlantContainer | may | 0.5 |  | back to a wall | not before a window; soft blocks |  | corner 1.0, apart 0.5 |
@@ -112,9 +163,8 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 |---|---|---|---|---|---|---|---|---|
 | sofa | Sofa | must | 1 |  | back to a wall | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide | center_on_wall 1.0, long_wall 0.7, far_from_door 0.3 |
 | coffee | CoffeeTable | should | 1 |  | before `sofa`, 0.4 m clear, 0.75 of its width | walk reaches it |  | ideal 1.0 |
-| armchair_a | ArmChair | may | 1 |  | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_b | ArmChair | may | 1 |  | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_wall | ArmChair | may | 1 |  | back to a wall | walk reaches it; only without coffee |  | near 1.0, corner 0.3 |
+| armchair_a | ArmChair | may | 1 |  | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
+| armchair_b | ArmChair | may | 1 |  | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
 | rug | Rug | may | 0.8 |  | under `sofa`: its width + 0.6 m, 2.2 of its length, 1.3 m past its foot | under furniture |  | ideal 2.0 |
 | tv_stand | TVStand | may | 0.5 |  | back to a wall | not before a window; walk reaches it |  | apart 1.0 |
 | bookcase | SimpleBookcase | may | 0.7 | 20.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0, center_on_wall 0.3 |
@@ -126,11 +176,10 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
-| sofa | Sofa | must | 1 |  | facing `FireplaceFeature`, 1.4-4.0 m front to front, up to 0.5 m off centre | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide | backed 1.0, ideal 1.0 |
+| sofa | Sofa | must | 1 |  | facing `FireplaceFeature`, 1.4-4.0 m front to front, up to 0.5 m off centre | not before a window; walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide, , 1.8 m wide, 1.4 m wide, 1.0 m wide,  | backed 1.0, ideal 1.0 |
 | coffee | CoffeeTable | should | 1 |  | before `sofa`, 0.4 m clear, 0.75 of its width | walk reaches it |  | ideal 1.0 |
-| armchair_a | ArmChair | may | 1 | 20.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_b | ArmChair | may | 1 | 30.0 | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
-| armchair_wall | ArmChair | may | 1 | 20.0 | back to a wall | walk reaches it; only without coffee |  | near 1.0, corner 0.3 |
+| armchair_a | ArmChair | may | 1 | 20.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
+| armchair_b | ArmChair | may | 1 | 30.0 | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | not before a window; walk reaches it |  | ideal 1.0, near 1.0 |
 | rug | Rug | may | 0.8 |  | under `sofa`: its width + 0.6 m, 2.2 of its length, 1.3 m past its foot | under furniture |  | ideal 2.0 |
 | bookcase | SimpleBookcase | may | 0.7 | 20.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0, center_on_wall 0.3 |
 | plant | LargePlantContainer | may | 0.5 |  | back to a wall | not before a window; soft blocks |  | corner 1.0, apart 0.5 |
@@ -142,9 +191,9 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
 | table | TableDining | must | 1 |  | free on the floor: 0.75 m from walls, 1.0 m from doors (less at a cost) | walk reaches it | 1.6 m wide, 1.2 m wide, 0.9 m wide | center_room 1.0, ideal 1.5 |
-| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
-| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
-| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
+| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
+| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
+| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
 | rug | Rug | may | 0.8 |  | under `table`, centred: its size + 1.2 by 1.2 m | under furniture |  | ideal 2.0 |
 | sideboard | SimpleBookcase | should | 1 |  | back to a wall | not before a window; walk reaches it | 1.0 m wide | center_on_wall 0.5, far_from_door 0.5 |
 | cabinet | SimpleBookcase | may | 1 | 18.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0 |
@@ -173,9 +222,9 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
 | table | TableDining | must | 1 |  | free on the floor: 0.75 m from walls, 1.0 m from doors (less at a cost) | walk reaches it | 1.9 m wide, 1.6 m wide,  | center_room 1.0, ideal 1.5 |
-| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
-| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
-| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
+| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
+| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
+| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
 | rug | Rug | may | 0.8 |  | under `table`, centred: its size + 1.2 by 1.2 m | under furniture |  | ideal 2.0 |
 | sideboard | SimpleBookcase | should | 1 |  | back to a wall | not before a window; walk reaches it | 1.0 m wide | center_on_wall 0.5, far_from_door 0.5 |
 | cabinet | SimpleBookcase | may | 1 | 18.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0 |
@@ -204,9 +253,9 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
 | table | TableDining | must | 1 |  | back to a wall | walk reaches it | 1.6 m wide, 1.2 m wide, 0.9 m wide | center_on_wall 0.7, far_from_door 0.5 |
-| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
-| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
-| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
+| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
+| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
+| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long | not before a window |  | ideal 2.0 |
 | rug | Rug | may | 0.8 |  | under `table`, centred: its size + 1.2 by 1.2 m | under furniture |  | ideal 2.0 |
 | plant | LargePlantContainer | may | 0.6 |  | back to a wall | not before a window; soft blocks |  | corner 1.0, apart 0.5 |
 | art_a | WallArt | may | 0.8 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | near 1.0, center_on_wall 0.5, apart 0.3 |

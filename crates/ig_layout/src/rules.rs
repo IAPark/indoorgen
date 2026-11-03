@@ -5,6 +5,8 @@ use std::collections::HashMap;
 #[derive(Deserialize, Clone, Debug)]
 pub struct RoomRules {
     #[serde(default)] pub program: Vec<Item>,
+    /// what every arrangement of the room has besides its own program (placed after it, same tier order)
+    #[serde(default)] pub also: Vec<Item>,
     /// other ways to furnish the room: one is drawn by weight from those the room is big enough for; when its must items have no place, the next
     #[serde(default)] pub arrangements: Vec<Arrangement>,
     /// noise on every candidate's score (the terms are worth about 1)
@@ -45,12 +47,12 @@ pub struct Item {
     #[serde(default)] pub set: Option<String>,
     /// wanted only with all of these placed (an armchair in a group around a coffee table)
     #[serde(default)] pub requires: Vec<String>,
-    /// not wanted when one of these is placed (a shower where a tub went)
-    #[serde(default)] pub unless: Vec<String>,
     /// its nearest door at least this far, m (a toilet)
     #[serde(default)] pub min_door: f64,
     /// this many of it (id#0, id#1, ...), each its own item of the same piece
     #[serde(default)] pub repeat: u32,
+    /// of those, one for each so many m2 of room (at least one)
+    #[serde(default)] pub per_area: Option<f64>,
     /// every variant is a candidate, the later ones at a cost, not only the first that fits: what comes after it may need a smaller one
     #[serde(default)] pub all_variants: bool,
     /// how it stands: wall / beside
@@ -77,19 +79,26 @@ pub struct Item {
 pub struct Fit { #[serde(default = "big")] pub max_w: f64, #[serde(default = "big")] pub max_h: f64, #[serde(default = "big")] pub max_d: f64, #[serde(default = "eight")] pub draws: u32 }
 fn big() -> f64 { 1e9 }
 fn eight() -> u32 { 8 }
-fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false, width: None, height: None, over_window: false }] }
+fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false, width: None, height: None, place: None, class: None, requires: vec![], over_window: false }] }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Variant { pub piece: String, #[serde(default)] pub side: bool, /// asked to be this wide (Piece::resize), m
     #[serde(default)] pub width: Option<f64>,
     /// asked to be this high (Piece::resize), m
-    #[serde(default)] pub height: Option<f64>, /// a last resort: it may stand before a window after all
+    #[serde(default)] pub height: Option<f64>, /// a different way to place it, or a different class altogether, when this variant is reached (a sofa on a wall, else one chair)
+    #[serde(default)] pub place: Option<Place>,
+    #[serde(default)] pub class: Option<String>,
+    /// this variant only with these placed (armchairs in a group need its coffee table)
+    #[serde(default)] pub requires: Vec<String>,
+    /// a last resort: it may stand before a window after all
     #[serde(default)] pub over_window: bool }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum Place {
+    /// on the ceiling, `wall_clear` m in from the walls
+    Ceiling { #[serde(default)] wall_clear: f64 },
     /// back against a wall, sliding along it
     Wall,
     /// its back in line with `parent`'s, next to its +y / -y side

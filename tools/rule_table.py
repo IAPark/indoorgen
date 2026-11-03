@@ -36,7 +36,6 @@ for room, rr, (gname, prog) in ((r, x, g) for r, x in d.items() for g in groups(
         if i.get("min_door"): lim.append(f"door ≥ {i['min_door']} m")
         if i.get("cover"): lim.append("under furniture")
         if i.get("soft_blocks"): lim.append("soft blocks")
-        if i.get("unless"): lim.append("only without " + ", ".join(i["unless"]))
         f = i.get("fit", {})
         for k, n in (("max_w", "width"), ("max_h", "height"), ("max_d", "depth")):
             if k in f: lim.append(f"{n} ≤ {f[k]} m")

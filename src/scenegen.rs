@@ -189,7 +189,10 @@ pub fn build_scene(p: &Params) -> Built {
     if std::env::var("PIECES").map_or(true, |v| v != "0") { indoorgen::assets::install_pieces(); }
     let t = web_time::Instant::now();
     ig_core::envx::progress("floor plan + furniture solve");
-    let mk = |nudges: Vec<(String, String, f64)>| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges };
+    // the rooms the rules cover go to the unified solver (crates/ig_layout) alone; a single-room or parity run keeps the old passes
+    let unified = cfg.program.realism && !orig_prog && !only_target;
+    let mk_at = |nudges: Vec<(String, String, f64)>, plan_attempt: u32| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges, solver_rooms: if unified { indoorgen::unified::kinds() } else { vec![] }, plan_attempt };
+    let mk = |nudges: Vec<(String, String, f64)>| mk_at(nudges, 0);
     let mut g = generate(&mk(vec![]), &assets, prog);
     // the plan layer answers the layers below (HIER=1): while hard complaints remain, the shared wall of the complaining room nearest
     // the complaint moves (0.25 / 0.5 m either way) and the house is solved again; a move stays when it leaves fewer hard complaints
@@ -229,6 +232,16 @@ pub fn build_scene(p: &Params) -> Built {
     } else if ig_core::envx::var_os("LAYERDBG").is_some() {
         eprintln!("LAYERS {} hard / {} soft complaints", g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
     }
+    // a plan with a room the solver cannot furnish (a triangle with doors on both legs and no wall for a bed) is planned again: at most twice, the plan missing fewest wins
+    let mut plan = unified.then(|| indoorgen::unified::solve_house(&g, seed));
+    for attempt in 1..=2 {
+        let Some(p) = &plan else { break };
+        if p.missing() == 0 { break }
+        let g2 = generate(&mk_at(vec![], attempt), &assets, prog);
+        let p2 = indoorgen::unified::solve_house(&g2, seed);
+        eprintln!("PLAN again {attempt}: {} must items had no place, {} now", p.missing(), p2.missing());
+        if p2.missing() < p.missing() { g = g2; plan = Some(p2); }
+    }
     if cfg.program.realism && !orig_prog {
         if let Some(spec) = &rules {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
@@ -240,8 +253,7 @@ pub fn build_scene(p: &Params) -> Built {
         }
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
-        // LAYOUT=unified: the rooms the rules cover are furnished by the unified solver instead (crates/ig_layout); tables are then set as ever
-        if std::env::var("LAYOUT").map_or(false, |v| v == "unified") { for l in indoorgen::unified::apply(&mut g, seed) { eprintln!("UNIFIED {l}"); } }
+        if let Some(p) = plan.take() { for l in indoorgen::unified::apply(&mut g, p, seed) { eprintln!("UNIFIED {l}"); } }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
         // (a living room's only seat, taken out to join the doors up, goes back on a wall that leaves them joined)
         let seats: Vec<(String, indoorgen::furn::state::ObjState)> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| gn.class == "SofaFactory" || gn.class == "ArmChairFactory") && indoorgen::furn::layout2d::room_of(&g.state, k).map_or(false, |r| r.starts_with("living-room"))).map(|(k, o)| (k.clone(), o.clone())).collect();
