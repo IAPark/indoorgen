@@ -640,10 +640,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             if out.iter().filter(|c| !c.name.contains('~')).count() >= n { return out; }
         }
         // the last word: a view from above the walls, ceiling and near walls gone, nothing but this room. Not as if standing in it, but the whole room always shows.
-        // (rectangular rooms only: an angled wall has no plane to cut it away)
-        // (and rooms holding little: with a bathroom's fittings, a wall-coloured slab stood through the picture, not yet explained)
-        let few = { let mut ids: Vec<String> = vec![]; for d in &s.draws { let nm = &s.glb.nodes[d.node].name; if skip(nm) || nm.contains("Ceiling") || nm.contains("_light") || nm.contains("urtain") { continue } let c = (d.bmin + d.bmax) * 0.5; if !rm.tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, z0), t)) { continue } let id = nm.split(|ch| ch == '#' || ch == '.').next().unwrap_or(nm).to_string(); if !ids.contains(&id) { ids.push(id); } } ids.len() <= 3 };
-        if few && rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01) > 0.9 {
+        // (true rectangles only: a notch's corner has no plane to cut it away, and stands through the picture as a slab)
+        if rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01) > 0.985 {
             let c = (lo + hi) * 0.5;
             let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
             let f = Vec3::new(sx, sy, 0.0).normalize();
@@ -815,6 +813,8 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow
             let nm = s.glb.nodes[d.node].name.replace('/', "_");
             let low = nm.to_lowercase();
             if low.contains(".ceiling") || low.contains("ceiling") || low.starts_with("outdoor") || low.starts_with("exterior") || low.contains("skirting") || low.contains("pendant") || low.contains("_light") || low.starts_with("beam") { continue; }
+            // (door leaves too: one swung into the room stood through the picture like a slab of wall. The frames stay, to show where the doors are)
+            if low.starts_with("door") && !low.starts_with("doorclear") && !low.contains("frame") && !low.contains("casing") { continue; }
             if low.contains(".wall") || low.contains(".floor") { if !nm.starts_with(&format!("{room}.")) { continue; } }
             else if (low.starts_with("door") || low.starts_with("window") || low.contains("curtain")) && { let c = (d.bmin + d.bmax) * 0.5; let n = [cut_plane(eye, lo, hi)]; n[0].0 * c.x < n[0].1 + 0.3 * 1.0 && n[0].0 != 0.0 || n[0].2 * c.y < n[0].3 + 0.3 && n[0].2 != 0.0 } { continue; }
             else { let c = (d.bmin + d.bmax) * 0.5; if c.x < lo.x - 0.15 || c.x > hi.x + 0.15 || c.y < lo.y - 0.15 || c.y > hi.y + 0.15 { continue; } }
