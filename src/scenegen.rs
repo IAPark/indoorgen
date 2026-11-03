@@ -973,11 +973,15 @@ pub fn build_scene(p: &Params) -> Built {
                     let horiz_area: f64 = m.faces.iter().map(|f| {
                         let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
                         let c: V3 = [0, 1, 2].map(|d| ps.iter().map(|p| p[d]).sum::<f64>() / ps.len() as f64);
-                        if !(0..3).all(|d| c[d] > clo[d] && c[d] < chi[d]) { return 0.0 }
+                        // (the face's box against the cutter's, not its centre: a long counter's top is one big face, whose centre lay far from a sink near its end, and the basin stayed filled)
+                        let _ = c;
+                        let (fl, fh) = ps.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), q| ([l[0].min(q[0]), l[1].min(q[1]), l[2].min(q[2])], [h[0].max(q[0]), h[1].max(q[1]), h[2].max(q[2])]));
+                        if !(0..3).all(|d| fl[d] < chi[d] && fh[d] > clo[d]) { return 0.0 }
+                        let overlap = (fh[0].min(chi[0]) - fl[0].max(clo[0])) * (fh[1].min(chi[1]) - fl[1].max(clo[1]));
                         let mut nrm = [0.0; 3];
                         for i in 0..ps.len() { let (a, b) = (ps[i], ps[(i + 1) % ps.len()]); nrm[0] += (a[1] - b[1]) * (a[2] + b[2]); nrm[1] += (a[2] - b[2]) * (a[0] + b[0]); nrm[2] += (a[0] - b[0]) * (a[1] + b[1]); }
                         let area = 0.5 * dot(nrm, nrm).sqrt();
-                        if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 { area } else { 0.0 }
+                        if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 { area.min(overlap) } else { 0.0 }
                     }).sum();
                     if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && horiz_area > 1e-3 {
                         let tb = web_time::Instant::now();
