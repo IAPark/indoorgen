@@ -16,6 +16,10 @@ pub struct Item {
     #[serde(default)] pub min_area: f64,
     /// how often the room wants it at all, drawn per room (rooms of one house differ)
     #[serde(default = "one")] pub chance: f64,
+    /// not wanted when one of these is placed (a shower where a tub went)
+    #[serde(default)] pub unless: Vec<String>,
+    /// its nearest door at least this far, m (a toilet)
+    #[serde(default)] pub min_door: f64,
     /// how it stands: wall / beside
     pub place: Place,
     /// tried in order until one has a place: as_is, tucked, compact (Piece::tucked once, twice); `side` turns the long side to the wall
@@ -37,14 +41,15 @@ pub struct Item {
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct Fit { #[serde(default = "big")] pub max_w: f64, #[serde(default = "big")] pub max_h: f64, #[serde(default = "eight")] pub draws: u32 }
+pub struct Fit { #[serde(default = "big")] pub max_w: f64, #[serde(default = "big")] pub max_h: f64, #[serde(default = "big")] pub max_d: f64, #[serde(default = "eight")] pub draws: u32 }
 fn big() -> f64 { 1e9 }
 fn eight() -> u32 { 8 }
-fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false, over_window: false }] }
+fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false, width: None, over_window: false }] }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct Variant { pub piece: String, #[serde(default)] pub side: bool, /// a last resort: it may stand before a window after all
+pub struct Variant { pub piece: String, #[serde(default)] pub side: bool, /// asked to be this wide (Piece::resize), m
+    #[serde(default)] pub width: Option<f64>, /// a last resort: it may stand before a window after all
     #[serde(default)] pub over_window: bool }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -56,6 +61,8 @@ pub enum Place {
     Beside { parent: String, side: i8, #[serde(default)] gap: f64 },
     /// on a wall at these centre heights, tried in order; one `tall_from` m or taller hangs with its bottom at `tall_bottom` instead
     Hang { #[serde(default)] centers: Vec<f64>, #[serde(default = "big")] tall_from: f64, #[serde(default)] tall_bottom: f64 },
+    /// on the wall behind `parent`, centred over it: centred at `center`, or higher to stand `gap` over its top (a mirror over a basin)
+    Over { parent: String, center: f64, gap: f64 },
     /// sized from `parent` and lying under it: as wide as it plus `add_w`, `share` of its length, reaching `past` beyond its foot; both clamped
     Under { parent: String, add_w: f64, share: f64, past: f64, w: [f64; 2], d: [f64; 2], #[serde(default = "thick")] t: f64 },
 }

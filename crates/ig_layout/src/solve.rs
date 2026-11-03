@@ -16,7 +16,7 @@ pub struct Placed { pub id: String, pub class: String, pub variant: String, pub 
 pub struct Candidate { pub at: Xy, pub yaw: f64, pub why: Option<Why>, pub score: f64, pub variant: String, pub side: bool, pub prisms: Vec<Prism> }
 
 #[derive(serde::Serialize, Default, Clone)]
-pub struct ItemReport { pub id: String, pub tier: u8, pub tried: usize, pub why: HashMap<String, usize>, pub placed: bool, pub variant: String }
+pub struct ItemReport { pub id: String, pub tier: u8, pub not_wanted: bool, pub tried: usize, pub why: HashMap<String, usize>, pub placed: bool, pub variant: String }
 
 #[derive(serde::Serialize)]
 pub struct Solution { pub room: Room, pub placed: Vec<Placed>, pub report: Vec<ItemReport>, pub score: f64, pub ms: f64, pub walk: Vec<u8>, pub nx: usize, pub ny: usize, pub ox: f64, pub oy: f64, pub why_item: Vec<Candidate>, pub doors_joined: bool }
@@ -45,7 +45,7 @@ fn hash(s: &str, seed: u64) -> u64 { let mut h = 0xcbf29ce484222325u64 ^ seed; f
 
 /// the piece's volumes for a variant (`Piece::tucked` once, twice)
 fn shape(it: &Item, seed: u64, v: &Variant, cache: &mut HashMap<(String, u64, String), Option<std::rc::Rc<Shape>>>) -> Option<std::rc::Rc<Shape>> {
-    let key = (it.class.clone(), seed, v.piece.clone());
+    let key = (it.class.clone(), seed, format!("{}/{:?}", v.piece, v.width));
     if let Some(s) = cache.get(&key) { return s.clone() }
     let draws = it.fit.as_ref().map_or(1, |f| f.draws.max(1)) as u64;
     let mut out = None;
@@ -54,11 +54,19 @@ fn shape(it: &Item, seed: u64, v: &Variant, cache: &mut HashMap<(String, u64, St
         if v.piece != "as_is" { p = p.and_then(|x| x.tucked()); }
         if v.piece == "compact" { p = p.and_then(|x| x.tucked()); }
         let Some(mut p) = p else { continue };
+        let mut size = None;
+        if let Some(w) = v.width {
+            let c = p.size();
+            let Some(q) = p.resize([w, c[1], c[2]]) else { continue };
+            p = q;
+            size = Some([w, c[1], c[2]]);
+        }
         let mut sh = shape_of(p.collision());
+        sh.size = size;
         sh.seed = seed.wrapping_add(d.wrapping_mul(0x9E3779B97F4A7C15));
         let s = std::rc::Rc::new(sh);
         let (lo, hi) = (s.lo, s.hi);
-        if it.fit.as_ref().map_or(true, |f| hi[1] - lo[1] <= f.max_w && hi[2] - lo[2] <= f.max_h) { out = Some(s); break }
+        if it.fit.as_ref().map_or(true, |f| hi[1] - lo[1] <= f.max_w && hi[2] - lo[2] <= f.max_h && hi[0] - lo[0] <= f.max_d) { out = Some(s); break }
     }
     cache.insert(key, out.clone());
     out
@@ -115,6 +123,13 @@ fn poses(room: &Room, it: &Item, v: &Variant, s: &Shape, state: &State) -> Vec<(
                     out.push((Pose { yaw, t: [at[0] - ra[0], at[1] - ra[1]], z }, t, wl.len));
                 }
             } }
+        },
+        Place::Over { parent, center, gap } => if let Some(p) = state.items.iter().find(|p| &p.id == parent) {
+            let h = s.hi[2] - s.lo[2];
+            let ptop = p.pose.z + p.hi[2];
+            let zc = center.max(ptop + gap + h / 2.0);
+            let at = p.pose.apply([p.lo[0] - s.lo[0], (p.lo[1] + p.hi[1]) / 2.0 - (s.lo[1] + s.hi[1]) / 2.0]);
+            out.push((Pose { yaw: p.pose.yaw, t: at, z: zc - h / 2.0 - s.lo[2] }, 0.0, 1.0));
         },
         Place::Under { parent, past, .. } => if let Some(p) = state.items.iter().find(|p| &p.id == parent) {
             // (less far past the foot, then off centre, when a wall is near)
@@ -185,6 +200,8 @@ pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str
         let pseed = hash(&format!("{}/{}", room.name, it.id), seed);
         for st in &beam {
             let mut any = false;
+            // (another took its place: not wanted, not missing)
+            if it.unless.iter().any(|u| st.items.iter().any(|p| &p.id == u)) { next.push(st.clone()); rep.not_wanted = true; continue }
             for v in &it.variants {
                 let sized = if let Place::Under { parent, .. } = &it.place { st.items.iter().find(|p| &p.id == parent).and_then(|p| sized_under(it, pseed, p)) } else { shape(it, pseed, v, &mut cache) };
                 let Some(s) = sized else { *rep.why.entry("no piece".into()).or_default() += 1; continue };
@@ -200,6 +217,10 @@ pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str
                         let (bot, top) = (z_of(0).fold(f64::MAX, f64::min), z_of(1).fold(f64::MIN, f64::max));
                         let blocks = room.windows.iter().any(|w| top > w.z[0] + 0.02 && bot < w.z[1] - 0.02 && { let hull = hull2(vec![[w.at[0] - w.u[0] * w.hw, w.at[1] - w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw, w.at[1] + w.u[1] * w.hw], [w.at[0] + w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] + w.u[1] * w.hw + w.n[1] * 0.1], [w.at[0] - w.u[0] * w.hw + w.n[0] * 0.1, w.at[1] - w.u[1] * w.hw + w.n[1] * 0.1]]); ps.iter().any(|p| p.role == HARD && sat(&p.hull, &hull) < 0.0) });
                         if blocks { fail = Some(Why::Window); }
+                    }
+                    if fail.is_none() && it.min_door > 0.0 {
+                        let c = pose.apply([(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0]);
+                        if room.doors.iter().any(|d| (d.at[0] - c[0]).hypot(d.at[1] - c[1]) < it.min_door) { fail = Some(Why::Door); }
                     }
                     // the floor before its front is kept (blocks furniture: it stands in the walk's way below)
                     if fail.is_none() && it.front > 0.0 {
@@ -258,7 +279,8 @@ pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str
         report.push(rep);
     }
     let best = beam.into_iter().next().unwrap();
-    for r in report.iter_mut() { r.placed = best.items.iter().any(|p| p.id == r.id); if let Some(p) = best.items.iter().find(|p| p.id == r.id) { r.variant = format!("{}{}", p.variant, if p.side { "+side" } else { "" }); } }
+    // (an item another stood in for is no fault)
+    for r in report.iter_mut() { r.placed = best.items.iter().any(|p| p.id == r.id) || (r.not_wanted && order.iter().find(|i| i.id == r.id).map_or(false, |i| i.unless.iter().any(|u| best.items.iter().any(|p| &p.id == u)))); if let Some(p) = best.items.iter().find(|p| p.id == r.id) { r.variant = format!("{}{}", p.variant, if p.side { "+side" } else { "" }); } }
     let walk = best.world.walk(&[]);
     let (seen, joined) = best.world.flood(&walk, room);
     let w: Vec<u8> = (0..walk.len()).map(|k| if seen[k] { 2 } else if walk[k] { 1 } else { 0 }).collect();

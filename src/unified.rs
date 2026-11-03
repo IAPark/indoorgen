@@ -28,7 +28,7 @@ pub fn apply(g: &mut Generated, seed: u64) -> Vec<String> {
         }
         // the room's floor relation, from what stands there now
         let rel = g.state.objs.values().flat_map(|o| o.relations.iter()).find(|r| r.target == name && r.relation.geo().is_some()).cloned();
-        let gone: Vec<String> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| !gn.class.ends_with("Feature") && !matches!(gn.class.as_str(), "CeilingLightFactory" | "Door" | "Window" | "HardwareFactory")) && layout2d::room_of(&g.state, k).as_deref() == Some(name.as_str()) && !feature_keys.contains(k)).map(|(k, _)| k.clone()).collect();
+        let gone: Vec<String> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| !gn.class.ends_with("Feature") && !matches!(gn.class.as_str(), "CeilingLightFactory" | "Door" | "Window") && (gn.class != "HardwareFactory" || rr.program.iter().any(|i| i.class == gn.class))) && layout2d::room_of(&g.state, k).as_deref() == Some(name.as_str()) && !feature_keys.contains(k)).map(|(k, _)| k.clone()).collect();
         for k in gone { if g.state.objs.contains_key(&k) { layout2d::remove_tree(&mut g.state, &k); } }
         let key = |id: &str| format!("{}_{id}", name.replace('/', "_"));
         for p in &s.placed {
