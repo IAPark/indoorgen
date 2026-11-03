@@ -21,6 +21,32 @@ pub fn unfit(g: &Generated, plan: &Plan) -> usize {
     plan.missing() + g.room_polys.iter().filter(|(n, _)| n.starts_with("kitchen")).map(|(n, _)| { let e = crate::furn::kitchen_rules::eval(&g.state, n, None); if e.unusable > 0 { let cl: Vec<&str> = g.state.objs.iter().filter(|(k, _)| layout2d::room_of(&g.state, k).as_deref() == Some(n.as_str())).filter_map(|(_, o)| o.generator.as_ref().map(|gg| gg.class.as_str())).collect(); eprintln!("PLAN fault {n}: {:?} holds {cl:?}", e.broken); } e.unusable }).sum::<usize>()
 }
 
+/// alcove shelves standing in a window's way go, with their keep-outs and what stands on them (the old passes moved them with the room's group; the wall layer only
+/// clears them when a window has nowhere else to go)
+pub fn clear_windows(g: &mut Generated) -> Vec<String> {
+    let mut log = vec![];
+    let alcoves: Vec<(String, String)> = g.features.iter().filter(|f| f.key.contains("alcove")).map(|f| (f.key.clone(), f.room.clone())).collect();
+    for (k, room) in alcoves {
+        let Some(o) = g.state.objs.get(&k) else { continue };
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let corners: Vec<[f64; 3]> = [[l[0], l[1], 0.0], [h[0], l[1], 0.0], [h[0], h[1], 0.0], [l[0], h[1], 0.0]].iter().map(|c| o.pose.apply(*c)).collect();
+        let (x0, x1) = (corners.iter().map(|c| c[0]).fold(f64::MAX, f64::min), corners.iter().map(|c| c[0]).fold(f64::MIN, f64::max));
+        let (y0, y1) = (corners.iter().map(|c| c[1]).fold(f64::MAX, f64::min), corners.iter().map(|c| c[1]).fold(f64::MIN, f64::max));
+        let blocks = g.cutters.iter().filter(|c| matches!(c.kind, crate::rooms::solidify::CutKind::Window) && c.rooms.contains(&room)).any(|c| {
+            let (sn, cs) = c.rot_z.sin_cos();
+            let (ax, ay) = (c.dims[0] / 2.0 * cs.abs() + c.dims[1] / 2.0 * sn.abs(), c.dims[0] / 2.0 * sn.abs() + c.dims[1] / 2.0 * cs.abs());
+            x0 < c.loc[0] + ax && x1 > c.loc[0] - ax && y0 < c.loc[1] + ay && y1 > c.loc[1] - ay
+        });
+        if !blocks { continue }
+        let kids: Vec<String> = g.state.objs.iter().filter(|(kk, oo)| kk.starts_with(&format!("{k}.keepout")) || oo.relations.iter().any(|r| r.target == k)).map(|(kk, _)| kk.clone()).collect();
+        for kk in kids { if g.state.objs.contains_key(&kk) { layout2d::remove_tree(&mut g.state, &kk); } }
+        layout2d::remove_tree(&mut g.state, &k);
+        g.features.retain(|f| f.key != k);
+        log.push(format!("{room}: alcove shelves {k} removed, a window stands there"));
+    }
+    log
+}
+
 pub fn solve_house(g: &Generated, seed: u64) -> Plan {
     let rs = rules::default_rules();
     let mut rooms = vec![];

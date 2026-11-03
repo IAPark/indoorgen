@@ -453,7 +453,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         for (q, e, f) in &scored {
             if chosen.len() >= 2 { break; }
             // (a second view only if it is good and elsewhere)
-            if !chosen.is_empty() && (*q < 1.5 || (chosen[0] - *e).truncate().length() < 2.5) { continue; }
+            if !chosen.is_empty() && (*q < 2.2 || (chosen[0] - *e).truncate().length() < 2.5) { continue; }
             chosen.push(*e); heads.push(*f);
         }
         // (every room gets a view: a closet or a hallway fails the rules above, so it takes the farthest clear spot in it and a wider lens)
@@ -608,14 +608,14 @@ fn visible(f: &[Vec4; 6], lo: Vec3, hi: Vec3) -> bool {
     true
 }
 
-/// a door leaf right before the lens fills the frame and shows nothing of the room: not drawn for that view
+/// a door leaf close before the lens fills the frame and shows nothing of the room: not drawn for that view
 fn leaf_in_the_way(s: &Scene, d: &Draw, eye: Option<Vec3>) -> bool {
     let Some(e) = eye else { return false };
     let nm = &s.glb.nodes[d.node].name;
     if !nm.starts_with("door") || nm.contains("frame") || nm.contains("casing") { return false }
     // (the whole door goes with its leaf: a handle left behind floated on the wall)
     let id = nm.split('.').next().unwrap_or(nm);
-    s.draws.iter().any(|o| { let n2 = &s.glb.nodes[o.node].name; n2.split('.').next() == Some(id) && !n2.contains("frame") && !n2.contains("casing") && (e.clamp(o.bmin, o.bmax) - e).truncate().length() < 1.5 })
+    s.draws.iter().any(|o| { let n2 = &s.glb.nodes[o.node].name; n2.split('.').next() == Some(id) && !n2.contains("frame") && !n2.contains("casing") && { let d = (e.clamp(o.bmin, o.bmax) - e).truncate().length(); let w = (o.bmax - o.bmin).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) } })
 }
 fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>) {
     for d in &s.draws {

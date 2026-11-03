@@ -233,13 +233,15 @@ pub fn build_scene(p: &Params) -> Built {
         eprintln!("LAYERS {} hard / {} soft complaints", g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
     }
     // a plan with a room that cannot work (no place for a must item, a kitchen whose appliances cannot open) is planned again: at most twice, the plan with fewest such faults wins
+    if unified { for l in indoorgen::unified::clear_windows(&mut g) { eprintln!("UNIFIED {l}"); } }
     let mut plan = unified.then(|| indoorgen::unified::solve_house(&g, seed));
     let mut faults = plan.as_ref().map_or(0, |p| indoorgen::unified::unfit(&g, p));
     for attempt in 1..=2 {
         if faults == 0 || plan.is_none() { break }
         // (the caches are keyed by name and version, which a new house starts over)
         crate::furn::dof::reset_caches(); crate::furn::col::reset_caches(); crate::furn::layout2d::reset_caches(); crate::furn::eval::reset_caches(); crate::furn::solver::reset_caches();
-        let g2 = generate(&mk_at(vec![], attempt), &assets, prog);
+        let mut g2 = generate(&mk_at(vec![], attempt), &assets, prog);
+        for l in indoorgen::unified::clear_windows(&mut g2) { eprintln!("UNIFIED {l}"); }
         let p2 = indoorgen::unified::solve_house(&g2, seed);
         let f2 = indoorgen::unified::unfit(&g2, &p2);
         eprintln!("PLAN again {attempt}: {faults} faults, {f2} now");
