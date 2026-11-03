@@ -446,7 +446,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 let cut = c.dot(f) - l * 0.5;
                 let in_the_way = s.draws.iter().any(|d| {
                     let nm = &s.glb.nodes[d.node].name;
-                    if nm.ends_with(".floor") || nm.ends_with(".wall") || nm.ends_with(".ceiling") || nm.contains("skirting") || nm.starts_with("outdoor") || nm.contains("exterior") || nm.contains("Ceiling") { return false }
+                    if nm.ends_with(".floor") || nm.ends_with(".wall") || nm.ends_with(".ceiling") || nm.contains("skirting") || nm.starts_with("outdoor") || nm.contains("exterior") || nm.contains("Ceiling") || nm.starts_with("door") { return false }
                     if d.bmin.z > z0 + 2.2 || d.bmax.x < lo.x || d.bmin.x > hi.x || d.bmax.y < lo.y || d.bmin.y > hi.y { return false }
                     let near_side = if sg > 0.0 { if ax { d.bmin.x } else { d.bmin.y } } else if ax { -d.bmax.x } else { -d.bmax.y };
                     near_side < cut + 0.25 && near_side > cut - 0.45
@@ -459,7 +459,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 // (dead level: a tilted clip plane left the foot of the removed wall standing)
                 let look = e + f * 2.0;
                 let mut cm = cam_look(e, look, 18.0 / half.tan());
-                cm.near = Some(back + 0.05);
+                cm.near = Some(back + 0.08);
                 cm.name = if k == 0 { format!("{}_A", rm.name) } else { format!("{}_A~{k}", rm.name) };
                 out.push(cm);
                 k += 1;
@@ -511,7 +511,9 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 let a = deg.to_radians();
                 let f = Vec3::new(f0.x * a.cos() - f0.y * a.sin(), f0.x * a.sin() + f0.y * a.cos(), 0.0);
                 let seen = shows(*e, f, half).0 as f32 / pieces.len().max(1) as f32;
-                let q = view_quality(&near, &low, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist + 3.0 * seen;
+                // (a big piece half out of the frame: a bed or a sofa cut off by its edge)
+                let cut_off = pieces.iter().filter(|(c, r)| { if *r < 0.6 { return false } let d = (*c - *e).truncate(); let l = d.length().max(0.01); let a = (d / l).dot(f.truncate()).clamp(-1.0, 1.0).acos(); let w = (*r / l).atan(); a < half + w && a + w > half }).count() as f32;
+                let q = view_quality(&near, &low, *e, f, half) - 0.01 * deg.abs() + 0.15 * dist + 3.0 * seen - 0.6 * cut_off;
                 if best.map_or(true, |b| q > b.0) { best = Some((q, f)); }
             }
             if let Some((q, f)) = best { scored.push((q, *e, f)); }
@@ -531,15 +533,22 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let mut lens = if rm.area < 7.0 { 14.0 } else { 18.0 };
         if chosen.is_empty() {
             let mut best: Option<(f32, Vec3)> = None;
+            let mut others: Vec<(f32, Vec3)> = vec![];
             let step = 0.2; let mut y = lo.y + step / 2.0;
             while y < hi.y { let mut x = lo.x + step / 2.0; while x < hi.x {
                 let p = Vec3::new(x, y, z0);
                 if rm.tris.iter().any(|t| in_tri2(p, t)) {
                     let e = Vec3::new(x, y, z0 + 1.4); let dist = (e - tgt).truncate().length();
-                    if !sh.blocked(e, tgt) && !inside(e, 0.05) && sh.clearance(e) > 0.12 && !leaf_blocks(e, tgt) && best.map_or(true, |b| dist > b.0) { best = Some((dist, e)); }
+                    if !sh.blocked(e, tgt) && !inside(e, 0.05) && sh.clearance(e) > 0.12 && !leaf_blocks(e, tgt) { others.push((dist, e)); if best.map_or(true, |b| dist > b.0) { best = Some((dist, e)); } }
                 }
                 x += step; } y += step; }
-            if let Some((_, e)) = best { chosen.push(e); lens = 13.0; }
+            if let Some((_, e)) = best {
+                chosen.push(e); lens = 13.0; heads.push((tgt - e).truncate().normalize_or_zero().extend(0.0));
+                // (the room has no good spot, so the picture decides: other spots looking at the subject)
+                others.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+                let mut kept = vec![e];
+                for (_, q) in others { if kept.len() < 4 && kept.iter().all(|k| (*k - q).truncate().length() >= 1.0) { kept.push(q); spare.push((q, (tgt - q).truncate().normalize_or_zero().extend(0.0))); } }
+            }
         }
         // (the best spot's other headings too: a bare wall one way, the room's contents behind the lens)
         if let (Some(e), Some(f)) = (chosen.first(), heads.first()) { for (a, b) in [(-f.y, f.x), (f.y, -f.x), (-f.x, -f.y)] { spare.push((*e, Vec3::new(a, b, 0.0))); } }
@@ -694,18 +703,23 @@ fn visible(f: &[Vec4; 6], lo: Vec3, hi: Vec3) -> bool {
 }
 
 /// a door leaf close before the lens fills the frame and shows nothing of the room: not drawn for that view
-fn leaf_in_the_way(s: &Scene, d: &Draw, eye: Option<Vec3>) -> bool {
+fn leaf_in_the_way(s: &Scene, d: &Draw, eye: Option<Vec3>, cut: Option<(Vec3, f32)>) -> bool {
     let Some(e) = eye else { return false };
     let nm = &s.glb.nodes[d.node].name;
     if !nm.starts_with("door") || nm.contains("frame") || nm.contains("casing") { return false }
+    // (a cutaway: the door the cut passes through, or a leaf swung across it, would show its cross-section)
+    if let Some((f, near)) = cut {
+        let id = nm.split('.').next().unwrap_or(nm);
+        if s.draws.iter().any(|o| { let n2 = &s.glb.nodes[o.node].name; if n2.split('.').next() != Some(id) { return false } let c = (o.bmin + o.bmax) * 0.5; let r = (o.bmax - o.bmin) * 0.5; let m = (c - e).dot(f); let h = r.x * f.x.abs() + r.y * f.y.abs() + r.z * f.z.abs(); m - h < near }) { return true }
+    }
     // (the whole door goes with its leaf: a handle left behind floated on the wall)
     let id = nm.split('.').next().unwrap_or(nm);
     s.draws.iter().any(|o| { let n2 = &s.glb.nodes[o.node].name; n2.split('.').next() == Some(id) && !n2.contains("frame") && !n2.contains("casing") && { let d = (e.clamp(o.bmin, o.bmax) - e).truncate().length(); let w = (o.bmax - o.bmin).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) } })
 }
-fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>) {
+fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>) {
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
-        if leaf_in_the_way(s, d, eye) { continue; }
+        if leaf_in_the_way(s, d, eye, cut) { continue; }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
         if !shadow {
@@ -749,7 +763,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &s.shadow_view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
             rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
-            draw_all(&mut rp, s, false, true, None, None);
+            draw_all(&mut rp, s, false, true, None, None, None);
         }
         s.shadow_done = true;
     }
@@ -765,8 +779,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.nrm, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye));
-        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye));
+        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, false, false, Some(&fr), Some(eye), cam.near.map(|n| (fwd, n)));
+        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, true, false, Some(&fr), Some(eye), cam.near.map(|n| (fwd, n)));
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
