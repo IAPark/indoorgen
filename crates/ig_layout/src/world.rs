@@ -18,6 +18,8 @@ pub const HARD: u8 = 0;
 pub const OPENING: u8 = 1;
 pub const SOFT: u8 = 2;
 pub const KEEP: u8 = 3;
+/// on the floor under everything: only the walls limit it
+pub const COVER: u8 = 4;
 
 pub fn role_of(r: &Role) -> u8 { match r { Role::Hard | Role::Support => HARD, Role::Opening(_) => OPENING, Role::Soft => SOFT, Role::Inset => 255 } }
 
@@ -121,7 +123,7 @@ impl World {
         // a door's clearance: its width by its width into the room (as far as 0.9 m), to door height
         for d in &room.doors {
             let depth = (d.hw * 2.0).min(0.9);
-            let e = 0.05;
+            let e = 0.03;
             let q = |a: f64, b: f64| [d.at[0] + d.u[0] * a + d.n[0] * b, d.at[1] + d.u[1] * a + d.n[1] * b];
             let hull = hull2(vec![q(-d.hw - e, 0.0), q(d.hw + e, 0.0), q(d.hw + e, depth), q(-d.hw - e, depth)]);
             let p = Prism { hull, z: [0.0, 2.1], role: KEEP };
@@ -169,7 +171,6 @@ impl World {
     /// the exact test: the prisms against the walls and what is placed
     pub fn exact(&self, ps: &[Prism], room: &Room) -> Option<Why> {
         for p in ps {
-            if p.role == SOFT || p.role == OPENING && false { continue }
             for q in &p.hull {
                 if !house::inside(&room.outline, *q) || house::edge_dist(&room.outline, *q) < self.inner_d - 0.002 { return Some(Why::Outside) }
             }

@@ -6,6 +6,7 @@ Pieces: dark hard, orange door/drawer swings, pale green soft; label = id(varian
 import json, sys
 from PIL import Image, ImageDraw
 args = sys.argv[1:]; src, dst = args[0], args[1]
+OLD = args[args.index("--old") + 1] if "--old" in args else None
 cols = int(args[args.index("--cols") + 1]) if "--cols" in args else 4
 S = float(args[args.index("--scale") + 1]) if "--scale" in args else 70
 sols = json.load(open(src))
@@ -33,7 +34,7 @@ def draw_room(e):
     for o in r["windows"]:
         a = [o["at"][0] - o["u"][0] * o["hw"], o["at"][1] - o["u"][1] * o["hw"]]; b = [o["at"][0] + o["u"][0] * o["hw"], o["at"][1] + o["u"][1] * o["hw"]]
         d.line([P(a), P(b)], fill=(0, 190, 220), width=4)
-    fill = {0: (70, 70, 80, 190), 1: (240, 150, 40, 70), 2: (120, 200, 120, 80)}
+    fill = {0: (70, 70, 80, 190), 1: (240, 150, 40, 70), 2: (120, 200, 120, 80), 4: (190, 120, 200, 70)}
     for p in s["placed"]:
         for q in p["prisms"]:
             if len(q["hull"]) >= 3: d.polygon([P(v) for v in q["hull"]], fill=fill.get(q["role"], (0, 0, 0, 40)), outline=(20, 20, 20))
@@ -49,11 +50,35 @@ def draw_room(e):
         q = P(c["at"])
         if c["why"]: d.text(q, LET.get(c["why"], "?"), fill=(200, 0, 0))
         else: d.ellipse([q[0] - 2, q[1] - 2, q[0] + 2, q[1] + 2], fill=(0, 150, 0))
-    miss = [x["id"] for x in s["report"] if not x["placed"]]
+    miss = [x["id"] for x in s["report"] if not x["placed"] and x["tier"] < 2]
+    left = [x["id"] for x in s["report"] if not x["placed"] and x["tier"] >= 2]
+    tail = ("  (without " + " ".join(left) + ")") if left else ""
+    if OLD:
+        # today's layout beside it, same scale: the boxes tools/layold.py read from a generated glb
+        import os
+        f = os.path.join(OLD, e["house"] + ".old.json")
+        if os.path.exists(f):
+            ol2 = Image.new("RGB", (W, H), (250, 250, 248)); o = ImageDraw.Draw(ol2, "RGBA")
+            o.polygon([P(p) for p in ol], outline=(30, 60, 170), fill=(240, 240, 240))
+            for x in json.load(open(f)):
+                if x["room"] != r["name"]: continue
+                col = (70, 70, 80, 170)
+                if "Rug" in x["class"]: col = (190, 120, 200, 70)
+                a_, b_ = P(x["lo"][:2]), P(x["hi"][:2])
+                o.rectangle([a_[0], b_[1], b_[0], a_[1]], fill=col, outline=(20, 20, 20))
+                o.text((a_[0] + 1, b_[1] + 1), x["class"].replace("Factory", "")[:9], fill=(255, 255, 255) if "Rug" not in x["class"] else (60, 0, 80))
+            o.rectangle([0, 0, W, 16], fill=(225, 225, 240)); o.text((3, 2), "TODAY " + e["house"] + " " + r["name"], fill=(0, 0, 0))
+            both = Image.new("RGB", (W * 2 + 4, H), (80, 80, 80)); both.paste(im, (0, 0)); both.paste(ol2, (W + 4, 0))
+            d2 = ImageDraw.Draw(both, "RGBA")
+            must = any(not x["placed"] and x["tier"] == 0 for x in s["report"])
+            d2.rectangle([0, 0, W, 32], fill=(255, 225, 225) if must or not s["doors_joined"] else (235, 235, 235))
+            d2.text((3, 2), f'{e["house"]} {r["name"]} {r["area"]:.1f} m2 {s["ms"]:.0f} ms' + ("  DOORS CUT" if not s["doors_joined"] else ""), fill=(0, 0, 0))
+            d2.text((3, 16), (("missing: " + " ".join(miss)) if miss else "complete") + tail, fill=(170, 0, 0) if miss else (0, 110, 0))
+            return both
     must = any(not x["placed"] and x["tier"] == 0 for x in s["report"])
     d.rectangle([0, 0, W, 32], fill=(255, 225, 225) if must or not s["doors_joined"] else (235, 235, 235))
     d.text((3, 2), f'{e["house"]} {r["name"]} {r["area"]:.1f} m2 {s["ms"]:.0f} ms' + ("  DOORS CUT" if not s["doors_joined"] else ""), fill=(0, 0, 0))
-    d.text((3, 16), ("missing: " + " ".join(miss)) if miss else "complete", fill=(170, 0, 0) if miss else (0, 110, 0))
+    d.text((3, 16), (("missing: " + " ".join(miss)) if miss else "complete") + tail, fill=(170, 0, 0) if miss else (0, 110, 0))
     return im
 ims = [draw_room(e) for e in sols]
 if not ims: sys.exit("nothing solved")

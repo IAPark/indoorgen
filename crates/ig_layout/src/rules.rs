@@ -24,8 +24,18 @@ pub struct Item {
     #[serde(default)] pub avoid_window: bool,
     /// the walk must reach its front
     #[serde(default)] pub reach: bool,
+    /// it lies on the floor under what stands there: only the walls limit it (a rug)
+    #[serde(default)] pub cover: bool,
+    /// the piece is drawn again until it fits these
+    #[serde(default)] pub fit: Option<Fit>,
     #[serde(default)] pub terms: Vec<Term>,
 }
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Fit { #[serde(default = "big")] pub max_w: f64, #[serde(default = "big")] pub max_h: f64, #[serde(default = "eight")] pub draws: u32 }
+fn big() -> f64 { 1e9 }
+fn eight() -> u32 { 8 }
 fn as_is() -> Vec<Variant> { vec![Variant { piece: "as_is".into(), side: false }] }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -39,11 +49,16 @@ pub enum Place {
     Wall,
     /// its back in line with `parent`'s, next to its +y / -y side
     Beside { parent: String, side: i8, #[serde(default)] gap: f64 },
+    /// on a wall at these centre heights, tried in order; one `tall_from` m or taller hangs with its bottom at `tall_bottom` instead
+    Hang { #[serde(default)] centers: Vec<f64>, #[serde(default = "big")] tall_from: f64, #[serde(default)] tall_bottom: f64 },
+    /// sized from `parent` and lying under it: as wide as it plus `add_w`, `share` of its length, reaching `past` beyond its foot; both clamped
+    Under { parent: String, add_w: f64, share: f64, past: f64, w: [f64; 2], d: [f64; 2], #[serde(default = "thick")] t: f64 },
 }
+fn thick() -> f64 { 0.015 }
 
 /// a score term: `w` times a value of about 0..1
 #[derive(Deserialize, Clone, Debug)]
-pub struct Term { pub name: String, #[serde(default = "one")] pub w: f64 }
+pub struct Term { pub name: String, #[serde(default = "one")] pub w: f64, #[serde(default)] pub of: Option<String> }
 fn one() -> f64 { 1.0 }
 
 pub fn load(path: &str) -> HashMap<String, RoomRules> {

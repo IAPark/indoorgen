@@ -1,11 +1,218 @@
 {
-  "bedroom": { "program": [
-    { "id": "bed", "class": "BedFactory", "tier": 0, "place": "wall", "reach": true,
-      "variants": [ {"piece": "as_is"}, {"piece": "tucked"}, {"piece": "compact"}, {"piece": "compact", "side": true} ],
-      "terms": [ {"name": "center_on_wall", "w": 1.0}, {"name": "long_wall", "w": 0.5}, {"name": "far_from_door", "w": 1.0} ] },
-    { "id": "stand_a", "class": "SideTableFactory", "tier": 1, "place": {"beside": {"parent": "bed", "side": 1, "gap": 0.02}} },
-    { "id": "stand_b", "class": "SideTableFactory", "tier": 2, "place": {"beside": {"parent": "bed", "side": -1, "gap": 0.02}} },
-    { "id": "wardrobe", "class": "WardrobeFactory", "tier": 1, "place": "wall", "avoid_window": true, "front": 0.6, "reach": true,
-      "terms": [ {"name": "corner", "w": 1.0}, {"name": "apart", "w": 1.0} ] }
-  ] }
+ "bedroom": {
+  "program": [
+   {
+    "id": "bed",
+    "class": "BedFactory",
+    "tier": 0,
+    "place": "wall",
+    "reach": true,
+    "variants": [
+     {
+      "piece": "as_is"
+     },
+     {
+      "piece": "tucked"
+     },
+     {
+      "piece": "compact"
+     },
+     {
+      "piece": "compact",
+      "side": true
+     }
+    ],
+    "terms": [
+     {
+      "name": "center_on_wall",
+      "w": 1.0
+     },
+     {
+      "name": "long_wall",
+      "w": 0.5
+     },
+     {
+      "name": "far_from_door",
+      "w": 1.0
+     }
+    ]
+   },
+   {
+    "id": "stand_a",
+    "class": "SideTableFactory",
+    "tier": 1,
+    "place": {
+     "beside": {
+      "parent": "bed",
+      "side": 1,
+      "gap": 0.02
+     }
+    },
+    "fit": {
+     "max_w": 0.7
+    }
+   },
+   {
+    "id": "stand_b",
+    "class": "SideTableFactory",
+    "tier": 2,
+    "place": {
+     "beside": {
+      "parent": "bed",
+      "side": -1,
+      "gap": 0.02
+     }
+    },
+    "fit": {
+     "max_w": 0.7
+    }
+   },
+   {
+    "id": "wardrobe",
+    "class": "WardrobeFactory",
+    "tier": 1,
+    "place": "wall",
+    "avoid_window": true,
+    "front": 0.6,
+    "reach": true,
+    "terms": [
+     {
+      "name": "corner",
+      "w": 1.0
+     },
+     {
+      "name": "apart",
+      "w": 1.0
+     }
+    ]
+   },
+   {
+    "id": "plant",
+    "class": "LargePlantContainerFactory",
+    "tier": 2,
+    "min_area": 14.0,
+    "place": "wall",
+    "avoid_window": true,
+    "terms": [
+     {
+      "name": "corner",
+      "w": 1.0
+     },
+     {
+      "name": "apart",
+      "w": 0.5
+     }
+    ]
+   },
+   {
+    "id": "rug",
+    "class": "RugFactory",
+    "tier": 2,
+    "cover": true,
+    "place": {
+     "under": {
+      "parent": "bed",
+      "add_w": 1.0,
+      "share": 0.7,
+      "past": 0.45,
+      "w": [
+       1.6,
+       3.0
+      ],
+      "d": [
+       1.2,
+       2.0
+      ]
+     }
+    },
+    "terms": [
+     {
+      "name": "ideal",
+      "w": 2.0
+     }
+    ]
+   },
+   {
+    "id": "mirror",
+    "class": "MirrorFactory",
+    "tier": 2,
+    "avoid_window": true,
+    "fit": {
+     "max_w": 1.2
+    },
+    "place": {
+     "hang": {
+      "centers": [
+       1.55
+      ],
+      "tall_from": 1.2,
+      "tall_bottom": 0.2
+     }
+    },
+    "terms": [
+     {
+      "name": "apart",
+      "w": 0.3
+     }
+    ]
+   },
+   {
+    "id": "art_a",
+    "class": "WallArtFactory",
+    "tier": 2,
+    "avoid_window": true,
+    "fit": {
+     "max_w": 1.6,
+     "max_h": 1.1
+    },
+    "place": {
+     "hang": {
+      "centers": [
+       1.5,
+       1.75
+      ]
+     }
+    },
+    "terms": [
+     {
+      "name": "near",
+      "of": "bed",
+      "w": 1.0
+     },
+     {
+      "name": "center_on_wall",
+      "w": 0.5
+     }
+    ]
+   },
+   {
+    "id": "art_b",
+    "class": "WallArtFactory",
+    "tier": 2,
+    "avoid_window": true,
+    "fit": {
+     "max_w": 1.6,
+     "max_h": 1.1
+    },
+    "place": {
+     "hang": {
+      "centers": [
+       1.5,
+       1.75
+      ]
+     }
+    },
+    "terms": [
+     {
+      "name": "apart",
+      "w": 0.5
+     },
+     {
+      "name": "center_on_wall",
+      "w": 0.5
+     }
+    ]
+   }
+  ]
+ }
 }

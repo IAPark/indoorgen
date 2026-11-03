@@ -39,7 +39,7 @@ fn run(rules_p: &str, room: Option<&str>, seed: u64, why: Option<&str>, out: Opt
     let t0 = std::time::Instant::now();
     let r = rules::load(rules_p);
     let mut sols = vec![];
-    let (mut rooms_n, mut miss_must, mut ms_max) = (0, 0, 0.0f64);
+    let (mut rooms_n, mut miss_must, mut incomplete, mut ms_max) = (0, 0, 0, 0.0f64);
     for h in houses {
         let hname = std::path::Path::new(h).file_stem().and_then(|s| s.to_str()).unwrap_or("?").trim_end_matches(".house").to_string();
         for rm in house::load(h) {
@@ -50,13 +50,16 @@ fn run(rules_p: &str, room: Option<&str>, seed: u64, why: Option<&str>, out: Opt
             if std::env::var_os("LAYVOL").is_some() { for r in &s.report { if !r.placed { eprintln!("{hname} {} {} unplaced {:?}", rm.name, r.id, r.why); } } }
             rooms_n += 1;
             ms_max = ms_max.max(s.ms);
-            let miss: Vec<String> = s.report.iter().filter(|x| !x.placed).map(|x| { let mut w: Vec<_> = x.why.iter().collect(); w.sort_by_key(|y| std::cmp::Reverse(*y.1)); format!("{}[t{}: {}]", x.id, x.tier, w.iter().take(3).map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")) }).collect();
+            // (a `may` item left out is not a fault: it only says what stopped it)
+            let miss: Vec<String> = s.report.iter().filter(|x| !x.placed && x.tier < 2).map(|x| { let mut w: Vec<_> = x.why.iter().collect(); w.sort_by_key(|y| std::cmp::Reverse(*y.1)); format!("{}[t{}: {}]", x.id, x.tier, w.iter().take(3).map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")) }).collect();
             if s.report.iter().any(|x| !x.placed && x.tier == 0) { miss_must += 1; }
+            if !miss.is_empty() { incomplete += 1; }
+            let left: Vec<&str> = s.report.iter().filter(|x| !x.placed && x.tier >= 2).map(|x| x.id.as_str()).collect();
             let placed: Vec<String> = s.report.iter().filter(|x| x.placed).map(|x| if x.variant == "as_is" { x.id.clone() } else { format!("{}({})", x.id, x.variant) }).collect();
-            println!("{hname} {:<18} {:5.1} m2 {:6.1} ms {} | {}{}{}", rm.name, rm.area, s.ms, placed.join(" "), if miss.is_empty() { String::new() } else { format!("| MISSING {}", miss.join(" ")) }, if s.doors_joined { "" } else { " | DOORS CUT" }, "");
+            println!("{hname} {:<18} {:5.1} m2 {:6.1} ms {} | {}{}{}", rm.name, rm.area, s.ms, placed.join(" "), if miss.is_empty() { String::new() } else { format!("| MISSING {}", miss.join(" ")) }, if s.doors_joined { "" } else { " | DOORS CUT" }, if left.is_empty() { String::new() } else { format!(" (without {})", left.join(" ")) });
             sols.push(serde_json::json!({ "house": hname, "sol": s }));
         }
     }
-    println!("{rooms_n} rooms, {miss_must} missing a must, slowest {ms_max:.1} ms, total {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+    println!("{rooms_n} rooms, {} complete, {miss_must} missing a must, slowest {ms_max:.1} ms, total {:.0} ms", rooms_n - incomplete, t0.elapsed().as_secs_f64() * 1000.0);
     if let Some(o) = out { std::fs::write(o, serde_json::to_vec(&sols).unwrap()).unwrap(); }
 }
