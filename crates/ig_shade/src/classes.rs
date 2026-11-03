@@ -118,7 +118,7 @@ fn ceramic(r: &mut R, white: Option<[f64; 3]>, rmax: f64) -> Value {
     let m = g.musgrave(&v, r.log_uniform(20.0, 40.0), 2.0, 2.0, 2.0, 0.0);
     let rough = g.map_range(&m, 0.0, 1.0, 0.0, rmax);
     let n = g.noise(&v, r.log_uniform(20.0, 40.0), 2.0, 0.0, 0.0);
-    let h = g.mul(&n, r.log_uniform(1e-3, 5e-3));
+    let h = g.mul(&n, r.log_uniform(1e-4, 4e-4)); // (glaze is smooth: at python's up to 5 mm toilets and basins looked hand-moulded)
     g.done("shader_ceramic", json!({"color": color, "roughness": rough, "coat": 1.0, "coat_roughness": rough, "specular": 1.0, "height": h}))
 }
 
@@ -130,7 +130,8 @@ fn rough_plastic(r: &mut R, kw: &Value) -> Value {
     let color = match kw.get("base_color").and_then(|v| v.as_array()) {
         Some(c) if c.len() >= 3 => [c[0].as_f64().unwrap_or(0.5), c[1].as_f64().unwrap_or(0.5), c[2].as_f64().unwrap_or(0.5)],
         _ if kw.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) => hsv(0.0, 0.0, r.log_uniform(0.02, 0.8)),
-        _ => hsv(r.f(), r.uniform(0.5, 0.8), r.log_uniform(0.01, 0.5)),
+        // (muted: at the shader's saturation furniture came out traffic yellow and orange)
+        _ => hsv(r.f(), r.uniform(0.08, 0.35), r.log_uniform(0.03, 0.5)),
     };
     let rough = 0.05 + 0.2 * rough0;
     let mut g = G::default();
@@ -183,7 +184,8 @@ fn wood_on(g: &mut G, r: &mut R, v: &Value, tint: Option<[f64; 3]>) -> (Value, V
     // assets/colors.py wood_colors
     const WOOD: [u32; 49] = [0x4C2F27,0x69432D,0x371803,0x7F4040,0xCC9576,0x9E8170,0x3D2B1F,0x8D6A58,0x8B3325,0x79443C,0x88540B,0x9B5F43,0x4E3828,0x4E3828,0xC09A6B,0x944536,0x3F0110,0x773C12,0x6E4E37,0x5C4033,0x5C4033,0x3C3034,0x96704C,0x371B1A,0x483B32,0x43141A,0x471713,0xC3B090,0x6B4423,0x674D46,0x5D2E1A,0x331C1F,0x7A5640,0xB99984,0x71543D,0x8F4B28,0x491A00,0x836446,0x7F461B,0x6A3208,0x724115,0xA0522B,0x832A0C,0x371B1A,0xC7A373,0x483B32,0x635147,0x664228,0x5C5248];
     let c0 = crate::hex_to_hsv(WOOD[(r.u64() % WOOD.len() as u64) as usize]);
-    let drawn = hsv(c0[0] + r.uniform(0.0, 0.05), (c0[1] + r.uniform(-0.3, 0.2)).clamp(0.0, 1.0), (c0[2] * r.log_uniform(0.2, 20.0)).min(1.0));
+    // (brightness up to 3x and capped, saturation not raised: python's up to 20x turned honey browns traffic yellow and orange)
+    let drawn = hsv(c0[0] + r.uniform(0.0, 0.03), (c0[1] + r.uniform(-0.3, 0.0)).clamp(0.2, 0.65), (c0[2] * r.log_uniform(0.7, 3.0)).min(0.55));
     // (floors keep the room's plain wood colour: the drawn ones reached crimson)
     let color = tint.unwrap_or(drawn);
     let w = r.f();
@@ -252,21 +254,23 @@ fn tile(r: &mut R, kw: &Value, wood_base: Option<()>, rgb: [f64; 3]) -> Value {
     let turn = (r.u64() % 4) as f64 * quarter;
     let (m, sc, row, width, offset, check) = match shape {
         "staggered" => {
-            let hs = scale * r.log_uniform(2.0, 3.5);
+            let hs = scale * r.log_uniform(6.0, 10.0); // (boards 8-16 cm wide: python's reached 50)
             let vs = hs * r.log_uniform(0.05, 0.2);
             (g.mapping(&u, [1.0, 1.0, 0.0], [0.0; 3]), 1.0, 1.0 / hs, 1.0 / vs, 0.5, false)
         }
         "rectangle" => {
-            let size = r.log_uniform(0.2, 0.4);
+            let size = r.log_uniform(0.14, 0.28); // (home tile: at python's up to 80 cm a wall read as paving)
             (g.mapping(&u, [scale, scale * r.log_uniform(1.3, 2.0), 0.0], [0.0, 0.0, turn]), 1.0 / size, 1.0, 1.0, 0.5, false)
         }
         _ => {
-            let size = r.log_uniform(0.2, 0.4);
+            let size = r.log_uniform(0.14, 0.28); // (home tile: at python's up to 80 cm a wall read as paving)
             let diamond = if shape == "diamond" || r.f() < 0.3 { quarter / 2.0 } else { 0.0 };
             (g.mapping(&u, [scale, scale, 0.0], [0.0, 0.0, turn + diamond]), 1.0 / size, 1.0, 1.0, 0.0, true)
         }
     };
-    let (shade, mortar) = g.brick(&m, sc, row, width, offset, r.uniform(0.005, 0.01));
+    // (hairline joints between boards: at a tile's width they read as decking)
+    let joint = if shape == "staggered" { r.uniform(0.0012, 0.002) } else { r.uniform(0.005, 0.01) };
+    let (shade, mortar) = g.brick(&m, sc, row, width, offset, joint);
     let alternating = check && r.f() < 0.75;
     let chk = alternating.then(|| g.checker(&m, sc));
     let (col, rough, coat, h0): (Value, Value, f64, Option<Value>) = match wood_base {

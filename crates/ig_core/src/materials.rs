@@ -67,7 +67,8 @@ pub fn wall_table(room_type: &str) -> Weighted {
     if !raw_rooms() {
         match room_type {
             "living-room" | "dining-room" => return LIVING_WALL,
-            "bedroom" => return HOME_WALL,
+            // (plaster in passages and closets: tiled ones read as bathrooms)
+            "bedroom" | "hallway" | "closet" => return HOME_WALL,
             "kitchen" => return KITCHEN_WALL_REAL,
             _ => {}
         }

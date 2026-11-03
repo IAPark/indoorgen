@@ -71,7 +71,9 @@ fn ig_brick(p: vec3<f32>, scale: f32, row: f32, width: f32, offset: f32, mortar:
   let fx = x - bn * width; let fy = q.y - rn * row;
   let d = min(min(fx, width - fx), min(fy, row - fy));
   let w = fwidth(d) + 1e-5;
-  return vec2<f32>(f32(ig_hash(vec3<i32>(i32(bn), i32(rn), 3)) & 65535u) / 65535.0, 1.0 - smoothstep(mortar - w, mortar + w, d));
+  // (a joint thinner than a pixel covers only part of it: at full strength far joints drew as thick black lines)
+  let cover = clamp(mortar / w, 0.0, 1.0);
+  return vec2<f32>(f32(ig_hash(vec3<i32>(i32(bn), i32(rn), 3)) & 65535u) / 65535.0, cover * (1.0 - smoothstep(mortar - w, mortar + w, d)));
 }
 fn ig_checker(p: vec3<f32>) -> f32 {
   let c = floor(p + 1e-4);
