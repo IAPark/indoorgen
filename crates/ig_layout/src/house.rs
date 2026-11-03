@@ -11,7 +11,7 @@ struct HouseFile { wall_thickness: f64, wall_height: f64, rooms: Vec<(String, St
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Wall { pub a: [f64; 2], pub b: [f64; 2], pub n: [f64; 2], pub len: f64 }
 
-/// an opening seen from this room: its centre on the wall, along-the-wall half width, unit normal into the room
+/// an opening seen from this room: its centre on the wall, along-the-wall half width, unit normal into the room; `z` from the room's floor, as pieces are (the plan's heights are from the slab, half a wall below it)
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Opening { pub at: [f64; 2], pub u: [f64; 2], pub n: [f64; 2], pub hw: f64, pub z: [f64; 2], pub kind: String }
 
@@ -79,7 +79,7 @@ pub fn room_from(name: &str, outline: Vec<[f64; 2]>, cutters: &[Cutter], wall_th
             let u = [c.rot_z.cos(), c.rot_z.sin()];
             let mut n = [-u[1], u[0]];
             if !inside(&outline, [c.loc[0] + n[0] * (half + 0.05), c.loc[1] + n[1] * (half + 0.05)]) { n = [-n[0], -n[1]]; }
-            let o = Opening { at: [c.loc[0] + n[0] * half, c.loc[1] + n[1] * half], u, n, hw: c.dims[0] / 2.0, z: [c.loc[2] - c.dims[2] / 2.0, c.loc[2] + c.dims[2] / 2.0], kind: c.kind.clone() };
+            let o = Opening { at: [c.loc[0] + n[0] * half, c.loc[1] + n[1] * half], u, n, hw: c.dims[0] / 2.0, z: [c.loc[2] - c.dims[2] / 2.0 - half, c.loc[2] + c.dims[2] / 2.0 - half], kind: c.kind.clone() };
             if c.kind == "Window" { windows.push(o) } else { doors.push(o) }
         }
         let kind = name.split('_').next().unwrap_or("").to_string();
