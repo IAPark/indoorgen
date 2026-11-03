@@ -108,9 +108,11 @@ pub fn dress(scene: &mut Scene, state: &State, features: &[crate::features::Plac
             if let Some(h) = side_piece(left) {
                 // on the slab beside the opening, toward its outer end, clear of the breast face
                 let (zx0, zx1) = (h.0[0] + 0.03, h.1[0] - 0.03);
-                let (zy0, zy1) = (h.0[1].max(depth_b * 0.0), h.1[1]);
+                let sx = if left { zx0 + rad } else { zx1 - rad };
+                // (in front of the breast where it stands behind the spot: a log basket's back half went into it)
+                let (zy0, zy1) = (if sx - rad < breast[1] && sx + rad > breast[0] { h.0[1].max(depth_b + 0.01) } else { h.0[1] }, h.1[1]);
                 if zx1 - zx0 >= 2.0 * rad && zy1 - zy0 >= 2.0 * rad * 0.9 {
-                    let (sx, sy) = (if left { zx0 + rad } else { zx1 - rad }, (zy0 + zy1) / 2.0);
+                    let sy = (zy0 + zy1) / 2.0;
                     // the slab's mesh top under the footprint (its support box lay 1 cm under a bevelled top: the stand's base sank)
                     let mut zt = h.1[2];
                     for p in &pf.asset.parts { for f in &p.mesh.faces {

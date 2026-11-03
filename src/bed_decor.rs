@@ -68,7 +68,8 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
             let bw = ((hi[1] - lo[1]) * r.uniform(0.6, 0.8)).max(0.9);
             let (x0, x1) = (hi[0] + 0.12, hi[0] + 0.12 + bd);
             let yc = (lo[1] + hi[1]) / 2.0;
-            let wb = world_box(o, [x0, yc - bw / 2.0, fz], [x1, yc + bw / 2.0, fz + bh]);
+            // (up to the blanket folded on it: the box stopped at the seat, and a blanket went into a wardrobe's door above it)
+            let wb = world_box(o, [x0, yc - bw / 2.0, fz], [x1, yc + bw / 2.0, fz + bh + 0.08]);
             if fits(&others, &wb) {
                 let cls = ["fabric.SofaFabric", "fabric.Velvet", "fabric.Leather", "fabric.CoarseKnitFabric"][r.randint(0, 4) as usize];
                 let fm = fab(scene, &format!("bench:{key}"), cls, r.next_u64(), [0.55, 0.5, 0.45]);
