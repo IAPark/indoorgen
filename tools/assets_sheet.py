@@ -6,7 +6,7 @@ close=float(os.environ.get('CLOSE','1')); W,H=map(int,os.environ.get('RES','480x
 views=[(-0.7,0.6),(2.3,0.35)]
 args=[]
 for a in A:
-    d=max(a['r']*2.1,0.25)/close
+    d=max(a['r']*3.0,0.3)/close
     for az,el in views:
         e=[a['c'][0]+d*math.cos(az)*math.cos(el),a['c'][1]+d*math.sin(az)*math.cos(el),a['c'][2]+d*math.sin(el)]
         args+=['--at',','.join('%.3f'%v for v in e+a['c']+[28])]

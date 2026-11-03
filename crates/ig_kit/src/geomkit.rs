@@ -15,7 +15,7 @@ pub fn limb(a: V3, b: V3, r0: f64, r1: f64, round: bool) -> Mesh {
     let up = if d[2].abs() > 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] };
     let u = unit3(cross(d, up));
     let v = cross(d, u);
-    let n = if round { 12 } else { 4 };
+    let n = if round { 24 } else { 4 }; // (24: at 12 plates, logs and handles showed as polygons)
     let ring = |c: V3, r: f64| -> Vec<V3> {
         (0..n)
             .map(|i| {

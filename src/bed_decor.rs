@@ -270,7 +270,14 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
 /// one slip-on slipper, toe to +x: a soft sole and a padded arch over the front, open at the heel side
 pub fn slipper(dy: f64) -> Mesh {
     let (top, x0, xe, w0, h0) = (0.018, -0.03, 0.122, 0.043, 0.05);
-    let mut m = crate::assets::sofa::pad([-0.13, dy - 0.045, 0.0], [0.13, dy + 0.045, top + 0.006], 0.008, 2);
+    // the sole: a foot's outline, narrower at the heel
+    let sole: Vec<[f64; 2]> = (0..48).map(|i| {
+        let a = std::f64::consts::TAU * i as f64 / 48.0;
+        let (c, s_) = (a.cos(), a.sin());
+        let (x, y) = (0.13 * c.signum() * c.abs().powf(0.75), 0.046 * s_.signum() * s_.abs().powf(0.75));
+        [x, dy + y * (0.86 + 0.14 * (x + 0.13) / 0.26)]
+    }).collect();
+    let mut m = ig_kit::geomkit::extrude(&sole, 0.0, top + 0.006);
     let n = 18;
     let arch = |x: f64, scale: f64| -> Vec<[f64; 3]> {
         let u = ((x - x0) / (xe - x0)).clamp(0.0, 1.0);

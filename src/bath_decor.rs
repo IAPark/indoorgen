@@ -169,8 +169,8 @@ pub fn add(scene: &mut Scene, state: &State, visuals: &HashMap<String, crate::as
                         let chrome = scene.material(Material::diffuse("tp_chrome", [0.78, 0.78, 0.8], 0.2));
                         let paper = scene.material(Material::diffuse("tp_paper", [0.95, 0.95, 0.93], 0.9));
                         let mut post = ig_kit::geomkit::limb([x, side, zf], [x, side, zf + 0.62], 0.012, 0.012, true);
-                        // (the base bar's axis at its radius above the floor: at 4 mm it sank 2.6 cm into it)
-                        post.append(&ig_kit::geomkit::limb([x - 0.1, side, zf + 0.031], [x + 0.1, side, zf + 0.031], 0.03, 0.03, false));
+                        // a round foot (a long brick across the post looked like a hammer)
+                        post.append(&ig_kit::geomkit::limb([x, side, zf], [x, side, zf + 0.018], 0.07, 0.066, true));
                         for q in post.pos.iter_mut() { *q = o.pose.apply(*q) }
                         scene.add(&format!("tpstand_{}#0", k.replace('/', "_")), "ToiletPaperFactory", post, chrome);
                         for (j, zz) in [zf + 0.5, zf + 0.3, zf + 0.18].iter().enumerate() {

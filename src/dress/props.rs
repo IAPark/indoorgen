@@ -93,7 +93,11 @@ pub fn log_basket(seed: u64) -> Asset {
         let row = i / 3;
         let y = -rad * 0.55 + (i % 3) as f64 * rad * 0.55 + r.uniform(-0.02, 0.02);
         let z = h * 0.45 + row as f64 * 0.07 + lr;
-        let half = r.uniform(0.17, 0.22);
+        // (within the wall at its height: full-length logs came out through the basket's sides)
+        let rin = (rad * 0.9 + 0.1 * rad * ((z - lr) / h).clamp(0.0, 1.0)) - 0.018;
+        let yy = y.abs() + 0.04 + lr;
+        let half = r.uniform(0.17, 0.22).min((rin * rin - yy * yy).max(0.0).sqrt());
+        if half < 0.09 { continue }
         let (m, mat) = log(seed + i as u64, [-half, y, z], [half, y + r.uniform(-0.04, 0.04), z + r.uniform(-0.02, 0.03)], lr);
         part(&mut a, m, &mat);
     }
@@ -209,6 +213,17 @@ pub fn kettle(seed: u64) -> Asset {
     a
 }
 
+/// a dispenser's body: rounded foot, round shoulders up to the neck
+fn soap_profile(rb: f64, h: f64) -> Vec<(f64, f64)> {
+    let mut p = vec![(0.0, 0.0), (rb * 0.9, 0.0), (rb * 0.98, 0.002), (rb, 0.006)];
+    for k in 0..=8 {
+        let a = k as f64 / 8.0 * std::f64::consts::FRAC_PI_2;
+        p.push((rb * 0.42 + rb * 0.58 * a.cos(), h * 0.82 + h * 0.18 * a.sin()));
+    }
+    p.push((0.0, h));
+    p
+}
+
 /// pump soap dispenser (15-19 cm)
 pub fn soap_dispenser(seed: u64) -> Asset {
     let mut r = Rng::seeded(seed);
@@ -217,8 +232,8 @@ pub fn soap_dispenser(seed: u64) -> Asset {
     let body = Material::diffuse("soap_body", c, 0.3);
     let pump = metal("soap_pump", [0.82, 0.82, 0.84], 0.2);
     let (rb, h) = (r.uniform(0.03, 0.04), r.uniform(0.1, 0.13));
-    part(&mut a, Mesh::revolve(0.0, 0.0, &[(0.0, 0.0), (rb, 0.0), (rb, h * 0.85), (rb * 0.45, h), (0.0, h)], 20), &body);
-    part(&mut a, limb([0.0, 0.0, h], [0.0, 0.0, h + 0.035], 0.008, 0.008, false), &pump);
+    part(&mut a, Mesh::revolve(0.0, 0.0, &soap_profile(rb, h), 32), &body);
+    part(&mut a, limb([0.0, 0.0, h], [0.0, 0.0, h + 0.035], 0.008, 0.008, true), &pump);
     part(&mut a, limb([0.0, 0.0, h + 0.035], [0.035, 0.0, h + 0.03], 0.006, 0.005, true), &pump);
     a
 }
