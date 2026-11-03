@@ -348,7 +348,9 @@ pub fn add(scene: &mut Scene, room_polys: &[(String, ig_core::shp::G)], cutters:
     let wx = weather::Weather::draw(&mut Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "weather"])), cfg.weather.as_deref());
     {
         let paved = |x: f64, y: f64| t.site.as_ref().and_then(|s| s.road_near(x, y)).filter(|(d, _)| *d < t.site.as_ref().unwrap().half - 0.3).map(|(_, z)| z + 0.03);
-        let nf = weather::add(scene, &wx, seed, centre, t.pad_z, &paved);
+        // (under the roof: the footprint and the widest eaves, exterior::Style::overhang)
+        let sheltered = |x: f64, y: f64| t.dist(x, y) < 0.6;
+        let nf = weather::add(scene, &wx, seed, centre, t.pad_z, &paved, &sheltered);
         log.push(format!("weather: {:?} cover {:.2} ({nf} faces)", wx.state, wx.cover));
     }
     scene.add("outdoor_terrain_near#0", "OutdoorTerrain", near, gm);

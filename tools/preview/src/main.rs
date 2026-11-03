@@ -275,7 +275,13 @@ fn in_tri2(p: Vec3, t: &Tri) -> bool {
 }
 struct Shell { walls: Vec<Tri>, boxes: Vec<(Vec3, Vec3)> }
 fn shell_of(s: &Scene) -> Shell {
-    let walls = node_tris(s, |n| n.contains(".wall") || n.contains("exterior"));
+    // (the cameras stand in this house: only what is near its floors can block them, not the neighbours' houses)
+    let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
+    for d in &s.draws { if s.glb.nodes[d.node].name.ends_with(".floor") { lo = lo.min(d.bmin); hi = hi.max(d.bmax); } }
+    let m = Vec3::new(1.0, 1.0, 0.0);
+    let mut walls = node_tris(s, |n| n.contains(".wall") || n.contains("exterior"));
+    walls.retain(|t| { let tl = t[0].min(t[1]).min(t[2]); let th = t[0].max(t[1]).max(t[2]); th.x > lo.x - m.x && tl.x < hi.x + m.x && th.y > lo.y - m.y && tl.y < hi.y + m.y });
+    if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("SHELL {} wall triangles", walls.len()); }
     let skip = |nm: &str| nm.contains(".floor") || nm.contains(".wall") || nm.contains(".ceiling") || nm.contains("skirting") || nm.starts_with("window") || nm.starts_with("door") || nm.contains("exterior") || nm.starts_with("outdoor") || nm.contains("rug");
     let boxes = s.draws.iter().filter(|d| !skip(&s.glb.nodes[d.node].name) && d.bmax.z > 0.3 && d.bmin.z < 1.9 && (d.bmax - d.bmin).length() > 0.5).map(|d| (d.bmin, d.bmax)).collect();
     Shell { walls, boxes }

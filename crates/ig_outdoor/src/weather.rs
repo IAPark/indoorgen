@@ -78,7 +78,7 @@ fn cloud_texture(n: usize, cover: f64, overcast: f64, seed: u64) -> Arc<Vec<u8>>
 
 /// Add the weather's geometry around `centre` (ground height `gz`); `paved(x, y)` gives the height of road / driveway at a point
 /// (None off it) for the puddles.
-pub fn add(scene: &mut Scene, w: &Weather, seed: u64, centre: [f64; 2], gz: f64, paved: &dyn Fn(f64, f64) -> Option<f64>) -> usize {
+pub fn add(scene: &mut Scene, w: &Weather, seed: u64, centre: [f64; 2], gz: f64, paved: &dyn Fn(f64, f64) -> Option<f64>, sheltered: &dyn Fn(f64, f64) -> bool) -> usize {
     let mut r = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "weather_geom"]));
     let mut n = 0;
     if w.cover > 0.02 {
@@ -110,7 +110,7 @@ pub fn add(scene: &mut Scene, w: &Weather, seed: u64, centre: [f64; 2], gz: f64,
         scene.add("outdoor_sky_clouds#0", "OutdoorSky", m, mi);
     }
     if w.state == State::Rain {
-        // rain streaks: 0.004 x 0.5 m cards, slightly slanted, in a 70 x 70 x 14 m box around the house
+        // rain streaks: 0.004 x 0.5 m cards, slightly slanted, in a 70 x 70 x 14 m box around the house, none under its roof
         let mut m = Mesh::new();
         let (sx, sy) = (r.uniform(-0.12, 0.12), r.uniform(-0.12, 0.12));
         for _ in 0..40000 {
@@ -119,6 +119,7 @@ pub fn add(scene: &mut Scene, w: &Weather, seed: u64, centre: [f64; 2], gz: f64,
             let a = r.uniform(0.0, std::f64::consts::PI);
             let (dx, dy) = (a.cos() * 0.002, a.sin() * 0.002);
             let top = [x + sx * l, y + sy * l, z + l];
+            if sheltered(x, y) || sheltered(top[0], top[1]) { continue }
             m.add_quad([x - dx, y - dy, z], [x + dx, y + dy, z], [top[0] + dx, top[1] + dy, top[2]], [top[0] - dx, top[1] - dy, top[2]]);
         }
         let mut mat = Material::diffuse("weather_rain", [0.75, 0.78, 0.82], 0.2);
