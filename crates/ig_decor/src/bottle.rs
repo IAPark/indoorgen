@@ -204,6 +204,18 @@ impl Factory for Bottle {
         let radius = (max_x as f64 + 2e-3) as f32;
         let h = ((z_max - z_min) * self.z_length) as f32;
         let loc = (z_min * self.z_length) as f32;
+        // the label follows the body 1.5 mm out (one straight cylinder at the widest radius hung off the shoulders like a loose sleeve)
+        let mut env: Vec<(f32, f32)> = body.pos.iter().map(|p| (p[2] as f32, ((p[0] * p[0] + p[1] * p[1]) as f32).sqrt())).collect();
+        env.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let mut prof: Vec<(f32, f32)> = vec![];
+        for (z, r_) in env {
+            match prof.last_mut() { Some(l) if z - l.0 < 2e-4 => l.1 = l.1.max(r_), _ => prof.push((z, r_)) }
+        }
+        let label_r = |z: f32| -> f32 {
+            let i = prof.partition_point(|q| q.0 < z);
+            let r_ = if i == 0 { prof[0].1 } else if i >= prof.len() { prof[prof.len() - 1].1 } else { let (a, b) = (prof[i - 1], prof[i]); a.1 + (b.1 - a.1) * ((z - a.0) / (b.0 - a.0).max(1e-6)) };
+            (r_ + 1.5e-3).min(radius)
+        };
         let mut wrap = Mesh::new();
         let n = 128usize;
         let cyl = unit_cylinder(n, false);
@@ -212,7 +224,9 @@ impl Factory for Bottle {
             for row in 0..rows {
                 let t = row as f32 / (rows - 1) as f32;
                 let p = cyl.pos[2 * k];
-                wrap.pos.push([(p[0] as f32 * radius) as f64, (p[1] as f32 * radius) as f64, ((t * h) + loc) as f64]);
+                let z = (t * h) + loc;
+                let rr = label_r(z);
+                wrap.pos.push([(p[0] as f32 * rr) as f64, (p[1] as f32 * rr) as f64, z as f64]);
             }
         }
         for k in 0..n {

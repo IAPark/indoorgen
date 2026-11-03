@@ -69,13 +69,15 @@ impl Toilet {
         let back_scale = r.uniform(0.8, 1.0);
         let seat_thickness = r.uniform(0.1, 0.3) * thickness;
         let seat_size = thickness * r.uniform(1.2, 1.6);
-        let has_seat_cut = r.f64() < 0.1;
+        let has_seat_cut = r.f64() < 0.1 && false; // (no open-front seat: its wedge left a broken-looking gap in the rim)
         let tank_width = width * r.uniform(1.0, 1.2);
         let tank_height = height * r.uniform(0.6, 1.0);
         let tank_size = back_size - seat_size - r.uniform(0.02, 0.03);
         let tank_cap_height = r.uniform(0.03, 0.04);
         let tank_cap_extrude = if r.f64() < 0.5 { 0.0 } else { r.uniform(0.005, 0.01) };
-        let cover_rotation = -r.uniform(0.0, std::f64::consts::FRAC_PI_2);
+        // (closed, or tipped back against the tank: a lid stopped part way hung over the bowl as if nothing held it)
+        let cover_draw = r.uniform(0.0, 1.0);
+        let cover_rotation = if cover_draw < 0.35 { 0.0 } else { -(1.35 + (cover_draw - 0.35) / 0.65 * 0.2) };
         let handle = r.choice_idx(2) == 1;
         let hw_cap = r.uniform(0.01, 0.015);
         let hw_radius = r.uniform(0.015, 0.02);

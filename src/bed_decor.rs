@@ -109,7 +109,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
                 let yaw = r.uniform(-0.4, 0.4);
                 let mut m = Mesh::new();
                 for dy in [-0.055, 0.055] {
-                    let mut s = crate::assets::sofa::pad([-0.13, dy - 0.045, 0.0], [0.13, dy + 0.045, 0.055], 0.025, 2);
+                    let mut s = slipper(dy);
                     for q in s.pos.iter_mut() {
                         let (xx, yy) = (q[0] * yaw.cos() - q[1] * yaw.sin(), q[0] * yaw.sin() + q[1] * yaw.cos());
                         *q = o.pose.apply([x + xx, side + yy, fz + q[2]]);
@@ -265,4 +265,24 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         if placed { basket_rooms.push(rk.clone()); log.push(format!("basket by side table {i}")) }
     }
     log
+}
+
+/// one slip-on slipper, toe to +x: a soft sole and a padded arch over the front, open at the heel side
+pub fn slipper(dy: f64) -> Mesh {
+    let (top, x0, xe, w0, h0) = (0.018, -0.03, 0.122, 0.043, 0.05);
+    let mut m = crate::assets::sofa::pad([-0.13, dy - 0.045, 0.0], [0.13, dy + 0.045, top + 0.006], 0.008, 2);
+    let n = 18;
+    let arch = |x: f64, scale: f64| -> Vec<[f64; 3]> {
+        let u = ((x - x0) / (xe - x0)).clamp(0.0, 1.0);
+        let f = (1.0 - u * u).max(0.0);
+        (0..=n).map(|i| { let a = std::f64::consts::PI * i as f64 / n as f64; [x, dy + scale * w0 * f.powf(0.35) * a.cos(), top + scale * h0 * f.powf(0.6) * a.sin()] }).collect()
+    };
+    // the outside, from the opening to the toe, then the opening's rolled rim and the inside back into it
+    let mut rings: Vec<Vec<[f64; 3]>> = vec![arch(x0 + 0.05, 0.78), arch(x0 + 0.015, 0.8), arch(x0 - 0.002, 0.82), arch(x0 - 0.002, 0.92)];
+    rings.push(arch(x0, 1.0));
+    for k in 1..=12 { rings.push(arch(x0 + (xe - x0) * (k as f64 / 12.0).min(0.995), 1.0)); }
+    for k in 0..rings.len() - 1 {
+        for i in 0..n { m.add_quad(rings[k][i], rings[k][i + 1], rings[k + 1][i + 1], rings[k + 1][i]); }
+    }
+    m
 }

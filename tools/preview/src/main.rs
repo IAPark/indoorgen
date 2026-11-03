@@ -252,7 +252,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, white: &w
         let tex = if cls.starts_with("people.") { spec.and_then(|s| s["spec"]["kwargs"]["color"].as_str()).unwrap_or("").to_string() } else { String::new() };
         let lname = n.name.to_lowercase();
         let is_ceil = lname.contains("ceiling");
-        let glass = lname.ends_with(".glass") && !lname.contains("wineglass");
+        // (a shower's panes too: drawn solid, a shower looked like a white wardrobe)
+        let glass = (lname.ends_with(".glass") && !lname.contains("wineglass")) || n.prims.iter().any(|p| glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))].name.starts_with("shower_glass"));
         for p in &n.prims {
             let m = &glb.mats[p.mat.min(glb.mats.len().saturating_sub(1))];
             let mi = p.mat.min(glb.mats.len().saturating_sub(1));
@@ -812,6 +813,11 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, glass: bool, shadow
         if leaf_in_the_way(s, d, eye, cut) { continue; }
         // (PREVIEW_HIDE=a,b: parts not drawn, to see which one a fault is in)
         if let Ok(h) = std::env::var("PREVIEW_HIDE") { let nm = &s.glb.nodes[d.node].name; if h.split(',').any(|x| x == nm) { continue; } }
+        // (PREVIEW_NOSHELL=1: no walls, ceilings, openings: nothing stands between an asset close-up and its asset)
+        if std::env::var_os("PREVIEW_NOSHELL").is_some() {
+            let low = s.glb.nodes[d.node].name.to_lowercase();
+            if low.contains(".wall") || low.contains("ceiling") || low.starts_with("door") || (low.starts_with("window") && !low.starts_with("windowseat")) || low.contains("curtain") || low.contains("skirting") || low.starts_with("outdoor") || low.starts_with("exterior") || low.contains(".glass") || low.contains(".rod") { continue; }
+        }
         if let Some((lo, hi, room)) = only {
             let nm = s.glb.nodes[d.node].name.replace('/', "_");
             let low = nm.to_lowercase();

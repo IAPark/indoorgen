@@ -565,66 +565,10 @@ impl Growth {
                 }
             }
         }
-        let n = self.n_cuts as usize;
-        let sel: Vec<usize> = (0..obj.v.len()).filter(|&i| obj.v[i][1].abs() < 0.08 && obj.v[i][1].abs() > 0.01).collect();
-        let mut pos: Vec<usize> = sel.iter().copied().filter(|&i| obj.v[i][1] > 0.0).collect();
-        let mut neg: Vec<usize> = sel.iter().copied().filter(|&i| obj.v[i][1] < 0.0).collect();
-        let keys: Vec<f32> = pos.iter().map(|&i| obj.v[i][0]).collect();
-        pos = np_argsort_f32(&keys).into_iter().map(|k| pos[k]).collect();
-        let keys: Vec<f32> = neg.iter().map(|&i| obj.v[i][0]).collect();
-        neg = np_argsort_f32(&keys).into_iter().map(|k| neg[k]).collect();
-        let choose = |r: &mut Rng, src: &Vec<usize>| -> Vec<usize> {
-            let mut perm: Vec<usize> = (0..src.len()).collect();
-            r.shuffle(&mut perm);
-            perm.iter().take(n).map(|&k| src[k]).collect()
-        };
-        let pc = choose(r, &pos);
-        let nc = choose(r, &neg);
-        if std::env::var("LEAFDBG").is_ok() {
-            eprintln!("cut_leaf: pos {} neg {} chosen pos {:?}", pos.len(), neg.len(), pc.iter().map(|&i| (obj.v[i][0], obj.v[i][1])).collect::<Vec<_>>());
-        }
-        let pts: Vec<[f32; 3]> = obj.v.clone();
-        let mut pairs: Vec<(usize, usize)> = vec![];
-        for k in 0..pc.len().saturating_sub(1) {
-            pairs.push((pc[k], pc[k + 1]));
-        }
-        for k in 0..nc.len().saturating_sub(1) {
-            pairs.push((nc[k], nc[k + 1]));
-        }
-        let (sa, ca) = (self.cut_angle.sin(), self.cut_angle.cos());
-        let (sa32, ca32) = (sa as f32, ca as f32);
-        for (i1, i2) in pairs {
-            let (x1, y1) = (pts[i1][0], pts[i1][1]);
-            let (x2, y2) = (pts[i2][0], pts[i2][1]);
-            let coeff32 = if y1 > 0.0 { 1.0f32 } else { -1.0 };
-            let ratio = r.uniform(-2.0, 0.4);
-            let exponent = r.uniform(1.2, 1.6);
-            // numpy 1.26 promotion: float32 arrays with python / float64 scalars stay float32; scalar-only expressions are float64
-            let m1 = ((x1 as f64 * sa - y1 as f64 * ca * coeff32 as f64) as f32) as f32;
-            let m2 = ((x2 as f64 * sa - y2 as f64 * ca * coeff32 as f64) as f32) as f32;
-            let dx = x1 - x2;
-            let dy = y1 - y2;
-            let den = (((dx * dx + dy * dy) as f64 + 0.1).sqrt()) as f32;
-            let ratio32 = ratio as f32;
-            let exp32 = exponent as f32;
-            for p in obj.v.iter_mut() {
-                let (x, y) = (p[0], p[1]);
-                let m = x * sa32 - y * ca32 * coeff32;
-                let dist = ((x - x1) * dy + (y - y1) * dx) / den;
-                if m1 < m && m < m2 && dist * coeff32 < 0.0 {
-                    p[2] += ratio32 * dist.abs().powf(exp32);
-                }
-            }
-        }
-        let del: Vec<bool> = obj
-            .e
-            .iter()
-            .map(|e| {
-                let (a, b) = (obj.v[e[0] as usize], obj.v[e[1] as usize]);
-                ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() > 0.02
-            })
-            .collect();
-        obj.delete_edges(&del)
+        // (whole leaves. The tears python cuts here lift wedges of the leaf and delete the stretched edges, along the mesh's grid: every leaf edge
+        // came out in stair steps and the blade looked chewed)
+        let _ = r;
+        obj
     }
 
     fn displace_veins(&self, obj: &mut LMesh, r: &mut Rng) {

@@ -73,7 +73,7 @@ pub fn tool_set(seed: u64) -> Asset {
 }
 
 fn log(seed: u64, a: V3, b: V3, rad: f64) -> (Mesh, Material) {
-    (limb(a, b, rad, rad * 0.95, false), spec(&format!("log:{seed}"), "wood.Wood", seed, [0.35, 0.25, 0.16]))
+    (limb(a, b, rad, rad * 0.95, true), spec(&format!("log:{seed}"), "wood.Wood", seed, [0.35, 0.25, 0.16]))
 }
 type V3 = [f64; 3];
 
@@ -165,7 +165,7 @@ pub fn dish_rack(seed: u64) -> Asset {
     let plate = spec(&format!("rack_plate:{seed}"), "ceramic.Ceramic", seed, [0.92, 0.92, 0.9]);
     for i in 0..np {
         let x = -w / 2.0 + 0.06 + i as f64 * 0.045;
-        part(&mut a, limb([x - 0.006, 0.0, pr + 0.02], [x + 0.006, 0.0, pr + 0.02], pr, pr, false), &plate);
+        part(&mut a, limb([x - 0.006, 0.0, pr + 0.02], [x + 0.006, 0.0, pr + 0.02], pr, pr, true), &plate);
         part(&mut a, limb([x + 0.022, -d / 2.0 + 0.02, 0.018], [x + 0.022, -d / 2.0 + 0.02, 0.1], 0.0025, 0.0025, false), &wire);
     }
     let cup = spec(&format!("rack_cup:{seed}"), "ceramic.Ceramic", seed + 7, [0.8, 0.8, 0.78]);
@@ -186,13 +186,24 @@ pub fn kettle(seed: u64) -> Asset {
     };
     let black = Material::diffuse("kettle_black", [0.03, 0.03, 0.03], 0.5);
     let (rb, h) = (r.uniform(0.085, 0.1), r.uniform(0.15, 0.19));
-    part(&mut a, Mesh::revolve(0.0, 0.0, &[(0.0, 0.0), (rb, 0.0), (rb * 1.05, h * 0.35), (rb * 0.8, h * 0.85), (rb * 0.45, h), (0.0, h + 0.005)], 28), &body);
+    // (a round belly rising to the lid: five straight sections of profile showed as hard rings round the body)
+    let mut prof = vec![(0.0, 0.0), (rb * 0.94, 0.0), (rb * 0.985, 0.004)];
+    for k in 0..=16 {
+        let t = k as f64 / 16.0;
+        let r_ = if t < 0.35 { rb * (1.0 + 0.06 * (t / 0.35 * std::f64::consts::FRAC_PI_2).sin()) } else { (rb * 1.06 * ((t - 0.35) / 0.65 * std::f64::consts::FRAC_PI_2).cos().powf(0.75)).max(rb * 0.42) };
+        prof.push((r_, 0.008 + t * (h - 0.008)));
+    }
+    for k in 1..=5 {
+        let a_ = k as f64 / 5.0 * std::f64::consts::FRAC_PI_2;
+        prof.push((rb * 0.42 * a_.cos(), h + 0.012 * a_.sin()));
+    }
+    part(&mut a, Mesh::revolve(0.0, 0.0, &prof, 40), &body);
     part(&mut a, Mesh::ellipsoid([0.0, 0.0, h + 0.015], [0.02, 0.02, 0.015], 12, 6), &black);
     part(&mut a, limb([rb * 0.8, 0.0, h * 0.35], [rb + 0.07, 0.0, h * 0.85], 0.02, 0.008, true), &body);
-    let n = 8;
+    let n = 16;
     for i in 0..n {
         let (t0, t1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
-        let p = |t: f64| { let a_ = std::f64::consts::PI * t; [-rb * 0.6 * a_.cos(), 0.0, h * 0.9 + 0.08 * a_.sin()] };
+        let p = |t: f64| { let a_ = std::f64::consts::PI * t; [-rb * 0.42 * a_.cos(), 0.0, h * 0.9 + 0.08 * a_.sin()] };
         part(&mut a, limb(p(t0), p(t1), 0.009, 0.009, true), &black);
     }
     a

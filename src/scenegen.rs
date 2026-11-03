@@ -1179,7 +1179,8 @@ fn mesh_diff(a: &Mesh, b: &Mesh) -> Mesh {
         }
     }
     let conv = |m: &Mesh| GM::from_faces(m.pos.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect(), &m.faces, &[]);
-    let r = if whole { indoorgen::gn::csg::mesh_boolean("DIFFERENCE", &conv(&sub), &[&conv(b)]) } else { indoorgen::gn::csg::mesh_boolean_exact("DIFFERENCE", &conv(&sub), &[&conv(b)], false, true) };
+    // (exact: the BSP left stray triangles standing on the countertop beside a sink's corner)
+    let r = indoorgen::gn::csg::mesh_boolean_exact("DIFFERENCE", &conv(&sub), &[&conv(b)], false, true);
     let base = o.pos.len() as u32;
     o.pos.extend(r.pos.iter().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]));
     // `sub` is an open piece of the part, so the BSP inside test can keep cutter faces that lie outside it (e.g. the cutter's

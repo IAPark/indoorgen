@@ -16,16 +16,23 @@ pub struct SinkBuilt {
 fn stand_mesh(s: &Sink, cuts: i64) -> Mesh {
     let (r, h) = (s.stand_radius, s.stand_height);
     let (cx, cy) = (s.width / 2.0, s.size / 2.0);
-    let ring: Vec<[f64; 2]> = if s.stand_circular {
-        let g = super::hwexact::bpy_cylinder();
-        let _ = g;
-        (0..16).map(|i| {
-            let (sn, cs) = super::cabnodes::sin_cos_from_fraction(i, 16);
-            [sn as f64, cs as f64]
-        }).collect()
-    } else {
-        vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]
-    };
+    if s.stand_circular {
+        // a lathed column flaring into its foot (subdividing a 16-sided cage with the flare in one step left the foot's rim toothed like a cog,
+        // its original and its new corners moving by different amounts)
+        let foot = s.stand_bottom.max(r);
+        let flare = (h * 0.22).min(0.16);
+        let mut prof = vec![(0.0, 0.01), (r, 0.01), (r, -h + flare)];
+        for k in 1..=8 {
+            let t = k as f64 / 8.0;
+            prof.push((r + (foot - r) * t * t * (3.0 - 2.0 * t), -h + flare * (1.0 - t) + 0.012 * t));
+        }
+        prof.push((foot, -h));
+        prof.push((0.0, -h));
+        prof.reverse(); // (bottom up: the faces look outward)
+        return Mesh::revolve(cx, cy, &prof, 40);
+    }
+    let _ = cuts;
+    let ring: Vec<[f64; 2]> = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
     let n = ring.len();
     let levels = cuts as usize + 2;
     let sc = s.stand_bottom / s.stand_radius;

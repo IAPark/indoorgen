@@ -356,8 +356,10 @@ pub fn gas_grates(p: &GrateParams) -> Option<Mesh> {
                 y_full = min_dist;
             }
             let center = [gd / nn * (j as f64 + 0.5) + (depth - gd) / 2.0, gw / ng * (fi + 0.5) + (width - gw) / 2.0];
-            for k in 0..p.branches {
-                let angle = 2.0 * std::f64::consts::PI / p.branches as f64 * k as f64;
+            // (four arms, a plain cross round the burner: other counts bent into a jumble of short angled bars)
+            let arms = 4;
+            for k in 0..arms {
+                let angle = 2.0 * std::f64::consts::PI / arms as f64 * k as f64;
                 let (mut x0, mut y0) = (x_center * angle.cos(), y_center * angle.sin());
                 let (mut x1, mut y1) = (x_middle * angle.cos(), y_middle * angle.sin());
                 let mut seg = |x0: f64, y0: f64, x1: f64, y1: f64, cubes: &mut Vec<Obj>| {
@@ -380,45 +382,18 @@ pub fn gas_grates(p: &GrateParams) -> Option<Mesh> {
             }
             grates.push(Obj { mesh: cylinder(center_dist + t, t / 2.0), xf: Xf::new([center[0], center[1], height], 0.0, [1.0; 3]) });
         }
-        let u = if std::env::var("GAS_CUBES_CHAIN").is_ok() { union_all(&cubes) } else { union_nary(&cubes) };
-        let t1 = web_time::Instant::now();
-        let r = remesh_smooth(&u, 0.004)?;
-        if std::env::var("GASDBG").is_ok() {
-            eprintln!("remesh+smooth {} -> {} verts in {:?}", u.pos.len(), r.pos.len(), t1.elapsed());
-        }
-        grates.push(Obj { mesh: r, xf: cubes[0].xf });
+        // (crisp bars: remeshing their union at 4 mm and smoothing it melted the grate into wobbling ridges)
+        grates.extend(cubes);
         Some(grates)
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    let per_grid: Vec<Option<Vec<Obj>>> = std::thread::scope(|sc| {
-        let hs: Vec<_> = p.grids.iter().enumerate().map(|(i, &n)| sc.spawn(move || grid_fn(i, n))).collect();
-        hs.into_iter().map(|h| h.join().unwrap()).collect()
-    });
-    #[cfg(target_arch = "wasm32")]
-    let per_grid: Vec<Option<Vec<Obj>>> = p.grids.iter().enumerate().map(|(i, &n)| grid_fn(i, n)).collect();
-    let mut grates: Vec<Obj> = vec![];
-    for g in per_grid {
-        grates.extend(g?);
-    }
-    // union is associative: the small cylinders first, so only two passes touch the big grid meshes (python's order interleaves them). The first
-    // object stays the first (its local space is the result space).
-    if std::env::var("GAS_PYORDER").is_err() {
-        let (mut cyl, mut grid): (Vec<Obj>, Vec<Obj>) = (vec![], vec![]);
-        for o in grates.drain(..) {
-            if o.mesh.pos.len() <= 64 {
-                cyl.push(o);
-            } else {
-                grid.push(o);
-            }
-        }
-        grates = cyl;
-        grates.extend(grid);
-    }
-    let u = if std::env::var("GAS_NARY").is_ok() { union_nary(&grates) } else { union_all(&grates) };
-    // join into the body object (identity transform): local -> world of the first object
     let mut out = Mesh::new();
-    out.faces = u.faces;
-    out.pos = u.pos.iter().map(|&q| grates[0].xf.to_world(q)).collect();
+    for (i, &n) in p.grids.iter().enumerate() {
+        for o in grid_fn(i, n)? {
+            let base = out.pos.len() as u32;
+            out.pos.extend(o.mesh.pos.iter().map(|&q| o.xf.to_world(q)));
+            out.faces.extend(o.mesh.faces.iter().map(|f| f.iter().map(|v| v + base).collect::<Vec<u32>>()));
+        }
+    }
     f32m(&mut out);
     Some(out)
 }
