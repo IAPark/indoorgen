@@ -77,7 +77,7 @@ struct Light { pos: Vec3, color: Vec3 }
 struct Scene {
     /// (azimuth deg, elevation deg, sun intensity, ambient) from the sidecar `variation.lighting` (--sidecar-lighting)
     lit: Option<(f32, f32, f32, f32)>,
-    name: String, bufs: Vec<wgpu::Buffer>, zeros: wgpu::Buffer, draws: Vec<Draw>, mat_bgs: Vec<wgpu::BindGroup>, pipes: Vec<wgpu::RenderPipeline>, lights: Vec<Light>,
+    name: String, bufs: Vec<wgpu::Buffer>, zeros: wgpu::Buffer, draws: Vec<Draw>, mat_bgs: Vec<wgpu::BindGroup>, pipes: Vec<wgpu::RenderPipeline>, /** draw plain colours: views are scored on these (texture would count as detail) */ flat: bool, lights: Vec<Light>,
     bmin: Vec3, bmax: Vec3, side: Value, glb: glb::Glb, sun_vp: Mat4, shadow_view: wgpu::TextureView, shadow_done: bool,
 }
 
@@ -325,7 +325,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: SHADOW, height: SHADOW, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] });
     if opts.verbose { eprintln!("  scene on GPU {:.2}s ({} draws, {} lights, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), draws.len(), lights.len(), bmin, bmax); }
-    Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, pipes, lights, bmin, bmax, side, glb,
+    Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, pipes, flat: false, lights, bmin, bmax, side, glb,
         sun_vp: sp * sv, shadow_view: sh.create_view(&wgpu::TextureViewDescriptor::default()), shadow_done: false }
 }
 
@@ -669,7 +669,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
             let f = Vec3::new(sx, sy, 0.0).normalize();
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
-            let dist = 1.15 * r / 0.5625 + 1.6;
+            let dist = 1.05 * r / 0.5625 + 0.7; // (filling the frame: further back the room floated small on the grey)
             let target = Vec3::new(c.x, c.y, z0 + 1.0);
             let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
             let mut cm = cam_look(e, target, 18.0);
@@ -749,6 +749,20 @@ fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets {
     let bpr = (o.res.0 * 4 + 255) / 256 * 256;
     let readback = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (bpr * o.res.1) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
     Targets { hdr, nrm, depth, depth_tex, dbuf, dbpr, out, readback, w, h, bpr }
+}
+
+/// a render, exposed again to suit if too bright or too dark for its lights, as a camera would
+fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaImage {
+    let img = render(r, s, c, o, 1.0);
+    let (mut sum, mut hi, n) = (0f32, 0u32, img.pixels().len() as f32);
+    for p in img.pixels() { let l = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0; sum += l; if l > 0.97 { hi += 1; } }
+    let (m0, h0) = (sum / n, hi as f32 / n);
+    if c.ortho.is_none() && (m0 > 0.74 || h0 > 0.10 || m0 < 0.38) {
+        // (the tonemap's middle is steep: a little goes a long way)
+        let xp = if m0 < 0.38 { (0.5 / m0.max(0.1)).min(1.8) } else { (0.66 / m0).powf(2.2).clamp(0.45, 0.95) };
+        return render(r, s, c, o, xp);
+    }
+    img
 }
 
 fn make_main_pipe(dev: &wgpu::Device, sm: &wgpu::ShaderModule, g_bgl: &wgpu::BindGroupLayout, mat_bgl: &wgpu::BindGroupLayout, glass: bool) -> wgpu::RenderPipeline {
@@ -857,7 +871,7 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
         }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
-        if let Some(b) = base { if bound != Some(d.pipe) { rp.set_pipeline(d.pipe.map_or(b, |i| &s.pipes[i])); bound = Some(d.pipe); } }
+        if let Some(b) = base { let want = if s.flat { None } else { d.pipe }; if bound != Some(want) { rp.set_pipeline(want.map_or(b, |i| &s.pipes[i])); bound = Some(want); } }
         if !shadow {
             match d.nrm { Some(n) => rp.set_vertex_buffer(1, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 12)), None => rp.set_vertex_buffer(1, s.zeros.slice(0..d.vcount as u64 * 12)) }
             match d.uv { Some(n) => rp.set_vertex_buffer(2, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 8)), None => rp.set_vertex_buffer(2, s.zeros.slice(0..d.vcount as u64 * 8)) }
@@ -988,19 +1002,15 @@ fn main() {
         let cams = resolve_cams(&s, &o);
         if o.verbose { eprintln!("scene {} ready {:.2}s, {} cams", s.name, t.elapsed().as_secs_f32(), cams.len()); }
         let mut best_detail: HashMap<String, f32> = HashMap::new();
+        // views are chosen on plain colours (their score counts edges, and texture is all edges: poor views scored well, and their alternates went untried), then drawn with materials
+        let has_graphs = !s.pipes.is_empty();
+        s.flat = has_graphs;
+        let mut chosen: HashMap<String, usize> = HashMap::new();
         for (i, c) in cams.iter().enumerate() {
             // (only a poor view looks further)
             if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.45 } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
             let t = Instant::now();
-            let mut img = render(&mut r, &mut s, c, &o, 1.0);
-            // a view too bright or too dark for its lights: exposed again to suit, as a camera would
-            let luma = |im: &image::RgbaImage| { let (mut sum, mut hi, n) = (0f32, 0u32, im.pixels().len() as f32); for p in im.pixels() { let l = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0; sum += l; if l > 0.97 { hi += 1; } } (sum / n, hi as f32 / n) };
-            let (m0, h0) = luma(&img);
-            if c.ortho.is_none() && (m0 > 0.74 || h0 > 0.10 || m0 < 0.38) {
-                // (the tonemap's middle is steep: a little goes a long way)
-                let xp = if m0 < 0.38 { (0.5 / m0.max(0.1)).min(1.8) } else { (0.66 / m0).powf(2.2).clamp(0.45, 0.95) };
-                img = render(&mut r, &mut s, c, &o, xp);
-            }
+            let img = exposed(&mut r, &mut s, c, &o);
             if o.verbose { eprintln!("  cam {} {:.3}s", c.name, t.elapsed().as_secs_f32()); }
             let nm = if c.name.is_empty() { format!("cam{i}") } else { c.name.clone() };
             // a view that is mostly bare: other spots for it are tried, the one with most to see kept; a second view only if it has something to show
@@ -1015,7 +1025,7 @@ fn main() {
             if let Some((base, alt)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {
-                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
+                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; chosen.insert(key.clone(), i); best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
                 }
                 if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2}"); }
                 continue;
@@ -1024,7 +1034,12 @@ fn main() {
             if nm.ends_with("_B") && detail < 0.75 { continue }
             best_detail.insert(format!("{}_{}", s.name, nm), detail);
             if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, nm)), o.res, r.last_depth.as_ref().unwrap()); }
+            chosen.insert(format!("{}_{}", s.name, nm), i);
             frames.push((format!("{}_{}", s.name, nm), img));
+        }
+        if has_graphs {
+            s.flat = false;
+            for fr in frames.iter_mut() { if let Some(&i) = chosen.get(&fr.0) { fr.1 = exposed(&mut r, &mut s, &cams[i], &o); } }
         }
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
     }
