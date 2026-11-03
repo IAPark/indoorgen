@@ -282,7 +282,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             }));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, 0.0, 0.0, 0.0], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let mut u = MatU { color: if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, 0.0, 0.0], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
                 if let Some(e) = graph {
                     for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
                     // the object frame the graph's coordinates are in (the sidecar's pose, rows of a 4x4)
