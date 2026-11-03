@@ -1080,7 +1080,9 @@ impl Factory for Bed {
         let mut pspec = PillowSpec::from_ctor(&pc);
         // (a ring cushion is no bed pillow: it read as a hole in the pillow)
         if pspec.shape == 3 { pspec.shape = 0; }
-        let pillow = pspec.build(&mut inst_rng(c.fseed, inst));
+        let mut pillow = pspec.build(&mut inst_rng(c.fseed, inst));
+        // (at least 11 cm: at 6 cm, on a quilted mattress, a pillow read as a flat disc)
+        { let (l, h) = pillow.bounds(); let (t, zc) = (h[2] - l[2], (h[2] + l[2]) / 2.0); if t > 1e-3 && t < 0.11 { let k = 0.11 / t; for q in pillow.pos.iter_mut() { q[2] = zc + (q[2] - zc) * k; } } }
         let pill_mat = m("pillow", "fabric.FineKnitFabric", 10, [0.9, 0.9, 0.92]);
         let xs: Vec<f64> = (0..10).map(|_| r.uniform(0.1, 0.4) * c.size).collect();
         let ys: Vec<f64> = (0..10).map(|_| r.uniform(-0.3, 0.3) * c.width).collect();

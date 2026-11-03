@@ -182,8 +182,9 @@ fn shelves_wood(r: &mut R, black: bool, z_axis: bool) -> Value {
     let vo = g.voronoi_color(&n1, 40.0);
     let c1 = g.ramp(&vo, &[(0.0864, [0.0; 3]), (0.1091, [1.0; 3])]);
     let m2 = g.mapping(&v, if z_axis { [wave, wave, 0.1] } else { [wave, 0.1, 0.1] }, [0.0; 3]);
-    let n2 = g.noise(&m2, 3.0, 15.0, 2.0, 0.0);
-    let nc = g.noise_color(&m2, 3.0, 15.0, 2.0);
+    // (distortion 0.5: at python's 2 the stretched grain curled into swirls across doors and panels)
+    let n2 = g.noise(&m2, 3.0, 15.0, 0.5, 0.0);
+    let nc = g.noise_color(&m2, 3.0, 15.0, 0.5);
     let mu = g.musgrave(&n2, 20.0, 3.0, 2.0, 2.0, 0.0);
     let mx = g.mix(0.5, mu, nc, "mix");
     let c2 = g.ramp(&mx, &[(0.0818, [0.0; 3]), (0.85, [1.0; 3])]);
@@ -409,7 +410,9 @@ fn metal(r: &mut R, rgb: [f64; 3], brushed: bool) -> Value {
     let c = g.coord();
     let v = if brushed { g.mapping(&c, [0.2, 0.2, 5.0], [0.0; 3]) } else { c };
     let n = g.noise(&v, if brushed { 100.0 } else { r.uniform(10.0, 25.0) }, 6.0, 0.1, 0.0);
-    let (lo, hi) = if brushed { (r.uniform(0.15, 0.25), r.uniform(0.3, 0.5)) } else { (r.uniform(0.0, 0.2), r.uniform(0.4, 0.7)) };
+    // (a narrow range: roughness from 0 to 0.7 mirrored a dim room in streaks, and appliances looked grimy)
+    let mid = if brushed { r.uniform(0.28, 0.4) } else { r.uniform(0.25, 0.45) };
+    let (lo, hi) = (mid - 0.03, mid + 0.03);
     let rough = g.map_range(&n, 0.0, 1.0, lo, hi);
     g.done("shader_metal", json!({"color": rgb, "metallic": 1.0, "roughness": rough}))
 }
