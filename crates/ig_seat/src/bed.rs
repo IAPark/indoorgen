@@ -611,10 +611,7 @@ impl BedSpec {
                     let j = serde_json::json!({"verts": g.pos, "polys": g.faces});
                     std::fs::write(p, j.to_string()).ok();
                 }
-                // (on a grid: the divided slab kept a fan of long triangles, and the coiling turned it into a sunburst)
-                let _ = (r.uniform(0.06, 0.08), r.uniform(0.5, 1.0));
-                if std::env::var("BEDDBG").is_ok() { eprintln!("BEDPANEL tufted"); }
-                pad_panel_rim(&g, 0.03, 0.15, Some((self.dot_distance, self.dot_depth)))
+                coil(&g, self, r)
             }
             1 => {
                 let g = divide(&m, self.panel_distance, r);

@@ -983,8 +983,15 @@ pub fn build_scene(p: &Params) -> Built {
                         let area = 0.5 * dot(nrm, nrm).sqrt();
                         if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 { area.min(overlap) } else { 0.0 }
                     }).sum();
+                    // (or a board standing well inside it, a cabinet's divider: left whole it stood up through the basin. A door front lies at the footprint's edge and stays whole)
+                    let board_inside = m.faces.iter().any(|f| {
+                        let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
+                        let (fl, fh) = ps.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), q| ([l[0].min(q[0]), l[1].min(q[1]), l[2].min(q[2])], [h[0].max(q[0]), h[1].max(q[1]), h[2].max(q[2])]));
+                        let ins = 0.04;
+                        (0..2).all(|d| fl[d] < chi[d] - ins && fh[d] > clo[d] + ins) && fl[2] < chi[2] && fh[2] > clo[2] + 0.02 && (fh[2] - fl[2]) > 0.1
+                    });
                     // (a good part of the cutter's footprint: a door front's thin top edge counts as horizontal too, and cutting it tore holes in the door)
-                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && horiz_area > 0.25 * (chi[0] - clo[0]) * (chi[1] - clo[1]) {
+                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && (horiz_area > 0.25 * (chi[0] - clo[0]) * (chi[1] - clo[1]) || board_inside) {
                         let tb = web_time::Instant::now();
                         let nv0 = m.pos.len();
                         m = mesh_diff(&m, c);

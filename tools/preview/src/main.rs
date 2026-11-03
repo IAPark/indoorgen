@@ -708,8 +708,10 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
             let mut cm = cam_look(e, target, 18.0);
             cm.near = Some(0.3);
-            cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { tl.x + 0.02 } else { -th.x + 0.02 }];
-            cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { tl.y + 0.02 } else { -th.y + 0.02 }];
+            // (past the wall's inner face: the trim stops up to 3 cm short of it, and a plane in front of the face kept the wall)
+            let m_ = |t: f32, b: f32| if (t - b).abs() > 1e-3 { 0.06 } else { 0.02 };
+            cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { tl.x + m_(tl.x, lo.x) } else { -th.x + m_(th.x, hi.x) }];
+            cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { tl.y + m_(tl.y, lo.y) } else { -th.y + m_(th.y, hi.y) }];
             cm.only = Some((lo, hi, rm.name.clone()));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
