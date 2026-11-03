@@ -643,6 +643,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         }
         let tries: Vec<(usize, usize, Vec3, Option<Vec3>)> = chosen.iter().enumerate().map(|(k, e)| (k, 0, *e, heads.get(k).copied())).chain(spare.iter().filter(|(e, f)| !chosen.iter().zip(heads.iter()).any(|(c, h)| (*c - *e).truncate().length() < 1.0 && h.dot(*f) > 0.9)).enumerate().map(|(i, (e, f))| (0, i + 1, *e, Some(*f)))).collect();
         for &(k, alt, e0, h0) in &tries {
+            // (off the walls: an eye on the plane of a wall's face, at the inner corner of an L, saw that wall in blocks across the lens)
+            let e0 = { let on = |q: Vec3| rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t)); let mut q = e0; for d in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y] { if !on(e0 + d * 0.25) { q -= d * 0.25; } } if on(q) { q } else { e0 } };
             let e = &e0;
             // (a level view, tilted down 8 degrees whatever the distance: walls stay upright, as an interior photograph's)
             let f = h0.unwrap_or_else(|| (tgt - *e).truncate().normalize_or_zero().extend(0.0));
