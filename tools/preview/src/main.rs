@@ -664,9 +664,17 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         // the last word: a view from above the walls, ceiling and near walls gone, nothing but this room. Not as if standing in it, but the whole room always shows.
         // (true rectangles only: a notch's corner has no plane to cut it away, and stands through the picture as a slab)
         // (and small rooms: a larger one comes out tiny in the frame, and its standing views are better even when they score poorly)
-        if rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8 && rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01) > 0.985 {
-            let c = (lo + hi) * 0.5;
-            let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
+        // (an L-shaped room too, seen from the side away from its notch: the notch's walls are then far walls like any other)
+        let c = (lo + hi) * 0.5;
+        let missing: Vec<(f32, f32)> = [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)].into_iter().filter(|(a, b)| { let q = Vec3::new(c.x + a * ((hi.x - lo.x) * 0.5 - 0.22), c.y + b * ((hi.y - lo.y) * 0.5 - 0.22), z0); !rm.tris.iter().any(|t| in_tri2(q, t)) }).collect();
+        let fill = rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01);
+        let rect = fill > 0.985;
+        // the view's direction, toward the notches (none across from each other: one would stand before the lens)
+        let (mx, my): (f32, f32) = (missing.iter().map(|q| q.0).sum(), missing.iter().map(|q| q.1).sum());
+        let aim = (!missing.is_empty() && missing.len() <= 2 && !(missing.len() == 2 && mx == 0.0 && my == 0.0)).then(|| (if mx != 0.0 { mx.signum() } else if rm.subj.x >= c.x { 1.0 } else { -1.0 }, if my != 0.0 { my.signum() } else if rm.subj.y >= c.y { 1.0 } else { -1.0 }));
+        if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("SHAPE {} area {:.2} size {:?} fill {fill:.2} missing {}", rm.name, rm.area, (hi - lo).truncate(), missing.len()); }
+        if (rect && rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8) || (!rect && rm.area < 12.0 && (hi - lo).truncate().max_element() < 6.0 && fill > 0.55 && aim.is_some()) {
+            let (sx, sy) = if let (false, Some(q)) = (rect, aim) { q } else { (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 }) };
             let f = Vec3::new(sx, sy, 0.0).normalize();
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
             let dist = 1.2 * r / 0.5625 + 0.9; // (filling the frame: further back the room floated small on the grey)
