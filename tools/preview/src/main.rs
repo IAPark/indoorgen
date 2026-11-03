@@ -249,7 +249,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     let emitted: Vec<Option<ig_shade::wgsl::Emitted>> = if std::env::var_os("PREVIEW_FLAT").is_some() { vec![] } else { side["graphs"].as_array().map(|a| a.iter().map(ig_shade::wgsl::emit).collect()).unwrap_or_default() };
     let mut pipes: Vec<wgpu::RenderPipeline> = vec![]; let mut pipe_of: HashMap<String, usize> = HashMap::new();
     let side_nodes: HashMap<&str, &serde_json::Value> = side["nodes"].as_array().map(|a| a.iter().filter_map(|n| Some((n["name"].as_str()?, n))).collect()).unwrap_or_default();
-    let mut draws = vec![]; let mut bmin = Vec3::splat(1e9); let mut bmax = Vec3::splat(-1e9);
+    let mut draws = vec![]; let mut bmin = Vec3::splat(1e9); let mut bmax = Vec3::splat(-1e9); let (mut sh_lo, mut sh_hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
     for (ni, n) in glb.nodes.iter().enumerate() {
         let spec = specs.get(&n.name);
         let cls = spec.and_then(|s| s["spec"]["cls"].as_str()).unwrap_or("");
@@ -302,6 +302,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             });
             let (lo, hi) = (Vec3::from(p.bmin), Vec3::from(p.bmax));
             if !is_ceil && !lname.starts_with("skirting_ceiling") { bmin = bmin.min(lo); bmax = bmax.max(hi); }
+            if !lname.starts_with("outdoor") { sh_lo = sh_lo.min(lo); sh_hi = sh_hi.max(hi); }
             let vw = |v: &glb::View| (v.chunk, v.off, v.len);
             draws.push(Draw { node: ni, pos: vw(&p.pos), nrm: p.nrm.as_ref().map(vw), uv: p.uv.as_ref().map(vw), idx: vw(&p.idx), u16: p.idx_u16, icount: p.icount, vcount: p.vcount,
                 mat_bg: bi, pipe, glass, shadow: !glass && !(opts.no_ceiling && is_ceil), bmin: lo, bmax: hi });
@@ -320,7 +321,9 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     let sun = lit.map_or(opts.sun, |l| (l.0, l.1));
     let (az, el) = (sun.0.to_radians(), sun.1.to_radians());
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
-    let c = (bmin + bmax) * 0.5; let r = ((bmax - bmin) * 0.5).length();
+    // (the house alone: with 5 km of terrain in the bounds a shadow texel was nearly 2 m, and sun on the walls came out in big blocks)
+    let (sh_lo, sh_hi) = if sh_hi.x >= sh_lo.x { (sh_lo, sh_hi) } else { (bmin, bmax) };
+    let c = (sh_lo + sh_hi) * 0.5; let r = ((sh_hi - sh_lo) * 0.5).length();
     let sv = look_at_rh(c + sdir * r * 2.0, c, Vec3::Z);
     let sp = orthographic_rh(-r, r, -r, r, 0.0, r * 4.0);
     let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: SHADOW, height: SHADOW, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
