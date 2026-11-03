@@ -669,7 +669,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let (sx, sy) = (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 });
             let f = Vec3::new(sx, sy, 0.0).normalize();
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
-            let dist = 1.05 * r / 0.5625 + 0.7; // (filling the frame: further back the room floated small on the grey)
+            let dist = 1.2 * r / 0.5625 + 0.9; // (filling the frame: further back the room floated small on the grey)
             let target = Vec3::new(c.x, c.y, z0 + 1.0);
             let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
             let mut cm = cam_look(e, target, 18.0);
@@ -1021,7 +1021,7 @@ fn main() {
             let raw = picture_detail(&img);
             // (nor a close-up: book spines filling the frame are detail, and show no room)
             let close = r.last_depth.as_ref().map_or(0.0, |d| { let (mut n, mut c) = (0f32, 0f32); for v in d.iter().step_by(11) { c += 1.0; if *v > 0.0 && *v < 1.5 { n += 1.0; } } n / c.max(1.0) });
-            let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.5).min(1.0) - 1.2 * flat_columns(&img) - if c.key { 0.0 } else { 0.8 } - 2.0 * (close - 0.45).max(0.0);
+            let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.5).min(1.0) - 1.2 * flat_columns(&img) - if c.key { 0.0 } else { 0.8 } - 2.5 * (close - 0.3).max(0.0);
             if let Some((base, alt)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {

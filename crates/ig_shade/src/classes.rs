@@ -349,8 +349,9 @@ fn leather(r: &mut R, rgb: [f64; 3]) -> Value {
 fn concrete(r: &mut R, rgb: [f64; 3]) -> Value {
     let mut g = G::default();
     let c = g.coord();
-    let n = g.noise(&c, r.uniform(1.5, 3.0), 7.0, 0.5, 0.0);
-    let tone = g.map_range(&n, 0.3, 0.7, 0.8, 1.05);
+    // (a faint unevenness: stronger, and warped, it drew contour lines across the wall)
+    let n = g.noise(&c, r.uniform(1.5, 3.0), 6.0, 0.0, 0.0);
+    let tone = g.map_range(&n, 0.25, 0.75, 0.94, 1.02);
     let color = g.mix(1.0, json!(rgb), tone, "multiply");
     let p = g.noise(&c, 200.0, 3.0, 0.0, 0.0);
     let h = g.mul(&p, 0.001);

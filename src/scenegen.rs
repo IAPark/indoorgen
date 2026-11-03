@@ -983,7 +983,8 @@ pub fn build_scene(p: &Params) -> Built {
                         let area = 0.5 * dot(nrm, nrm).sqrt();
                         if area > 1e-12 && (nrm[2] * 0.5 / area).abs() > 0.7 { area.min(overlap) } else { 0.0 }
                     }).sum();
-                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && horiz_area > 1e-3 {
+                    // (a good part of the cutter's footprint: a door front's thin top edge counts as horizontal too, and cutting it tore holes in the door)
+                    if (0..3).all(|d| mlo[d] <= chi[d] && clo[d] <= mhi[d]) && horiz_area > 0.25 * (chi[0] - clo[0]) * (chi[1] - clo[1]) {
                         let tb = web_time::Instant::now();
                         let nv0 = m.pos.len();
                         m = mesh_diff(&m, c);
