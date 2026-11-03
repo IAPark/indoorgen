@@ -618,6 +618,21 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         }
         // (the best spot's other headings too: a bare wall one way, the room's contents behind the lens)
         if let (Some(e), Some(f)) = (chosen.first(), heads.first()) { for (a, b) in [(-f.y, f.x), (f.y, -f.x), (-f.x, -f.y)] { spare.push((*e, Vec3::new(a, b, 0.0))); } }
+        // (from the doorways too, a step inside: where a person first sees the room, and what stands in it mostly lies ahead)
+        {
+            let mut seen_doors: Vec<Vec3> = vec![];
+            for d in &s.draws {
+                let nm = &s.glb.nodes[d.node].name;
+                if !nm.starts_with("door") || !(nm.contains("frame") || nm.contains("casing")) { continue }
+                let dc = (d.bmin + d.bmax) * 0.5;
+                if dc.x < lo.x - 0.3 || dc.x > hi.x + 0.3 || dc.y < lo.y - 0.3 || dc.y > hi.y + 0.3 { continue }
+                if seen_doors.iter().any(|q| (*q - dc).truncate().length() < 0.5) { continue }
+                seen_doors.push(dc);
+                let f = (tgt - dc).truncate().normalize_or_zero().extend(0.0);
+                let e = Vec3::new(dc.x, dc.y, z0 + 1.45) + f * 0.3;
+                if rm.tris.iter().any(|t| in_tri2(Vec3::new(e.x, e.y, z0), t)) && !inside(e, 0.05) { spare.push((e, f)); }
+            }
+        }
         // (and for a view that is still poor, a wider search: spots across the floor, every heading; rendered only if needed, and the picture decides)
         let n_normal = spare.len();
         {
