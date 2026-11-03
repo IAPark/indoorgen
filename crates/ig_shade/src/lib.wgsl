@@ -61,3 +61,19 @@ fn ig_hsv_adjust(c: vec3<f32>, s: f32, v: f32) -> vec3<f32> {
   return mix(vec3<f32>(g), c, s) * v;
 }
 fn smooth_lin(x: f32, a: f32, b: f32) -> f32 { return clamp((x - a) / max(b - a, 1e-5), 0.0, 1.0); }
+// Blender's brick texture: (the brick's random grey, the mortar mask)
+fn ig_brick(p: vec3<f32>, scale: f32, row: f32, width: f32, offset: f32, mortar: f32) -> vec2<f32> {
+  let q = p * scale;
+  let rn = floor(q.y / row);
+  let odd = i32(rn) & 1;
+  let x = q.x + select(0.0, offset * width, odd == 1);
+  let bn = floor(x / width);
+  let fx = x - bn * width; let fy = q.y - rn * row;
+  let d = min(min(fx, width - fx), min(fy, row - fy));
+  let w = fwidth(d) + 1e-5;
+  return vec2<f32>(f32(ig_hash(vec3<i32>(i32(bn), i32(rn), 3)) & 65535u) / 65535.0, 1.0 - smoothstep(mortar - w, mortar + w, d));
+}
+fn ig_checker(p: vec3<f32>) -> f32 {
+  let c = floor(p + 1e-4);
+  return f32((i32(c.x) + i32(c.y) + i32(c.z)) & 1);
+}

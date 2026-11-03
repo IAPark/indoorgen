@@ -58,6 +58,13 @@ impl E {
             "noise_color" => (format!("ig_noise_color({})", self.noise_args(i)?), T::C),
             "musgrave" => (format!("ig_musgrave({})", self.noise_args(i)?), T::F),
             "voronoi_color" => { let (v, s) = (self.c(&i["v"])?, self.f(&i["scale"])?); (format!("ig_voronoi_color({v} * {s})"), T::C) }
+            "brick_color" | "brick_fac" => {
+                let (v, sc, row, w, off, mo) = (self.c(&i["v"])?, self.f(&i["scale"])?, self.f(&i["row"])?, self.f(&i["width"])?, self.f(&i["offset"])?, self.f(&i["mortar"])?);
+                if n["op"] == "brick_color" { (format!("vec3<f32>(ig_brick({v}, {sc}, {row}, {w}, {off}, {mo}).x)"), T::C) } else { (format!("ig_brick({v}, {sc}, {row}, {w}, {off}, {mo}).y"), T::F) }
+            }
+            "checker" => { let (v, sc) = (self.c(&i["v"])?, self.f(&i["scale"])?); (format!("ig_checker({v} * {sc})"), T::F) }
+            "wall_uv" => { let v = self.c(&i["v"])?; (format!("vec3<f32>(cross({v}, n).z, {v}.z, 0.0)"), T::C) }
+            "add" => { let (a, b) = (self.c(&i["a"])?, self.c(&i["b"])?); (format!("{a} + {b}"), T::C) }
             "ramp" => {
                 let f = self.f(&i["fac"])?;
                 let stops = i["stops"].as_array()?;

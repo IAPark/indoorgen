@@ -24,6 +24,16 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
         "shader.wood.plywood.shader_shelves_wood_z" => shelves_wood(&mut r, false, true),
         "shader.wood.plywood.shader_shelves_black_wood_z" => shelves_wood(&mut r, true, true),
         "shader.wood.wood.shader_wood" => wood(&mut r, kw.get("vertical").and_then(|v| v.as_bool()).unwrap_or(false)),
+        "wood.HardwoodFloor" => hardwood(&mut r, base),
+        "ceramic.Tile" => tile(&mut r, &kw, None, base),
+        "ceramic.Brick" => brick(&mut r, base),
+        "wood.StaggeredWoodTile" => tile(&mut r, &json!({"shape": "staggered"}), Some(()), base),
+        "wood.SquareWoodTile" | "wood.CrossedWoodTile" => tile(&mut r, &json!({"shape": "square"}), Some(()), base),
+        "wood.CompositeWoodTile" => tile(&mut r, &json!({"shape": "rectangle"}), Some(()), base),
+        "wood.HexagonWoodTile" => tile(&mut r, &json!({"shape": "diamond"}), Some(()), base),
+        "metal.MetalBasic" | "metal.GalvanizedMetal" | "metal.GrainedMetal" | "metal.HammeredMetal" => metal(&mut r, base, false),
+        "metal.BrushedMetal" => metal(&mut r, base, true),
+        "metal.BrushedBlackMetal" => metal(&mut r, [0.02, 0.02, 0.022], true),
         "wood.Wood" => {
             // large flat tops: straight-grain veneer (the noise-warped grain read as burl or contour lines there)
             let mut e = ext;
@@ -60,7 +70,8 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
 /// ceramic/plaster.py. `tint`: the room's wall colour (its muted paint), where the shader would draw any hue
 fn plaster(r: &mut R, tint: Option<[f64; 3]>) -> Value {
     let (front, back) = match tint {
-        Some(c) => { let k = r.uniform(0.82, 0.95); (c, [c[0] * k, c[1] * k, c[2] * k]) }
+        // (a faint mottle: at the shader's contrast painted walls read as camouflage)
+        Some(c) => { let k = r.uniform(0.94, 0.98); (c, [c[0] * k, c[1] * k, c[2] * k]) }
         None => {
             let hue = r.f();
             let fv = r.log_uniform(0.5, 1.0);
@@ -151,40 +162,147 @@ fn shelves_wood(r: &mut R, black: bool, z_axis: bool) -> Value {
     g.done(if black { "shader_shelves_black_wood" } else { "shader_shelves_wood" }, json!({"color": color, "roughness": rough, "height": h}))
 }
 
-/// wood/wood.py
-fn wood(r: &mut R, vertical: bool) -> Value {
+/// wood/wood.py: returns (colour, roughness, coat, relief) for the grain coordinates `v`, in a graph whose node 0 is the object coordinate
+fn wood_on(g: &mut G, r: &mut R, v: &Value, tint: Option<[f64; 3]>) -> (Value, Value, f64, Value) {
     // assets/colors.py wood_colors
     const WOOD: [u32; 49] = [0x4C2F27,0x69432D,0x371803,0x7F4040,0xCC9576,0x9E8170,0x3D2B1F,0x8D6A58,0x8B3325,0x79443C,0x88540B,0x9B5F43,0x4E3828,0x4E3828,0xC09A6B,0x944536,0x3F0110,0x773C12,0x6E4E37,0x5C4033,0x5C4033,0x3C3034,0x96704C,0x371B1A,0x483B32,0x43141A,0x471713,0xC3B090,0x6B4423,0x674D46,0x5D2E1A,0x331C1F,0x7A5640,0xB99984,0x71543D,0x8F4B28,0x491A00,0x836446,0x7F461B,0x6A3208,0x724115,0xA0522B,0x832A0C,0x371B1A,0xC7A373,0x483B32,0x635147,0x664228,0x5C5248];
     let c0 = crate::hex_to_hsv(WOOD[(r.u64() % WOOD.len() as u64) as usize]);
-    let color = hsv(c0[0] + r.uniform(0.0, 0.05), (c0[1] + r.uniform(-0.3, 0.2)).clamp(0.0, 1.0), (c0[2] * r.log_uniform(0.2, 20.0)).min(1.0));
+    let drawn = hsv(c0[0] + r.uniform(0.0, 0.05), (c0[1] + r.uniform(-0.3, 0.2)).clamp(0.0, 1.0), (c0[2] * r.log_uniform(0.2, 20.0)).min(1.0));
+    // (floors keep the room's plain wood colour: the drawn ones reached crimson)
+    let color = tint.unwrap_or(drawn);
     let w = r.f();
+    let m2 = g.mapping(v, [5.0, 100.0, 100.0], [0.0; 3]);
+    let mu2 = g.musgrave(&m2, 10.0, 15.0, 7.0, 2.0, w);
+    let mr2 = g.map_range(&mu2, 0.0, 1.0, 1.0, -1.0);
+    let n1 = g.noise(v, 0.5, 1.0, 1.1, w);
+    let mu1 = g.musgrave(v, n1, 15.0, 0.2, 2.4, w);
+    let mr = g.map_range(&mu1, 0.0, 1.0, -1.4, 1.5);
+    let mr1 = g.map_range(&mr, 0.0, 1.0, 1.0, 0.5);
+    let m0 = g.mapping(v, [0.15, 1.0, 0.15], [0.0; 3]);
+    let n0 = g.noise(&m0, 5.0, 5.0, 1.0, w);
+    let mu0 = g.musgrave(&n0, 4.0, 10.0, 0.0, 2.0, w);
+    let mx = g.mix(0.5, n0, mu0, "mix");
+    let mx1 = g.mix(0.9, mr1, mx, "multiply");
+    let mx1_soft = mx1.clone();
+    let mx2 = g.mix(0.95, mr2, mx1, "multiply");
+    let dark = g.hsv_adjust(json!(color), 0.8, 0.2);
+    let col = g.mix(mx2.clone(), dark, json!(color), "mix");
+    let rn = g.noise(&c_of(&g), r.log_uniform(40.0, 50.0), 2.0, 0.0, 0.0);
+    let (r0, dr) = (r.uniform(0.0, 0.4), r.uniform(0.0, 0.8));
+    let rough = g.map_range(&rn, 0.0, 1.0, r0, r0 + dr);
+    // relief from the smoother grain layer, 1.5 mm filled by the varnish (the shader's up to 1 cm of its fibre noise crumpled the wood like foil)
+    let coat = r.uniform(0.0, 1.4).min(1.0);
+    let h = g.mul(&mx1_soft, 0.0015 * (1.0 - 0.9 * coat));
+    (col, rough, coat, h)
+}
+
+fn wood(r: &mut R, vertical: bool) -> Value {
     let mut g = G::default();
     let c = g.coord();
     let v = if vertical {
         let quarter = if r.f() < 0.5 { 0.0 } else { std::f64::consts::FRAC_PI_2 };
         g.mapping(&c, [1.0; 3], [std::f64::consts::FRAC_PI_2, 0.0, quarter])
     } else { c };
-    let m2 = g.mapping(&v, [5.0, 100.0, 100.0], [0.0; 3]);
-    let mu2 = g.musgrave(&m2, 10.0, 15.0, 7.0, 2.0, w);
-    let mr2 = g.map_range(&mu2, 0.0, 1.0, 1.0, -1.0);
-    let n1 = g.noise(&v, 0.5, 1.0, 1.1, w);
-    let mu1 = g.musgrave(&v, n1, 15.0, 0.2, 2.4, w);
-    let mr = g.map_range(&mu1, 0.0, 1.0, -1.4, 1.5);
-    let mr1 = g.map_range(&mr, 0.0, 1.0, 1.0, 0.5);
-    let m0 = g.mapping(&v, [0.15, 1.0, 0.15], [0.0; 3]);
-    let n0 = g.noise(&m0, 5.0, 5.0, 1.0, w);
-    let mu0 = g.musgrave(&n0, 4.0, 10.0, 0.0, 2.0, w);
-    let mx = g.mix(0.5, n0, mu0, "mix");
-    let mx1 = g.mix(0.9, mr1, mx, "multiply");
-    let mx2 = g.mix(0.95, mr2, mx1, "multiply");
-    let dark = g.hsv_adjust(json!(color), 0.8, 0.2);
-    let col = g.mix(mx2.clone(), dark, json!(color), "mix");
-    let h = g.mul(&mx2, r.log_uniform(2e-4, 1e-2));
-    let rn = g.noise(&c_of(&g), r.log_uniform(40.0, 50.0), 2.0, 0.0, 0.0);
-    let (r0, dr) = (r.uniform(0.0, 0.4), r.uniform(0.0, 0.8));
-    let rough = g.map_range(&rn, 0.0, 1.0, r0, r0 + dr);
-    let coat = r.uniform(0.0, 1.4).min(1.0);
+    let (col, rough, coat, h) = wood_on(&mut g, r, &v, None);
     g.done("shader_wood", json!({"color": col, "roughness": rough, "coat": coat, "height": h}))
+}
+
+/// wood/hardwood_floor.py: planks with the grain along them (python's grain ran across the planks of most floors), each its own cut of the wood
+fn hardwood(r: &mut R, rgb: [f64; 3]) -> Value {
+    let rot = if r.f() < 0.1 { 0.0 } else { std::f64::consts::FRAC_PI_2 };
+    let mut g = G::default();
+    let c = g.coord();
+    let m = g.mapping(&c, [1.0; 3], [0.0, 0.0, rot]);
+    let (row, width) = (r.log_uniform(0.06, 0.15), r.log_uniform(0.6, 1.0));
+    let (shade, mortar) = g.brick(&m, 1.0, row, width, 0.5, 0.002);
+    let v = g.add_v(&m, shade);
+    let (col, rough, coat, h) = wood_on(&mut g, r, &v, Some(rgb));
+    let color = g.mix(mortar, col, json!([0.0, 0.0, 0.0]), "mix");
+    g.done("shader_hardwood_floor", json!({"color": color, "roughness": rough, "coat": coat, "height": h}))
+}
+
+/// ceramic/tile.py and the wood tiles. Square, rectangle and staggered as in python; its hexagon, crossed and composite patterns are not ported:
+/// they come out as diamonds and squares. A glaze keeps the room's plain colour `rgb`, where the shader would draw any hue
+fn tile(r: &mut R, kw: &Value, wood_base: Option<()>, rgb: [f64; 3]) -> Value {
+    let shape = kw.get("shape").and_then(|v| v.as_str()).unwrap_or(["square", "rectangle", "staggered", "diamond"][(r.u64() % 4) as usize]);
+    let vertical = kw.get("vertical").and_then(|v| v.as_bool()).unwrap_or(false);
+    let scale = kw.get("scale").and_then(|v| v.as_f64()).unwrap_or_else(|| r.log_uniform(1.0, 2.0));
+    let mut g = G::default();
+    let c = g.coord();
+    let u = if vertical { g.wall_uv(&c) } else { c.clone() };
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let turn = (r.u64() % 4) as f64 * quarter;
+    let (m, sc, row, width, offset, check) = match shape {
+        "staggered" => {
+            let hs = scale * r.log_uniform(2.0, 3.5);
+            let vs = hs * r.log_uniform(0.05, 0.2);
+            (g.mapping(&u, [1.0, 1.0, 0.0], [0.0; 3]), 1.0, 1.0 / hs, 1.0 / vs, 0.5, false)
+        }
+        "rectangle" => {
+            let size = r.log_uniform(0.2, 0.4);
+            (g.mapping(&u, [scale, scale * r.log_uniform(1.3, 2.0), 0.0], [0.0, 0.0, turn]), 1.0 / size, 1.0, 1.0, 0.5, false)
+        }
+        _ => {
+            let size = r.log_uniform(0.2, 0.4);
+            let diamond = if shape == "diamond" || r.f() < 0.3 { quarter / 2.0 } else { 0.0 };
+            (g.mapping(&u, [scale, scale, 0.0], [0.0, 0.0, turn + diamond]), 1.0 / size, 1.0, 1.0, 0.0, true)
+        }
+    };
+    let (shade, mortar) = g.brick(&m, sc, row, width, offset, r.uniform(0.005, 0.01));
+    let alternating = check && r.f() < 0.75;
+    let chk = alternating.then(|| g.checker(&m, sc));
+    let (col, rough, coat, h0): (Value, Value, f64, Option<Value>) = match wood_base {
+        Some(()) => {
+            // each tile its own cut; alternate ones turned a quarter
+            let base = match &chk {
+                Some(k) => { let t = g.mapping(&m, [1.0; 3], [0.0, 0.0, quarter]); g.mix(k.clone(), m.clone(), t, "mix") }
+                None => m.clone(),
+            };
+            let v = g.add_v(&base, shade);
+            let (a, b, c_, h) = wood_on(&mut g, r, &v, Some(rgb));
+            (a, b, c_, Some(h))
+        }
+        None => {
+            let k = r.uniform(0.82, 0.98);
+            let dark = [rgb[0] * k, rgb[1] * k, rgb[2] * k];
+            let cc = match &chk { Some(q) => g.mix(q.clone(), json!(rgb), json!(dark), "mix"), None => json!(rgb) };
+            let (lo, hi) = (r.uniform(0.1, 0.3), r.uniform(0.6, 0.8));
+            let mu = g.musgrave(&c, r.log_uniform(20.0, 40.0), 2.0, 2.0, 2.0, 0.0);
+            (cc, g.map_range(&mu, 0.0, 1.0, lo, hi), 1.0, None)
+        }
+    };
+    let dk = g.mul(&mortar, r.uniform(0.4, 1.0));
+    let color = g.mix(dk, col, json!([0.0, 0.0, 0.0]), "mix");
+    let h = g.mul(&mortar, -r.uniform(0.01, 0.02));
+    let _ = h0;
+    g.done("tile", json!({"color": color, "roughness": rough, "coat": coat, "height": h}))
+}
+
+/// a running-bond brick wall in the room's brick colour (a simple graph, not a port of ceramic/brick.py)
+fn brick(r: &mut R, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let u = g.wall_uv(&c);
+    let (shade, mortar) = g.brick(&u, 1.0, r.uniform(0.07, 0.085), r.uniform(0.21, 0.25), 0.5, 0.005);
+    let k = r.uniform(0.55, 0.7);
+    let dark = json!([rgb[0] * k, rgb[1] * k, rgb[2] * k]);
+    let col = g.mix(shade, json!(rgb), dark, "mix");
+    let n = g.noise(&c, 30.0, 4.0, 0.0, 0.0);
+    let col = g.mix(0.25, col, n, "multiply");
+    let color = g.mix(mortar.clone(), col, json!([0.5, 0.48, 0.45]), "mix");
+    let h = g.mul(&mortar, -0.004);
+    g.done("shader_brick", json!({"color": color, "roughness": r.uniform(0.8, 0.95), "height": h}))
+}
+
+/// metal/metal_basic.py and brushed_metal.py, in the part's own colour; the galvanized, hammered and grained metals are plain for now
+fn metal(r: &mut R, rgb: [f64; 3], brushed: bool) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let v = if brushed { g.mapping(&c, [0.2, 0.2, 5.0], [0.0; 3]) } else { c };
+    let n = g.noise(&v, if brushed { 100.0 } else { r.uniform(10.0, 25.0) }, 6.0, 0.1, 0.0);
+    let (lo, hi) = if brushed { (r.uniform(0.15, 0.25), r.uniform(0.3, 0.5)) } else { (r.uniform(0.0, 0.2), r.uniform(0.4, 0.7)) };
+    let rough = g.map_range(&n, 0.0, 1.0, lo, hi);
+    g.done("shader_metal", json!({"color": rgb, "metallic": 1.0, "roughness": rough}))
 }
 
 /// the graph's object coordinate (node 0)

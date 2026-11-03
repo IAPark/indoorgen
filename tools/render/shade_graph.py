@@ -67,6 +67,44 @@ def _node(nt, nd, nodes):
         return n.outputs["Color"]
     if op == "ramp":
         return _ramp(nt, i, nodes)
+    if op in ("brick_color", "brick_fac"):
+        n = nt.nodes.new("ShaderNodeTexBrick")
+        n.offset = i["offset"]
+        n.offset_frequency = 2
+        _set(nt, n.inputs["Vector"], i["v"], nodes)
+        n.inputs["Color1"].default_value = (0, 0, 0, 1)
+        n.inputs["Color2"].default_value = (1, 1, 1, 1)
+        n.inputs["Mortar"].default_value = (0.5, 0.5, 0.5, 1)
+        for name, k in (("Scale", "scale"), ("Mortar Size", "mortar"), ("Brick Width", "width"), ("Row Height", "row")):
+            _set(nt, n.inputs[name], i[k], nodes)
+        return n.outputs["Color" if op == "brick_color" else "Fac"]
+    if op == "checker":
+        n = nt.nodes.new("ShaderNodeTexChecker")
+        _set(nt, n.inputs["Vector"], i["v"], nodes)
+        n.inputs["Color1"].default_value = (0, 0, 0, 1)
+        n.inputs["Color2"].default_value = (1, 1, 1, 1)
+        _set(nt, n.inputs["Scale"], i["scale"], nodes)
+        return n.outputs["Fac"]
+    if op == "wall_uv":
+        geo = nt.nodes.new("ShaderNodeNewGeometry")
+        cr = nt.nodes.new("ShaderNodeVectorMath")
+        cr.operation = "CROSS_PRODUCT"
+        _set(nt, cr.inputs[0], i["v"], nodes)
+        nt.links.new(geo.outputs["Normal"], cr.inputs[1])
+        a = nt.nodes.new("ShaderNodeSeparateXYZ")
+        nt.links.new(cr.outputs[0], a.inputs[0])
+        b = nt.nodes.new("ShaderNodeSeparateXYZ")
+        _set(nt, b.inputs[0], i["v"], nodes)
+        c = nt.nodes.new("ShaderNodeCombineXYZ")
+        nt.links.new(a.outputs["Z"], c.inputs["X"])
+        nt.links.new(b.outputs["Z"], c.inputs["Y"])
+        return c.outputs[0]
+    if op == "add":
+        n = nt.nodes.new("ShaderNodeVectorMath")
+        n.operation = "ADD"
+        _set(nt, n.inputs[0], i["a"], nodes)
+        _set(nt, n.inputs[1], i["b"], nodes)
+        return n.outputs[0]
     if op == "map_range":
         n = nt.nodes.new("ShaderNodeMapRange")
         for idx, k in ((0, "v"), (1, "f0"), (2, "f1"), (3, "t0"), (4, "t1")):

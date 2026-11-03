@@ -78,7 +78,10 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     let r1 = cross(dpy, n); let r2 = cross(n, dpx);
     let det = dot(dpx, r1);
     let grad = sign(det) * (dpdx(surf_height) * r1 + dpdy(surf_height) * r2);
-    n = normalize(abs(det) * n - grad);
+    // (a limit on the slope: fine relief seen from afar tilted the normals every which way, and sparkled)
+    let adet = max(abs(det), 1e-9);
+    let g0 = grad / adet;
+    n = normalize(n - g0 * min(1.0, 0.35 / max(length(g0), 1e-6)));
   }
   let sun = g.sun_dir.xyz;
   let ndl = max(dot(n, sun), 0.0);

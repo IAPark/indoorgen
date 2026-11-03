@@ -353,7 +353,7 @@ for o in list(bpy.data.objects):
                     cache[ck] = _surf.shaderfunc_to_material(shader_window_glass)
                 elif mod == "factory":  # "factory.<module under infinigen.assets.objects>.<Class>", kwargs.attr = dotted attribute path of the material (or apply-style material)
                     _mp, _cn = cls.rsplit(".", 1)
-                    _o = getattr(importlib.import_module("infinigen.assets.objects." + _mp), _cn)(int(spec.get("seed", 0)))
+                    _o = getattr(importlib.import_module("infinigen.assets.objects." + _mp), _cn)(int(spec.get("seed", 0)) % 2**32)
                     for _a in spec["kwargs"]["attr"].split("."): _o = getattr(_o, _a)
                     cache[ck] = _as_material(_o, **{k: v for k, v in spec["kwargs"].items() if k != "attr"})
                 else:

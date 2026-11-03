@@ -72,6 +72,15 @@ impl G {
     }
     /// Blender's Hue / Saturation / Value node at hue 0.5
     pub fn hsv_adjust(&mut self, color: impl Into<Value>, sat: f64, val: f64) -> Value { self.add("hsv_adjust", json!({"color": color.into(), "sat": sat, "val": val})) }
+    /// Blender's brick texture: each brick's random grey ("brick_color") and the mortar mask ("brick_fac"); `offset` shifts every other row
+    pub fn brick(&mut self, v: &Value, scale: f64, row: f64, width: f64, offset: f64, mortar: f64) -> (Value, Value) {
+        let i = json!({"v": v, "scale": scale, "row": row, "width": width, "offset": offset, "mortar": mortar});
+        (self.add("brick_color", i.clone()), self.add("brick_fac", i))
+    }
+    pub fn checker(&mut self, v: &Value, scale: f64) -> Value { self.add("checker", json!({"v": v, "scale": scale})) }
+    /// (distance along a wall, height, 0): infinigen's vertical tile coordinates
+    pub fn wall_uv(&mut self, v: &Value) -> Value { self.add("wall_uv", json!({"v": v})) }
+    pub fn add_v(&mut self, a: &Value, b: impl Into<Value>) -> Value { self.add("add", json!({"a": a, "b": b.into()})) }
     /// a finished graph; `out` keys: color, roughness, metallic, coat, coat_roughness, specular, height (metres of relief)
     pub fn done(self, name: &str, out: Value) -> Value { json!({"name": name, "nodes": self.nodes, "out": out}) }
 }
