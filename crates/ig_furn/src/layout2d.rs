@@ -423,8 +423,8 @@ pub fn floor_foot(state: &State, name: &str) -> Option<Vec<Vec<[f64; 2]>>> {
     if !(z0 < 0.25) {
         return None;
     }
-    // (a door's swing is passable: walkways may cross it)
-    Some(ps.iter().filter(|p| p.z[0] < 1.2 && p.role != ROLE_OPEN).map(|p| p.poly.clone()).collect())
+    // (a door's swing is passable: walkways may cross it; so are soft parts -- bedding, foliage -- user, 2026-11-03)
+    Some(ps.iter().filter(|p| p.z[0] < 1.2 && p.role == ROLE_HARD).map(|p| p.poly.clone()).collect())
 }
 
 fn polys_g(ps: &[Vec<[f64; 2]>]) -> Vec<shp::G> {
