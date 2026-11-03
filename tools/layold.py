@@ -8,10 +8,12 @@ objs = {o["key"]: o for o in side["objects"]}
 boxes = {}
 for n in g["nodes"]:
     nm = n.get("name", ""); k = nm.split("#")[0]
-    if "mesh" not in n or k not in objs or objs[k]["class"] in ("Door", "Window", "CeilingLightFactory") or objs[k].get("parent"): continue
+    if "mesh" not in n or k not in objs or objs[k]["class"] in ("Door", "Window", "CeilingLightFactory") continue
     for p in g["meshes"][n["mesh"]]["primitives"]:
         a = g["accessors"][p["attributes"]["POSITION"]]
         b = boxes.setdefault(k, [list(a["min"]), list(a["max"])])
         for d in range(3): b[0][d] = min(b[0][d], a["min"][d]); b[1][d] = max(b[1][d], a["max"][d])
-json.dump([{"key": k, "class": objs[k]["class"], "room": objs[k]["room"], "lo": b[0], "hi": b[1]} for k, b in boxes.items()], open(out, "w"))
+# (what stands on the floor, what hangs, not what stands on furniture: the nightstands and the rest of the layout, without the lamps and books)
+keep = {k: b for k, b in boxes.items() if not objs[k].get("parent") or (max(b[1][0] - b[0][0], b[1][1] - b[0][1]) > 0.3 and b[0][2] < 0.35)}
+json.dump([{"key": k, "class": objs[k]["class"], "room": objs[k]["room"], "lo": b[0], "hi": b[1]} for k, b in keep.items()], open(out, "w"))
 print(out, len(boxes))

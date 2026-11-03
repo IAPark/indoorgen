@@ -194,8 +194,8 @@ impl World {
     pub fn walk(&self, extra: &[Prism]) -> Vec<bool> {
         let body = mask([0.05, 1.9], 0.0);
         let (nx, ny) = (self.nx, self.ny);
-        // (bedding and foliage too: soft parts may lie over furniture and door clearances, not over the walk)
-        let mut blocked: Vec<bool> = (0..nx * ny).map(|k| !self.floor[k] || (self.hard[k] | self.soft[k]) & body != 0).collect();
+        // (soft parts -- bedding, foliage -- may be walked through: user, 2026-11-03; an item with soft_blocks counts its soft parts as hard)
+        let mut blocked: Vec<bool> = (0..nx * ny).map(|k| !self.floor[k] || self.hard[k] & body != 0).collect();
         for p in extra.iter().filter(|p| p.role == HARD) {
             if p.z[0] >= 1.9 || p.z[1] <= 0.05 { continue }
             let (i0, i1, j0, j1) = self.range(&p.hull);
