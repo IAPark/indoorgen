@@ -375,7 +375,20 @@ fn styled_doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::
                 let glazed = !closet && w > 1.2 && (r.f64() < 0.5 || std::env::var_os("SLIDE_GLAZED").is_some()); // (SLIDE_GLAZED: testing)
                 let base = swing * (wt / 2.0 + CASING_T + 0.02 + t / 2.0);
                 let top = zt + LINING + 0.02;
-                let dir = if r.f64() < 0.5 { -1.0 } else { 1.0 };
+                // the wall's free run each way along the room's side (a rail sized from the door alone ran through the next wall on a short one)
+                let inner = polys.iter().find(|(n, _)| *n == room).map(|(_, g)| crate::shp::buffer_mitre(g, -wt / 2.0));
+                let along = (ct.rot_z.cos(), ct.rot_z.sin());
+                let free = |sg: f64| -> f64 {
+                    let Some(g) = &inner else { return 9.0 };
+                    let mut x = w / 2.0;
+                    while x < 6.0 { let q = [ct.loc[0] + sg * (x + 0.02) * along.0 + base * dn.0, ct.loc[1] + sg * (x + 0.02) * along.1 + base * dn.1]; if !crate::shp::contains_pt(g, q) { break } x += 0.02; }
+                    x
+                };
+                let (fp, fm_) = (free(1.0), free(-1.0));
+                let dir0 = if r.f64() < 0.5 { -1.0 } else { 1.0 };
+                // (toward whichever side has room for the panel; the side drawn if both have)
+                let dir: f64 = if (if dir0 > 0.0 { fp } else { fm_ }) >= w * 1.2 { dir0 } else if fp >= fm_ { 1.0 } else { -1.0 };
+                let room_dir = if dir > 0.0 { fp } else { fm_ };
                 let mut solid = Mesh::new();
                 let mut glass = Mesh::new();
                 let mut panel = |x0: f64, x1: f64, yc: f64, solid: &mut Mesh, glass: &mut Mesh| {
@@ -404,9 +417,9 @@ fn styled_doors(c: &RoomConstants, cutters: &[Cutter], polys: &[(String, crate::
                     rail_lo = -w / 2.0 - 0.05; rail_hi = w / 2.0 + 0.05;
                 } else {
                     let pw = w + 0.08;
-                    let off = dir * r.uniform(0.3, 0.9) * w;
+                    let off = dir * (r.uniform(0.3, 0.9) * w).min((room_dir - pw / 2.0 - 0.02).max(0.0));
                     panel(off - pw / 2.0, off + pw / 2.0, base, &mut solid, &mut glass);
-                    rail_lo = -w / 2.0 - pw * 0.9; rail_hi = w / 2.0 + pw * 0.9;
+                    rail_lo = -(w / 2.0 + pw * 0.9).min(fm_.max(w / 2.0 + 0.05)); rail_hi = (w / 2.0 + pw * 0.9).min(fp.max(w / 2.0 + 0.05));
                 }
                 let ry = base + swing * if w > 1.2 { (t + 0.01) / 2.0 } else { 0.0 };
                 let mut rail = Mesh::cuboid([rail_lo, ry - 0.03, top], [rail_hi, ry + 0.03, top + 0.06]);

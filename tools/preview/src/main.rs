@@ -701,13 +701,15 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             while y0 < c.y && cov_y(y0 + 0.03) < 0.6 { y0 += 0.03; } while y1 > c.y && cov_y(y1 - 0.03) < 0.6 { y1 -= 0.03; }
             (Vec3::new(x0, y0, lo.z), Vec3::new(x1, y1, hi.z)) };
         let fill_t = rm.tris.iter().map(|t| ((t[1] - t[0]).cross(t[2] - t[0]).z.abs()) * 0.5).sum::<f32>() / ((th.x - tl.x) * (th.y - tl.y)).max(0.01);
-        let rect = fill > 0.97 || (fill_t > 0.97 && fill_t < 1.25);
+        let rect = fill > 0.97 || (fill_t > 0.97 && fill_t < 1.25) || (missing.is_empty() && fill > 0.88);
         // the view's direction, toward the notches (none across from each other: one would stand before the lens)
         let (mx, my): (f32, f32) = (missing.iter().map(|q| q.0).sum(), missing.iter().map(|q| q.1).sum());
         let aim = (!missing.is_empty() && missing.len() <= 2 && !(missing.len() == 2 && mx == 0.0 && my == 0.0)).then(|| (if mx != 0.0 { mx.signum() } else if rm.subj.x >= c.x { 1.0 } else { -1.0 }, if my != 0.0 { my.signum() } else if rm.subj.y >= c.y { 1.0 } else { -1.0 }));
         if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("SHAPE {} area {:.2} size {:?} fill {fill:.2} missing {}", rm.name, rm.area, (hi - lo).truncate(), missing.len()); }
         // (not a hallway: its long look below says more, and an overhead view of one was skipped for a bare corner that scored above zero)
-        if !rm.name.starts_with("hallway") && ((rect && rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8) || (!rect && rm.area < 12.0 && (hi - lo).truncate().max_element() < 6.0 && fill > 0.55 && aim.is_some())) {
+        // (a stub of a hallway has no long look: from above it shows, standing in it only walls)
+        let hall_stub = rm.area < 7.5 && (hi - lo).truncate().max_element() < 4.0;
+        if (!rm.name.starts_with("hallway") || hall_stub) && ((rect && rm.area < 9.0 && (hi - lo).truncate().max_element() < 3.8) || (!rect && rm.area < 12.0 && (hi - lo).truncate().max_element() < 6.0 && fill > 0.55 && aim.is_some())) {
             let (sx, sy) = if let (false, Some(q)) = (rect, aim) { q } else { (if rm.subj.x >= c.x { 1.0f32 } else { -1.0 }, if rm.subj.y >= c.y { 1.0f32 } else { -1.0 }) };
             let f = Vec3::new(sx, sy, 0.0).normalize();
             let r = ((hi - lo).truncate().length() * 0.5).max(1.0);
@@ -732,7 +734,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             cm.only = Some((lo, hi, rm.name.clone()));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
-        } else if rm.area < 14.0 && rm.name.starts_with("hallway") {
+        } else if rm.area < 40.0 && rm.name.starts_with("hallway") {
             // the last word for a passage: from wherever it can be seen furthest, a long look down its length
             let eye_z = z0 + 1.5;
             let (mut best, mut pick) = (0f32, None);
@@ -958,7 +960,10 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
             if low.starts_with("door") && !low.starts_with("doorclear") && !low.contains("frame") && !low.contains("casing") { continue; }
             if low.contains(".wall") || low.contains(".floor") { if !nm.starts_with(&format!("{room}.")) { continue; } }
             else if (low.starts_with("door") || low.starts_with("window") || low.contains("curtain")) && { let c = (d.bmin + d.bmax) * 0.5; let n = [cut_plane(eye, lo, hi)]; n[0].0 * c.x < n[0].1 + 0.3 * 1.0 && n[0].0 != 0.0 || n[0].2 * c.y < n[0].3 + 0.3 && n[0].2 != 0.0 } { continue; }
-            else { let c = (d.bmin + d.bmax) * 0.5; if c.x < lo.x - 0.15 || c.x > hi.x + 0.15 || c.y < lo.y - 0.15 || c.y > hi.y + 0.15 { continue; } }
+            else { let c = (d.bmin + d.bmax) * 0.5; if c.x < lo.x - 0.15 || c.x > hi.x + 0.15 || c.y < lo.y - 0.15 || c.y > hi.y + 0.15 { continue; }
+                // (what hangs on a cut wall goes with it: a picture was left hanging in the air)
+                let thin = (d.bmax - d.bmin).truncate().min_element() < 0.12; let n = cut_plane(eye, lo, hi);
+                if thin && d.bmin.z > lo.z + 0.3 && ((n.0 != 0.0 && n.0 * c.x < n.1 + 0.3) || (n.2 != 0.0 && n.2 * c.y < n.3 + 0.3)) { continue; } }
         }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
@@ -1099,7 +1104,7 @@ fn main() {
         let mut chosen: HashMap<String, usize> = HashMap::new();
         for (i, c) in cams.iter().enumerate() {
             // (only a poor view looks further)
-            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.0 } else if alt == "s" { f32::MAX } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
+            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { if c.name.starts_with("hallway") { f32::MAX } else { 0.0 } } else if alt == "s" { f32::MAX } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
             let t = Instant::now();
             let img = exposed(&mut r, &mut s, c, &o);
             if o.verbose { eprintln!("  cam {} {:.3}s", c.name, t.elapsed().as_secs_f32()); }
