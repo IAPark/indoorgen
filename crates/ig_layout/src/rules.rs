@@ -37,6 +37,8 @@ pub struct Item {
     #[serde(default)] pub min_area: f64,
     /// how often the room wants it at all, drawn per room (rooms of one house differ)
     #[serde(default = "one")] pub chance: f64,
+    /// items of one set draw one piece (the chairs around a table)
+    #[serde(default)] pub set: Option<String>,
     /// wanted only with all of these placed (an armchair in a group around a coffee table)
     #[serde(default)] pub requires: Vec<String>,
     /// not wanted when one of these is placed (a shower where a tub went)

@@ -29,7 +29,7 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
-| toilet | Toilet | must | 1 |  | back to a wall | front 0.6 m free; walk reaches it; door ≥ 1.0 m |  | far_from_door 1.5, corner 0.3 |
+| toilet | Toilet | must | 1 |  | back to a wall | front 0.6 m free; not before a window; walk reaches it; door ≥ 1.0 m | before window | far_from_door 1.5, corner 0.3 |
 | basin | StandingSink | must | 1 |  | back to a wall | front 0.55 m free; not before a window; walk reaches it |  | center_on_wall 0.7 |
 | tub | Bathtub | should | 0.6 |  | back to a wall | front 0.4 m free; walk reaches it |  | corner 1.0, far_from_door 0.7 |
 | shower | Shower | should | 1 |  | back to a wall | front 0.4 m free; not before a window; walk reaches it; only without tub |  | corner 1.0, far_from_door 0.7 |

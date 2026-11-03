@@ -355,7 +355,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
         let mut next: Vec<State> = vec![];
         let mut rep = ItemReport { id: it.id.clone(), tier: it.tier, ..Default::default() };
         // (one piece for all of a repeated item: a set of chairs)
-        let pseed = hash(&format!("{}/{}", room.name, it.id.split('#').next().unwrap_or("")), seed);
+        let pseed = hash(&format!("{}/{}", room.name, it.set.as_deref().unwrap_or(it.id.split('#').next().unwrap_or(""))), seed);
         for st in &beam {
             let mut any = false;
             // (another took its place: not wanted, not missing)
