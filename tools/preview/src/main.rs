@@ -684,7 +684,16 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         let c = (lo + hi) * 0.5;
         let missing: Vec<(f32, f32)> = [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)].into_iter().filter(|(a, b)| { let q = Vec3::new(c.x + a * ((hi.x - lo.x) * 0.5 - 0.22), c.y + b * ((hi.y - lo.y) * 0.5 - 0.22), z0); !rm.tris.iter().any(|t| in_tri2(q, t)) }).collect();
         let fill = rm.area / ((hi.x - lo.x) * (hi.y - lo.y)).max(0.01);
-        let rect = fill > 0.97;
+        // the room's main rectangle: door openings add nubs to the floor's outline, and a view clipped at a nub left the wall itself standing through the picture
+        let (tl, th) = { let on = |x: f32, y: f32| rm.tris.iter().any(|t| in_tri2(Vec3::new(x, y, z0), t));
+            let cov_x = |x: f32| (0..20).filter(|k| on(x, lo.y + (hi.y - lo.y) * (*k as f32 + 0.5) / 20.0)).count() as f32 / 20.0;
+            let cov_y = |y: f32| (0..20).filter(|k| on(lo.x + (hi.x - lo.x) * (*k as f32 + 0.5) / 20.0, y)).count() as f32 / 20.0;
+            let (mut x0, mut x1, mut y0, mut y1) = (lo.x, hi.x, lo.y, hi.y);
+            while x0 < c.x && cov_x(x0 + 0.03) < 0.6 { x0 += 0.03; } while x1 > c.x && cov_x(x1 - 0.03) < 0.6 { x1 -= 0.03; }
+            while y0 < c.y && cov_y(y0 + 0.03) < 0.6 { y0 += 0.03; } while y1 > c.y && cov_y(y1 - 0.03) < 0.6 { y1 -= 0.03; }
+            (Vec3::new(x0, y0, lo.z), Vec3::new(x1, y1, hi.z)) };
+        let fill_t = rm.tris.iter().map(|t| ((t[1] - t[0]).cross(t[2] - t[0]).z.abs()) * 0.5).sum::<f32>() / ((th.x - tl.x) * (th.y - tl.y)).max(0.01);
+        let rect = fill > 0.97 || (fill_t > 0.97 && fill_t < 1.25);
         // the view's direction, toward the notches (none across from each other: one would stand before the lens)
         let (mx, my): (f32, f32) = (missing.iter().map(|q| q.0).sum(), missing.iter().map(|q| q.1).sum());
         let aim = (!missing.is_empty() && missing.len() <= 2 && !(missing.len() == 2 && mx == 0.0 && my == 0.0)).then(|| (if mx != 0.0 { mx.signum() } else if rm.subj.x >= c.x { 1.0 } else { -1.0 }, if my != 0.0 { my.signum() } else if rm.subj.y >= c.y { 1.0 } else { -1.0 }));
@@ -699,8 +708,8 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let e = target - f * dist * 0.72 + Vec3::new(0.0, 0.0, dist * 0.69);
             let mut cm = cam_look(e, target, 18.0);
             cm.near = Some(0.3);
-            cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { lo.x + 0.02 } else { -hi.x + 0.02 }];
-            cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { lo.y + 0.02 } else { -hi.y + 0.02 }];
+            cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { tl.x + 0.02 } else { -th.x + 0.02 }];
+            cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { tl.y + 0.02 } else { -th.y + 0.02 }];
             cm.only = Some((lo, hi, rm.name.clone()));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
