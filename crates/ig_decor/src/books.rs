@@ -317,6 +317,7 @@ fn join(a: &Mesh, b: &Mesh) -> Mesh {
 
 #[derive(Clone)]
 struct BookF {
+    width0: f64,
     rel_scale: f64,
     skew: f64,
     paperback: bool,
@@ -343,6 +344,7 @@ impl BookF {
     /// BookFactory.__init__ (draws from the current global stream)
     fn new(r: &mut Rng) -> BookF {
         let rel_scale = r.log_uniform(1.0, 1.5);
+        let width0 = r.log_uniform(0.09, 0.14); // (one format per kind of book: each drawn anew, a row stood like a city skyline)
         let skew = r.log_uniform(1.3, 1.8);
         let paperback = r.uniform(0.0, 1.0) < 0.5;
         let margin = r.uniform(0.005, 0.01);
@@ -352,7 +354,7 @@ impl BookF {
         r.uniform(0.0, 1.0); // scratch
         r.uniform(0.0, 1.0); // edge wear
         r.uniform(0.0, 1.0); // texture_shared
-        BookF { rel_scale, skew, paperback, margin, offset, thickness }
+        BookF { width0, rel_scale, skew, paperback, margin, offset, thickness }
     }
 
     /// create_asset: (paper, cover) meshes in the book's local frame
@@ -366,7 +368,7 @@ impl BookF {
     /// create_asset's draws: (width, height, depth) of the next book
     fn dims(&self, r: &mut Rng) -> (f64, f64, f64) {
         plaster_draws(r);
-        let width = ((r.log_uniform(0.08, 0.15) * self.rel_scale / UNIT) as i64) as f64 * UNIT;
+        let width = ((self.width0 * r.log_uniform(0.93, 1.07) * self.rel_scale / UNIT) as i64) as f64 * UNIT;
         let height = (((width * self.skew) / UNIT) as i64) as f64 * UNIT;
         let depth = r.uniform(0.01, 0.02) * self.rel_scale;
         (width, height, depth)

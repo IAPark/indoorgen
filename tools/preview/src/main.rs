@@ -711,7 +711,9 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                                 // (within the room: the longest look was often out through a doorway, and showed the next room)
                                 let mut inside_d = 0f32;
                                 while inside_d < d { let q = e + f * (inside_d + 0.1); if !rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t)) { break } inside_d += 0.1; }
-                                if inside_d > best { best = inside_d; pick = Some((e, f)); }
+                                // (from the middle of the passage, not along a wall that fills half the frame)
+                                let v = inside_d + 2.5 * clear.min(0.7);
+                                if v > best { best = v; pick = Some((e, f)); }
                             }
                         }
                     }
@@ -720,7 +722,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 y += 0.25;
             }
             if let Some((e, f)) = pick {
-                if best > 2.0 {
+                if best > 2.5 {
                     let mut cm = cam_look(e, e + f * 2.0 + Vec3::new(0.0, 0.0, -0.28), 16.0);
                     cm.name = format!("{}_A~s", rm.name);
                     out.push(cm);
@@ -1055,7 +1057,7 @@ fn main() {
         let mut chosen: HashMap<String, usize> = HashMap::new();
         for (i, c) in cams.iter().enumerate() {
             // (only a poor view looks further)
-            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.0 } else if alt == "s" { 0.3 } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
+            if let Some((base, alt)) = c.name.split_once('~') { let enough = if alt.starts_with('w') { 0.5 } else if alt == "h" { 0.0 } else if alt == "s" { f32::MAX } else { 1.0 }; if best_detail.get(&format!("{}_{}", s.name, base)).map_or(true, |d| *d >= enough) { continue } }
             let t = Instant::now();
             let img = exposed(&mut r, &mut s, c, &o);
             if o.verbose { eprintln!("  cam {} {:.3}s", c.name, t.elapsed().as_secs_f32()); }

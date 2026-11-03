@@ -16,7 +16,7 @@ pub struct SinkBuilt {
 fn stand_mesh(s: &Sink, cuts: i64) -> Mesh {
     let (r, h) = (s.stand_radius, s.stand_height);
     let (cx, cy) = (s.width / 2.0, s.size / 2.0);
-    if s.stand_circular {
+    {
         // a lathed column flaring into its foot (subdividing a 16-sided cage with the flare in one step left the foot's rim toothed like a cog,
         // its original and its new corners moving by different amounts)
         let foot = s.stand_bottom.max(r);
@@ -29,48 +29,19 @@ fn stand_mesh(s: &Sink, cuts: i64) -> Mesh {
         prof.push((foot, -h));
         prof.push((0.0, -h));
         prof.reverse(); // (bottom up: the faces look outward)
-        return Mesh::revolve(cx, cy, &prof, 40);
-    }
-    let _ = cuts;
-    let ring: Vec<[f64; 2]> = vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
-    let n = ring.len();
-    let levels = cuts as usize + 2;
-    let sc = s.stand_bottom / s.stand_radius;
-    let mut m = Mesh::new();
-    for k in 0..levels {
-        let z = -h * k as f64 / (levels - 1) as f64;
-        let f = if k == levels - 1 { sc } else { 1.0 };
-        for p in &ring {
-            m.pos.push([cx + p[0] * r * f, cy + p[1] * r * f, z]);
-        }
-    }
-    // outward faces: ring is counter-clockwise from above for the square; the cylinder ring runs clockwise (sin, cos)
-    let ccw = {
-        let a: f64 = (0..n).map(|i| { let (p, q) = (ring[i], ring[(i + 1) % n]); p[0] * q[1] - q[0] * p[1] }).sum();
-        a > 0.0
-    };
-    for k in 0..levels - 1 {
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let (a, b, c, d) = ((k * n + i) as u32, (k * n + j) as u32, ((k + 1) * n + j) as u32, ((k + 1) * n + i) as u32);
-            if ccw {
-                m.faces.push(vec![a, b, c, d]);
-            } else {
-                m.faces.push(vec![a, d, c, b]);
+        let mut m = Mesh::revolve(0.0, 0.0, &prof, 48);
+        // (a square pedestal: the same lathe drawn out to a rounded square; a flared cage of 4 corners subdivided into lumps)
+        if !s.stand_circular {
+            for p in m.pos.iter_mut() {
+                let a = p[1].atan2(p[0]);
+                let k = 1.0 / (a.cos().abs().powi(6) + a.sin().abs().powi(6)).powf(1.0 / 6.0);
+                p[0] *= k; p[1] *= k;
             }
         }
+        for p in m.pos.iter_mut() { p[0] += cx; p[1] += cy; }
+        let _ = cuts;
+        m
     }
-    let top: Vec<u32> = (0..n as u32).collect();
-    let bot: Vec<u32> = (0..n as u32).map(|i| ((levels - 1) * n) as u32 + i).collect();
-    if ccw {
-        m.faces.push(top);
-        m.faces.push(bot.into_iter().rev().collect());
-    } else {
-        m.faces.push(top.into_iter().rev().collect());
-        m.faces.push(bot);
-    }
-    let m = simple_subsurf_bl(&m, 2);
-    super::subsurf::subsurf_bl(&m, 1, false)
 }
 
 fn simple_subsurf_bl(m: &Mesh, l: usize) -> Mesh {

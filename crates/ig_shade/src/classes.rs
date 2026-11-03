@@ -13,7 +13,8 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
     let family = mat.split(':').next().unwrap_or("");
     let base = [rgb[0] as f64, rgb[1] as f64, rgb[2] as f64];
     let mut g = match cls {
-        "ceramic.Plaster" => plaster(&mut r, matches!(family, "wall" | "wall_alt").then_some(base)),
+        // (walls keep the room's paint, book pages their paper colour: the shader draws any hue)
+        "ceramic.Plaster" => plaster(&mut r, matches!(family, "wall" | "wall_alt" | "book_pages").then_some(base)),
         // sanitary ware is white (the shader's random hues made mauve and mint toilets)
         "ceramic.Ceramic" if matches!(family, "toilet_ceramic" | "tub_ceramic" | "sink_ceramic") => ceramic(&mut r, Some([0.9, 0.9, 0.88]), 0.3),
         "ceramic.Ceramic" => ceramic(&mut r, None, 0.8),
