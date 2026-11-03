@@ -1503,11 +1503,8 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
     let two_layers = pre.pos.iter().any(|p| { let d = p[2] - zmin; d > 0.002 && d < 0.02 });
     // (z = which layer: 0 bottom, 1 top, + 2 a fold, lying 5 cm over the layer it came from, flipped: +0.06 and +0.07 over the two, +0.05 over the one)
     let mut m = pre.clone();
-    for p in m.pos.iter_mut() {
-        let d = p[2] - zmin;
-        let folded = d >= 0.03;
-        p[2] = if two_layers { ((if folded { d - 0.06 } else { d }) / 0.01).clamp(0.0, 1.0) } else { 0.0 } + if folded { 2.0 } else { 0.0 };
-    }
+    // (read after the subdivision, without a threshold: fold() turns the height over gradually, and a threshold on it, on a line slanting across the grid, stepped from cell to cell in a saw-tooth)
+    for p in m.pos.iter_mut() { p[2] -= zmin; }
     let mut m = subsurf(&m, 1, false);
     let c0 = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     // the seams run from the cloth's middle (Blanket::box_pinch)
@@ -1519,7 +1516,11 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         two_layers && (0..n).map(|i| { let (a, b) = (m.pos[f[i] as usize], m.pos[f[(i + 1) % n] as usize]); a[0] * b[1] - b[0] * a[1] }).sum::<f64>() < 1e-9
     }).collect();
     for p in m.pos.iter_mut() {
-        let (layer, stack) = if p[2] <= 1.0 { (p[2].max(0.0), 0.0) } else { ((p[2] - 2.0).clamp(0.0, 1.0), (p[2] - 1.0).min(1.0)) };
+        let d = p[2];
+        let (layer, stack) = if !two_layers { (0.0, (d / 0.05).clamp(0.0, 1.0)) }
+            else if d <= 0.01 { (d.max(0.0) / 0.01, 0.0) }
+            else if d < 0.06 { let t = (d - 0.01) / 0.05; (1.0 - t, t) }
+            else { (((d - 0.06) / 0.01).min(1.0), 1.0) };
         let edge = (p[0] - lo[0]).min(hi[0] - p[0]).min(p[1] - lo[1]).min(hi[1] - p[1]).max(0.0);
         let mut fill = (edge / 0.09).min(1.0).sqrt();
         if margin > 0.0 { fill *= 0.15 + 0.85 * dome(p[0] - c0[0]) * dome(p[1] - c0[1]); }
