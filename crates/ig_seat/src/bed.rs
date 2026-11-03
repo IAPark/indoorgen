@@ -787,7 +787,8 @@ impl Factory for Bed {
             // (tucked in, it keeps within the frame: the soft volume comes in to the hard box)
             let tuck = crate::api::tuck_hint() > 0;
             let (side, foot) = if tuck { (hi[1] - mh[1], hi[0] - mh[0]) } else if sim_bedding() { (0.45, 0.45) } else {
-                let gm = DrapeGeom::of(c, &ms);
+                let mut gm = DrapeGeom::of(c, &ms);
+                if self.s.leg_decor_wrapped || self.s.leg_decor == 0 { gm.gap_side += 0.015; gm.gap_foot += 0.015; }
                 let lift = drape_loft(self.s.sheet_type) + 0.012;
                 let (ov_s, ov_f) = ((wm - 1.0) / 2.0 * ms.width, (0.15 + sm * ms.size - gm.x1).max(0.0));
                 let ov = ov_s.hypot(ov_f);
@@ -986,7 +987,9 @@ impl Factory for Bed {
         pre.transform(&rot);
         pre.transform(&Mat4::translation([b.size / 2.0 + off, 0.0, z_sheet]));
         let sim = sim_bedding();
-        let geom = DrapeGeom::of(c, &ms);
+        let mut geom = DrapeGeom::of(c, &ms);
+        // (clear of a foot panel standing outside the legs: 6 mm off, its bevels came through the hanging cloth in black marks)
+        if s.leg_decor_wrapped || s.leg_decor == 0 { geom.gap_side += 0.015; geom.gap_foot += 0.015; }
         let pleats = Pleats::new(&mut r);
         let sheet = if !sim { drape(&pre, &geom, 0.0, drape_loft(s.sheet_type), if s.sheet_type >= 2 { b.margin } else { 0.0 }, &pleats, drape_slide(c.fseed, inst, 0), 0.0, 1.0) } else {
         let mut p = ClothParams::default();

@@ -177,6 +177,18 @@ impl Table {
         (self.hx - 0.04 - p, self.hy - 0.06 - p, p)
     }
 
+    /// slab sides: thickness, inset from the top's ends, half width. Under a round or oval top they stand in from its ends and within its outline (at the ends they stuck out past it)
+    fn slab(&self) -> (f64, f64, f64) {
+        let (t, mut i) = (self.top_t.max(0.035), self.slab_inset);
+        let mut px = if i > 0.0 { self.hx - 0.06 } else { self.hx };
+        if self.sq < 10.0 {
+            i = i.max(0.2 * self.hy);
+            let f = (self.hy - i) / self.hy;
+            px = px.min(self.hx * (1.0 - f.powf(self.sq)).max(0.0).powf(1.0 / self.sq) * 0.95);
+        }
+        (t, i, px)
+    }
+
     /// the flat of the top, inside its bevel (on a round / oval top: the inscribed rectangle)
     fn support(&self) -> (V3, V3) {
         let c = std::f64::consts::FRAC_1_SQRT_2.powf(2.0 / self.sq);
@@ -186,9 +198,11 @@ impl Table {
 
     fn build(&self) -> Asset {
         let mut r = Rng::seeded(self.seed);
-        let topm = spec_material("table_top", json!({"cls": weighted(&mut r, TOP), "kwargs": {}, "seed": self.seed}), [0.55, 0.40, 0.26]);
+        let top_cls = weighted(&mut r, TOP);
+        let topm = spec_material("table_top", json!({"cls": top_cls, "kwargs": {}, "seed": self.seed}), [0.55, 0.40, 0.26]);
         // a slab / drum base is the top's own material (a waterfall table, a solid block)
-        let legm = if matches!(self.base, Base::Slab | Base::Drum) { topm.clone() } else {
+        // (not glass: a solid block of it was a ghost of a table)
+        let legm = if matches!(self.base, Base::Slab | Base::Drum) && !top_cls.contains("Glass") { topm.clone() } else {
             spec_material("table_leg", json!({"cls": weighted(&mut r, LEG), "kwargs": {}, "seed": self.seed + 1}), [0.3, 0.25, 0.2])
         };
         let (hx, hy, h) = (self.hx, self.hy, self.h);
@@ -255,8 +269,7 @@ impl Table {
             }
             Base::Slab => {
                 // two solid side panels flush with the top's ends (a waterfall table); a dining table's set in from the ends
-                let (t, i) = (self.top_t.max(0.035), self.slab_inset);
-                let px = if i > 0.0 { hx - 0.06 } else { hx };
+                let (t, i, px) = self.slab();
                 legs.push(bx([-px, -hy + i, 0.0], [px, -hy + i + t, ztop]));
                 legs.push(bx([-px, hy - i - t, 0.0], [px, hy - i, ztop]));
             }
@@ -331,8 +344,7 @@ impl Table {
                 v.push(Volume::hard([-fx, -fy, 0.0], [fx, fy, 0.05]));
             }
             Base::Slab => {
-                let (t, i) = (self.top_t.max(0.035), self.slab_inset);
-                let px = if i > 0.0 { hx - 0.06 } else { hx };
+                let (t, i, px) = self.slab();
                 v.push(Volume::hard([-px, -hy + i, 0.0], [px, -hy + i + t, ztop]));
                 v.push(Volume::hard([-px, hy - i - t, 0.0], [px, hy - i, ztop]));
             }
