@@ -695,12 +695,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,
@@ -906,12 +906,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,
@@ -969,7 +969,7 @@
       "id": "art_a",
       "class": "WallArtFactory",
       "tier": 2,
-      "chance": 0.8,
+      "chance": 1.0,
       "avoid_window": true,
       "fit": {
        "max_w": 1.2,
@@ -1211,12 +1211,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,
@@ -1668,12 +1668,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,
@@ -2942,12 +2942,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,
@@ -4582,12 +4582,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,
@@ -4610,12 +4610,12 @@
    {
     "id": "light",
     "class": "CeilingLightFactory",
-    "tier": 2,
+    "tier": 1,
     "repeat": 4,
     "per_area": 4.0,
     "place": {
      "ceiling": {
-      "wall_clear": 0.3
+      "wall_clear": 0.05
      }
     },
     "reach": false,

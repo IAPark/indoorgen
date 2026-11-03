@@ -452,7 +452,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
         for t in &rm.tris { for v in t { lo = lo.min(*v); hi = hi.max(*v); } }
         let mut cut_done = false;
         // what the room holds, by size (not its curtains and lights), and the share of it in a view
-        let held: Vec<(Vec3, f32)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !skip(nm) && !nm.contains("Ceiling") && !nm.contains("urtain") && !nm.contains("_light") && !nm.starts_with("light") && !nm.starts_with("beam") && !nm.contains("Pendant") && (d.bmax - d.bmin).max_element() > 0.2 && d.bmin.z < z0 + 1.2 }).filter_map(|d| { let c = (d.bmin + d.bmax) * 0.5; rm.tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, z0), t)).then(|| (c, (d.bmax - d.bmin).truncate().length() * 0.5)) }).collect();
+        let held: Vec<(Vec3, f32)> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !skip(nm) && !nm.contains("Ceiling") && !nm.contains("urtain") && !nm.contains("_light") && !nm.starts_with("light") && !nm.starts_with("beam") && !nm.contains("Pendant") && (d.bmax - d.bmin).max_element() > 0.2 && d.bmin.z < z0 + 1.9 }).filter_map(|d| { let c = (d.bmin + d.bmax) * 0.5; rm.tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, z0), t)).then(|| (c, (d.bmax - d.bmin).truncate().length() * 0.5)) }).collect();
         let held_all: f32 = held.iter().map(|h| h.1).sum();
         // the room's main piece, by floor area: a bedroom's bed, a dining room's table
         let main_piece: Option<Vec3> = s.draws.iter().filter(|d| { let nm = &s.glb.nodes[d.node].name; !skip(nm) && !nm.contains("Ceiling") && !nm.contains("urtain") && d.bmin.z < z0 + 1.0 && d.bmax.z > z0 + 0.25 }).filter(|d| { let c = (d.bmin + d.bmax) * 0.5; rm.tris.iter().any(|t| in_tri2(Vec3::new(c.x, c.y, z0), t)) }).map(|d| { let e = d.bmax - d.bmin; (e.x * e.y, (d.bmin + d.bmax) * 0.5) }).filter(|m| m.0 > 0.4).max_by(|a, b| a.0.partial_cmp(&b.0).unwrap()).map(|m| m.1);
@@ -496,6 +496,19 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 cm.near = Some(0.3);
                 { let d = c.dot(f) - l * 0.5 + 0.04; cm.clip = [f.x, f.y, f.z, d]; }
                 cm.shown = share(e, f, half); cm.key = key_seen(e, f, half);
+                // (doors in the walls beside the cut: seen edge-on down a long lens, their casings and the rooms through them read as stripes and stray blocks)
+                {
+                    let mut ids: Vec<&str> = vec![];
+                    for d in &s.draws {
+                        let nm = &s.glb.nodes[d.node].name;
+                        if !nm.starts_with("door") { continue }
+                        let q = (d.bmin + d.bmax) * 0.5;
+                        let side = if ax { Vec3::Y } else { Vec3::X };
+                        let (al, la) = ((q - c).dot(f).abs(), (q - c).dot(side).abs());
+                        if al < l * 0.5 && la > w * 0.5 - 0.4 && la < w * 0.5 + 0.4 { let id = nm.split('.').next().unwrap_or(nm); if !ids.contains(&id) { ids.push(id); } }
+                    }
+                    cm.shown -= 0.6 * ids.len() as f32;
+                }
                 cm.name = if k == 0 { format!("{}_A", rm.name) } else { format!("{}_A~{k}", rm.name) };
                 out.push(cm);
                 k += 1;

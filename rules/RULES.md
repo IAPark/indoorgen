@@ -69,7 +69,7 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
 |---|---|---|---|---|---|---|---|---|
 | mirror | Mirror | may | 0.5 |  | on a wall, centre 1.55 m; 1.2 m+ tall: bottom at 0.2 m | not before a window; width ≤ 1.0 m |  | apart 0.3 |
-| art_a | WallArt | may | 0.8 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
+| art_a | WallArt | may | 1.0 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
 | art_b | WallArt | may | 0.5 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.5 |
 | console | SingleCabinet | may | 0.3 | 6.0 | back to a wall | not before a window; walk reaches it; depth ≤ 0.45 m |  | center_on_wall 0.5, far_from_door 0.5 |
 
