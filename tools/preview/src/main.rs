@@ -23,7 +23,7 @@ struct Globals {
 struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 4]; 4], p: [[f32; 4]; 48] }
 
 #[derive(Clone)]
-struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String)>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
+struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String)>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the room's floor in view, walls considered */ cover: f32, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
@@ -330,7 +330,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
 fn cam_look(eye: Vec3, tgt: Vec3, lens: f32) -> Cam {
     let f = (tgt - eye).normalize(); let r = f.cross(Vec3::Z).normalize(); let u = r.cross(f);
     let m = Mat4::from_cols(r.extend(0.0), u.extend(0.0), (-f).extend(0.0), eye.extend(1.0));
-    Cam { name: String::new(), view: m, fov_x: 2.0 * (18.0f32 / lens).atan(), ortho: None, near: None, clip: [0.0; 4], clip2: [0.0; 4], only: None, shown: 0.0, key: true, slab: 0.0 }
+    Cam { name: String::new(), view: m, fov_x: 2.0 * (18.0f32 / lens).atan(), ortho: None, near: None, clip: [0.0; 4], clip2: [0.0; 4], only: None, shown: 0.0, key: true, cover: 1.0, slab: 0.0 }
 }
 fn mat_from_json(v: &Value) -> Mat4 {
     let mut c = [0f32; 16];
@@ -339,7 +339,7 @@ fn mat_from_json(v: &Value) -> Mat4 {
 }
 fn cam_json(v: &Value, name: &str) -> Cam {
     let lens = v["lens"].as_f64().unwrap_or(18.0) as f32; let sw = v["sensor_width"].as_f64().unwrap_or(36.0) as f32;
-    Cam { name: name.to_string(), view: mat_from_json(&v["matrix"]), fov_x: 2.0 * (sw / (2.0 * lens)).atan(), ortho: None, near: None, clip: [0.0; 4], clip2: [0.0; 4], only: None, shown: 0.0, key: true, slab: 0.0 }
+    Cam { name: name.to_string(), view: mat_from_json(&v["matrix"]), fov_x: 2.0 * (sw / (2.0 * lens)).atan(), ortho: None, near: None, clip: [0.0; 4], clip2: [0.0; 4], only: None, shown: 0.0, key: true, cover: 1.0, slab: 0.0 }
 }
 fn person_pos(s: &Scene, idx: usize) -> Option<Vec3> {
     let mut seen: Vec<String> = vec![];
@@ -650,6 +650,13 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             spare.extend(wide.into_iter().step_by(every));
         }
         let tries: Vec<(usize, usize, Vec3, Option<Vec3>)> = chosen.iter().enumerate().map(|(k, e)| (k, 0, *e, heads.get(k).copied())).chain(spare.iter().filter(|(e, f)| !chosen.iter().zip(heads.iter()).any(|(c, h)| (*c - *e).truncate().length() < 1.0 && h.dot(*f) > 0.9)).enumerate().map(|(i, (e, f))| (0, i + 1, *e, Some(*f)))).collect();
+        // the room's floor, sampled: how much of it a view takes in is what says whether it shows the room
+        let floor_pts: Vec<Vec3> = { let mut v = vec![]; let mut y = lo.y + 0.15; while y < hi.y { let mut x = lo.x + 0.15; while x < hi.x { if rm.tris.iter().any(|t| in_tri2(Vec3::new(x, y, z0), t)) { v.push(Vec3::new(x, y, z0)); } x += 0.3; } y += 0.3; } v };
+        let floor_cover = |e: Vec3, f: Vec3, half: f32| -> f32 {
+            let (mut seen_pts, n) = (0usize, floor_pts.len().max(1));
+            for q in &floor_pts { let d = (*q - e).truncate(); let l = d.length().max(0.01); let u = d / l;
+                if u.dot(f.truncate()).clamp(-1.0, 1.0).acos() < half && !ray_hit(&sh.walls, Vec3::new(e.x, e.y, z0 + 1.0), u.extend(0.0), l - 0.05) { seen_pts += 1; } }
+            seen_pts as f32 / n as f32 };
         for &(k, alt, e0, h0) in &tries {
             // (off the walls: an eye on the plane of a wall's face, at the inner corner of an L, saw that wall in blocks across the lens)
             let e0 = { let on = |q: Vec3| rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t)); let mut q = e0; for d in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y] { if !on(e0 + d * 0.25) { q -= d * 0.25; } } if on(q) { q } else { e0 } };
@@ -679,6 +686,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                 if dn > 3.4 || a1 - a0 > 3.0 || (a0 > -hv && a1 < hv) { continue }
                 w = w.max((a1.min(hv) - a0.max(-hv)).max(0.0) / (2.0 * hv)); }
             if w > 0.12 { w } else { 0.0 } };
+            cm.cover = floor_cover(*e, f, (18.0 / view_lens).atan());
             cm.shown = share(*e, f, (18.0 / view_lens).atan()) - 2.0 * out_share; cm.key = key_seen(*e, f, (18.0 / view_lens).atan()); cm.name = if alt > n_normal { format!("{}_A~w{alt}", rm.name) } else if cut_done { format!("{}_A~{}", rm.name, 20 + alt + 8 * k) } else if alt > 0 { format!("{}_A~{alt}", rm.name) } else { format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }) };
             // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, look.x, look.y, look.z, lens); }
@@ -753,10 +761,10 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
                                 let f = Vec3::new(a.cos(), a.sin(), 0.0);
                                 // how much of this room's own floor the view takes in, ray by ray across the lens: a look out through a door sees little of it, and one along a wall half
                                 let on = |q: Vec3| rm.tris.iter().any(|t| in_tri2(Vec3::new(q.x, q.y, z0), t));
-                                let v: f32 = (-4..=4).map(|h| { let a_ = (h as f32 * 8.0).to_radians(); let dir = Vec3::new(f.x * a_.cos() - f.y * a_.sin(), f.x * a_.sin() + f.y * a_.cos(), 0.0);
+                                let v: f32 = (-4..=4).map(|h| { let a_ = (h as f32 * 10.0).to_radians(); let dir = Vec3::new(f.x * a_.cos() - f.y * a_.sin(), f.x * a_.sin() + f.y * a_.cos(), 0.0);
                                     let mut w = ray_dist(&sh.walls, e, dir, 8.0);
                                     for b in &sh.boxes { let (mut t0, mut t1) = (0f32, w); let mut hit = true; for ax in 0..2 { let (o_, r_) = (e[ax], dir[ax]); if r_.abs() < 1e-5 { if o_ < b.0[ax] || o_ > b.1[ax] { hit = false; } } else { let (a2, b2) = ((b.0[ax] - o_) / r_, (b.1[ax] - o_) / r_); t0 = t0.max(a2.min(b2)); t1 = t1.min(a2.max(b2)); } } if hit && t0 <= t1 { w = w.min(t0); } }
-                                    let mut d_ = 0f32; while d_ < w && on(e + dir * (d_ + 0.1)) { d_ += 0.1; } d_ }).sum::<f32>();
+                                    let mut d_ = 0f32; while d_ < w && on(e + dir * (d_ + 0.1)) { d_ += 0.1; } if d_ < 1.0 { 0.0 } else { d_.min(4.0) } }).sum();
                                 if v > best { best = v; pick = Some((e, f)); }
                             }
                         }
@@ -1117,7 +1125,7 @@ fn main() {
             let raw = picture_detail(&img);
             // (nor a close-up: book spines filling the frame are detail, and show no room)
             let close = r.last_depth.as_ref().map_or(0.0, |d| { let (mut n, mut c) = (0f32, 0f32); for v in d.iter().step_by(11) { c += 1.0; if *v > 0.0 && *v < 1.5 { n += 1.0; } } n / c.max(1.0) });
-            let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.5).min(1.0) - 1.2 * flat_columns(&img) - if c.key { 0.0 } else { 0.8 } - 2.5 * (close - 0.3).max(0.0) - 2.0 * c.slab;
+            let detail = raw - 1.2 * near + 0.8 * c.shown * (raw / 0.5).min(1.0) - 1.2 * flat_columns(&img) - if c.key { 0.0 } else { 0.8 } - 2.5 * (close - 0.3).max(0.0) - 2.0 * c.slab - 3.0 * (0.4 - c.cover).max(0.0);
             if let Some((base, alt)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {
@@ -1126,7 +1134,7 @@ fn main() {
                 if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2}"); }
                 continue;
             }
-            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2} raw {raw:.2} near {near:.2} close {close:.2} slab {:.2}", c.slab); }
+            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2} raw {raw:.2} near {near:.2} close {close:.2} slab {:.2} cover {:.2}", c.slab, c.cover); }
             if nm.ends_with("_B") && detail < 0.75 { continue }
             best_detail.insert(format!("{}_{}", s.name, nm), detail);
             if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, nm)), o.res, r.last_depth.as_ref().unwrap()); }
