@@ -28,6 +28,8 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
         "ceramic.Tile" => tile(&mut r, &kw, None, base),
         "ceramic.Brick" => brick(&mut r, base),
         "ceramic.Concrete" => concrete(&mut r, base),
+        // (a sink's basin is glazed, whatever its counter is)
+        "ceramic.Marble" | "ceramic.MarbleRegular" | "ceramic.MarbleVoronoi" if family == "sink" => ceramic(&mut r, Some([0.88, 0.88, 0.86]), 0.3),
         "ceramic.Marble" | "ceramic.MarbleRegular" | "ceramic.MarbleVoronoi" => marble(&mut r, base),
         "fabric.FineKnitFabric" => fabric(&mut r, base, 250.0, 0.0006, 0.9),
         "fabric.CoarseKnitFabric" | "fabric.LinedFabric" => fabric(&mut r, base, 90.0, 0.0015, 0.95),
@@ -355,9 +357,10 @@ fn concrete(r: &mut R, rgb: [f64; 3]) -> Value {
 fn marble(r: &mut R, rgb: [f64; 3]) -> Value {
     let mut g = G::default();
     let c = g.coord();
-    let n = g.noise(&c, r.uniform(1.5, 3.0), 7.0, r.uniform(2.0, 5.0), 0.0);
-    let vein = g.ramp(&n, &[(0.47, [0.0; 3]), (0.5, [1.0; 3]), (0.53, [0.0; 3])]);
-    let k = r.uniform(0.25, 0.45);
+    // (broad, faint veins: dark and dense they read as scribbles at room scale)
+    let n = g.noise(&c, r.uniform(0.8, 1.5), 6.0, r.uniform(1.0, 2.5), 0.0);
+    let vein = g.ramp(&n, &[(0.485, [0.0; 3]), (0.5, [1.0; 3]), (0.515, [0.0; 3])]);
+    let k = r.uniform(0.62, 0.8);
     let color = g.mix(vein, json!(rgb), json!([rgb[0] * k, rgb[1] * k, rgb[2] * k]), "mix");
     g.done("shader_marble", json!({"color": color, "roughness": r.uniform(0.08, 0.2), "coat": 0.5}))
 }
