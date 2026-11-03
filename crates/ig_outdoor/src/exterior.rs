@@ -283,7 +283,9 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
     let ccw = area2 > 0.0;
     let mut p = Parts { siding: Mesh::new(), trim: Mesh::new(), roof: Mesh::new(), concrete: Mesh::new() };
     let (mut glass, mut doors) = (Mesh::new(), Mesh::new());
-    let ze = wall_top + 0.05;
+    // (the eaves, which run down the pitch past the wall, clear of the ceilings: the footprint's roof rectangles overlap, so an eave can lie over a
+    // room, and it came through the ceiling as a dark band along the wall's top)
+    let ze = wall_top + 0.05 + st.overhang * st.pitch_deg.to_radians().tan();
     let zs = floor_z + 0.1; // siding starts above the foundation band
     for k in 0..ring.len() {
         let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
