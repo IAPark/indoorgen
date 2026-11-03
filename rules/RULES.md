@@ -44,14 +44,46 @@ Tiers: **must** (the room fails without it), **should** (a miss is reported), **
 | mirror | Mirror | should | 1 |  | over `basin`: centre 1.55 m, at least 0.08 m above it | not before a window; width ≤ 1.0 m; height ≤ 1.0 m |  |  |
 | rail | Hardware | may | 0.8 |  | on a wall, centre 1.15 m | not before a window |  | near 0.5, apart 0.5 |
 
+## living-room
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| tv_stand | TVStand | must | 1 |  | back to a wall | not before a window; walk reaches it | 1.3 m wide, 1.0 m wide | center_on_wall 1.0, long_wall 0.7, far_from_door 0.5 |
+| sofa | Sofa | should | 1 |  | facing `tv_stand`, 1.3-4.0 m front to front, up to 0.5 m off centre | walk reaches it | 1.8 m wide, 1.4 m wide, 1.0 m wide | backed 1.0, ideal 1.0 |
+| sofa_wall | Sofa | should | 1 |  | back to a wall | walk reaches it; only without sofa | 1.8 m wide, 1.4 m wide, 1.0 m wide | center_on_wall 0.5, long_wall 0.5 |
+| seat_only | ArmChair | should | 1 |  | back to a wall | walk reaches it; only without sofa, sofa_wall |  | center_on_wall 0.3 |
+| tv | TV | must | 1 |  | on `tv_stand`, centred | width ≤ 1.6 m |  |  |
+| coffee | CoffeeTable | should | 1 |  | before `sofa`, 0.4 m clear, 0.75 of its width | walk reaches it |  |  |
+| armchair_a | ArmChair | may | 1 | 20.0 | at `sofa`'s +y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
+| armchair_b | ArmChair | may | 1 | 30.0 | at `sofa`'s -y side, turned to face across, 0.1 m clear, 0.5 m out before its front | walk reaches it |  | ideal 1.0 |
+| rug | Rug | may | 0.8 |  | under `sofa`: its width + 0.6 m, 2.2 of its length, 1.3 m past its foot | under furniture |  | ideal 2.0 |
+| bookcase | SimpleBookcase | may | 0.7 | 20.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0, center_on_wall 0.3 |
+| plant | LargePlantContainer | may | 0.5 |  | back to a wall | not before a window; soft blocks |  | corner 1.0, apart 0.5 |
+| art_a | WallArt | may | 0.9 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | near 1.0, center_on_wall 0.5, apart 0.3 |
+| art_b | WallArt | may | 0.5 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | center_on_wall 0.5, apart 0.3 |
+
+## dining-room
+
+| Item | Class | Tier | Chance | From m² | Placement | Limits | Fallbacks | Scored by |
+|---|---|---|---|---|---|---|---|---|
+| table | TableDining | must | 1 |  | free on the floor: 0.75 m from walls, 1.0 m from doors (less at a cost) | walk reaches it | 1.6 m wide, 1.2 m wide, 0.9 m wide | center_room 1.0, ideal 1.5 |
+| chair_a | Chair | must | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
+| chair_b | Chair | should | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
+| chair_c | Chair | may | 1 |  | around `table`: 0.6 m apart, up to 0.25 m under the top, ends from 1.2 m long |  |  | ideal 2.0 |
+| rug | Rug | may | 0.8 |  | under `table`, centred: its size + 1.2 by 1.2 m | under furniture |  | ideal 2.0 |
+| sideboard | SimpleBookcase | should | 1 |  | back to a wall | not before a window; walk reaches it | 1.0 m wide | center_on_wall 0.5, far_from_door 0.5 |
+| cabinet | SimpleBookcase | may | 1 | 18.0 | back to a wall | not before a window; walk reaches it |  | apart 1.0 |
+| plant | LargePlantContainer | may | 0.6 |  | back to a wall | not before a window; soft blocks |  | corner 1.0, apart 0.5 |
+| art_a | WallArt | may | 0.8 |  | on a wall, centre 1.5 m/1.75 m | not before a window; width ≤ 1.2 m; height ≤ 0.9 m |  | near 1.0, center_on_wall 0.5, apart 0.3 |
+
 ## Not ported yet
 
 From `LayoutRules` (reviewed values, which keep their numbers), `groups::cap` and `realism.rs`:
 
 | Room | Rules to carry over |
 |---|---|
-| Living room | One TV and stand; sofa facing it, 1.3–4.0 m (backed to a side wall up to 3.6, floating 2.2–3.8); armchairs: one from 20 m², two from 30 m²; coffee table 0.75 of sofa width; bookcase on a free wall from 20 m² without built-ins; one plant below 20 m²; storage capped per room; 2 pictures |
-| Dining room | Table centred, 0.75 m from walls and 1.0 from doors; 1 m table under the small-room size; round chance for tables to 1.6 m; chairs 0.6 m apart, tucked 0.04, end chairs from 1.2 m; sideboard on a free wall; tall cabinet from 18 m²; rug; plant; 1 picture |
+| Living room | Sofa backed to a side wall up to 3.6 m and floating 2.2–3.8 m as separate options; bookcase only without built-ins; seating that faces a fireplace; TV over a mantel |
+| Dining room | 1 m table under the small-room size; round rug under a round table; diagonal chairs at a round table. Changed by request: chairs tuck up to 0.25 m, the reviewed value was 0.04 |
 | Kitchen | L template with fridge and range at the leg ends; up to 3 extra runs; aisle 1.0 m; sink to range 0.6 m; fridge door clear 0.2 m; 1.0 m before a range or dishwasher; fridge corner gap 0.3 m; slots under 0.6 m closed; triangle legs 1.2–2.7 m, sum 4–8 m; one fridge, oven, dishwasher |
 | Utility | Up to 2 storage pieces |
 | All | Windows as solver variables (still fixed); built-ins; items on surfaces and shelf fill; re-planning when a must fails |
