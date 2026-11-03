@@ -114,7 +114,9 @@ fn poses(room: &Room, it: &Item, v: &Variant, s: &Shape, state: &State) -> Vec<(
             let steps = ((wl.len - span) / 0.05).floor() as usize;
             for i in 0..=steps {
                 let t = span / 2.0 + if steps == 0 { (wl.len - span) / 2.0 } else { (wl.len - span) * i as f64 / steps as f64 };
-                let at = [wl.a[0] + u[0] * t + wl.n[0] * 0.003, wl.a[1] + u[1] * t + wl.n[1] * 0.003];
+                // (clear of the skirting: it came through the thin back of an open shelf as a white line)
+                let off = 0.024;
+                let at = [wl.a[0] + u[0] * t + wl.n[0] * off, wl.a[1] + u[1] * t + wl.n[1] * off];
                 out.push((Pose { yaw, t: [at[0] - ra[0], at[1] - ra[1]], z }, t, wl.len));
             }
         },
@@ -421,6 +423,14 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
                 for (pose, t, len) in poses(room, it, v, &s, st) {
                     rep.tried += 1;
                     let mut ps = prisms(&s.vols, &pose);
+                    if it.solid {
+                        let hard: Vec<&Prism> = ps.iter().filter(|p| p.role == HARD).collect();
+                        if !hard.is_empty() {
+                            let hull = crate::world::hull2(hard.iter().flat_map(|p| p.hull.iter().cloned()).collect());
+                            let z = [hard.iter().map(|p| p.z[0]).fold(f64::MAX, f64::min), hard.iter().map(|p| p.z[1]).fold(f64::MIN, f64::max)];
+                            ps.push(Prism { hull, z, role: HARD });
+                        }
+                    }
                     if it.cover { for p in ps.iter_mut() { p.role = COVER; } }
                     if it.soft_blocks { for p in ps.iter_mut() { if p.role == SOFT { p.role = HARD; } } }
                     let mut fail = st.world.voxel(&ps).or_else(|| st.world.exact(&ps, room));

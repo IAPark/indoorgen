@@ -103,7 +103,8 @@
         "name": "apart",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -337,7 +338,8 @@
         "name": "apart",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -547,7 +549,8 @@
         "name": "apart",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -770,7 +773,8 @@
         "piece": "as_is",
         "width": 0.55
        }
-      ]
+      ],
+      "solid": true
      }
     ]
    },
@@ -806,7 +810,8 @@
         "name": "far_from_door",
         "w": 0.7
        }
-      ]
+      ],
+      "solid": true
      }
     ]
    },
@@ -860,7 +865,8 @@
         "piece": "as_is",
         "width": 0.55
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "shelf",
@@ -890,7 +896,8 @@
         "name": "far_from_door",
         "w": 0.7
        }
-      ]
+      ],
+      "solid": true
      }
     ]
    }
@@ -1040,7 +1047,8 @@
         "name": "far_from_door",
         "w": 0.5
        }
-      ]
+      ],
+      "solid": true
      }
     ]
    },
@@ -1167,7 +1175,8 @@
         "name": "far_from_door",
         "w": 0.5
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "mirror",
@@ -1726,7 +1735,8 @@
         "w": 0.5
        }
       ],
-      "all_variants": true
+      "all_variants": true,
+      "solid": true
      },
      {
       "id": "sofa",
@@ -1953,7 +1963,8 @@
         "name": "center_on_wall",
         "w": 0.3
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -2233,7 +2244,8 @@
         "name": "center_on_wall",
         "w": 0.3
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -2502,7 +2514,8 @@
         "name": "apart",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "bookcase",
@@ -2522,7 +2535,8 @@
         "name": "center_on_wall",
         "w": 0.3
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -2831,7 +2845,8 @@
         "name": "center_on_wall",
         "w": 0.3
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -3122,7 +3137,8 @@
         "name": "far_from_door",
         "w": 0.5
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "cabinet",
@@ -3137,7 +3153,8 @@
         "name": "apart",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -3673,7 +3690,8 @@
         "name": "far_from_door",
         "w": 0.5
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "cabinet",
@@ -3688,7 +3706,8 @@
         "name": "apart",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "plant",
@@ -4647,7 +4666,8 @@
         "w": 0.7
        }
       ],
-      "reach": true
+      "reach": true,
+      "solid": true
      },
      {
       "id": "shelf_b",
@@ -4678,7 +4698,8 @@
         "of": "shelf",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      }
     ]
    },
@@ -4715,7 +4736,8 @@
         "w": 0.7
        }
       ],
-      "reach": true
+      "reach": true,
+      "solid": true
      },
      {
       "id": "cabinet",
@@ -4747,7 +4769,8 @@
         "of": "shelf",
         "w": 1.0
        }
-      ]
+      ],
+      "solid": true
      }
     ]
    },
@@ -4784,7 +4807,8 @@
         "name": "far_from_door",
         "w": 0.7
        }
-      ]
+      ],
+      "solid": true
      },
      {
       "id": "cabinet_b",
@@ -4817,7 +4841,8 @@
         "w": 1.0
        }
       ],
-      "chance": 0.7
+      "chance": 0.7,
+      "solid": true
      }
     ]
    }

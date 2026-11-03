@@ -63,6 +63,8 @@ pub struct Item {
     #[serde(default)] pub front: f64,
     /// taller than a sill it does not stand before a window
     #[serde(default)] pub avoid_window: bool,
+    /// blocks as its whole box, not part by part: nothing slots in between a bookcase's shelves
+    #[serde(default)] pub solid: bool,
     /// the walk must reach its front
     #[serde(default)] pub reach: bool,
     /// its soft parts keep to the walk and the doors like hard ones (foliage; bedding may spread over them)

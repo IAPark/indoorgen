@@ -159,7 +159,9 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
       let diff = zq - zs;
       if (diff > 0.02 * R && diff < R * 1.2) { occ += 1.0; }
     }
-    ao = 1.0 - g.params.z * occ / f32(N);
+    // (a wall seen nearly edge-on has its samples fall behind the depth of its own next pixels: dark grain, no real occlusion)
+    let facing = abs(dot(n, normalize(g.cam_pos.xyz - p)));
+    ao = 1.0 - g.params.z * smoothstep(0.08, 0.3, facing) * occ / f32(N);
   }
   // ao only attenuates the indirect part; approximated by scaling the whole radiance gently
   var c = hdr * mix(1.0, ao, 0.9) * g.params.y;
