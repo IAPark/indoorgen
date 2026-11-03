@@ -363,7 +363,10 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             if let Some((_, e)) = best { chosen.push(e); lens = 13.0; }
         }
         for (k, e) in chosen.iter().enumerate() {
-            let mut cm = cam_look(*e, tgt, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" }); out.push(cm);
+            let mut cm = cam_look(*e, tgt, lens); cm.name = format!("{}_{}", rm.name, if k == 0 { "A" } else { "B" });
+            // (PREVIEW_CAMS=1: one line per camera, for rendering the same view in Blender)
+            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CAM {} {} {} {} {} {} {} {}", cm.name, e.x, e.y, e.z, tgt.x, tgt.y, tgt.z, lens); }
+            out.push(cm);
             if out.len() >= n { return out; }
         }
     }
