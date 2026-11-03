@@ -233,7 +233,10 @@
     ],
     "chance": 0.45
    }
-  ]
+  ],
+  "noise": 0.4,
+  "pick_within": 0.9,
+  "jitter": 0.5
  },
  "closet": {
   "program": [
@@ -284,7 +287,10 @@
      }
     ]
    }
-  ]
+  ],
+  "noise": 0.4,
+  "pick_within": 0.9,
+  "jitter": 0.5
  },
  "hallway": {
   "program": [
@@ -398,7 +404,10 @@
      }
     ]
    }
-  ]
+  ],
+  "noise": 0.4,
+  "pick_within": 0.9,
+  "jitter": 0.5
  },
  "bathroom": {
   "program": [
@@ -518,7 +527,10 @@
      }
     ]
    }
-  ]
+  ],
+  "noise": 0.4,
+  "pick_within": 0.9,
+  "jitter": 0.5
  },
  "living-room": {
   "program": [
@@ -857,7 +869,10 @@
      }
     ]
    }
-  ]
+  ],
+  "noise": 0.4,
+  "pick_within": 0.9,
+  "jitter": 0.5
  },
  "dining-room": {
   "program": [
@@ -1088,6 +1103,9 @@
      }
     ]
    }
-  ]
+  ],
+  "noise": 0.4,
+  "pick_within": 0.9,
+  "jitter": 0.5
  }
 }

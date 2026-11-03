@@ -363,8 +363,8 @@ pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str
                         if st.world.placed.iter().any(|o| o.role == HARD && o.z[0] < 1.9 && sat(&f.hull, &o.hull) < -0.002) { fail = Some(Why::Hard); }
                     }
                     let c = pose.apply([(s.lo[0] + s.hi[0]) / 2.0, (s.lo[1] + s.hi[1]) / 2.0]);
-                    let terms: Vec<(String, f64)> = it.terms.iter().map(|tm| (tm.name.clone(), tm.w * term_value(tm, room, c, t, len, st, wall_behind(room, pose.apply([s.lo[0], (s.lo[1] + s.hi[1]) / 2.0]), [-pose.yaw.cos(), -pose.yaw.sin()])))).collect();
-                    let sc: f64 = terms.iter().map(|x| x.1).sum::<f64>() + 0.15 * noise(pseed, { draw += 1; draw }) - if it.all_variants { 0.4 * vi as f64 } else { 0.0 };
+                    let terms: Vec<(String, f64)> = it.terms.iter().map(|tm| (tm.name.clone(), tm.w * (rules.jitter * (2.0 * noise(hash(&format!("{}/{}/{}", room.name, it.id.split('#').next().unwrap_or(""), tm.name), seed), 1) - 1.0)).exp() * term_value(tm, room, c, t, len, st, wall_behind(room, pose.apply([s.lo[0], (s.lo[1] + s.hi[1]) / 2.0]), [-pose.yaw.cos(), -pose.yaw.sin()])))).collect();
+                    let sc: f64 = terms.iter().map(|x| x.1).sum::<f64>() + rules.noise * noise(pseed, { draw += 1; draw }) - if it.all_variants { 0.4 * vi as f64 } else { 0.0 };
                     if fail.is_none() { cands.push((sc, pose, ps, terms)); } else {
                         let w = fail.unwrap();
                         *rep.why.entry(format!("{w:?}")).or_default() += 1;
@@ -426,7 +426,11 @@ pub fn solve_with(room: &Room, rules: &RoomRules, seed: u64, why_id: Option<&str
         beam = kept;
         report.push(rep);
     }
-    let best = beam.into_iter().next().unwrap();
+    // (drawn among the layouts close to the best: variety without giving anything up)
+    let top = beam[0].score;
+    let close = beam.iter().filter(|b| b.score >= top - rules.pick_within).count().max(1);
+    let which = (noise(hash(&room.name, seed), 2) * close as f64) as usize;
+    let best = beam.into_iter().nth(which.min(close - 1)).unwrap();
     // (an item another stood in for is no fault)
     for r in report.iter_mut() { r.placed = best.items.iter().any(|p| p.id == r.id) || (r.not_wanted && order.iter().find(|i| i.id == r.id).map_or(false, |i| i.unless.iter().any(|u| best.items.iter().any(|p| &p.id == u)))); if let Some(p) = best.items.iter().find(|p| p.id == r.id) { r.variant = format!("{}{}", p.variant, if p.side { "+side" } else { "" }); } }
     let walk = best.world.walk(&[]);

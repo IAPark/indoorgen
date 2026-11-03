@@ -3,7 +3,16 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct RoomRules { pub program: Vec<Item> }
+pub struct RoomRules {
+    pub program: Vec<Item>,
+    /// noise on every candidate's score (the terms are worth about 1)
+    #[serde(default = "noise_d")] pub noise: f64,
+    /// the finished layout is drawn from those within this of the best (a may item is worth 1, so under 1 none is given up for it)
+    #[serde(default)] pub pick_within: f64,
+    /// how much a room's own priorities differ: each term's weight times e^(+-jitter), drawn per room
+    #[serde(default)] pub jitter: f64,
+}
+fn noise_d() -> f64 { 0.15 }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
