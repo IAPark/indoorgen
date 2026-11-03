@@ -348,6 +348,85 @@ fn coil(g: &Mesh, s: &BedSpec, r: &mut Rng) -> Mesh {
     super::coil::make_coiled(g, s.dot_distance, s.dot_depth, s.dot_size, ru, sf)
 }
 
+/// a padded panel over a flat slab's outline (x, z; thin in y): two shells on a grid, swelling from a narrow rim to the slab's thickness
+fn pad_panel(slab: &Mesh) -> Mesh { pad_panel_rim(slab, 0.07, 0.12, None) }
+
+/// `tuft`: (spacing, depth) of buttons pressed in on a staggered lattice
+fn pad_panel_rim(slab: &Mesh, rim: f64, edge: f64, tuft: Option<(f64, f64)>) -> Mesh {
+    let (lo, hi) = slab.bounds();
+    let mut pts: Vec<[f64; 2]> = slab.pos.iter().map(|q| [q[0], q[2]]).collect();
+    pts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let cr = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut hull: Vec<[f64; 2]> = vec![];
+    for pass in 0..2 {
+        let start = hull.len();
+        let it: Vec<[f64; 2]> = if pass == 0 { pts.clone() } else { pts.iter().rev().cloned().collect() };
+        for q in it {
+            while hull.len() >= start + 2 && cr(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 1e-9 { hull.pop(); }
+            hull.push(q);
+        }
+        hull.pop();
+    }
+    // the outline's x extent at a height
+    let span = |z: f64| -> (f64, f64) {
+        let (mut a, mut b) = (f64::MAX, f64::MIN);
+        for k in 0..hull.len() {
+            let (p, q) = (hull[k], hull[(k + 1) % hull.len()]);
+            if (p[1] - z) * (q[1] - z) > 0.0 { continue }
+            let x = if (q[1] - p[1]).abs() < 1e-9 { a = a.min(p[0].min(q[0])); b = b.max(p[0].max(q[0])); continue } else { p[0] + (q[0] - p[0]) * (z - p[1]) / (q[1] - p[1]) };
+            a = a.min(x); b = b.max(x);
+        }
+        if a > b { (lo[0], hi[0]) } else { (a, b) }
+    };
+    let (nx, nz) = if tuft.is_some() { (120usize, 80usize) } else { (48usize, 32usize) };
+    let (yc, half) = ((lo[1] + hi[1]) / 2.0, (hi[1] - lo[1]) / 2.0);
+    let (z0, z1) = (lo[2] + 1e-5, hi[2] - 1e-5);
+    let mut m = Mesh::new();
+    for side in [-1.0f64, 1.0] {
+        for j in 0..=nz {
+            // (rows bunch toward the rim, where the swell is)
+            let e = |t: f64| if tuft.is_some() { t } else { 0.5 - 0.5 * (std::f64::consts::PI * t).cos() };
+            let (tz, z) = { let t = j as f64 / nz as f64; (t, z0 + (z1 - z0) * e(t)) };
+            let (a, b) = span(z);
+            for i in 0..=nx {
+                let tx = i as f64 / nx as f64;
+                let x = a + (b - a) * e(tx);
+                let d = (x - a).min(b - x).min(z - z0).min(z1 - z);
+                let u = (d / rim).clamp(0.0, 1.0);
+                let swell = edge + (1.0 - edge) * (1.0 - (1.0 - u) * (1.0 - u)).sqrt();
+                let _ = tz;
+                let press = tuft.map_or(0.0, |(dist, depth)| {
+                    let (dz, dx) = (dist * 0.866, dist);
+                    let row = (z / dz).round();
+                    let mut best = f64::MAX;
+                    for k in [row - 1.0, row, row + 1.0] {
+                        let off = if (k as i64).rem_euclid(2) == 1 { 0.5 * dx } else { 0.0 };
+                        let cx = ((x - off) / dx).round() * dx + off;
+                        best = best.min((x - cx).powi(2) + (z - k * dz).powi(2));
+                    }
+                    (depth / half.max(1e-4)).min(0.55) * (-best / (0.26 * dist).powi(2)).exp()
+                });
+                m.pos.push([x, yc + side * half * swell * (1.0 - press), z]);
+            }
+        }
+    }
+    let at = |s: usize, i: usize, j: usize| (s * (nx + 1) * (nz + 1) + j * (nx + 1) + i) as u32;
+    for j in 0..nz { for i in 0..nx {
+        m.faces.push(vec![at(0, i, j), at(0, i + 1, j), at(0, i + 1, j + 1), at(0, i, j + 1)]);
+        m.faces.push(vec![at(1, i, j + 1), at(1, i + 1, j + 1), at(1, i + 1, j), at(1, i, j)]);
+    } }
+    // the rim between the shells
+    for i in 0..nx {
+        m.faces.push(vec![at(1, i, 0), at(1, i + 1, 0), at(0, i + 1, 0), at(0, i, 0)]);
+        m.faces.push(vec![at(0, i, nz), at(0, i + 1, nz), at(1, i + 1, nz), at(1, i, nz)]);
+    }
+    for j in 0..nz {
+        m.faces.push(vec![at(0, 0, j), at(0, 0, j + 1), at(1, 0, j + 1), at(1, 0, j)]);
+        m.faces.push(vec![at(1, nx, j), at(1, nx, j + 1), at(0, nx, j + 1), at(0, nx, j)]);
+    }
+    m
+}
+
 /// butil.modify_mesh(obj, "BEVEL", segments=4): width 0.1, angle limit 30 degrees
 fn pad_bevel(m: &Mesh) -> Mesh {
     if std::env::var("PAD_OLD").is_err() {
@@ -532,7 +611,10 @@ impl BedSpec {
                     let j = serde_json::json!({"verts": g.pos, "polys": g.faces});
                     std::fs::write(p, j.to_string()).ok();
                 }
-                coil(&g, self, r)
+                // (on a grid: the divided slab kept a fan of long triangles, and the coiling turned it into a sunburst)
+                let _ = (r.uniform(0.06, 0.08), r.uniform(0.5, 1.0));
+                if std::env::var("BEDDBG").is_ok() { eprintln!("BEDPANEL tufted"); }
+                pad_panel_rim(&g, 0.03, 0.15, Some((self.dot_distance, self.dot_depth)))
             }
             1 => {
                 let g = divide(&m, self.panel_distance, r);
@@ -583,15 +665,17 @@ impl BedSpec {
                 if let Ok(p) = std::env::var("BEDDUMP2") {
                     std::fs::write(p, serde_json::json!({"verts": g.pos, "polys": g.faces}).to_string()).ok();
                 }
-                coil(&g, self, r)
+                // (on a grid: the divided slab kept a fan of long triangles, and the coiling turned it into a sunburst)
+                let _ = (r.uniform(0.06, 0.08), r.uniform(0.5, 1.0));
+                if std::env::var("BEDDBG").is_ok() { eprintln!("BEDPANEL tufted"); }
+                pad_panel_rim(&g, 0.03, 0.15, Some((self.dot_distance, self.dot_depth)))
             } else {
                 let g = back_divide(&slab, self.panel_distance, garbled, r);
                 let sel: Vec<bool> = g.faces.iter().map(|f| face_normal(&g, f)[1].abs() > 0.5).collect();
-                let ins = inset_individual(&g, &sel, self.panel_margin, self.panel_margin);
-                if std::env::var("BEDDBG").is_ok() {
-                    eprintln!("backpad: slab {} verts divided {}v/{}f inset {}v/{}f", slab.pos.len(), g.pos.len(), g.faces.len(), ins.pos.len(), ins.faces.len());
-                }
-                pad_bevel(&ins)
+                let _ = (sel, self.panel_margin);
+                // (a grid over the slab's outline: the bevelled polygon was one face with a fan of long thin triangles, a sunburst under smooth shading)
+                if std::env::var("BEDDBG").is_ok() { eprintln!("BEDPANEL pad"); }
+                pad_panel(&g)
             };
             for p in g.pos.iter_mut() {
                 *p = [p[0] * (1.0 - 1e-3), p[1] * (1.0 - 1e-3), p[2] * (1.0 - 1e-3)];

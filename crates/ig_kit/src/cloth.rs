@@ -983,6 +983,8 @@ pub fn rest_and_wrap(pos: &mut [V3], col: &Collider, depth: f64, skin: f64, max_
         return;
     }
     let lo = pos.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
+    // (the lower half only follows what is below: with the depth past a thin pillow's thickness its top took the print of a quilted mattress)
+    let depth = depth.min(0.5 * (pos.iter().map(|p| p[2]).fold(f64::NEG_INFINITY, f64::max) - lo).max(1e-3));
     let below = |p: V3| -> Option<f64> {
         let a = [p[0], p[1], p[2] + 0.12];
         let b = [p[0], p[1], p[2] - 0.6];
@@ -1023,10 +1025,12 @@ pub fn rest_and_wrap(pos: &mut [V3], col: &Collider, depth: f64, skin: f64, max_
     // (no further than 40% of its thickness: what it lies on stays inside it) and its underside rides up over what stands higher
     let hi = pos.iter().map(|p| p[2]).fold(f64::NEG_INFINITY, f64::max);
     let lo2 = pos.iter().map(|p| p[2]).fold(f64::INFINITY, f64::min);
-    let mut gaps: Vec<f64> = pos.iter().zip(zs.iter()).filter_map(|(p, z)| z.map(|z| p[2] - z - skin)).collect();
+    // (the underside only: with the top surface in the median every pillow sank the full 40 % and lay squashed flat)
+    let under = lo2 + 0.3 * (hi - lo2);
+    let mut gaps: Vec<f64> = pos.iter().zip(zs.iter()).filter(|(p, _)| p[2] < under).filter_map(|(p, z)| z.map(|z| p[2] - z - skin)).collect();
     if gaps.is_empty() { return }
     gaps.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let sink = gaps[gaps.len() / 2].clamp(0.0, 0.4 * (hi - lo2));
+    let sink = gaps[gaps.len() / 2].clamp(0.0, 0.25 * (hi - lo2));
     for (p, z) in pos.iter_mut().zip(zs.iter()) {
         p[2] -= sink;
         if let Some(z) = z { if p[2] < z + skin { p[2] = z + skin; } }
