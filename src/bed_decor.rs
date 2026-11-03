@@ -253,7 +253,7 @@ pub fn add(scene: &mut Scene, state: &State, room_polys: &[(String, crate::shp::
         for (_, c) in cands {
             let fz = st.0[2];
             let wb: Box3 = ([c[0] - rad, c[1] - rad, fz], [c[0] + rad, c[1] + rad, fz + hgt]);
-            if !crate::shp::contains_pt(rp, c) || !fits(&taken, &wb) || !clear_of_others(k, &wb) { continue }
+            if !crate::shp::contains_pt(rp, c) || !fits(&taken, &wb) || !clear_of_others("", &wb) { continue }
             let wicker = scene.material({ let mut m = Material::diffuse(&format!("basket:{i}"), [0.62, 0.5, 0.33], 0.85); m.spec = Some(json!({"cls": "fabric.CoarseKnitFabric", "kwargs": {}, "seed": r.next_u64() % 1_000_000})); m });
             let mut m = limb([c[0], c[1], fz], [c[0], c[1], fz + hgt], rad * 0.9, rad, true);
             m.append(&limb([c[0], c[1], fz + hgt - 0.02], [c[0], c[1], fz + hgt + 0.01], rad + 0.01, rad + 0.01, true));
