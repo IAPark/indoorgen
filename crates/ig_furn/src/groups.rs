@@ -1992,7 +1992,10 @@ pub fn dining_furnish(ctx: &mut Ctx, state: &mut State, rng: &mut Rng, only_room
             if !new_piece(ctx, state, rng, cls, &room, &name) { log.push(format!("{room}: no {cls} placeholder")); continue }
             if what == "sideboard" {
                 let base = state.objs[&name].clone();
-                let _ = super::solver::set_width(ctx, state, &name, &base, 1.3, 1.0);
+                // (sideboard height and depth: a bookcase's own 2 m read as a tall unit beside the table; `set_size` says false here only
+                // because the piece is not placed yet, so what counts is the size it took)
+                let _ = super::solver::set_size(ctx, state, &name, &base, [1.3, 0.38, 0.9], 1.0);
+                if state.objs[&name].generator.as_ref().and_then(super::solver::cur_size).map_or(true, |c| (c[2] - 0.9).abs() > 0.05) { let _ = super::solver::set_width(ctx, state, &name, &base, 1.3, 1.0); }
             }
             // scored on the placed piece (place_on_wall scores after placing): the table gap, the doors, centred on its wall
             // (a second piece on another wall than the first: two cabinets side by side read as a storage wall)

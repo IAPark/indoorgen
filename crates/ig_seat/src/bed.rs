@@ -1370,6 +1370,12 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
     let c0 = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     // the seams run from the cloth's middle (Blanket::box_pinch)
     let dome = |d: f64| { let t = (d / margin).rem_euclid(1.0); let t = if t > 0.5 { 1.0 - t } else { t } * 2.0; (1.0 - (1.0 - t) * (1.0 - t)).sqrt() };
+    // (tucked in, its inner layer is never seen from within, and at the hem, where the fill has eased to nothing, it came through the outer one, black)
+    // (those not facing up, the cloth still flat, so the strip closing the layers at the hem too: a seam's points lie as low on the outer layer)
+    let inner: Vec<bool> = m.faces.iter().map(|f| {
+        let n = f.len();
+        two_layers && (0..n).map(|i| { let (a, b) = (m.pos[f[i] as usize], m.pos[f[(i + 1) % n] as usize]); a[0] * b[1] - b[0] * a[1] }).sum::<f64>() < 1e-9
+    }).collect();
     for p in m.pos.iter_mut() {
         let (layer, stack) = if p[2] <= 1.0 { (p[2].max(0.0), 0.0) } else { ((p[2] - 2.0).clamp(0.0, 1.0), (p[2] - 1.0).min(1.0)) };
         let edge = (p[0] - lo[0]).min(hi[0] - p[0]).min(p[1] - lo[1]).min(hi[1] - p[1]).max(0.0);
@@ -1381,6 +1387,13 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
     }
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (sy, cy) = slide[1].sin_cos();
+    // tucked in, the hem reaches the rail all round (a short overhang rode up at the middle of the foot, showing the mattress)
+    let stretch = if g.tuck {
+        let need = std::f64::consts::FRAC_PI_2 * DRAPE_R + g.gap_foot.max(g.gap_side).hypot(g.top - DRAPE_R - g.rail);
+        let over = (hi[0] + pull - g.x1).min((hi[1] - lo[1]) / 2.0 - slide[0].abs() - g.yh).max(0.05);
+        // (the same for every cloth with the usual overhang, so they nest: each on its own, the cover and the comforter crossed)
+        (need * 1.08 / over).max(2.5)
+    } else { 1.0 };
     for p in m.pos.iter_mut() {
         let off = p[2];
         let (dx0, dy0) = (p[0] - c[0], p[1] - c[1]);
@@ -1400,7 +1413,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let u = g.perimeter(qx, qy, dx, dy, ang);
         let wave = pl.at(u);
         // the hem's length waves with the folds
-        let s = s0 * (1.0 + 0.06 * pl.at(u * 0.37 + 11.0));
+        let s = stretch * s0 * (1.0 + 0.06 * pl.at(u * 0.37 + 11.0));
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
         let (h, z, nh, nz) = g.profile(s, gap, 0.0);
         let ramp = (s / 0.2).min(1.0);
@@ -1415,8 +1428,14 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         // (at the head end it stays clear of the headboard)
         let px = (qx + nx * h).max(if nx < 0.0 { 0.005 } else { f64::NEG_INFINITY });
         let py = qy + ny * h;
-        let (px, py) = (px.min(g.xmax), py.clamp(-g.ymax, g.ymax));
+        // (the layer under the cover a little inside the limit: on the same plane they fought, a jagged black patch on the bed's side)
+        let inset = if lift > 0.0 { 0.0 } else { 0.006 };
+        let (px, py) = (px.min(g.xmax - inset), py.clamp(-g.ymax + inset, g.ymax - inset));
         *p = [px, py, z + (off + rum) * nz];
+    }
+    if g.tuck {
+        let mut i = 0;
+        m.faces.retain(|_| { i += 1; !inner[i - 1] });
     }
     m
 }

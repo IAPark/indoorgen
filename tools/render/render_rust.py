@@ -1066,6 +1066,10 @@ else:
   if args.cam:
     c = json.load(open(args.cam))
     co.matrix_world = mathutils.Matrix(c["matrix"]); cam.lens = c.get("lens", 15); cam.sensor_width = c.get("sensor_width", 36)
+# RENDER_HIDE=substr,substr: objects whose name holds one of these are left out (which part of a piece shows a defect)
+for _h in filter(None, os.environ.get("RENDER_HIDE", "").split(",")):
+    for _o in [o for o in bpy.data.objects if _h in o.name]:
+        print("RENDER_HIDE", _o.name); bpy.data.objects.remove(_o)
 # (far clip: the default 1 km cut camera rays still inside the 450 m haze below ~25 deg up -- a hard grey band across the sky; the
 # terrain reaches 2.5 km and the cloud layer 9 km)
 if sc.camera is not None: sc.camera.data.clip_end = 30000.0

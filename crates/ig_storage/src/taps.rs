@@ -38,7 +38,7 @@ pub fn tap_bounds(fseed: u64, inst: u64) -> ([f64; 3], [f64; 3]) {
     let f = |i: usize| v[i].as_f64().unwrap_or(0.0);
     let b = |i: usize| v[i].as_bool().unwrap_or(false);
     let (base_width, tap_head, rot_z, tap_height, switch, hand_type, hx, hy, different) = (f(0), f(1), f(2), f(3), b(5), b(7), f(8), f(9), b(11));
-    let mut boxes: Vec<([f64; 3], [f64; 3])> = vec![([-base_width / 2.0, -0.35, 0.0], [base_width / 2.0, 0.35, 0.05])];
+    let mut boxes: Vec<([f64; 3], [f64; 3])> = vec![([-base_width / 2.0, -0.25, 0.0], [base_width / 2.0, 0.25, 0.05])];
     // a box's xy corners turned about z
     let turn = |lo: [f64; 3], hi: [f64; 3], a: f64| -> ([f64; 3], [f64; 3]) {
         let (s, c) = a.sin_cos();
@@ -81,6 +81,9 @@ pub fn tap_bounds(fseed: u64, inst: u64) -> ([f64; 3], [f64; 3]) {
 }
 
 /// tap mesh for TapFactory(fseed).spawn_asset(inst) in the tap frame (before the sink places it)
+/// the base plate's top in the scaled mesh (0.05 x 0.4), a little over for its bevel
+const PLATE_TOP: f64 = 0.0205;
+
 pub fn tap_mesh(fseed: u64, inst: u64) -> Mesh {
     static TPL: OnceLock<GnTemplate> = OnceLock::new();
     let tpl = TPL.get_or_init(|| GnTemplate::parse(TAP_JSON));
@@ -96,6 +99,8 @@ pub fn tap_mesh(fseed: u64, inst: u64) -> Mesh {
         let (x, y, z) = (p[0] as f32 * 0.4, p[1] as f32 * 0.4, p[2] as f32 * 0.4);
         let (s, c) = (std::f32::consts::PI.sin(), std::f32::consts::PI.cos());
         *p = [(x * c - y * s) as f64, (x * s + y * c) as f64, z as f64];
+        // the base plate 20 cm long, not the group's 28 (it hung over the back of a rounded basin); the handles stand 8 cm either side
+        if p[2] <= PLATE_TOP { p[1] *= 0.25 / 0.35; }
     }
     m
 }
