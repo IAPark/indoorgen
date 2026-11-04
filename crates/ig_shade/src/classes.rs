@@ -10,7 +10,8 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
     let seed = spec.get("seed").and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|x| x as u64))).unwrap_or(0);
     let kw = spec.get("kwargs").cloned().unwrap_or(json!({}));
     let mut r = R::new(seed);
-    let family = mat.split(':').next().unwrap_or("");
+    // (without the scene's ~N, which keeps same-named materials with different specs apart: read as part of the name, white toilets and basins lost their rule and drew any colour)
+    let family = mat.split(':').next().unwrap_or("").split('~').next().unwrap_or("");
     let base = [rgb[0] as f64, rgb[1] as f64, rgb[2] as f64];
     let mut g = match cls {
         // (walls keep the room's paint, book pages their paper colour: the shader draws any hue)
