@@ -125,8 +125,8 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   out.color = vec4<f32>(col, a);
   out.nrm = vec4<f32>(n, surf_coat);
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
-  out.alb = vec4<f32>(albedo.rgb, surf_rough);
-  out.mat = vec4<f32>(surf_metal, surf_coat, m.flags.w, 1.0);
+  out.alb = vec4<f32>(albedo.rgb, select(max(surf_rough, 0.002), 0.0, m.flags.w < -0.5));
+  out.mat = vec4<f32>(surf_metal, surf_coat, max(m.flags.w, 0.0), 1.0);
   if (g.params2.w > 0.5 && m.flags.x < 1.5) { out.color = vec4<f32>(m.emissive.rgb, 1.0); }
   // (glass, over the traced picture: a little is lost in it; what lies behind is already lit)
   if (g.params2.w > 0.5 && m.flags.x > 1.5) {

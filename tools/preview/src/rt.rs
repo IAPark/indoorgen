@@ -193,7 +193,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let tex = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let dep = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let out = |b| E { binding: b, visibility: c, ty: T::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: FMT, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
-    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12)] });
+    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13)] });
     let denoise_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(1), dep(2), tex(3), tex(4), tex(5), out(6), out(7)] });
     let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10)] });
     let pipe = |bgl: &wgpu::BindGroupLayout, src: &str, ep: &str| {
@@ -239,7 +239,7 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: &[([Vec3; 3], u32)], mats: &[Mat
     SceneData { wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
 }
 
-pub struct Gb<'a> { pub depth: &'a wgpu::TextureView, pub nrm: &'a wgpu::TextureView, pub alb: &'a wgpu::TextureView, pub mat: &'a wgpu::TextureView, pub lit: &'a wgpu::TextureView, pub hdr: &'a wgpu::TextureView }
+pub struct Gb<'a> { pub mirror_lit: &'a wgpu::TextureView, pub depth: &'a wgpu::TextureView, pub nrm: &'a wgpu::TextureView, pub alb: &'a wgpu::TextureView, pub mat: &'a wgpu::TextureView, pub lit: &'a wgpu::TextureView, pub hdr: &'a wgpu::TextureView }
 
 pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, gb: &Gb, res: (u32, u32), ss: u32, qu: Quality, vp: Mat4, eye: Vec3, frame: u32, scales: [f32; 3], cutaway: bool) {
     let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
@@ -252,7 +252,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
         B { binding: 3, resource: sd.mats.as_entire_binding() }, B { binding: 4, resource: sd.lights.as_entire_binding() }, B { binding: 5, resource: sd.sky.as_entire_binding() },
         B { binding: 6, resource: R::TextureView(gb.depth) }, B { binding: 7, resource: R::TextureView(gb.nrm) }, B { binding: 8, resource: R::TextureView(gb.alb) },
-        B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }] });
+        B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }, B { binding: 13, resource: R::TextureView(gb.mirror_lit) }] });
     let filter = |enc: &mut wgpu::CommandEncoder, a: usize, b: usize, step: usize| {
         let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.denoise_bgl, entries: &[
             B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: p.step_ubufs[step].as_entire_binding() }, B { binding: 2, resource: R::TextureView(gb.depth) }, B { binding: 3, resource: R::TextureView(gb.nrm) },

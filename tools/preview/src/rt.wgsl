@@ -28,6 +28,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(7) var g_nrm: texture_2d<f32>;
 @group(0) @binding(8) var g_alb: texture_2d<f32>;
 @group(0) @binding(12) var irr_done: texture_2d<f32>;
+@group(0) @binding(13) var m_lit: texture_2d<f32>;
 @group(0) @binding(9) var out_irr: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(10) var out_spec: texture_storage_2d<rgba16float, write>;
 struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
@@ -340,7 +341,11 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   if ((rough < 0.03 || (coat < 0.25 && rough < 0.5)) && p.misc2.y > 0u) {
     let v = normalize(pos - p.cam.xyz);
     let r0 = reflect(v, n);
-    for (var s = 0u; s < p.misc2.y; s++) {
+    // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
+    let is_mirror = rough < 0.001;
+    let rays = select(p.misc2.y, 0u, is_mirror);
+    if (is_mirror) { sp = textureLoad(m_lit, px, 0).rgb; }
+    for (var s = 0u; s < rays; s++) {
       var rd = r0;
       if (rough > 0.03) { rd = cone(r0, rough * rough * 1.2); }
       if (dot(rd, n) <= 0.0) { rd = r0; }
@@ -358,7 +363,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
         sp += m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e);
       }
     }
-    sp /= f32(p.misc2.y);
+    if (rays > 0u) { sp /= f32(rays); }
   }
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }

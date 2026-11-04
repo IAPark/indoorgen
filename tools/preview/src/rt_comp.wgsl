@@ -127,7 +127,20 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let vf = 0.25 / max(mix(nv, 1.0, r2 * 0.5) * mix(ndl, 1.0, r2 * 0.5), 0.05);
   let spec_sun = (f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(h_, vdir), 0.0), 5.0)) * min(ggx * vf, 40.0) * ndl * p.sun_col.rgb * v;
   // (rays only for the truly glossy: anything rougher, or a coat over fine relief as Blender's surfaces have, gives back the room's light, blurred. Traced, floors came out in sharp glare)
-  let traced = rough < 0.03 || (coat < 0.25 && rough < 0.5);
+  // (and not on a thin rail no traced pixel landed on: what it would borrow is its neighbours', who traced nothing, and bright metal came out black)
+  // (brushed metal that is thin or curved too: a sharp ray per pixel put hard glints on rails and frames that Blender, with its fine relief, draws soft. Flat panels keep their reflections)
+  var flat_here = true;
+  if (metal >= 0.5 && rough >= 0.03) {
+    // (one side is only an edge nearby. Not in a mirror's picture, at one sample a pixel: there a speck of relief counted, and left dots across a door)
+    var off_ = 0; let r_ = ss + 1;
+    for (var k = 0; k < 4; k++) {
+      let o = array<vec2<i32>, 4>(vec2<i32>(r_, 0), vec2<i32>(-r_, 0), vec2<i32>(0, r_), vec2<i32>(0, -r_))[k];
+      let nq = textureLoad(c_nrm, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).xyz;
+      if (dot(n, nq) < 0.98 * length(nq)) { off_++; }
+    }
+    flat_here = off_ < 2 || ss == 1;
+  }
+  let traced = (rough < 0.03 || (coat < 0.25 && rough < 0.5 && flat_here)) && fine.r < 0.0;
   var refl = select(e, s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
