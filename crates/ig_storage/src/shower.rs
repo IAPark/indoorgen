@@ -15,8 +15,8 @@ pub struct Shower {
     width: f64,
     height: f64,
     tray_h: f64,
-    corner: bool,
-    door_side: bool,
+    /// is there a wall at its y = 0 side, and at its y = w side: glass stands where there is none (set when it has been placed; none known, glass on both)
+    walls: [bool; 2],
     seed: u64,
 }
 
@@ -36,8 +36,8 @@ impl Shower {
             width,
             height,
             tray_h: r.uniform(0.03, 0.06),
-            corner: r.f64() < 0.5,
-            door_side: r.f64() < 0.5,
+            // (two draws that once chose the side panes by chance, kept so that the next ones stay as they were)
+            walls: { r.f64(); r.f64(); crate::api::kitchen_join().map_or([false; 2], |e| [e[0] > 0.5, e[1] > 0.5]) },
             seed: r.randint(0, 1_000_000) as u64,
         }
     }
@@ -62,7 +62,7 @@ impl Shower {
             let m = limb([x, y, th], [x, y, h], 0.012, 0.012, true);
             a.mesh(m, &chrome, None);
         };
-        // front screen along y at x = d (fixed panel + door), and for corner showers a side screen along x at y = w (or 0)
+        // front screen along y at x = d (fixed panel + door)
         let front_x = d - 0.01;
         let (fy0, fy1) = (0.0, w);
         let split = fy0 + (fy1 - fy0) * 0.5;
@@ -88,14 +88,17 @@ impl Shower {
         a.mesh(hb, &chrome, None);
         post(&mut a, front_x, fy0 + 0.01);
         post(&mut a, front_x, split);
-        if self.corner {
-            let sy = if self.door_side { w - 0.01 } else { 0.01 };
-            let side = Mesh::cuboid([0.02, sy - gt / 2.0, th + 0.01], [front_x - 0.02, sy + gt / 2.0, h]);
-            a.mesh(side, &glass, Some(([0.0, sy - 0.01, th], [front_x, sy + 0.01, h])));
+        // a shower is closed all round: walls where it has them, glass on the sides where it does not
+        for (side, sy) in [(0, 0.01), (1, w - 0.01)] {
+            if self.walls[side] { continue }
+            let pane = Mesh::cuboid([0.02, sy - gt / 2.0, th + 0.01], [front_x - 0.02, sy + gt / 2.0, h]);
+            a.mesh(pane, &glass, Some(([0.0, sy - 0.01, th], [front_x, sy + 0.01, h])));
             post(&mut a, front_x, sy);
+            post(&mut a, 0.015, sy);
+            a.mesh(limb([0.015, sy, h], [front_x, sy, h], 0.01, 0.01, true), &chrome, None);
         }
         // top rail on the front screen
-        let rail = limb([front_x, fy0, h], [front_x, split, h], 0.01, 0.01, true);
+        let rail = limb([front_x, fy0, h], [front_x, fy1, h], 0.01, 0.01, true);
         a.mesh(rail, &chrome, None);
         // riser + head + valve on the back wall (x = 0)
         let ry = w * 0.5;

@@ -184,7 +184,8 @@ impl Piece for FactoryPiece {
         Some(Box::new(p))
     }
     fn with_ends(&self, ends: [f64; 4]) -> Option<Box<dyn Piece>> {
-        if self.class != "KitchenSpaceFactory" { return None }
+        // (a counter run's ends; for a shower, which sides have walls)
+        if self.class != "KitchenSpaceFactory" && self.class != "ShowerFactory" { return None }
         let mut p = FactoryPiece::new(&self.class, self.seed, self.size);
         p.ends = Some(ends);
         p.volumes();

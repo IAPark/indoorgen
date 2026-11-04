@@ -85,7 +85,14 @@ pub fn apply(g: &mut Generated, plan: Plan, seed: u64) -> Vec<String> {
         let rel = groups::floor_relation(&name);
         let key = |id: &str| format!("{}_{}", name.replace('/', "_"), id.replace('#', "_"));
         for p in &s.placed {
-            let Some(piece) = solve::build_piece(p) else { log.push(format!("{name}: {} has no piece", p.id)); continue };
+            let Some(mut piece) = solve::build_piece(p) else { log.push(format!("{name}: {} has no piece", p.id)); continue };
+            // (a shower closes itself where its sides have no wall: known only now that it stands)
+            if p.class == "ShowerFactory" {
+                let (lo, hi) = ig_kit::piece::rigid_bounds(&piece.collision());
+                let wall_at = |y: f64| [0.2, 0.5, 0.8].iter().all(|f: &f64| { let q = p.pose.apply([lo[0] + (hi[0] - lo[0]) * f, y]); house::edge_dist(&s.room.outline, q) < s.room.wall_t / 2.0 + 0.08 });
+                let ends = [if wall_at(lo[1]) { 1.0 } else { 0.0 }, if wall_at(hi[1]) { 1.0 } else { 0.0 }, 0.0, 0.0];
+                if let Some(x) = piece.with_ends(ends) { piece = x; }
+            }
             groups::insert_piece(&mut g.state, &key(&p.id), &p.class, piece, [p.pose.t[0], p.pose.t[1], floor_z + p.pose.z], p.pose.yaw, Some(&rel), p.parent.as_ref().map(|x| key(x)).as_deref(), p.cover);
         }
         // (LAY_DUMP=PATH: what the solver saw, for tools/layview.py; and the checker's own view of the walk beside it)
