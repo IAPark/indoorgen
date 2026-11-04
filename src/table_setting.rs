@@ -88,7 +88,8 @@ pub fn arrange(state: &mut State) -> Vec<String> {
             let (ex, ey) = (half[0] * cy.abs() + half[1] * sy.abs() + 0.01, half[0] * sy.abs() + half[1] * cy.abs() + 0.01);
             // (the whole footprint on the top, 4 cm in from the edge -- on a round or oval top inside its ellipse: a spoon's tip lay on a
             // table's edge bevel)
-            let round = t.tags.contains(crate::furn::tags::Tag::sem("RoundTable"));
+            // (an oval top too, by its collision outline: judged as a rectangle, a fork's tip stuck out past the curved end)
+            let round = t.tags.contains(crate::furn::tags::Tag::sem("RoundTable")) || crate::furn::solver::round_top(&t);
             let (cx, cyy, rx, ry) = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (hi[0] - lo[0]) / 2.0 - 0.04, (hi[1] - lo[1]) / 2.0 - 0.04);
             let off_top = [[-ex, -ey], [ex, -ey], [ex, ey], [-ex, ey]].iter().any(|d| {
                 let q = to_local([pos[0] + d[0], pos[1] + d[1], pos[2]]);

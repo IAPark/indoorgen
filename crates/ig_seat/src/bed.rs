@@ -882,7 +882,8 @@ impl Factory for Bed {
             let top = seat.bounds().1[2];
             let rails: Vec<Mesh> = limbs[limbs.len() - n..].to_vec();
             let span = |ms: &[&Mesh]| -> Option<(f64, f64)> { ms.iter().filter(|m| !m.is_empty()).map(|m| m.bounds()).fold(None, |o: Option<(f64, f64)>, (l, h)| { let a = if h[0] - l[0] > h[1] - l[1] { (l[0], h[0]) } else { (l[1], h[1]) }; Some(o.map_or(a, |x| (x.0.min(a.0), x.1.max(a.1)))) }) };
-            let wide = panels.iter().filter(|g| g.bounds().1[2] > top + 0.2).filter_map(|g| span(&[g])).fold(0.0f64, |w, s| w.max(s.1 - s.0));
+            // (and comes down to the frame: bars high on the wall, their rails gone, hung in the air over the pillows)
+            let wide = panels.iter().filter(|g| { let (l, h) = g.bounds(); h[2] > top + 0.2 && l[2] < top + 0.1 }).filter_map(|g| span(&[g])).fold(0.0f64, |w, s| w.max(s.1 - s.0));
             let (lo, hi) = rails.iter().map(|m| m.bounds()).fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), (a, b)| ([l[0].min(a[0]), l[1].min(a[1]), l[2].min(a[2])], [h[0].max(b[0]), h[1].max(b[1]), h[2].max(b[2])]));
             if n > 0 && wide > (hi[0] - lo[0]).max(hi[1] - lo[1]) - 0.015 { limbs.truncate(limbs.len() - n); }
         }
