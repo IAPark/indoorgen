@@ -26,12 +26,13 @@ struct M { color: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32>, obj: mat4x4<
 @group(1) @binding(2) var base_smp: sampler;
 
 struct VIn { @location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>, @location(2) uv: vec2<f32> };
-struct VOut { @builtin(position) clip: vec4<f32>, @location(0) wpos: vec3<f32>, @location(1) nrm: vec3<f32>, @location(2) uv: vec2<f32> };
+struct VOut { @builtin(position) clip: vec4<f32>, @location(0) wpos: vec3<f32>, @location(1) nrm: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) @interpolate(flat) id: u32 };
 
 @vertex fn vs_shadow(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> { return g.sun_vp * vec4<f32>(pos, 1.0); }
 
-@vertex fn vs_main(v: VIn) -> VOut {
+@vertex fn vs_main(v: VIn, @builtin(instance_index) ii: u32) -> VOut {
   var o: VOut;
+  o.id = ii;
   o.clip = g.viewproj * vec4<f32>(v.pos, 1.0);
   o.wpos = v.pos; o.nrm = v.nrm; o.uv = v.uv;
   return o;
@@ -83,6 +84,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     let g0 = grad / adet;
     if (m.flags.y < 0.5) { let sl = length(g0); n = normalize(n - g0 * min(1.0, 0.35 / max(sl, 1e-6)) * (1.0 - smoothstep(0.2, 0.5, sl))); }
   }
+  /*LIT<*/
   let sun = g.sun_dir.xyz;
   let ndl = max(dot(n, sun), 0.0);
   let sh = select(1.0, shadow_at(v.wpos, n), ndl > 0.0);
@@ -119,6 +121,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
       col = mix(vec3<f32>(0.2, 0.2, 0.21), vec3<f32>(0.46, 0.48, 0.5), rf.z * 0.5 + 0.5) + 0.22 * streak;
     }
   }
+  /*>LIT*/
   var out: FOut;
   var a = 1.0;
   if (m.flags.x > 1.5) { a = select(0.18, m.flags.z, m.flags.z > 0.0); }
@@ -126,7 +129,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   out.nrm = vec4<f32>(n, surf_coat);
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
   out.alb = vec4<f32>(albedo.rgb, select(max(surf_rough, 0.002), 0.0, m.flags.w < -0.5));
-  out.mat = vec4<f32>(surf_metal, surf_coat, max(m.flags.w, 0.0), 1.0);
+  out.mat = vec4<f32>(surf_metal, surf_coat, max(m.flags.w, 0.0), 1.0 + f32(v.id)); // (a: which part, for --bake; plain draws pass 0)
   if (g.params2.w > 0.5 && m.flags.x < 1.5) { out.color = vec4<f32>(m.emissive.rgb, 1.0); }
   // (glass, over the traced picture: a little is lost in it; what lies behind is already lit)
   if (g.params2.w > 0.5 && m.flags.x > 1.5) {

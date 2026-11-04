@@ -18,10 +18,12 @@ rows = []
 tot = [0, 0]
 for v in views:
     s = v.split('_')[0]
-    p = f'{out}/{v}_{mode}.png'
+    p = f'{out}/{v}_{mode.split(":")[0]}.png'
     t = time.time()
-    r = subprocess.run([preview, f'{ref}/h{s}.glb', '--cam', f'{ref}/{v}.cam.json', '--res', '960x540', '--rt', mode, '-v', '-o', p], env=env, capture_output=True, text=True)
-    traced = [l for l in r.stderr.splitlines() if 'exposure x' in l]
+    # (--rt bake[:SECONDS]: the baked mode. RT_CMP_PRE: a command to run the previewer under, as a lock for timing)
+    args = ['--bake', 'still' + mode[4:]] if mode.startswith('bake') else ['--rt', mode]
+    r = subprocess.run(os.environ.get('RT_CMP_PRE', '').split() + [preview, f'{ref}/h{s}.glb', '--cam', f'{ref}/{v}.cam.json', '--res', '960x540', *args, '-v', '-o', p], env=env, capture_output=True, text=True)
+    traced = [l for l in r.stderr.splitlines() if 'exposure x' in l or 'baked in' in l]
     if not os.path.exists(p): print(v, 'failed', r.stderr[-400:]); continue
     a, b = Image.open(f'{ref}/{v}.png').convert('RGB').resize((960, 540)), Image.open(p).convert('RGB')
     blur = lambda im: im.filter(ImageFilter.GaussianBlur(12))
@@ -29,7 +31,7 @@ for v in views:
     dl, df = mean(ImageChops.difference(blur(a), blur(b))), mean(ImageChops.difference(a, b))
     la, lb = sum(ImageStat.Stat(a.convert('L')).mean), sum(ImageStat.Stat(b.convert('L')).mean)
     tot[0] += dl; tot[1] += df
-    print(f'{v:32} light {dl:5.1f}  full {df:5.1f}  lum blender {la:5.1f} rt {lb:5.1f}  {traced[-1].strip() if traced else ""}')
+    print(f'{v:32} light {dl:5.1f}  full {df:5.1f}  lum blender {la:5.1f} rt {lb:5.1f}  {" ".join(x.strip() for x in traced)[:90]}')
     rows.append((v, a, b))
 if rows:
     print(f'mean light {tot[0] / len(rows):.1f}  full {tot[1] / len(rows):.1f}')
