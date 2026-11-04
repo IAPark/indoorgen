@@ -93,6 +93,7 @@ fn cell_at(q: vec3<f32>, n: vec3<f32>, id: u32) -> i32 {
   flags[i] = select(1u, 0u, back >= 4u || near >= 5u);
 }
 @compute @workgroup_size(64) fn bk_round(@builtin(global_invocation_id) id: vec3<u32>) {
+  var bk_miss = 0u;
   let i = id.x + b.run.y; if (i >= b.run.z) { return; }
   let round = b.run.x;
   seed = (i * 2654435761u) ^ (round * 83492791u); seed = seed * 747796405u + 2891336453u;
@@ -121,7 +122,9 @@ fn cell_at(q: vec3<f32>, n: vec3<f32>, id: u32) -> i32 {
     ilmp += m.emissive.rgb;
     let s = cell_at(q, ng, t.mat % 2047u);
     // (a point no cell holds: nearly always beside this one)
-    let cv = cur[select(i, table[max(s, 0)].e, s >= 0)];
+    // (a point no cell holds counts as dark. Reusing this cell's own light fed it back into itself, each round adding to the last, and walls and door leaves beside a sunlit part glowed)
+    if (s < 0) { bk_miss += 1u; continue; }
+    let cv = cur[table[s].e];
     isky += m.albedo.rgb * (cv.sky.rgb + cv.i_sky.rgb); ilmp += m.albedo.rgb * (cv.lamp.rgb + cv.i_lamp.rgb);
     isun += m.albedo.rgb * (cv.sun.rgb + cv.i_sun.rgb);
   }
@@ -282,7 +285,8 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let d = textureLoad(g_depth, g, 0);
   if (d >= 1.0) { textureStore(o_out, px, vec4<f32>(0.0)); return; }
   let a = textureLoad(g_alb, g, 0); let rough = a.a; let nc = textureLoad(g_nrm, g, 0); let coat = nc.a;
-  if (!(rough >= 0.001 && (rough < 0.03 || coat < 0.25))) { textureStore(o_out, px, vec4<f32>(0.0, 0.0, 0.0, rough)); return; }
+  // (none on a rough surface: its reflection is a smooth blur of the room, which the cache has. A few rays there were fireflies, in blobs)
+  if (!(rough >= 0.001 && (rough < 0.03 || coat < 0.25) && rough < 0.55)) { textureStore(o_out, px, vec4<f32>(0.0, 0.0, 0.0, rough)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = nc.xyz; if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); } n = normalize(n);
   // (rough surfaces keep the same rays from frame to frame: the filter hides their pattern in one picture, and fresh ones shimmered across walls and floors. Polished ones average out over frames)
@@ -300,7 +304,8 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   var c_ = vec3<f32>(0.0);
   if (hh.i < 0) {
     c_ = sky_at(rd) * b.scales.y;
-    if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 0.4)) { c_ += p.sun_col.rgb * b.scales.z * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 0.4)))); }
+    // (the sun only in a truly sharp reflection: on anything rough its highlight is already counted, and a ray that happened on it was a firefly)
+    if (rough < 0.03 && dot(rd, p.sun_dir.xyz) > cos(p.scale.w)) { c_ += p.sun_col.rgb * b.scales.z * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w)))); }
   } else {
     let t = tris[hh.i]; let m = mats[t.mat];
     var ng = normalize(cross(t.e1.xyz, t.e2.xyz)); if (dot(ng, rd) > 0.0) { ng = -ng; }
@@ -320,8 +325,17 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let lw = i32(p.dims.x) / 2; let lh = i32(p.dims.y) / 2;
   let px = vec2<i32>(id.xy);
   if (px.x >= lw || px.y >= lh) { return; }
-  let c = textureLoad(f_in, px, 0);
+  var c = textureLoad(f_in, px, 0);
   let stride = i32(b.fl.w);
+  // a pixel far brighter than all around it is a lucky ray, a firefly: it comes down to them. (Its rays hold still from frame to frame, so it would never average away)
+  var hi_n = vec3<f32>(0.0);
+  if (c.a >= 0.03) {
+    for (var k = 0; k < 8; k++) {
+      let o_ = array<vec2<i32>, 8>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1), vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1))[k];
+      hi_n = max(hi_n, textureLoad(f_in, clamp(px + o_, vec2<i32>(0), vec2<i32>(lw - 1, lh - 1)), 0).rgb);
+    }
+    c = vec4<f32>(min(c.rgb, hi_n * 1.2), c.a);
+  }
   if (c.a < 0.08 || (stride > 1 && c.a < 0.25)) { textureStore(o_out, px, c); return; }
   let off = vec2<i32>(i32(b.frame.y), i32(b.frame.z));
   let dims = vec2<f32>(f32(p.dims.x), f32(p.dims.y));
@@ -329,16 +343,43 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   if (d0 >= 1.0) { textureStore(o_out, px, c); return; }
   let n0 = normalize(textureLoad(g_nrm, g, 0).xyz + vec3<f32>(1e-5)); let p0 = world_of(g, d0, dims, p.inv_vp);
   var s = vec3<f32>(0.0); var sw = 0.0;
-  for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) {
+  // (wider the rougher: its rays hold still from frame to frame, so this is all that smooths them. A rough metal door came out mottled)
+  let rad = select(1, 3, c.a > 0.12);
+  for (var j = -rad; j <= rad; j++) { for (var i = -rad; i <= rad; i++) {
     let q = px + vec2<i32>(i, j) * stride;
     if (q.x < 0 || q.y < 0 || q.x >= lw || q.y >= lh) { continue; }
     let gq = q * 2 + off; let dq = textureLoad(g_depth, gq, 0);
     if (dq >= 1.0) { continue; }
     let nq = normalize(textureLoad(g_nrm, gq, 0).xyz + vec3<f32>(1e-5));
-    let wg = f32(2 - abs(i)) * f32(2 - abs(j)) * pow(max(dot(n0, nq), 0.0), 32.0) * exp(-abs(dot(n0, world_of(gq, dq, dims, p.inv_vp) - p0)) / 0.03);
+    let wg = f32(rad + 1 - abs(i)) * f32(rad + 1 - abs(j)) * pow(max(dot(n0, nq), 0.0), 32.0) * exp(-abs(dot(n0, world_of(gq, dq, dims, p.inv_vp) - p0)) / 0.03);
     s += textureLoad(f_in, q, 0).rgb * wg; sw += wg;
   } }
   textureStore(o_out, px, vec4<f32>(select(c.rgb, s / max(sw, 1e-5), sw > 1e-5), c.a));
+}
+// The lamps' own highlights, as lamp_glint in rt.wgsl: reflected rooms carry no lamps. The two that show most, each with its shadow ray where it would show
+fn bk_glint(pos: vec3<f32>, n: vec3<f32>, vdir: vec3<f32>, rough: f32, alb: vec3<f32>, metal: f32, coat: f32, nv: f32, here: f32) -> vec3<f32> {
+  let a0 = max(rough * rough, 0.002);
+  let f0_ = mix(vec3<f32>(0.04), alb, metal);
+  var c0 = vec3<f32>(0.0); var c1 = vec3<f32>(0.0); var m0 = 0.0; var m1 = 0.0; var l0 = vec3<f32>(0.0); var l1 = vec3<f32>(0.0); var d0 = 0.0; var d1 = 0.0; var i = 0u;
+  loop { if (i >= p.misc.z) { break; }
+    let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), 0.04); let dl = sqrt(r2); let l = v / dl;
+    let ndl = dot(n, l);
+    if (ndl > 0.0) {
+      let a = min(a0 + LAMP_R / (2.0 * dl), 1.0); let keep = (a0 / a) * (a0 / a);
+      let h_ = normalize(l + vdir); let ndh = max(dot(n, h_), 0.0);
+      let dn = ndh * ndh * (a * a - 1.0) + 1.0;
+      let dv = keep * a * a / (PI * dn * dn + 1e-6) * 0.25 / max(mix(nv, 1.0, a * 0.5) * mix(ndl, 1.0, a * 0.5), 0.05);
+      let fc_ = pow(1.0 - max(dot(h_, vdir), 0.0), 5.0);
+      let c = lights[i].col.xyz * PI / r2 * b.scales.x * ndl * min(dv, 200.0) * (f0_ + (vec3<f32>(1.0) - f0_) * fc_ + vec3<f32>(coat * (0.04 + 0.96 * fc_)));
+      let m_ = dot(c, vec3<f32>(0.333));
+      if (m_ > m0) { c1 = c0; m1 = m0; l1 = l0; d1 = d0; c0 = c; m0 = m_; l0 = l; d0 = dl; } else if (m_ > m1) { c1 = c; m1 = m_; l1 = l; d1 = dl; }
+    }
+    i++; }
+  let so = start_at(pos, n); let floor_ = max(here * 0.02, 0.0005);
+  var out = vec3<f32>(0.0);
+  if (m0 > floor_ && !occluded(so, l0, d0 - 0.02)) { out += c0; }
+  if (m1 > floor_ && !occluded(so, l1, d1 - 0.02)) { out += c1; }
+  return min(out, vec3<f32>(50.0));
 }
 @compute @workgroup_size(8, 8) fn bk_compose(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y);
@@ -366,7 +407,8 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   // the light, from the cache
   let lk = lookup(pos, n, u32(mt.a - 0.5));
   let cv = lk.a;
-  let e = lk.rgb + lamps_here(pos, n);
+  let e_cache = lk.rgb;
+  let e = e_cache + lamps_here(pos, n);
   // the sun at this very point; a ray only where the cells around disagree or it is not plain
   let sun = p.sun_dir.xyz;
   let ndl = max(dot(n, sun), 0.0);
@@ -421,7 +463,7 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   }
   // (at any roughness, as rt_comp.wgsl: a roughness that jumps must not jump between two kinds of reflection)
   let traced = (rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && flat_here);
-  var s = e;
+  var s = e_cache;
   if (b.frame.w == 2u && rough < 0.001) {
     // (a mirror in a mirror's own picture: the room's light)
   } else if (rough < 0.001) {
@@ -442,11 +484,13 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
       let wt = bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, world_of(gq, dq, dims, p.inv_vp) - pos)) / 0.02) + 1e-4 * bw;
       ss_ += textureLoad(f_spec, q, 0).rgb * wt; tw += wt;
     } }
-    if (tw > 1e-3) { s = ss_ / tw; }
+    // (rays give way to the cache by roughness, without a seam)
+    if (tw > 1e-3) { s = mix(ss_ / tw, e_cache, smoothstep(0.3, 0.55, rough)); }
   }
   let refl = s * (fr + vec3<f32>(fc));
+  let glint = select(bk_glint(pos, n, vdir, rough, a.rgb, metal, coat, nv, dot(e_cache, vec3<f32>(0.333))), vec3<f32>(0.0), mt.z > 0.0 || rough < 0.001);
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
-  let col = textureLoad(f_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun;
+  let col = textureLoad(f_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + glint;
   let show = p.misc2.w;
   if (show == 5u) { textureStore(o_lit, px0, vec4<f32>(vec3<f32>(v), 1.0)); return; }
   if (show == 6u) { textureStore(o_lit, px0, vec4<f32>(n * 0.5 + 0.5, 1.0)); return; }

@@ -117,7 +117,11 @@ function placeLamps(lamps) {
 
 function fitScene() {
   bbox = new THREE.Box3();
-  content.traverse((o) => { if (o.isMesh && !ceilings.includes(o)) bbox.expandByObject(o); });
+  // (the house alone: walking height, the corners and top-down all come from it. With terrain and trees in it the camera went under the floor, and far off)
+  const isOutdoor = (o) => { for (let p = o; p; p = p.parent) if (/^(outdoor|exterior)/i.test(p.name || '')) return true; return false; };
+  const whole = new THREE.Box3();
+  content.traverse((o) => { if (o.isMesh && !ceilings.includes(o)) { whole.expandByObject(o); if (!isOutdoor(o)) bbox.expandByObject(o); } });
+  if (bbox.isEmpty()) bbox.copy(whole);
   if (bbox.isEmpty()) bbox.setFromObject(content);
   const size = bbox.getSize(new THREE.Vector3()), ctr = bbox.getCenter(new THREE.Vector3());
   // sun shadow frustum
@@ -129,7 +133,9 @@ function fitScene() {
   sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 0.1; sc.far = r * 3.2;
   sc.updateProjectionMatrix();
   sun.target.updateMatrixWorld();
-  cam.far = Math.max(200, size.length() * 6);
+  // (far enough for the distant terrain, and no further: depth precision is what keeps near surfaces apart)
+  const wholeLen = whole.isEmpty() ? size.length() : whole.getSize(new THREE.Vector3()).length();
+  cam.far = Math.max(200, wholeLen * 1.5);
   cam.updateProjectionMatrix();
 }
 
@@ -454,15 +460,16 @@ function cfgRender() {
 }
 // mirror the cfg values into the always-visible controls (clutter, cloth) and the generated rows' tooltips
 function cfgSync() {
-  const m = getPath(cfg, 'mess.level'), c = getPath(cfg, 'cloth.on');
+  const m = getPath(cfg, 'mess.level'), c = getPath(cfg, 'cloth.on'), od = getPath(cfg, 'program.outdoor.on');
   if (m != null) { $('mess').value = m; $('messv').textContent = (+m).toFixed(2); }
   if (c != null) $('cloth').checked = !!c;
+  $('outdoors').checked = !!od;
   $('quality').value = cfgPreset;
 }
 function cfgSet(path, v, keepPreset) {
   setPath(cfg, path, v);
   if (!keepPreset) cfgPreset = 'custom';
-  if (path === 'mess.level' || path === 'cloth.on') { cfgSync(); if (!keepPreset) { /* re-render so the generated row follows */ document.querySelectorAll(`#cfgbody [data-path="${path}"] input`).forEach((i) => { if (i.type === 'checkbox') i.checked = !!v; else { i.value = v; const o = i.parentNode.querySelector('.v'); if (o) o.textContent = (+v).toFixed(2); } }); } }
+  if (path === 'mess.level' || path === 'cloth.on' || path === 'program.outdoor.on') { cfgSync(); if (!keepPreset) { /* re-render so the generated row follows */ document.querySelectorAll(`#cfgbody [data-path="${path}"] input`).forEach((i) => { if (i.type === 'checkbox') i.checked = !!v; else { i.value = v; const o = i.parentNode.querySelector('.v'); if (o) o.textContent = (+v).toFixed(2); } }); } }
   cfgShow();
 }
 function applyCfgPreset(name) {
@@ -498,6 +505,7 @@ $('cfgreset').onclick = () => { extraJson = ''; $('cfgjson').value = ''; applyCf
 $('cfgjson').oninput = () => { extraJson = $('cfgjson').value; cfgShow(); };
 $('mess').addEventListener('input', () => cfgSet('mess.level', +$('mess').value));
 $('cloth').addEventListener('change', () => cfgSet('cloth.on', $('cloth').checked));
+$('outdoors').addEventListener('change', () => cfgSet('program.outdoor.on', $('outdoors').checked));
 $('cfglink').onclick = async () => {
   const u = new URL(location.href); u.search = '';
   u.searchParams.set('seed', $('seed').value); u.searchParams.set('room', $('room').value);
@@ -508,6 +516,8 @@ $('cfglink').onclick = async () => {
 // called once the wasm module reported its schema + defaults: restore localStorage / URL state, build the panel
 function cfgInit(schemaJson, defaultsJson) {
   try { SCHEMA = schemaJson ? JSON.parse(schemaJson) : null; DEFAULTS = defaultsJson ? JSON.parse(defaultsJson) : {}; } catch (e) { SCHEMA = null; }
+  // (no terrain or trees unless asked for: they are most of a house's triangles here, and most of its time to bake)
+  if (DEFAULTS.program && DEFAULTS.program.outdoor) DEFAULTS.program.outdoor.on = false;
   cfg = clone(DEFAULTS); cfgPreset = 'fast';
   try {
     const st = JSON.parse(localStorage.getItem('indoorgen.cfg2') || 'null');
@@ -640,8 +650,12 @@ async function bakeNow() {
     if (!bakeReady) { await bakeMod.default(); bakeReady = true; }
   } catch (e) { setStatus('baked render failed to load: ' + (e.message || e), true); baking = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady; return; }
   try {
-    const a = Math.max(0.5, Math.min(2.5, innerWidth / Math.max(1, innerHeight)));
-    bakeCanvas.height = 540; bakeCanvas.width = Math.round(540 * a / 2) * 2;
+    // (the window's own pixels, up to about 2 million: at a fixed 540 lines, stretched to a large screen, everything was soft)
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let bw = innerWidth * dpr, bh = innerHeight * dpr;
+    const lim = Math.min(1, Math.sqrt(2.1e6 / Math.max(1, bw * bh)));
+    bw = Math.round(bw * lim / 2) * 2; bh = Math.round(bh * lim / 2) * 2;
+    bakeCanvas.width = Math.max(320, bw); bakeCanvas.height = Math.max(180, bh);
     const c = bakedCamera();
     const t0 = performance.now();
     const seed = parseInt($('seed').value, 10) || 0;

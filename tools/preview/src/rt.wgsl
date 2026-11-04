@@ -521,7 +521,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       let hh = closest(o, rd, 1000.0);
       if (hh.i < 0) {
         var l = sky_at(rd);
-        if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 1.0)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 1.0)))); }
+        // (the sun only in a truly sharp reflection: on anything rough its highlight is already counted, and a ray that happened on it was a firefly)
+        if (rough < 0.03 && dot(rd, p.sun_dir.xyz) > cos(p.scale.w)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w)))); }
         sp += l * wt_;
       } else {
         let t = tris[hh.i]; let m = mats[t.mat];

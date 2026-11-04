@@ -823,7 +823,7 @@ pub async fn expose(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Bak
         (core.iter().sum::<f32>() / core.len().max(1) as f32, lum.iter().filter(|v| **v > 0.95).count() as f32 / lum.len().max(1) as f32) };
     let target = std::env::var("RT_MEAN").ok().and_then(|v| v.parse().ok()).unwrap_or(0.45f32);
     let (mut lo, mut hi, mut xp) = (0.02f32, 64f32, 1.0f32);
-    for _ in 0..7 {
+    for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 7 } {
         let (avg, clip) = stat(&img);
         if (avg - target).abs() < 0.008 && clip < 0.18 { break }
         if avg > target || clip >= 0.18 { hi = xp } else { lo = xp }
