@@ -219,7 +219,9 @@ impl Terrain {
         let free = self.ground(x, y) - self.level + self.mountains(x, y) * far;
         let b = smooth(1.5, 1.5 + self.pad_blend, d);
         let h = self.pad_z * (1.0 - b) + (self.pad_z + free) * b;
-        match &self.site { Some(s) => s.shape(x, y, h), None => h }
+        let h = match &self.site { Some(s) => s.shape(x, y, h), None => h };
+        // (never above the pad under the house: blended up to a road's level nearby, grass came through a kitchen's floor)
+        if d <= 0.0 { h.min(self.pad_z) } else { h }
     }
     fn dist(&self, x: f64, y: f64) -> f64 {
         if ig_core::shp::contains_pt(&self.house, [x, y]) { 0.0 } else { ig_core::shp::distance(&self.house, &ig_core::shp::point(x, y)) }
