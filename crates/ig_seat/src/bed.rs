@@ -1671,10 +1671,14 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
     smooth_rounded(&m, &mut rounded);
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (sy, cy) = slide[1].sin_cos();
+    // (a tucked cloth that reaches the foot reaches it at both corners: turned, and short, one corner stopped on top of the mattress, and no stretch can bring down a hem that is not past the edge. The frame's top lay bare along the foot, a black tear)
+    let pull = if g.tuck && hi[0] + pull > g.x1 { pull + (0.08 - (hi[0] + pull - g.x1 - sy.abs() * (hi[1] - lo[1]) / 2.0)).max(0.0) } else { pull };
     // tucked in, the hem reaches the rail all round (a short overhang rode up at the middle of the foot, showing the mattress)
     let stretch = if g.tuck {
         let need = std::f64::consts::FRAC_PI_2 * DRAPE_R + g.gap_foot.max(g.gap_side).hypot(g.top - DRAPE_R - g.rail);
-        let over = (hi[0] + pull - g.x1).min((hi[1] - lo[1]) / 2.0 - slide[0].abs() - g.yh).max(0.05);
+        // (the shortest overhang, at the corner the cloth's turn draws in: taken at the middle of its edge, the hem rode up along the foot on the turned side and left the frame's top bare, a black tear under it)
+        let turn = sy.abs();
+        let over = (hi[0] + pull - g.x1 - turn * (hi[1] - lo[1]) / 2.0).min((hi[1] - lo[1]) / 2.0 - slide[0].abs() - g.yh - turn * (hi[0] - lo[0]) / 2.0).max(0.05);
         // (the same for every cloth with the usual overhang, so they nest: each on its own, the cover and the comforter crossed)
         (need * 1.08 / over).max(2.5)
     } else { 1.0 };
