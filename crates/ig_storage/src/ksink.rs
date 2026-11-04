@@ -94,6 +94,10 @@ impl Factory for KSink {
                         p[2] += 0.02;
                     }
                 }
+                // (a little wider than the basin, past its thin wall: cut to the wall's own thickness, a board's end showed through it in a coloured line. The rim still covers the hole)
+                let (l, h) = cm.bounds();
+                let c = [(l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0];
+                for p in cm.pos.iter_mut() { for d in 0..2 { p[d] += if p[d] > c[d] { 0.006 } else { -0.006 }; } }
                 a.cutters.push(cm);
             } else {
                 a.mesh(super::gnhelpers::to_mesh(g), &m, None);
