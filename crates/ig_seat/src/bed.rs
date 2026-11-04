@@ -619,9 +619,9 @@ impl BedSpec {
                 }
                 // (a cap from the panel in past the legs: standing outside them, it left a gap under the frame with the legs showing)
                 let mut out = coil(&g, self, r);
-                let (t, w) = (0.012, c.leg_thickness + self.dot_depth + 0.02);
-                // (reaching down into the coiled panel: resting on its top, the panels' shrink below left a 2 mm crack, the wall showing through in a white line)
-                let t = t + 0.006;
+                let (t, w) = (0.012f64, c.leg_thickness + self.dot_depth + 0.02);
+                // (reaching 2.5 cm below the coiled panel's own top, which is uneven and lower than its box: to a fixed depth, a crack of up to 4 mm stayed open under the cap, the frame showing through in a bright streak)
+                let t = t.max(-out.bounds().1[2] + 0.025);
                 for (l, h) in [([x0, y0, -t], [x1, y0 + w, 0.0]), ([x0, y1 - w, -t], [x1, y1, 0.0]), ([x0, y0, -t], [x0 + w, y1, 0.0]), ([x1 - w, y0, -t], [x1, y1, 0.0])] {
                     out.append(&Mesh::cuboid(l, h));
                 }
