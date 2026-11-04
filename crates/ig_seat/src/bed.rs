@@ -1001,6 +1001,8 @@ impl Factory for Bed {
         let mut fold_p = serde_json::Value::Null;
         if s.sheet_folded {
             let theta = r.uniform(-std::f64::consts::PI / 6.0, std::f64::consts::PI / 6.0);
+            // (a tucked bed's fold lies square: stretched down the side, the rows of a slanted fold stood at different distances past the edge, and came out as a row of teeth)
+            let theta = if crate::api::tuck_hint() > 0 { 0.0 } else { theta };
             let ym = b.size * (0.5 - r.uniform(0.1, 0.3));
             fold_p = json!({"theta": theta, "y_margin": ym});
             pre = fold(&pre, theta, ym);
