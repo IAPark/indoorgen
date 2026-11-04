@@ -620,6 +620,8 @@ impl BedSpec {
                 // (a cap from the panel in past the legs: standing outside them, it left a gap under the frame with the legs showing)
                 let mut out = coil(&g, self, r);
                 let (t, w) = (0.012, c.leg_thickness + self.dot_depth + 0.02);
+                // (reaching down into the coiled panel: resting on its top, the panels' shrink below left a 2 mm crack, the wall showing through in a white line)
+                let t = t + 0.006;
                 for (l, h) in [([x0, y0, -t], [x1, y0 + w, 0.0]), ([x0, y1 - w, -t], [x1, y1, 0.0]), ([x0, y0, -t], [x0 + w, y1, 0.0]), ([x1 - w, y0, -t], [x1, y1, 0.0])] {
                     out.append(&Mesh::cuboid(l, h));
                 }
@@ -686,8 +688,10 @@ impl BedSpec {
                 if std::env::var("BEDDBG").is_ok() { eprintln!("BEDPANEL pad"); }
                 pad_panel(&g)
             };
+            // (not in height: shrunk, a panel stopped a millimetre under the arch above it, the wall showing through in a white line)
+            let ztop = g.bounds().1[2];
             for p in g.pos.iter_mut() {
-                *p = [p[0] * (1.0 - 1e-3), p[1] * (1.0 - 1e-3), p[2] * (1.0 - 1e-3)];
+                *p = [p[0] * (1.0 - 1e-3), p[1] * (1.0 - 1e-3), if p[2] > ztop - 1e-4 { p[2] + 0.002 } else { p[2] }];
             }
             panels.push(g);
             decors = decors.iter().map(|m| clip_above(m, c.back_height)).collect();
