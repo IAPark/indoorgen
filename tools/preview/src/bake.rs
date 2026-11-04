@@ -1,4 +1,7 @@
-//! bake: baked rendering of the house (--bake). Up to 30 s of baking, then frames at 30+ fps with the look of --rt full. See bake.wgsl.
+//! bake: baked rendering of the house (--bake MODE[:SECONDS], SECONDS of baking, 25 if not given). Then frames at 30+ fps with the look of --rt full. See bake.wgsl.
+//! still: a picture per camera (BAKE_FRAMES, 16: jittered frames averaged). video: -o X.mp4 by ffmpeg, a walk through the rooms (BAKE_LEN frames, 300) or BAKE_PATH=file.json ([[ex,ey,ez,tx,ty,tz], ...], one a frame); BAKE_SAVE_PATH=file keeps the walk.
+//! measure: what the parts of a frame cost. Others: BAKE_SCALE (1.5), BAKE_CELL (0.05 m), BAKE_TAA (0.12), BAKE_CODEC (h264_videotoolbox or libx264), BAKE_DUMP=dir (every frame as a png), RT_LAMP, RT_SKY, RT_SUN, RT_SHOW as --rt.
+//! Assumes a static scene and a perspective camera, one sky seed per bake; cutaways are not handled.
 use super::*;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -102,7 +105,7 @@ pub fn measure(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
     for (w, h) in [(1440u32, 810u32), (960, 540)] {
         let gb = make_gb(dev, w, h);
         let aspect = w as f32 / h as f32;
-        let mut st_f = Stat::new(&format!("gbuffer {w}x{h}")); let mut st_z = Stat::new(&format!("depth only {w}x{h}")); let mut st_c = Stat::new(&format!("gbuffer after prepass {w}x{h}"));
+        let mut st_z = Stat::new(&format!("depth only {w}x{h}")); let mut st_c = Stat::new(&format!("gbuffer after prepass {w}x{h}"));
         let (mut nd, mut nt) = (0usize, 0u64);
         for f in 0..n + 3 {
             let cam = wiggled(cam0, f);
@@ -113,21 +116,6 @@ pub fn measure(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
             // front to back, near boxes first
             list.sort_by_key(|&i| { let d = &s.draws[i as usize]; (eye.clamp(d.bmin, d.bmax) - eye).length_squared() as u32 * 16 });
             let att = |v| Some(wgpu::RenderPassColorAttachment { view: v, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(black), store: wgpu::StoreOp::Store } });
-            // full
-            let t = Instant::now();
-            let mut enc = dev.create_command_encoder(&Default::default());
-            {
-                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
-                    color_attachments: &[att(&gb.hdr), att(&gb.nrm), att(&gb.alb), att(&gb.mat)],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &gb.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
-                rp.set_bind_group(0, &bg, &[]);
-                rp.set_pipeline(&r.main_pipe);
-                nt = draw_fast(&mut rp, s, &r.main_pipe, &list); nd = list.len();
-            }
-            q.submit([enc.finish()]);
-            let e = t.elapsed().as_secs_f32() * 1000.0;
-            dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            if f >= 3 { st_f.enc.push(e); st_f.wait.push(t.elapsed().as_secs_f32() * 1000.0 - e); }
             // prepass and then the surfaces
             let mut gz = gl; gz.sun_vp = gl.viewproj;
             q.write_buffer(&ub, 0, bytemuck::bytes_of(&gz));
@@ -157,7 +145,7 @@ pub fn measure(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &gb.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
                 rp.set_bind_group(0, &bg, &[]);
                 rp.set_pipeline(&r.main_pipe);
-                draw_fast(&mut rp, s, &r.main_pipe, &list);
+                nt = draw_fast(&mut rp, s, &r.main_pipe, &list); nd = list.len();
             }
             q.submit([enc.finish()]);
             let e = t.elapsed().as_secs_f32() * 1000.0;
@@ -166,7 +154,7 @@ pub fn measure(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
             let _ = &mut st_c;
         }
         println!("  in view: {nd} draws, {nt} tris");
-        st_f.print(); st_z.print(); st_c.print();
+        st_z.print(); st_c.print();
         // the rays: from the G-buffer, closest-hit into the hemisphere and any-hit at the sun, one ray a pixel
         q.write_buffer(&ub, 0, bytemuck::bytes_of(&globals(s, cam0, o, aspect, (0.0, 0.0)).0));
         let p = r.rt.as_ref().unwrap(); let sd = s.rt.as_ref().unwrap();
@@ -625,7 +613,7 @@ fn z_pass<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, pp: &'a Pipes, list: 
 fn mirrors(f: &Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, gl: &Globals, vp: Mat4, eye: Vec3, fr: &[Vec4; 6]) {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let (rw, rh) = (f.res.0 as f32, f.res.1 as f32);
-    for (n, d, lo, hi) in f.panes(s, eye) {
+    for (n, d, lo, hi) in mirror_panes(s, eye) {
         if !visible(fr, lo, hi) { continue }
         let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;
         for k in 0..8 {
@@ -686,8 +674,6 @@ fn mirrors(f: &Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, gl: &Glob
         q.submit([enc.finish()]);
     }
 }
-impl Frame { fn panes(&self, s: &Scene, eye: Vec3) -> Vec<(Vec3, f32, Vec3, Vec3)> { mirror_panes(s, eye) } }
-pub struct Timing { pub cpu: f32 }
 /// everything up to the picture of this frame in linear light; alpha 1 starts the history over
 fn surfaces_and_light(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, cam: &Cam, xp: f32, jitter: bool) -> (Mat4, Vec3, wgpu::CommandEncoder) {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
@@ -750,7 +736,9 @@ fn surfaces_and_light(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &B
             rp.draw_indexed(0..d.icount, 0, 0..1);
         }
     }
-    (vp, eye, enc)
+    // (what comes next reprojects into the picture as it would be without this frame's jitter: with it, the history wobbled by half a pixel)
+    let vp0 = globals(s, cam, o, res_aspect(f), (0.0, 0.0)).1;
+    (vp0, eye, enc)
 }
 fn res_aspect(f: &Frame) -> f32 { f.gb.w as f32 / f.gb.h as f32 }
 /// the shown picture from the linear one. alpha: the share of this frame in the history; clamp: motion
@@ -929,6 +917,12 @@ pub fn auto_path(s: &Scene, frames: usize) -> Vec<(Vec3, Vec3)> {
         route.extend(seg); stops.remove(k); at = t;
         if route.len() as f32 >= want || guard > 64 { break }
     }
+    // (one room, or the others out of reach: to its far end from where it stands)
+    if route.len() < 30 {
+        let (cost, prev) = dijkstra(at);
+        let far = (0..nx * ny).filter(|&i| cost[i] < f32::MAX).max_by(|&a, &b| cost[a].partial_cmp(&cost[b]).unwrap());
+        if let Some(t) = far { let mut seg = vec![t]; let mut c = t; while prev[c] != u32::MAX { c = prev[c] as usize; seg.push(c); } seg.reverse(); route.extend(seg); }
+    }
     if route.len() < 8 { return vec![] }
     let mut pts: Vec<Vec3> = route.iter().map(|&i| Vec3::new(lo.x + ((i % nx) as f32 + 0.5) * C, lo.y + ((i / nx) as f32 + 0.5) * C, floor_z + 1.5)).collect();
     // smooth: and it stays clear, as the steps were small next to the clearance
@@ -959,7 +953,7 @@ fn video(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, path: &[(Vec
     let te = Instant::now();
     let step = 15usize;
     let keys: Vec<f32> = (0..path.len()).step_by(step).map(|k| expose(&mut f, r, s, pp, bk, o, &cam_at(k)).max(1e-3).ln()).collect();
-    let keyd: Vec<f32> = (0..keys.len()).map(|i| { let (mut a, mut w) = (0.0, 0.0); for j in 0..keys.len() { let d = (i as f32 - j as f32) / 6.0; let g = (-d * d).exp(); a += keys[j] * g; w += g; } a / w }).collect();
+    let keyd: Vec<f32> = (0..keys.len()).map(|i| { let (mut a, mut w) = (0.0, 0.0); for j in 0..keys.len() { let d = (i as f32 - j as f32) / 3.0; let g = (-d * d).exp(); a += keys[j] * g; w += g; } a / w }).collect();
     let xp_at = |k: usize| { let u = k as f32 / step as f32; let i = (u as usize).min(keyd.len() - 1); let j = (i + 1).min(keyd.len() - 1); (keyd[i] + (keyd[j] - keyd[i]) * (u - i as f32)).exp() };
     eprintln!("exposure keys {}, {:.2}s; since the start of the bake {:.2}s", keys.len(), te.elapsed().as_secs_f32(), t_start.elapsed().as_secs_f32());
     // the encoder takes what the GPU has done, on threads of its own

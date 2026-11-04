@@ -285,14 +285,18 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (b.frame.x * 1103515245u); seed = seed * 747796405u + 2891336453u;
   let o = start_at(pos, n);
   let r0 = reflect(normalize(pos - p.cam.xyz), n);
+  var sp = vec3<f32>(0.0);
+  // (a sharp reflection needs one ray; a rough one is what shows grain)
+  let rays = select(1u, 4u, rough > 0.03);
+  for (var ri = 0u; ri < rays; ri++) {
   var rd = r0;
   if (rough > 0.03) { rd = cone(r0, rough * rough * 1.2); }
   if (dot(rd, n) <= 0.0) { rd = r0; }
   let hh = closest(o, rd, 1000.0);
-  var sp = vec3<f32>(0.0);
+  var c_ = vec3<f32>(0.0);
   if (hh.i < 0) {
-    sp = sky_at(rd) * b.scales.y;
-    if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 0.4)) { sp += p.sun_col.rgb * b.scales.z * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 0.4)))); }
+    c_ = sky_at(rd) * b.scales.y;
+    if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 0.4)) { c_ += p.sun_col.rgb * b.scales.z * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 0.4)))); }
   } else {
     let t = tris[hh.i]; let m = mats[t.mat];
     var ng = normalize(cross(t.e1.xyz, t.e2.xyz)); if (dot(ng, rd) > 0.0) { ng = -ng; }
@@ -300,8 +304,11 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     let s = cell_at(q, ng, t.mat % 2047u);
     var e = vec3<f32>(0.0); var vs = 0.0;
     if (s >= 0) { let tt = table[s]; e = dec_e(tt.e_hit); vs = tt.vis; }
-    sp = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * b.scales.z * max(dot(ng, p.sun_dir.xyz), 0.0) * vs / PI + e);
+    c_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * b.scales.z * max(dot(ng, p.sun_dir.xyz), 0.0) * vs / PI + e);
   }
+  sp += min(c_, vec3<f32>(20.0));
+  }
+  sp /= f32(rays);
   textureStore(o_out, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }
 // the rough ones have few rays: smoothed along the surface
@@ -365,7 +372,11 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     else if (cv > 0.0 || cv < -0.5) {
       seed = u32(px0.x) + u32(px0.y) * 4099u + b.frame.x * 65521u;
       seed = seed * 747796405u + 2891336453u; seed = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u; seed = (seed >> 22u) ^ seed;
-      v = select(0.0, 1.0, !occluded(start_at(pos, n), cone(sun, p.scale.w), 1000.0));
+      // (two rays; where they differ, on a shadow's soft edge, more: one ray a pixel left it in grain)
+      let so = start_at(pos, n);
+      let v1 = select(0.0, 1.0, !occluded(so, cone(sun, p.scale.w), 1000.0)); let v2 = select(0.0, 1.0, !occluded(so, cone(sun, p.scale.w), 1000.0));
+      v = (v1 + v2) * 0.5;
+      if (v1 != v2) { var acc_ = v1 + v2; for (var k = 0; k < 6; k++) { acc_ += select(0.0, 1.0, !occluded(so, cone(sun, p.scale.w), 1000.0)); } v = acc_ / 8.0; }
     }
   }
   let metal = mt.x; let rough = a.a; let coat = nr.a;
