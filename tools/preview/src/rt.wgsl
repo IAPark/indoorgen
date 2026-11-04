@@ -34,11 +34,11 @@ struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 @group(0) @binding(11) var<storage, read> wins: array<W>;
 
 fn sky_at(d: vec3<f32>) -> vec3<f32> {
-  // (below the horizon Blender's sky does not stop: the horizon's colour, fading out by 45 degrees down. A warm fill for a low sun)
+  // (below the horizon Blender's sky does not stop: the horizon's colour, gone by 24 degrees down, as measured from it. A warm fill for a low sun)
   var dd = d; var fade = 1.0;
   if (d.z <= 0.0) {
     let el = asin(clamp(d.z, -1.0, 0.0));
-    fade = max(1.0 + el * 2.0 / (PI * 0.5), 0.0); fade = fade * fade * fade;
+    fade = max(1.0 + el * 7.5 / PI, 0.0); fade = fade * fade * fade;
     if (fade <= 0.0) { return vec3<f32>(0.0); }
     dd = normalize(vec3<f32>(d.x, d.y, 1e-4));
   }
@@ -162,6 +162,21 @@ fn sun_vis(o: vec3<f32>, n: vec3<f32>) -> f32 {
   if (dot(n, s) <= 0.0) { return 0.0; }
   return select(1.0, 0.0, occluded(o, cone(s, p.scale.w), 1000.0));
 }
+// where a ray from a visible point starts: mostly back toward the camera, the one way known to be free. Along the normal alone, a point where a curtain's side or a casing meets a wall started behind the wall, and saw the sun outside
+fn start_at(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+  return pos + normalize(p.cam.xyz - pos) * 0.003 + n * 0.001;
+}
+// how far a traced pixel's light holds at a surface point: near it, and on the same surface
+fn light_weight(q0: vec2<i32>, f: vec2<f32>, n: vec3<f32>, pos: vec3<f32>, dims: vec2<f32>, ss: i32, lw: i32, lh: i32) -> f32 {
+  let q = clamp(q0, vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
+  let gq = q * ss + vec2<i32>(ss / 2);
+  let dq = textureLoad(g_depth, gq, 0);
+  if (dq >= 1.0) { return 0.0; }
+  let pq = world_of(gq, dq, dims, p.inv_vp);
+  let nq = textureLoad(g_nrm, gq, 0).xyz;
+  let bw = (1.0 - abs(f.x - f32(q0.x))) * (1.0 - abs(f.y - f32(q0.y)));
+  return bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02);
+}
 // the sky seen through one window, chosen by what it gives here: most of a room's light comes in through a small part of what it sees, and rays sent at random rarely find it
 fn portal(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let nw = p.misc2.z; if (nw == 0u) { return vec3<f32>(0.0); }
@@ -244,16 +259,61 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
   seed = u32(px.x) * 73856093u ^ u32(px.y) * 19349663u ^ (p.misc.y * 83492791u);
-  let o = pos + n * 0.004;
-  var e = vec3<f32>(0.0); var vis = 0.0;
+  let o = start_at(pos, n);
+  var e = vec3<f32>(0.0);
   let spp = p.dims.w;
   for (var s = 0u; s < spp; s++) {
-    vis += sun_vis(o, n);
     let es = lamp(o, n) + portal(o, n) + gather(o, n);
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
-  e /= f32(spp); vis /= f32(spp);
+  e /= f32(spp);
+  textureStore(out_irr, px, vec4<f32>(e, 0.0));
+}
+
+// At the G-buffer's own resolution: the sun, whose edges a filtered picture would turn to steps, and the light on whatever no traced pixel landed on: a thin rail, a door's groove, which came out in dashes where the traced pixels happened to fall.
+// a = the sun's visibility; r < 0: the filtered light will do here
+@compute @workgroup_size(8, 8) fn trace_fine(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let lw = i32(p.dims.x); let lh = i32(p.dims.y); let w = lw * ss; let h = lh * ss;
+  let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let dims = vec2<f32>(f32(w), f32(h));
+  let d = textureLoad(g_depth, px, 0);
+  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(-1.0, 0.0, 0.0, 0.0)); return; }
+  let pos = world_of(px, d, dims, p.inv_vp);
+  var n = textureLoad(g_nrm, px, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  // (a real hash: with a plain product of the coordinates the first random number follows the rows, and a sun edge came out as a comb)
+  seed = u32(px.x) + u32(px.y) * 4099u + p.misc.y * 65521u;
+  seed = seed * 747796405u + 2891336453u; seed = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u; seed = (seed >> 22u) ^ seed;
+  let o = start_at(pos, n);
+  // (two rays; only where they differ, on a shadow's soft edge, more)
+  var vis = sun_vis(o, n);
+  if (dot(n, p.sun_dir.xyz) > 0.0) {
+    let v2 = sun_vis(o, n);
+    if (v2 != vis) {
+      var acc = vis + v2;
+      for (var k = 0; k < 6; k++) { acc += sun_vis(o, n); }
+      vis = acc / 8.0;
+    }
+  }
+  let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
+  let b = vec2<i32>(floor(f));
+  var tw = 0.0;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+    tw += light_weight(b + vec2<i32>(i, j), f, n, pos, dims, ss, lw, lh);
+  } }
+  var e = vec3<f32>(-1.0, 0.0, 0.0);
+  if (tw < 0.02) {
+    e = vec3<f32>(0.0);
+    let spp = p.dims.w;
+    for (var s = 0u; s < spp; s++) {
+      let es = lamp(o, n) + portal(o, n) + gather(o, n);
+      e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
+    }
+    e /= f32(spp);
+  }
   textureStore(out_irr, px, vec4<f32>(e, vis));
 }
 
@@ -270,7 +330,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
   seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (p.misc.y * 1103515245u);
-  let o = pos + n * 0.004;
+  let o = start_at(pos, n);
   let e = textureLoad(irr_done, px, 0).rgb;
   // what a glossy surface reflects
   let a = textureLoad(g_alb, g, 0);

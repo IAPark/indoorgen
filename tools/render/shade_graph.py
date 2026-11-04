@@ -147,7 +147,14 @@ def build(graph):
         fr = nt.nodes.new("ShaderNodeFresnel")
         fr.inputs["IOR"].default_value = max(out.get("ior", 1.5), 1.3)
         mx = nt.nodes.new("ShaderNodeMixShader")
-        nt.links.new(fr.outputs[0], mx.inputs[0])
+        # (only the face the light enters by reflects. Fresnel on the far face of a pane reads as leaving a denser medium, and past its critical angle -- 42 degrees at
+        # IOR 1.5, 82 at 1.01 -- went to a full mirror: hard curved edges across windows, and half a shower pane black)
+        geo = nt.nodes.new("ShaderNodeNewGeometry")
+        keep = nt.nodes.new("ShaderNodeMath"); keep.operation = "SUBTRACT"; keep.inputs[0].default_value = 1.0
+        nt.links.new(geo.outputs["Backfacing"], keep.inputs[1])
+        only = nt.nodes.new("ShaderNodeMath"); only.operation = "MULTIPLY"
+        nt.links.new(fr.outputs[0], only.inputs[0]); nt.links.new(keep.outputs[0], only.inputs[1])
+        nt.links.new(only.outputs[0], mx.inputs[0])
         nt.links.new(tr.outputs[0], mx.inputs[1])
         nt.links.new(gy.outputs[0], mx.inputs[2])
         nt.links.new(mx.outputs[0], mo.inputs["Surface"])

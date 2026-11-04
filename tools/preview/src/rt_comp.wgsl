@@ -20,12 +20,13 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(7) var c_spec: texture_2d<f32>;
 @group(0) @binding(8) var c_emis: texture_2d<f32>;
 @group(0) @binding(9) var o_lit: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(10) var c_fine: texture_2d<f32>;
 fn sky_at(d: vec3<f32>) -> vec3<f32> {
-  // (below the horizon Blender's sky does not stop: the horizon's colour, fading out by 45 degrees down. A warm fill for a low sun)
+  // (below the horizon Blender's sky does not stop: the horizon's colour, gone by 24 degrees down, as measured from it. A warm fill for a low sun)
   var dd = d; var fade = 1.0;
   if (d.z <= 0.0) {
     let el = asin(clamp(d.z, -1.0, 0.0));
-    fade = max(1.0 + el * 2.0 / (PI * 0.5), 0.0); fade = fade * fade * fade;
+    fade = max(1.0 + el * 7.5 / PI, 0.0); fade = fade * fade * fade;
     if (fade <= 0.0) { return vec3<f32>(0.0); }
     dd = normalize(vec3<f32>(d.x, d.y, 1e-4));
   }
@@ -47,8 +48,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   var d = textureLoad(c_depth, px, 0);
   // (a crack between two meshes, where what lies behind the wall -- the sky, a sunlit outside -- came through as white dots: a pixel far behind its neighbours on two opposite sides takes one of them)
   let dist0 = select(length(world_of(px0, d, dims, p.inv_vp) - p.cam.xyz), 1e9, d >= 1.0);
-  for (var k = 0; k < 4; k++) {
-    let o = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(0, 1), vec2<i32>(1, 1), vec2<i32>(1, -1))[k];
+  for (var k = 0; k < 8; k++) {
+    let o = array<vec2<i32>, 8>(vec2<i32>(1, 0), vec2<i32>(0, 1), vec2<i32>(1, 1), vec2<i32>(1, -1), vec2<i32>(2, 0), vec2<i32>(0, 2), vec2<i32>(2, 2), vec2<i32>(2, -2))[k];
     let a0 = clamp(px0 + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)); let b0 = clamp(px0 - o, vec2<i32>(0), vec2<i32>(w - 1, h - 1));
     let da = textureLoad(c_depth, a0, 0); let db = textureLoad(c_depth, b0, 0);
     if (da < 1.0 && db < 1.0 && length(world_of(a0, da, dims, p.inv_vp) - p.cam.xyz) < dist0 - 0.06 && length(world_of(b0, db, dims, p.inv_vp) - p.cam.xyz) < dist0 - 0.06) { px = a0; d = da; break; }
@@ -68,7 +69,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let lw = i32(p.dims.x); let lh = i32(p.dims.y);
   let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
   let b = vec2<i32>(floor(f));
-  var e = vec3<f32>(0.0); var v = 0.0; var s = vec3<f32>(0.0); var tw = 0.0;
+  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var tw = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
     let gq = q * ss + vec2<i32>(ss / 2);
@@ -79,11 +80,32 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let bw = (1.0 - abs(f.x - f32(b.x + i))) * (1.0 - abs(f.y - f32(b.y + j)));
     let wt = bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02) + 1e-4 * bw;
     let c = textureLoad(c_irr, q, 0);
-    e += c.rgb * wt; v += c.a * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
+    e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
-  e /= max(tw, 1e-5); v /= max(tw, 1e-5); s /= max(tw, 1e-5);
-  // (no traced pixel on this surface -- a thin rail's top between them: the light around it will do, but not the sun of a surface it does not share)
-  if (tw < 0.02) { v = 0.0; }
+  e /= max(tw, 1e-5); s /= max(tw, 1e-5);
+  // the sun at this very point, and the light of a surface no traced pixel landed on
+  let fine = textureLoad(c_fine, px, 0);
+  var v = fine.a;
+  // (a shadow's soft edge, from few rays: smoothed along this surface, only where the sun's visibility changes nearby)
+  var v_lo = v; var v_hi = v;
+  for (var k = 0; k < 4; k++) {
+    let o = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2))[k];
+    let t = textureLoad(c_fine, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a;
+    v_lo = min(v_lo, t); v_hi = max(v_hi, t);
+  }
+  if (v_hi > v_lo) {
+    var vs = 0.0; var vc = 0.0;
+    for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+      let q = px + vec2<i32>(i, j);
+      if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+      let dq = textureLoad(c_depth, q, 0);
+      if (dq >= 1.0 || abs(dot(n, world_of(q, dq, dims, p.inv_vp) - pos)) > 0.01) { continue; }
+      let wq = f32(3 - abs(i)) * f32(3 - abs(j));
+      vs += textureLoad(c_fine, q, 0).a * wq; vc += wq;
+    } }
+    if (vc > 0.0) { v = vs / vc; }
+  }
+  if (fine.r >= 0.0) { e = min(fine.rgb, e * 1.2); }
   let metal = mt.x; let rough = a.a;
   let vdir = normalize(p.cam.xyz - pos);
   let sun = p.sun_dir.xyz;
@@ -107,8 +129,13 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // (rays only for the truly glossy: anything rougher, or a coat over fine relief as Blender's surfaces have, gives back the room's light, blurred. Traced, floors came out in sharp glare)
   let traced = rough < 0.03 || (coat < 0.25 && rough < 0.5);
   var refl = select(e, s, traced) * (fr + vec3<f32>(fc));
-  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) + refl + spec_sun;
+  // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
+  let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
+  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun;
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
+  if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }
+  if (p.misc2.w == 5u) { textureStore(o_lit, px0, vec4<f32>(vec3<f32>(v), 1.0)); return; }
+  if (p.misc2.w == 6u) { textureStore(o_lit, px0, vec4<f32>(n * 0.5 + 0.5, 1.0)); return; }
   if (p.misc2.w == 2u) { textureStore(o_lit, px0, vec4<f32>(a.rgb, 1.0)); return; }
   if (p.misc2.w == 3u) { textureStore(o_lit, px0, vec4<f32>(lit, 1.0)); return; }
   if (p.misc2.w == 4u) { textureStore(o_lit, px0, vec4<f32>(refl + spec_sun, 1.0)); return; }

@@ -126,13 +126,13 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   out.nrm = vec4<f32>(n, surf_coat);
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
   out.alb = vec4<f32>(albedo.rgb, surf_rough);
-  out.mat = vec4<f32>(surf_metal, surf_coat, 0.0, 1.0);
+  out.mat = vec4<f32>(surf_metal, surf_coat, m.flags.w, 1.0);
   if (g.params2.w > 0.5 && m.flags.x < 1.5) { out.color = vec4<f32>(m.emissive.rgb, 1.0); }
   // (glass, over the traced picture: a little is lost in it; what lies behind is already lit)
   if (g.params2.w > 0.5 && m.flags.x > 1.5) {
     // (and it mirrors the room, more at a glancing angle)
-    let fr = 0.04 + 0.96 * pow(1.0 - abs(dot(n, vdir)), 5.0);
-    out.color = vec4<f32>(g.ground.rgb, max(fr, select(0.06, m.flags.z * 0.5, m.flags.z > 0.0)));
+    let fr = 0.02 + 0.6 * pow(1.0 - abs(dot(n, vdir)), 5.0);
+    out.color = vec4<f32>(g.ground.rgb, max(fr, select(0.0, m.flags.z * 0.5, m.flags.z > 0.0)));
   }
   return out;
 }
@@ -248,9 +248,21 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
   let ss = i32(g.params2.y);
   let base = vec2<i32>(i32(fp.x), i32(fp.y)) * ss;
   var acc = vec3<f32>(0.0);
+  if (g.params2.w > 0.5) {
+    // (path traced: a filter wider than the pixel, as Blender's is: a box left thin rails and sun edges in steps)
+    let top = vec2<i32>(dims) - vec2<i32>(1);
+    let c = f32(ss - 1) * 0.5; let r = f32(ss) * 1.0; var tw = 0.0;
+    for (var i = -ss / 2; i < ss + ss / 2; i++) { for (var j = -ss / 2; j < ss + ss / 2; j++) {
+      let wx = 1.0 - abs(f32(i) - c) / (r + 0.5); let wy = 1.0 - abs(f32(j) - c) / (r + 0.5);
+      let wq = wx * wy;
+      acc += wq * shade_px(clamp(base + vec2<i32>(i, j), vec2<i32>(0), top), dims); tw += wq;
+    } }
+    acc = acc / tw;
+  } else {
   for (var i = 0; i < ss; i++) { for (var j = 0; j < ss; j++) {
     acc += shade_px(base + vec2<i32>(i, j), dims);
   } }
   acc = acc / f32(ss * ss);
+  }
   return vec4<f32>(srgb(acc), 1.0);
 }
