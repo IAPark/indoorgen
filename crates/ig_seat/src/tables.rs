@@ -246,8 +246,9 @@ impl Table {
                 for sy in [-1.0f64, 1.0] {
                     let y = sy * fy;
                     for sx in [-1.0f64, 1.0] { legs.push(bx([sx * fx - p, y - p, 0.0], [sx * fx + p, y + p, ztop])); }
-                    legs.push(bx([-fx - p, y - p, 0.0], [fx + p, y + p, 2.0 * p]));
-                    legs.push(bx([-fx - p, y - p, ztop - 2.0 * p], [fx + p, y + p, ztop]));
+                    // (between the posts: run through them, their faces lay in one plane and fought, black at the corners)
+                    legs.push(bx([-fx + p, y - p, 0.0], [fx - p, y + p, 2.0 * p]));
+                    legs.push(bx([-fx + p, y - p, ztop - 2.0 * p], [fx - p, y + p, ztop]));
                 }
             }
             Base::Trestle => {

@@ -243,7 +243,8 @@ fn wood(r: &mut R, vertical: bool) -> Value {
     let mut g = G::default();
     let c = g.coord();
     let v = if vertical {
-        let quarter = if r.f() < 0.5 { 0.0 } else { std::f64::consts::FRAC_PI_2 };
+        // (from a copy of the stream: a draw here shifted the rest, and the same wood came out another colour on its upright parts, tan posts on pink rails)
+        let quarter = if R(r.0.clone()).f() < 0.5 { 0.0 } else { std::f64::consts::FRAC_PI_2 };
         g.mapping(&c, [1.0; 3], [std::f64::consts::FRAC_PI_2, 0.0, quarter])
     } else { c };
     let (col, rough, coat, h) = wood_on(&mut g, r, &v, None);

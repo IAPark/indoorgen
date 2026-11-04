@@ -406,6 +406,8 @@ impl PlantContainer {
         // container stream: PlantPotFactory's trailing weighted_sample(decorative_hard)()() runs on it first
         let mut r = Rng::seeded(fs);
         let cls = matdraw::sample_call(&mut r, matdraw::DECORATIVE_HARD);
+        // (not glass: a clear pot showed its soil as a disc over nothing)
+        let cls = if cls.contains("Glass") { "ceramic.VaseCeramic" } else { cls };
         // (no mushroom: a single one fitted to the box came out as a 40 cm tan lump standing in the pot)
         let kinds = [Kind::Cactus, Kind::Fern, Kind::Succulent, Kind::Spider, Kind::Snake];
         let ki = r.randint(0, kinds.len() as i64) as usize;
