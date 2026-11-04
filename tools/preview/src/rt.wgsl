@@ -465,10 +465,19 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
     let is_mirror = rough < 0.001;
     let rays = select(p.misc2.y, 0u, is_mirror);
+    // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
+    var nsp = n;
+    for (var k = 0; k < 4; k++) {
+      let dq = array<vec2<i32>, 4>(vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1))[k] * max(ss / 2, 1);
+      let nq = textureLoad(g_nrm, clamp(g + dq, vec2<i32>(0), vec2<i32>(w * ss - 1, h * ss - 1)), 0).xyz;
+      nsp += select(n, nq, dot(nq, n) > 0.5);
+    }
+    let nspl = length(nsp) / 5.0;
+    let spec_w = select(min(sqrt(max((1.0 - nspl) / max(nspl, 0.01), 0.0)), 0.5), 0.0, is_mirror);
     if (is_mirror) { sp = textureLoad(m_lit, px, 0).rgb; }
     for (var s = 0u; s < rays; s++) {
       var rd = r0;
-      if (rough > 0.03) { rd = cone(r0, min(rough * rough * 3.0, 0.8)); }
+      if (rough > 0.03 || spec_w > 0.0) { rd = cone(r0, min((rough * rough + spec_w) * 3.0, 0.8)); }
       if (dot(rd, n) <= 0.0) { rd = r0; }
       let hh = closest(o, rd, 1000.0);
       if (hh.i < 0) {

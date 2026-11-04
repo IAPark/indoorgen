@@ -128,7 +128,14 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let lit = e + p.sun_col.rgb * ndl * v / PI;
   // specular: what the reflection rays found, by the share a rough surface returns (Karis's fit), and a clear coat's own Fresnel on top
   let f0 = mix(vec3<f32>(select(0.04, 0.02, cloth)), a.rgb, metal);
-  let nv = max(dot(n, vdir), 0.001);
+  // specular anti-aliasing: Fresnel over what the whole output pixel sees. A ledge nearly edge-on, thinner than a pixel, was at full Fresnel on its own and drew a broken bright line
+  var nbar = n;
+  for (var k = 0; k < 4; k++) {
+    let o = array<vec2<i32>, 4>(vec2<i32>(ss, 0), vec2<i32>(-ss, 0), vec2<i32>(0, ss), vec2<i32>(0, -ss))[k];
+    let nq = textureLoad(c_nrm, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).xyz;
+    if (dot(nq, nq) > 0.25) { nbar += nq; } else { nbar += n; }
+  }
+  let nv = max(max(dot(n, vdir), dot(normalize(nbar), vdir)), 0.001);
   let r_ = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
   let a004 = min(r_.x * r_.x, pow(2.0, -9.28 * nv)) * r_.x + r_.y;
   let ab = vec2<f32>(-1.04, 1.04) * a004 + r_.zw;
