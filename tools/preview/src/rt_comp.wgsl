@@ -21,6 +21,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(8) var c_emis: texture_2d<f32>;
 @group(0) @binding(9) var o_lit: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(10) var c_fine: texture_2d<f32>;
+@group(0) @binding(11) var c_glint: texture_2d<f32>;
 fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // (below the horizon Blender's sky does not stop: the horizon's colour, gone by 24 degrees down, as measured from it. A warm fill for a low sun)
   var dd = d; var fade = 1.0;
@@ -69,7 +70,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let lw = i32(p.dims.x); let lh = i32(p.dims.y);
   let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
   let b = vec2<i32>(floor(f));
-  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var tw = 0.0;
+  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var gl_ = vec3<f32>(0.0); var tw = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
     let gq = q * ss + vec2<i32>(ss / 2);
@@ -80,9 +81,9 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let bw = (1.0 - abs(f.x - f32(b.x + i))) * (1.0 - abs(f.y - f32(b.y + j)));
     let wt = bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02) + 1e-4 * bw;
     let c = textureLoad(c_irr, q, 0);
-    e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
+    gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
-  e /= max(tw, 1e-5); s /= max(tw, 1e-5);
+  e /= max(tw, 1e-5); s /= max(tw, 1e-5); gl_ /= max(tw, 1e-5);
   // the sun at this very point, and the light of a surface no traced pixel landed on
   let fine = textureLoad(c_fine, px, 0);
   var v = fine.a;
@@ -160,7 +161,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   var refl = select(e, s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
-  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun;
+  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_ * (fr + vec3<f32>(fc)), vec3<f32>(0.0), cloth);
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
   if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }
   if (p.misc2.w == 5u) { textureStore(o_lit, px0, vec4<f32>(vec3<f32>(v), 1.0)); return; }
