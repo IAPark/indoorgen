@@ -362,7 +362,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
         // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
         // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
         var e_hit = e;
-        if (rough > 0.08) {
+        if (rough > 0.08 && p.misc2.y > 1u) { // (not in the stripped mode)
           let eh = lamp(q, ng) + portal(q, ng) + gather(q, ng);
           e_hit = eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
         }
