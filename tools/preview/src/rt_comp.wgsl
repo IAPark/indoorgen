@@ -155,7 +155,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     }
     flat_here = off_ < 2 || ss == 1;
   }
-  let traced = (rough < 0.03 || (coat < 0.25 && rough < 0.5 && flat_here)) && fine.r < 0.0;
+  // (not by roughness alone under a coat: where a ceramic's roughness varies across 0.03, a hard switch between sharp and blurred drew camouflage on a sink)
+  let traced = ((rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && rough < 0.5 && flat_here)) && fine.r < 0.0;
   var refl = select(e, s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
