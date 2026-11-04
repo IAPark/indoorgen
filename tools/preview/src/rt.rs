@@ -11,8 +11,8 @@ pub struct Quality { pub spp: u32, pub bounces: u32, pub spec_spp: u32, pub deno
 impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
-            "fast" => Quality { spp: 3, bounces: 2, spec_spp: 1, denoise: 5, ss: 3 },
-            "full" => Quality { spp: 5, bounces: 3, spec_spp: 3, denoise: 5, ss: 3 },
+            "fast" => Quality { spp: 2, bounces: 2, spec_spp: 1, denoise: 5, ss: 3 },
+            "full" => Quality { spp: 3, bounces: 3, spec_spp: 3, denoise: 5, ss: 3 },
             _ => panic!("--rt fast|full"),
         }
     }
@@ -247,6 +247,16 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     q.write_buffer(&p.ubuf, 0, bytemuck::bytes_of(&pr));
     use wgpu::{BindGroupEntry as B, BindingResource as R};
     let (wx, wy) = (res.0.div_ceil(8), res.1.div_ceil(8));
+    // (RT_PROF=1: each pass alone, timed)
+    let prof = std::env::var_os("RT_PROF").is_some();
+    let t0 = std::cell::Cell::new(std::time::Instant::now());
+    let lap = |enc: &mut wgpu::CommandEncoder, name: &str| {
+        if !prof { return; }
+        let done = std::mem::replace(enc, dev.create_command_encoder(&Default::default()));
+        q.submit([done.finish()]); dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        eprintln!("  prof {name:14} {:7.1} ms", t0.get().elapsed().as_secs_f32() * 1000.0); t0.set(std::time::Instant::now());
+    };
+    lap(enc, "before trace");
     // the G-buffer's light first, then, with its clean result to shade by, the reflections. The trace writes one of the pairs and reads the other
     let trace_bg = |irr_out: &wgpu::TextureView, spec_out: &wgpu::TextureView, irr_in: &wgpu::TextureView, lamp_out: &wgpu::TextureView, lamp_in: &wgpu::TextureView| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.trace_bgl, entries: &[
         B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
@@ -260,14 +270,21 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.denoise); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups(wx, wy, 1);
     };
     { let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
+    lap(enc, "trace");
     let mut cur = 0usize;
     for i in 0..qu.denoise as usize { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
+    lap(enc, "denoise");
     { let tg = trace_bg(&p.irr[1 - cur], &p.spec[cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
+    lap(enc, "trace_spec");
     for i in 0..3usize { filter(enc, cur, 1 - cur, 6 + i); cur = 1 - cur; }
+    lap(enc, "spec filter");
     { let tg = trace_bg(&p.fine, &p.spec[1 - cur], &p.irr[cur], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_fine); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1); }
+    lap(enc, "trace_fine");
     let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.compose_bgl, entries: &[
         B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: sd.sky.as_entire_binding() }, B { binding: 2, resource: R::TextureView(gb.depth) }, B { binding: 3, resource: R::TextureView(gb.nrm) },
         B { binding: 4, resource: R::TextureView(gb.alb) }, B { binding: 5, resource: R::TextureView(gb.mat) }, B { binding: 6, resource: R::TextureView(&p.irr[cur]) }, B { binding: 7, resource: R::TextureView(&p.spec[cur]) },
         B { binding: 8, resource: R::TextureView(gb.hdr) }, B { binding: 9, resource: R::TextureView(gb.lit) }, B { binding: 10, resource: R::TextureView(&p.fine) }, B { binding: 11, resource: R::TextureView(&p.glint) }, B { binding: 12, resource: R::TextureView(&p.lamp[1]) }] });
     let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.compose); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1);
+    drop(c);
+    lap(enc, "compose");
 }
