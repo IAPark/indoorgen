@@ -16,7 +16,7 @@ const LEG: Weighted = &[
     ("metal.GrainedMetal", 1.0),
     ("metal.HammeredMetal", 1.0),
     ("wood.Wood", 1.0),
-    ("ceramic.GlassVolume", 1.0),
+    // (no glass: legs of it were a ghost under the seat)
 ];
 
 fn spec(name: &str, cls: &str, seed: u64) -> Material {

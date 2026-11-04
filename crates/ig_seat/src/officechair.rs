@@ -131,7 +131,8 @@ pub fn handles(c: &str) -> bool {
 }
 
 const SEAT: Weighted = &[("fabric.Velvet", 0.3), ("fabric.SofaFabric", 0.5), ("fabric.Leather", 0.2)];
-const LEG: Weighted = &[("metal.BrushedMetal", 1.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 1.0), ("wood.Wood", 1.0), ("ceramic.GlassVolume", 1.0)];
+// (no glass: legs and a swivel base of it were a ghost under the seat)
+const LEG: Weighted = &[("metal.BrushedMetal", 1.0), ("metal.GalvanizedMetal", 1.0), ("metal.GrainedMetal", 1.0), ("metal.HammeredMetal", 1.0), ("wood.Wood", 1.0),];
 
 pub struct OfficeChair {
     x: f64,
