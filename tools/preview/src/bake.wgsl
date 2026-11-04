@@ -397,8 +397,8 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   }
   let traced = rough < 0.03 || (coat < 0.25 && rough < 0.5 && flat_here);
   var s = e;
-  if (b.frame.w == 2u) {
-    // (in a mirror's own picture: no rays, the room's light for all)
+  if (b.frame.w == 2u && rough < 0.001) {
+    // (a mirror in a mirror's own picture: the room's light)
   } else if (rough < 0.001) {
     s = textureSampleLevel(f_mirror, smp, (vec2<f32>(px) + 0.5) / dims, 0.0).rgb;
   } else if (traced) {

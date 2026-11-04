@@ -547,7 +547,7 @@ pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> 
 
 // ---------------- a frame ----------------
 struct Frame {
-    gb: Gb, mirror: Gb, m_lit: (wgpu::Texture, wgpu::TextureView), m_tmp: (wgpu::Texture, wgpu::TextureView), ub_gm: wgpu::Buffer, ub_pm: wgpu::Buffer, ub_bm: wgpu::Buffer, g_bgm: wgpu::BindGroup, g0m: wgpu::BindGroup, b_cm: wgpu::BindGroup, lit: wgpu::TextureView, disp: wgpu::TextureView, hist: [wgpu::TextureView; 2], specs: [wgpu::TextureView; 3], out: (wgpu::Texture, wgpu::TextureView), black: wgpu::TextureView,
+    gb: Gb, mirror: Gb, m_lit: (wgpu::Texture, wgpu::TextureView), m_tmp: (wgpu::Texture, wgpu::TextureView), ub_gm: wgpu::Buffer, ub_pm: wgpu::Buffer, ub_bm: wgpu::Buffer, g_bgm: wgpu::BindGroup, g0m: wgpu::BindGroup, b_cm: wgpu::BindGroup, b_sm: wgpu::BindGroup, b_fm: wgpu::BindGroup, lit: wgpu::TextureView, disp: wgpu::TextureView, hist: [wgpu::TextureView; 2], specs: [wgpu::TextureView; 3], out: (wgpu::Texture, wgpu::TextureView), black: wgpu::TextureView,
     rb: wgpu::Buffer, bpr: u32, res: (u32, u32),
     ub_g: wgpu::Buffer, ub_p: wgpu::Buffer, ub_b: wgpu::Buffer, ub_b2: wgpu::Buffer, g_bg: wgpu::BindGroup, g0: wgpu::BindGroup,
     b_spec: wgpu::BindGroup, b_f: [wgpu::BindGroup; 2], b_compose: wgpu::BindGroup, b_tone: wgpu::BindGroup, b_taa: [wgpu::BindGroup; 2], b_fin: [wgpu::BindGroup; 2],
@@ -584,7 +584,10 @@ fn make_frame(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, res: (u32, u32), 
     let (ub_gm, ub_pm, ub_bm) = (ubuf(std::mem::size_of::<Globals>()), ubuf(std::mem::size_of::<rt::Params>()), ubuf(std::mem::size_of::<Bp>()));
     let g_bgm = g_bg(r, s, &ub_gm);
     let g0m = bg!(dev, &pp.g0_bgl, 0 => ub_pm.as_entire_binding(), 1 => sd.nodes.as_entire_binding(), 2 => sd.tris.as_entire_binding(), 3 => sd.mats.as_entire_binding(), 4 => sd.lights.as_entire_binding(), 5 => sd.sky.as_entire_binding(), 6 => tv(&mirror.depth), 7 => tv(&mirror.nrm), 8 => tv(&mirror.alb), 11 => sd.wins.as_entire_binding());
-    let b_cm = bg!(dev, &pp.compose.1, 0 => ub_bm.as_entire_binding(), 1 => bk.table.as_entire_binding(), 10 => tv(&mirror.mat), 11 => tv(&mirror.hdr), 12 => tv(&black), 13 => tv(&black), 14 => tv(&m_tmp.1), 18 => wgpu::BindingResource::Sampler(&smp));
+    let sm = [0, 1].map(|_| tex(dev, res.0 / 2, res.1 / 2, F16, U::STORAGE_BINDING | U::TEXTURE_BINDING).1);
+    let b_sm = bg!(dev, &pp.spec.1, 0 => ub_bm.as_entire_binding(), 1 => bk.table.as_entire_binding(), 16 => tv(&sm[0]));
+    let b_fm = bg!(dev, &pp.specf.1, 0 => ub_bm.as_entire_binding(), 15 => tv(&sm[0]), 16 => tv(&sm[1]));
+    let b_cm = bg!(dev, &pp.compose.1, 0 => ub_bm.as_entire_binding(), 1 => bk.table.as_entire_binding(), 10 => tv(&mirror.mat), 11 => tv(&mirror.hdr), 12 => tv(&sm[1]), 13 => tv(&black), 14 => tv(&m_tmp.1), 18 => wgpu::BindingResource::Sampler(&smp));
     let mut order: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| !s.draws[i as usize].glass).collect();
     order.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1));
     let mut by: HashMap<String, (Vec<u32>, Vec<(Vec3, Vec3)>)> = HashMap::new();
@@ -595,7 +598,7 @@ fn make_frame(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, res: (u32, u32), 
         e.0.push(i as u32); e.1.push((d.bmin, d.bmax));
     }
     let show = match std::env::var("RT_SHOW").as_deref() { Ok("albedo") => 2, Ok("sun") => 5, Ok("normal") => 6, Ok("flags") => 7, Ok("light") => 3, Ok("spec") => 4, _ => 0 };
-    Frame { gb, mirror, m_lit, m_tmp, ub_gm, ub_pm, ub_bm, g_bgm, g0m, b_cm, lit, disp, hist, specs, out, black, rb, bpr, res, ub_g, ub_p, ub_b, ub_b2, g_bg: g_bg_, g0, b_spec, b_f, b_compose, b_tone, b_taa, b_fin, order, doors: by.into_values().collect(), hidden: vec![false; s.draws.len()], cur: 0, n: 0, prev_vp: Mat4::IDENTITY, prev_eye: Vec3::ZERO, show }
+    Frame { gb, mirror, m_lit, m_tmp, ub_gm, ub_pm, ub_bm, g_bgm, g0m, b_cm, b_sm, b_fm, lit, disp, hist, specs, out, black, rb, bpr, res, ub_g, ub_p, ub_b, ub_b2, g_bg: g_bg_, g0, b_spec, b_f, b_compose, b_tone, b_taa, b_fin, order, doors: by.into_values().collect(), hidden: vec![false; s.draws.len()], cur: 0, n: 0, prev_vp: Mat4::IDENTITY, prev_eye: Vec3::ZERO, show }
 }
 fn halton(mut i: u32, b: u32) -> f32 { let (mut f, mut r) = (1.0, 0.0); while i > 0 { f /= b as f32; r += f * (i % b) as f32; i /= b; } r }
 fn z_pass<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, pp: &'a Pipes, list: &[u32]) {
@@ -670,9 +673,13 @@ fn mirrors(f: &Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, gl: &Glob
             rp.set_pipeline(&r.main_pipe);
             draw_fast(&mut rp, s, &r.main_pipe, &list);
         }
-        q.write_buffer(&f.ub_pm, 0, bytemuck::bytes_of(&params(s, vpm.inverse(), eye_m, f.res.0, f.res.1, 0)));
-        let mut bp = bk.base; bp.frame = [f.n, 0, 0, 2]; bp.run = [sx, sy, 0, 0];
+        q.write_buffer(&f.ub_pm, 0, bytemuck::bytes_of(&params(s, vpm.inverse(), eye_m, f.res.0, f.res.1, std::env::var("BAKE_MSHOW").ok().and_then(|v| v.parse().ok()).unwrap_or(0))));
+        let mut bp = bk.base; bp.frame = [f.n, 0, 0, 2]; bp.run = [sx, sy, 0, 0]; bp.fl[3] = 1.0;
         q.write_buffer(&f.ub_bm, 0, bytemuck::bytes_of(&bp));
+        // (rays for what is glossy in it too, at half its size: a metal door otherwise comes out in the room's whole light, and it may face nothing bright)
+        let (mw, mh) = ((f.res.0 / 2).div_ceil(8), (f.res.1 / 2).div_ceil(8));
+        dispatch(&mut enc, &pp.spec.0, &f.g0m, &f.b_sm, mw, mh);
+        dispatch(&mut enc, &pp.specf.0, &f.g0m, &f.b_fm, mw, mh);
         dispatch(&mut enc, &pp.compose.0, &f.g0m, &f.b_cm, sw.div_ceil(8), sh.div_ceil(8));
         enc.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { texture: &f.m_tmp.0, mip_level: 0, origin: wgpu::Origin3d { x: sx, y: sy, z: 0 }, aspect: wgpu::TextureAspect::All },
             wgpu::TexelCopyTextureInfo { texture: &f.m_lit.0, mip_level: 0, origin: wgpu::Origin3d { x: sx, y: sy, z: 0 }, aspect: wgpu::TextureAspect::All }, wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 });
@@ -829,6 +836,205 @@ pub fn run(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
                 save_png(&img, &p); println!("{}", p.display());
             }
         }
-        _ => panic!("--bake measure|still[:seconds]"),
+        "video" => {
+            let frames = std::env::var("BAKE_LEN").ok().and_then(|v| v.parse().ok()).unwrap_or(300usize);
+            let path: Vec<(Vec3, Vec3)> = match std::env::var("BAKE_PATH").as_deref() {
+                // (a file: [[ex,ey,ez,tx,ty,tz], ...], one a frame)
+                Ok(p) if p != "auto" => { let v: Value = serde_json::from_slice(&std::fs::read(p).expect("path file")).expect("path json");
+                    v.as_array().unwrap().iter().map(|q| { let f = |i: usize| q[i].as_f64().unwrap() as f32; (Vec3::new(f(0), f(1), f(2)), Vec3::new(f(3), f(4), f(5))) }).collect() }
+                _ => auto_path(s, frames),
+            };
+            assert!(!path.is_empty(), "no path through this house");
+            if let Ok(d) = std::env::var("BAKE_SAVE_PATH") { let j: Vec<Vec<f32>> = path.iter().map(|(a, b)| vec![a.x, a.y, a.z, b.x, b.y, b.z]).collect(); std::fs::write(d, serde_json::to_string(&j).unwrap()).ok(); }
+            video(r, s, &pp, &bk, o, &path, t0);
+        }
+        _ => panic!("--bake measure|still|video[:seconds]"),
     }
+}
+
+// ---------------- a path through the house, and a video ----------------
+/// a walk through the rooms, on the floor plan: from room to room by the shortest way that keeps clear of things, smoothed. (eye, target) a frame
+pub fn auto_path(s: &Scene, frames: usize) -> Vec<(Vec3, Vec3)> {
+    let (mut lo, mut hi) = (Vec3::splat(1e9), Vec3::splat(-1e9));
+    let mut floors: Vec<(String, Vec3)> = vec![];
+    for d in &s.draws { let nm = &s.glb.nodes[d.node].name; if !nm.starts_with("outdoor") && !nm.starts_with("exterior") { lo = lo.min(d.bmin); hi = hi.max(d.bmax); } if nm.ends_with(".floor") { floors.push((nm.clone(), (d.bmin + d.bmax) * 0.5)); } }
+    const C: f32 = 0.1;
+    let (nx, ny) = (((hi.x - lo.x) / C) as usize + 2, ((hi.y - lo.y) / C) as usize + 2);
+    let floor_z = floors.iter().map(|f| f.1.z).fold(f32::MAX, f32::min);
+    let mut solid = vec![false; nx * ny];
+    for d in &s.draws {
+        let nm = s.glb.nodes[d.node].name.to_lowercase();
+        if nm.ends_with(".floor") || nm.contains("ceiling") || nm.starts_with("outdoor") || nm.starts_with("exterior") { continue }
+        // (door leaves swing out of the way: the path goes through their opening)
+        if nm.starts_with("door") && !nm.contains("frame") && !nm.contains("casing") && !d.glass { continue }
+        if d.bmin.z > floor_z + 2.1 || d.bmax.z < floor_z + 0.15 { continue }
+        let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
+        let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
+        let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
+        let ix = |k: usize| -> usize { if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as usize } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) as usize } };
+        for t in 0..d.icount as usize / 3 {
+            let (a, b, c) = (p(ix(t * 3)), p(ix(t * 3 + 1)), p(ix(t * 3 + 2)));
+            if a.z.max(b.z).max(c.z) < floor_z + 0.15 || a.z.min(b.z).min(c.z) > floor_z + 2.1 { continue }
+            let l = (b - a).length().max((c - a).length()).max((c - b).length());
+            let n = ((l / (C * 0.7)).ceil() as usize).clamp(1, 400);
+            for i in 0..=n { for j in 0..=(n - i) {
+                let q = a + (b - a) * (i as f32 / n as f32) + (c - a) * (j as f32 / n as f32);
+                if q.z < floor_z + 0.15 || q.z > floor_z + 2.1 { continue }
+                let (x, y) = (((q.x - lo.x) / C) as i64, ((q.y - lo.y) / C) as i64);
+                if x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny { solid[y as usize * nx + x as usize] = true; }
+            } }
+        }
+    }
+    // distance to the nearest thing, by sweeps (in cells)
+    let mut dist = vec![1e6f32; nx * ny];
+    for i in 0..nx * ny { if solid[i] { dist[i] = 0.0; } }
+    for _ in 0..2 {
+        for y in 0..ny { for x in 0..nx { let i = y * nx + x; if x > 0 { dist[i] = dist[i].min(dist[i - 1] + 1.0); } if y > 0 { dist[i] = dist[i].min(dist[i - nx] + 1.0); } if x > 0 && y > 0 { dist[i] = dist[i].min(dist[i - nx - 1] + 1.41); } if y > 0 && x + 1 < nx { dist[i] = dist[i].min(dist[i - nx + 1] + 1.41); } } }
+        for y in (0..ny).rev() { for x in (0..nx).rev() { let i = y * nx + x; if x + 1 < nx { dist[i] = dist[i].min(dist[i + 1] + 1.0); } if y + 1 < ny { dist[i] = dist[i].min(dist[i + nx] + 1.0); } if x + 1 < nx && y + 1 < ny { dist[i] = dist[i].min(dist[i + nx + 1] + 1.41); } if y + 1 < ny && x > 0 { dist[i] = dist[i].min(dist[i + nx - 1] + 1.41); } } }
+    }
+    let clear = 3.0f32; // cells
+    let free = |i: usize| dist[i] >= clear;
+    let snap = |p: Vec3| -> Option<usize> { let (cx, cy) = (((p.x - lo.x) / C) as i64, ((p.y - lo.y) / C) as i64); let mut best = None; let mut bd = i64::MAX;
+        for y in 0..ny as i64 { for x in 0..nx as i64 { let i = y as usize * nx + x as usize; if free(i) { let d = (x - cx).pow(2) + (y - cy).pow(2); if d < bd { bd = d; best = Some(i); } } } } best };
+    let dijkstra = |from: usize| -> (Vec<f32>, Vec<u32>) {
+        let mut cost = vec![f32::MAX; nx * ny]; let mut prev = vec![u32::MAX; nx * ny];
+        let mut h = std::collections::BinaryHeap::new();
+        cost[from] = 0.0; h.push((std::cmp::Reverse(0u32), from as u32));
+        while let Some((std::cmp::Reverse(c), i)) = h.pop() {
+            let i = i as usize; if c as f32 / 16.0 > cost[i] { continue }
+            let (x, y) = ((i % nx) as i64, (i / nx) as i64);
+            for (dx, dy, w) in [(1i64, 0i64, 1.0f32), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0), (1, 1, 1.41), (1, -1, 1.41), (-1, 1, 1.41), (-1, -1, 1.41)] {
+                let (a, b) = (x + dx, y + dy); if a < 0 || b < 0 || a >= nx as i64 || b >= ny as i64 { continue }
+                let j = b as usize * nx + a as usize; if !free(j) { continue }
+                // (the middle of the way: close to things costs more)
+                let nc = cost[i] + w * (1.0 + 40.0 / (dist[j] * dist[j]).max(1.0));
+                if nc < cost[j] { cost[j] = nc; prev[j] = i as u32; h.push((std::cmp::Reverse((nc * 16.0) as u32), j as u32)); }
+            }
+        }
+        (cost, prev)
+    };
+    floors.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut stops: Vec<usize> = floors.iter().filter_map(|f| snap(f.1)).collect();
+    if stops.is_empty() { return vec![] }
+    // the rooms, nearest next, from the most connected
+    let mut route: Vec<usize> = vec![]; let mut at = stops.remove(0);
+    let want = frames as f32 / 30.0 * 1.0 / C; // cells of walk wanted, at 1 m/s
+    let mut guard = 0;
+    loop {
+        guard += 1;
+        let (cost, prev) = dijkstra(at);
+        let next = stops.iter().enumerate().filter(|(_, &t)| cost[t] < f32::MAX).min_by(|a, b| cost[*a.1].partial_cmp(&cost[*b.1]).unwrap()).map(|(k, &t)| (k, t));
+        let Some((k, t)) = next else { break };
+        let mut seg = vec![t]; let mut c = t; while prev[c] != u32::MAX { c = prev[c] as usize; seg.push(c); } seg.reverse();
+        route.extend(seg); stops.remove(k); at = t;
+        if route.len() as f32 >= want || guard > 64 { break }
+    }
+    if route.len() < 8 { return vec![] }
+    let mut pts: Vec<Vec3> = route.iter().map(|&i| Vec3::new(lo.x + ((i % nx) as f32 + 0.5) * C, lo.y + ((i / nx) as f32 + 0.5) * C, floor_z + 1.5)).collect();
+    // smooth: and it stays clear, as the steps were small next to the clearance
+    for _ in 0..40 { let o = pts.clone(); for i in 1..pts.len() - 1 { pts[i] = (o[i - 1] + o[i] * 2.0 + o[i + 1]) * 0.25; } }
+    let mut acc = vec![0f32; pts.len()]; for i in 1..pts.len() { acc[i] = acc[i - 1] + (pts[i] - pts[i - 1]).length(); }
+    let total = *acc.last().unwrap();
+    let at_s = |t: f32| -> Vec3 { let t = t.clamp(0.0, total); let k = acc.partition_point(|v| *v < t).clamp(1, pts.len() - 1); let f = (t - acc[k - 1]) / (acc[k] - acc[k - 1]).max(1e-5); pts[k - 1].lerp(pts[k], f) };
+    let speed = 1.0f32; let mut fwd = (at_s(1.2) - at_s(0.0)).normalize_or_zero();
+    (0..frames).map(|f| {
+        let t = (f as f32 / 30.0 * speed).min(total);
+        let e = at_s(t);
+        let aim = at_s(t + 1.2) - e; if aim.length() > 0.05 { fwd = fwd.lerp(aim.normalize(), 0.06).normalize(); }
+        // (it looks about, gently, and a little down)
+        let yaw = 0.2 * (f as f32 / 30.0 * 0.5).sin();
+        let lookdir = Mat4::from_rotation_z(yaw).transform_vector3(fwd) + Vec3::new(0.0, 0.0, -0.1);
+        (e, e + lookdir)
+    }).collect()
+}
+fn pct(v: &[f32], p: f32) -> f32 { let mut s = v.to_vec(); s.sort_by(|a, b| a.partial_cmp(b).unwrap()); s[((s.len() - 1) as f32 * p) as usize] }
+fn video(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, path: &[(Vec3, Vec3)], t_start: Instant) {
+    use std::sync::{Arc, atomic::AtomicU32};
+    let (dev, q) = (&r.gpu.dev, &r.gpu.q);
+    let scale = std::env::var("BAKE_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.5f32);
+    let mut f = make_frame(r, s, pp, bk, o.res, scale);
+    let lens = std::env::var("BAKE_LENS").ok().and_then(|v| v.parse().ok()).unwrap_or(18.0f32);
+    let cam_at = |k: usize| cam_look(path[k].0, path[k].1, lens);
+    // exposure: set here, for places along the path, and eased between them
+    let te = Instant::now();
+    let step = 15usize;
+    let keys: Vec<f32> = (0..path.len()).step_by(step).map(|k| expose(&mut f, r, s, pp, bk, o, &cam_at(k)).max(1e-3).ln()).collect();
+    let keyd: Vec<f32> = (0..keys.len()).map(|i| { let (mut a, mut w) = (0.0, 0.0); for j in 0..keys.len() { let d = (i as f32 - j as f32) / 6.0; let g = (-d * d).exp(); a += keys[j] * g; w += g; } a / w }).collect();
+    let xp_at = |k: usize| { let u = k as f32 / step as f32; let i = (u as usize).min(keyd.len() - 1); let j = (i + 1).min(keyd.len() - 1); (keyd[i] + (keyd[j] - keyd[i]) * (u - i as f32)).exp() };
+    eprintln!("exposure keys {}, {:.2}s; since the start of the bake {:.2}s", keys.len(), te.elapsed().as_secs_f32(), t_start.elapsed().as_secs_f32());
+    // the encoder takes what the GPU has done, on threads of its own
+    let (w, h) = o.res; let is_vid = o.out.extension().map_or(false, |e| e != "png") && o.out.as_os_str() != "/dev/null";
+    let codec = std::env::var("BAKE_CODEC").unwrap_or("h264_videotoolbox".into());
+    let mut child = if is_vid {
+        let mut a: Vec<String> = ["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba", "-s"].iter().map(|s| s.to_string()).collect();
+        a.push(format!("{w}x{h}")); for x in ["-r", "30", "-i", "-", "-c:v"] { a.push(x.into()); } a.push(codec.clone());
+        if codec == "h264_videotoolbox" { for x in ["-b:v", "16M", "-realtime", "1"] { a.push(x.into()); } } else { for x in ["-preset", "veryfast", "-crf", "18"] { a.push(x.into()); } }
+        for x in ["-pix_fmt", "yuv420p"] { a.push(x.into()); } a.push(o.out.display().to_string());
+        Some(std::process::Command::new("ffmpeg").args(&a).stdin(std::process::Stdio::piped()).spawn().expect("ffmpeg"))
+    } else { None };
+    let stdin = child.as_mut().and_then(|c| c.stdin.take());
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+    let (back_tx, back_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let writer = std::thread::spawn(move || { use std::io::Write; let mut out = stdin; for b in rx { if let Some(p) = out.as_mut() { p.write_all(&b).ok(); } back_tx.send(b).ok(); } drop(out); });
+    let dump = std::env::var("BAKE_DUMP").ok().map(PathBuf::from);
+    if let Some(d) = &dump { std::fs::create_dir_all(d).ok(); }
+    let alpha = std::env::var("BAKE_TAA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.12f32);
+    let ring: Vec<wgpu::Buffer> = (0..5).map(|_| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (f.bpr * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false })).collect();
+    let flags: Vec<Arc<AtomicU32>> = ring.iter().map(|_| Arc::new(AtomicU32::new(0))).collect();
+    let mut queue: std::collections::VecDeque<(usize, usize)> = Default::default();
+    let (mut times, mut enc_ms): (Vec<f32>, Vec<f32>) = (vec![], vec![]);
+    let bpr = f.bpr as usize; let row = w as usize * 4;
+    let mut pool: Vec<Vec<u8>> = vec![];
+    let mut take = |slot: usize, k: usize, ring: &Vec<wgpu::Buffer>, pool: &mut Vec<Vec<u8>>| {
+        let data = ring[slot].slice(..).get_mapped_range().unwrap();
+        let mut b = pool.pop().unwrap_or_else(|| vec![0u8; row * h as usize]);
+        if bpr == row { b.copy_from_slice(&data[..row * h as usize]); } else { for y in 0..h as usize { b[y * row..(y + 1) * row].copy_from_slice(&data[y * bpr..y * bpr + row]); } }
+        drop(data); ring[slot].unmap();
+        if let Some(d) = &dump { let im = image::RgbaImage::from_raw(w, h, b.clone()).unwrap(); save_png(&im, &d.join(format!("{k:05}.png"))); }
+        tx.send(b).ok();
+    };
+    let t0 = Instant::now(); let mut last = t0;
+    for k in 0..path.len() {
+        let cam = cam_at(k); let xp = xp_at(k);
+        f.n = k as u32;
+        let t_enc = Instant::now();
+        let (vp, eye, mut enc) = surfaces_and_light(&mut f, r, s, pp, bk, o, &cam, xp, true);
+        f.cur = 1 - f.cur;
+        post(&mut f, r, pp, bk, &mut enc, xp, if k == 0 { 1.0 } else { alpha }, true, (vp, eye));
+        // the next free buffer of the ring
+        let slot = k % ring.len();
+        while queue.iter().any(|&(sl, _)| sl == slot) {
+            while let Some(&(sl, kk)) = queue.front() {
+                if flags[sl].load(Ordering::Acquire) == 1 { queue.pop_front(); take(sl, kk, &ring, &mut pool); while let Ok(b) = back_rx.try_recv() { pool.push(b); } } else { break }
+            }
+            if queue.iter().any(|&(sl, _)| sl == slot) { dev.poll(wgpu::PollType::Poll).ok(); std::thread::yield_now(); }
+        }
+        enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &f.out.0, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &ring[slot], layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(f.bpr), rows_per_image: Some(h) } }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+        q.submit([enc.finish()]);
+        flags[slot].store(0, Ordering::Release);
+        let fl = flags[slot].clone();
+        ring[slot].slice(..).map_async(wgpu::MapMode::Read, move |_| fl.store(1, Ordering::Release));
+        queue.push_back((slot, k));
+        enc_ms.push(t_enc.elapsed().as_secs_f32() * 1000.0);
+        // (a frame's end is when the GPU has begun it: never run far ahead of it)
+        while queue.len() >= 3 {
+            dev.poll(wgpu::PollType::Poll).ok();
+            let Some(&(sl, kk)) = queue.front() else { break };
+            if flags[sl].load(Ordering::Acquire) == 1 { queue.pop_front(); take(sl, kk, &ring, &mut pool); while let Ok(b) = back_rx.try_recv() { pool.push(b); } } else { std::thread::yield_now(); }
+        }
+        let now = Instant::now(); times.push((now - last).as_secs_f32() * 1000.0); last = now;
+    }
+    while let Some((sl, kk)) = queue.pop_front() {
+        while flags[sl].load(Ordering::Acquire) != 1 { dev.poll(wgpu::PollType::Poll).ok(); std::thread::yield_now(); }
+        take(sl, kk, &ring, &mut pool);
+    }
+    drop(take); drop(tx);
+    writer.join().ok();
+    if let Some(mut c) = child { c.wait().ok(); }
+    let total = t0.elapsed().as_secs_f32(); let n = path.len();
+    // the slowest second
+    let (mut worst, mut sum, mut a) = (0f32, 0f32, 0usize);
+    for b in 0..times.len() { sum += times[b]; while b - a >= 30 { sum -= times[a]; a += 1; } if b >= 29 { worst = worst.max(sum); } }
+    println!("FRAMES {n} in {total:.2}s (written and encoded): {:.1} fps; frame ms p50 {:.1} p95 {:.1} p99 {:.1} max {:.1}; slowest 30 frames {:.1} fps; encode-side CPU p50 {:.1} ms; codec {}", n as f32 / total, pct(&times, 0.5), pct(&times, 0.95), pct(&times, 0.99), pct(&times, 1.0), 30000.0 / worst.max(1.0), pct(&enc_ms, 0.5), if is_vid { codec } else { "none".into() });
 }
