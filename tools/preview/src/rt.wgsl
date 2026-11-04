@@ -360,7 +360,13 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
         if (dot(ng, rd) > 0.0) { ng = -ng; }
         let q = o + rd * hh.t + ng * 0.002;
         // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
-        sp += m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e);
+        // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
+        var e_hit = e;
+        if (rough > 0.08) {
+          let eh = lamp(q, ng) + portal(q, ng) + gather(q, ng);
+          e_hit = eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
+        }
+        sp += m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
       }
     }
     if (rays > 0u) { sp /= f32(rays); }

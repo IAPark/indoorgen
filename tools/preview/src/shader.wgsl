@@ -21,6 +21,7 @@ struct M { color: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32>, obj: mat4x4<
 @group(0) @binding(0) var<uniform> g: G;
 @group(0) @binding(1) var shadow_tex: texture_depth_2d;
 @group(0) @binding(2) var shadow_smp: sampler_comparison;
+@group(0) @binding(6) var mirror_tex: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> m: M;
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var base_smp: sampler;
@@ -144,6 +145,11 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     // (and it mirrors the room, more at a glancing angle)
     let fr = 0.02 + 0.6 * pow(1.0 - abs(dot(n, vdir)), 5.0);
     out.color = vec4<f32>(g.ground.rgb, max(fr, select(0.0, m.flags.z * 0.5, m.flags.z > 0.0)));
+    // (a flat pane of real glass: the room it mirrors, traced like a mirror's, by Fresnel. At a glancing angle a shower's pane is mostly this)
+    if (m.flags.w < -1.5) {
+      let mt = textureLoad(mirror_tex, vec2<i32>(v.clip.xy / g.params2.y), 0);
+      if (mt.a > 0.0) { out.color = vec4<f32>(mt.rgb, 0.04 + 0.96 * pow(1.0 - abs(dot(n, vdir)), 5.0)); }
+    }
   }
   return out;
 }

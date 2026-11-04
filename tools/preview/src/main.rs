@@ -22,6 +22,8 @@ struct Globals {
     sun_dir: [f32; 4], sun_col: [f32; 4], sky: [f32; 4], ground: [f32; 4], cam_pos: [f32; 4], cam_fwd: [f32; 4],
     params: [f32; 4], clip2: [f32; 4], clip: [f32; 4], params2: [f32; 4], lpos: [[f32; 4]; 32], lcol: [[f32; 4]; 32],
 }
+/// The index of refraction of a part's glass (0: none given).
+fn sn_ior(side: &serde_json::Value, sn: Option<&serde_json::Value>) -> f64 { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["ior"].as_f64()).unwrap_or(0.0) }
 /// A flat mirror's pane, by its material.
 fn is_mirror(name: &str) -> bool { name.to_lowercase().contains("mirror") }
 /// Cloth, by the shader names `tools/render/render_rust.py` treats as cloth (the shader's, not the part's: a "sofa_fabric" can be leather): there it gets a soft sheen, which is why dark cushions are never near black.
@@ -86,7 +88,7 @@ fn parse_args() -> Opts {
 }
 
 // ---------------- scene on the GPU ----------------
-struct Draw { mat: usize, node: usize, pos: (usize, u64, u64), nrm: Option<(usize, u64, u64)>, uv: Option<(usize, u64, u64)>, idx: (usize, u64, u64), u16: bool, icount: u32, vcount: u32, mat_bg: usize, pipe: Option<usize>, glass: bool, shadow: bool, bmin: Vec3, bmax: Vec3 }
+struct Draw { pane: bool, mat: usize, node: usize, pos: (usize, u64, u64), nrm: Option<(usize, u64, u64)>, uv: Option<(usize, u64, u64)>, idx: (usize, u64, u64), u16: bool, icount: u32, vcount: u32, mat_bg: usize, pipe: Option<usize>, glass: bool, shadow: bool, bmin: Vec3, bmax: Vec3 }
 struct Light { pos: Vec3, color: Vec3 }
 struct Scene {
     /// (azimuth deg, elevation deg, sun intensity, ambient) from the sidecar `variation.lighting` (--sidecar-lighting)
@@ -298,6 +300,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                 }
                 k
             } else { tex };
+            let real_glass = glass && sn_ior(&side, side_nodes.get(n.name.as_str()).copied()) > 1.2;
             let flags = if cls == "people.hair" || m.mask { 1u32 } else if glass { 2 } else { 0 };
             let sn = side_nodes.get(n.name.as_str());
             let graph = if glass || shown || flags != 0 || m.tex.is_some() { None } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| emitted.get(i as usize)).and_then(|e| e.as_ref()) };
@@ -312,7 +315,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let dark_glass = glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) { -1.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
                 if graph.is_none() { u.p[47] = if shown { [0.45, 0.0, 0.0, 0.0] } else { [m.rough, m.metal, 0.0, 0.0] }; }
                 if let Some(e) = graph {
                     for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
@@ -349,7 +352,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                 bufs.push(gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &uv, usage: wgpu::BufferUsages::VERTEX }));
                 (bufs.len() - 1, 0u64, uv.len() as u64)
             });
-            draws.push(Draw { mat: mi, node: ni, pos: vw(&p.pos), nrm: p.nrm.as_ref().map(vw), uv: art_uv.or(p.uv.as_ref().map(vw)), idx: vw(&p.idx), u16: p.idx_u16, icount: p.icount, vcount: p.vcount,
+            draws.push(Draw { pane: real_glass, mat: mi, node: ni, pos: vw(&p.pos), nrm: p.nrm.as_ref().map(vw), uv: art_uv.or(p.uv.as_ref().map(vw)), idx: vw(&p.idx), u16: p.idx_u16, icount: p.icount, vcount: p.vcount,
                 mat_bg: bi, pipe, glass, shadow: !glass && !(opts.no_ceiling && is_ceil), bmin: lo, bmax: hi });
         }
     }
@@ -981,7 +984,8 @@ fn init(o: &Opts) -> Renderer {
     let tex2d = |b: u32, depth: bool, vis| wgpu::BindGroupLayoutEntry { binding: b, visibility: vis, ty: wgpu::BindingType::Texture { sample_type: if depth { wgpu::TextureSampleType::Depth } else { wgpu::TextureSampleType::Float { filterable: true } }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let vf = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT; let f = wgpu::ShaderStages::FRAGMENT;
     let bgl = |e: &[wgpu::BindGroupLayoutEntry]| dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: e });
-    let g_bgl = bgl(&[uni(0, vf), tex2d(1, true, f), wgpu::BindGroupLayoutEntry { binding: 2, visibility: f, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None }]);
+    let g_bgl = bgl(&[uni(0, vf), tex2d(1, true, f), wgpu::BindGroupLayoutEntry { binding: 2, visibility: f, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None },
+        wgpu::BindGroupLayoutEntry { binding: 6, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None }]);
     let sh_bgl = bgl(&[uni(0, vf)]);
     let mat_bgl = bgl(&[uni(0, f), tex2d(1, false, f), wgpu::BindGroupLayoutEntry { binding: 2, visibility: f, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }]);
     let post_bgl = bgl(&[uni(0, f), wgpu::BindGroupLayoutEntry { binding: 3, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
@@ -1134,7 +1138,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
     let g_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.g_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&s.shadow_view) },
-        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }] });
+        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }, wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&r.tg.m_acc_v) }] });
     let tg = &r.tg; let fr = frustum(vp);
     // (path traced, a whole picture: the door leaves stay, as in Blender. Hiding those by the camera is the plain preview's help)
     let eye_leaf = if rt_q.is_some() && cam.near.is_none() && cam.only.is_none() { None } else { Some(eye) };
@@ -1160,6 +1164,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
         q.submit([me.finish()]);
         let mut panes = mirror_panes(s, eye);
         panes.retain(|m| visible(&fr, m.2, m.3));
+        panes.truncate(4);
         for &(n, d, lo, hi) in &panes {
             // the pane's box on screen (a pane reaching behind the camera: all of it)
             let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;
@@ -1181,7 +1186,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
             let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.g_bgl, entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&s.shadow_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }] });
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }, wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&r.tg.m_acc_v) }] });
             let mut me = dev.create_command_encoder(&Default::default());
             {
                 let att = |v| Some(wgpu::RenderPassColorAttachment { view: v, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(black), store: wgpu::StoreOp::Store } });
@@ -1258,9 +1263,12 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
 
 /// The flat mirrors facing this eye: (normal toward the eye, plane offset, box low, box high)
 fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<(Vec3, f32, Vec3, Vec3)> {
-    let mut out = vec![];
+    let (mut out, mut panes) = (vec![], vec![]);
     for d in &s.draws {
-        if d.glass || !is_mirror(&s.glb.mats[d.mat].name) { continue; }
+        // (flat panes of real glass too: they mirror the room a little)
+        let mut ext = [d.bmax.x - d.bmin.x, d.bmax.y - d.bmin.y, d.bmax.z - d.bmin.z]; ext.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let flat_pane = d.pane && ext[0] < 0.05 && ext[1] > 0.3;
+        if !flat_pane && (d.glass || !is_mirror(&s.glb.mats[d.mat].name)) { continue; }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
@@ -1282,8 +1290,11 @@ fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<(Vec3, f32, Vec3, Vec3)> {
             if ar > best * 0.25 && (cr / ar).dot(nn).abs() > 0.99 { off = off.max(nn.dot(a)); }
         }
         if nn.dot(eye) - off < 1e-3 { continue; }
-        out.push((nn, off, d.bmin, d.bmax));
+        if flat_pane { panes.push((nn, off, d.bmin, d.bmax)); } else { out.push((nn, off, d.bmin, d.bmax)); }
     }
+    // (the largest panes after the mirrors: each one costs a small picture)
+    panes.sort_by(|a, b| ((b.3 - b.2).length()).partial_cmp(&(a.3 - a.2).length()).unwrap());
+    out.extend(panes);
     out
 }
 
@@ -1463,7 +1474,7 @@ fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> {
         groups.push(dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.g_bgl, entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&s.shadow_view) },
-            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }] }));
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }, wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&r.tg.m_acc_v) }] }));
     }
     {
         let clr = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
