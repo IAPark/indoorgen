@@ -404,7 +404,7 @@ fn lamp_smooth(px: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, dims: vec2<f32>, w: 
 }
 // The lamps' own highlights on a glossy surface, before Fresnel: reflections of the room carry no lamps, since a lamp is a point and no ray finds it
 fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f32, w: i32, h: i32, ss: i32, e: vec3<f32>) -> vec3<f32> {
-    if (rough < 0.001 || rough > 0.45 || p.misc2.w == 8u) { return vec3<f32>(0.0); }
+  if (rough < 0.001 || p.misc2.w == 8u) { return vec3<f32>(0.0); }
   // relief finer than a pixel widens the highlight (Toksvig)
   var nb = n;
   for (var k = 0; k < 4; k++) {
@@ -416,9 +416,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let nbl = max(length(nb), 0.01); let ns = nb / nbl;
   let a0 = sqrt(max(rough * rough * rough * rough + (1.0 - nbl) / nbl, 0.000004));
   let vdir = normalize(p.cam.xyz - pos); let nv = max(dot(ns, vdir), 0.001);
-  // (the brightest lamp only: highlights rarely overlap, and one ray a pixel is what there is time for)
-  var out = vec3<f32>(0.0); // (only where it would show: F0's 4 percent of it against a tenth of the light already here. Elsewhere a ray a pixel cost a quarter of the frame for nothing visible)
-  let floor_ = max(dot(e, vec3<f32>(0.333)) * 0.1 / 0.04, 1.25); var best = floor_; var bl = vec3<f32>(0.0); var bd = 0.0; var i = 0u;
+  // the two lamps that show most here, each with its shadow ray. Any roughness: on a rough dark wall this broad highlight is what keeps it from going black
+  var c0 = vec3<f32>(0.0); var c1 = vec3<f32>(0.0); var m0 = 0.0; var m1 = 0.0; var l0 = vec3<f32>(0.0); var l1 = vec3<f32>(0.0); var d0 = 0.0; var d1 = 0.0; var i = 0u;
   loop { if (i >= p.misc.z) { break; }
     let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), 0.04); let dl = sqrt(r2); let l = v / dl;
     let ndl = dot(ns, l);
@@ -431,13 +430,14 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       // (E / pi is what lamp() adds to the light; the sun's highlight has the same form)
       let c = lights[i].col.xyz * PI / r2 * p.scale.x * ndl * min(dv, 200.0);
       let m_ = dot(c, vec3<f32>(0.333));
-      if (m_ > best) { best = m_; out = c; bl = l; bd = dl; }
+      if (m_ > m0) { c1 = c0; m1 = m0; l1 = l0; d1 = d0; c0 = c; m0 = m_; l0 = l; d0 = dl; }
+      else if (m_ > m1) { c1 = c; m1 = m_; l1 = l; d1 = dl; }
     }
     i++; }
-  if (bd <= 0.0 || occluded(o, bl, bd - 0.02)) { return vec3<f32>(0.0); }
-  // (faded in from there, or the glow ended in a hard edge)
-  // (and by roughness: on a tile whose roughness varies, a hard limit made it dots)
-  return min(out, vec3<f32>(500.0)) * clamp(best / floor_ - 1.0, 0.0, 1.0) * (1.0 - smoothstep(0.2, 0.45, rough));
+  var out = vec3<f32>(0.0);
+  if (d0 > 0.0 && !occluded(o, l0, d0 - 0.02)) { out += c0; }
+  if (d1 > 0.0 && !occluded(o, l1, d1 - 0.02)) { out += c1; }
+  return min(out, vec3<f32>(500.0));
 }
 @compute @workgroup_size(8, 8) fn trace_spec(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);

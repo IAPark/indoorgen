@@ -908,7 +908,7 @@ fn resolve_cams(s: &Scene, o: &Opts) -> Vec<Cam> {
 
 // ---------------- renderer ----------------
 struct Targets { m: [wgpu::TextureView; 4], m_depth: wgpu::TextureView, m_lit: wgpu::Texture, m_acc: wgpu::Texture, m_lit_v: wgpu::TextureView, m_acc_v: wgpu::TextureView, alb: wgpu::TextureView, mat: wgpu::TextureView, lit: wgpu::TextureView, hdr: wgpu::TextureView, nrm: wgpu::TextureView, depth: wgpu::TextureView, depth_tex: wgpu::Texture, dbuf: wgpu::Buffer, dbpr: u32, out: wgpu::Texture, readback: wgpu::Buffer, w: u32, h: u32, bpr: u32 }
-struct Renderer { rt: Option<rt::Pipes>, last_gl: Option<Globals>, rt_now: bool,
+struct Renderer { agx: wgpu::TextureView, agx_smp: wgpu::Sampler, rt: Option<rt::Pipes>, last_gl: Option<Globals>, rt_now: bool,
     gpu: Gpu, ubuf: wgpu::Buffer, g_bgl: wgpu::BindGroupLayout, mat_bgl: wgpu::BindGroupLayout, post_bgl: wgpu::BindGroupLayout,
     shadow_pipe: wgpu::RenderPipeline, main_pipe: wgpu::RenderPipeline, glass_pipe: wgpu::RenderPipeline, post_pipe: wgpu::RenderPipeline,
     cmp_smp: wgpu::Sampler, white: wgpu::TextureView, smp: wgpu::Sampler, tg: Targets, last_depth: Option<Vec<f32>>,
@@ -1011,7 +1011,8 @@ fn init(o: &Opts) -> Renderer {
         wgpu::BindGroupLayoutEntry { binding: 6, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None }]);
     let sh_bgl = bgl(&[uni(0, vf)]);
     let mat_bgl = bgl(&[uni(0, f), tex2d(1, false, f), wgpu::BindGroupLayoutEntry { binding: 2, visibility: f, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }]);
-    let post_bgl = bgl(&[uni(0, f), wgpu::BindGroupLayoutEntry { binding: 3, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+    let post_bgl = bgl(&[wgpu::BindGroupLayoutEntry { binding: 7, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D3, multisampled: false }, count: None },
+        wgpu::BindGroupLayoutEntry { binding: 8, visibility: f, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }, uni(0, f), wgpu::BindGroupLayoutEntry { binding: 3, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
         wgpu::BindGroupLayoutEntry { binding: 4, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
         wgpu::BindGroupLayoutEntry { binding: 5, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None }]);
     let pl = |l: &[&wgpu::BindGroupLayout]| dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &l.iter().map(|x| Some(*x)).collect::<Vec<_>>(), immediate_size: 0 });
@@ -1036,7 +1037,17 @@ fn init(o: &Opts) -> Renderer {
         format: wgpu::TextureFormat::Rgba8UnormSrgb, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] }, wgpu::util::TextureDataOrder::LayerMajor, &[255, 255, 255, 255]);
     let white = wt.create_view(&Default::default());
     let tg = make_targets(&dev, o);
-    Renderer { rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
+    // Blender's AgX, in steps of the log shaper: tools/preview/src/agx_lut.bin, 33 cubed, u16 RGB, blue slowest
+    let half = |v: f32| -> u16 { // (0..1)
+        if v < 6.2e-5 { return (v * 16777216.0).round() as u16; }
+        let b = v.to_bits(); let e = ((b >> 23) & 0xff) as i32 - 127 + 15; let m = (b & 0x7fffff) >> 13;
+        ((e as u16) << 10) | m as u16
+    };
+    let raw = include_bytes!("agx_lut.bin");
+    let lut: Vec<u16> = raw.chunks_exact(6).flat_map(|c| { let f = |i: usize| half(u16::from_le_bytes([c[i], c[i + 1]]) as f32 / 65535.0); [f(0), f(2), f(4), half(1.0)] }).collect();
+    let agx = dev.create_texture_with_data(&q, &wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 33, height: 33, depth_or_array_layers: 33 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D3, format: wgpu::TextureFormat::Rgba16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] }, wgpu::wgt::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&lut)).create_view(&Default::default());
+    let agx_smp = dev.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
+    Renderer { agx, agx_smp, rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
 }
 
 fn frustum(vp: Mat4) -> [Vec4; 6] {
@@ -1243,7 +1254,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
         rp.set_bind_group(0, &g_bg, &[]);
         rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
-    let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
+    let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&r.agx) }, wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&r.agx_smp) },
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
         wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(if rt_q.is_some() { &tg.lit } else { &tg.hdr }) },
         wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&tg.nrm) },
@@ -1396,7 +1407,7 @@ fn post_again(r: &mut Renderer, o: &Opts, xp: f32) -> image::RgbaImage {
     gl.params[1] = 3.0 * xp;
     q.write_buffer(&r.ubuf, 0, bytemuck::bytes_of(&gl));
     let tg = &r.tg;
-    let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
+    let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&r.agx) }, wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&r.agx_smp) },
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
         wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&tg.lit) },
         wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&tg.nrm) },

@@ -167,6 +167,8 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
 @group(0) @binding(3) var hdr_tex: texture_2d<f32>;
 @group(0) @binding(4) var nrm_tex: texture_2d<f32>;
 @group(0) @binding(5) var depth_tex: texture_depth_2d;
+@group(0) @binding(7) var agx_lut: texture_3d<f32>;
+@group(0) @binding(8) var agx_smp: sampler;
 
 @vertex fn vs_full(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
   let x = f32((i << 1u) & 2u); let y = f32(i & 2u);
@@ -181,19 +183,11 @@ fn world_at(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
 }
 fn hash(p: vec2<f32>) -> f32 { return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453); }
 
-// AgX, as Blender's view transform, with its Medium High Contrast look (Wrensch's fit)
+// AgX with its Medium High Contrast look, as Blender computes it: a table Blender itself wrote (agx_lut.bin). Back to linear here, for the filter and srgb() that follow
 fn agx(c: vec3<f32>) -> vec3<f32> {
-  let ins = mat3x3<f32>(vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051), vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336), vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
-  let outs = mat3x3<f32>(vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438), vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241), vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
-  var v = ins * max(c, vec3<f32>(1e-10));
-  v = clamp((log2(v) + 12.47393) / 16.5, vec3<f32>(0.0), vec3<f32>(1.0));
-  let x2 = v * v; let x4 = x2 * x2;
-  v = 15.5 * x4 * x2 - 40.14 * x4 * v + 31.96 * x4 - 6.868 * x2 * v + 0.4298 * x2 + 0.1191 * v - 0.00232;
-  // look: contrast about mid grey
-  let luma = dot(v, vec3<f32>(0.2126, 0.7152, 0.0722));
-  v = pow(max(v, vec3<f32>(0.0)), vec3<f32>(g.cam_fwd.w));
-  v = outs * v;
-  return pow(clamp(v, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(2.2));
+  let v = clamp((log2(max(c, vec3<f32>(1e-10))) + 12.47393) / 16.5, vec3<f32>(0.0), vec3<f32>(1.0));
+  let d = textureSampleLevel(agx_lut, agx_smp, (v * 32.0 + 0.5) / 33.0, 0.0).rgb;
+  return select(pow((d + 0.055) / 1.055, vec3<f32>(2.4)), d / 12.92, d <= vec3<f32>(0.04045));
 }
 fn aces(x: vec3<f32>) -> vec3<f32> {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
