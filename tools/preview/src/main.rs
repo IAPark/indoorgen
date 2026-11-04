@@ -255,7 +255,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let mi = p.mat.min(glb.mats.len().saturating_sub(1));
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
             // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
-            let is_art = m.name == "art" || m.name.starts_with("gallery_art");
+            let is_art = m.name == "art" || m.name.starts_with("art~") || m.name.starts_with("gallery_art");
             let shown = is_art;
             let tex = if shown {
                 let k = format!("{}:{}", m.name, n.name);
