@@ -33,6 +33,7 @@ fn main() {
             o.insert("graph".into(), json!(id));
         }
         o.insert("spec".into(), spec);
+        o.insert("rgb".into(), json!(col));
     }
     side["graphs"] = Value::Array(graphs);
     side["style"] = json!(cfg.style_of(house));

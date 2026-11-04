@@ -1,7 +1,7 @@
 #!/bin/zsh
 # variety.sh [RULES.json|-] [OUT] [SEED0] [N]: a contact sheet of living rooms and bedrooms from N fixed houses, and how far they differ, for judging material rules fast.
 # The houses (no outdoors) and their views are generated once into ~/work/bench/var/base; after that a rule file only re-runs reshade and draws the saved views.
-# Writes OUT/sheet.jpg and prints the variety numbers. After a geometry change, delete the base. STYLE=name forces one style on every house.
+# Writes OUT/sheet.jpg and prints the variety numbers. After a geometry change, delete the base. STYLE=name forces one style on every house, VIEWS="kitchen bathroom" picks the rooms drawn (default living-room bedroom).
 SELF=${0:A}; R=${0:A:h:h}
 BASE=$HOME/work/bench/var/base; CFG=$HOME/work/bench/var/cfg_noout.json; G=$R/target/fast/gen2; P=$R/tools/preview.sh; RS=$R/target/fast/reshade
 if [[ $1 == --gen ]]; then
@@ -14,7 +14,7 @@ if [[ $1 == --gen ]]; then
 fi
 if [[ $1 == --draw ]]; then
   OUT=$2; s=$3; a=()
-  for c in $BASE/c$s/living-room*_A.json(N) $BASE/c$s/bedroom*_A.json(N); do a+=(--cam $c); done
+  for k in ${=${VIEWS:-living-room bedroom}}; do for c in $BASE/c$s/$k*_A.json(N); do a+=(--cam $c); done; done
   (( ${#a} )) || exit 0
   exec $P $OUT/h$s.glb $a --res 480x270 -o $OUT/v$s > /dev/null 2>&1
 fi

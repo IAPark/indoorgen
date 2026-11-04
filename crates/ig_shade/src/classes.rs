@@ -33,6 +33,9 @@ pub fn for_material(spec: &Value, mat: &str, node: &str, ext: [f64; 3], rgb: [f3
         // (a sink's basin is glazed, whatever its counter is)
         "ceramic.Marble" | "ceramic.MarbleRegular" | "ceramic.MarbleVoronoi" if family == "sink" => ceramic(&mut r, Some([0.88, 0.88, 0.86]), 0.3),
         "ceramic.Marble" | "ceramic.MarbleRegular" | "ceramic.MarbleVoronoi" => marble(&mut r, base),
+        "wallpaper.Stripe" | "wallpaper.Pinstripe" | "wallpaper.Check" | "wallpaper.Trellis" => wallpaper(&mut r, cls, base),
+        "wall.Beadboard" | "wall.Shiplap" | "wall.Panel" => boards(&mut r, cls, base),
+        "fabric.Stripe" | "fabric.Check" | "fabric.Plaid" => patterned_fabric(&mut r, cls, base),
         "fabric.FineKnitFabric" => fabric(&mut r, base, 250.0, 0.0006, 0.9),
         "fabric.CoarseKnitFabric" | "fabric.LinedFabric" => fabric(&mut r, base, 90.0, 0.0015, 0.95),
         "fabric.SofaFabric" | "fabric.PlaidFabric" => fabric(&mut r, base, 160.0, 0.001, 0.92),
@@ -339,6 +342,83 @@ fn brick(r: &mut R, rgb: [f64; 3]) -> Value {
     let color = g.mix(mortar.clone(), col, json!([0.5, 0.48, 0.45]), "mix");
     let h = g.mul(&mortar, -0.004);
     g.done("shader_brick", json!({"color": color, "roughness": r.uniform(0.8, 0.95), "height": h}))
+}
+
+/// parallel bands along x of a coordinate, on any surface that crosses x: a checker stretched almost flat in the other two axes (the small offset keeps them from flipping at the origin)
+fn bands(g: &mut G, v: &Value, period: f64, angle: f64) -> Value {
+    let m = g.mapping(v, [1.0, 1.0, 1.0], [0.0, 0.0, angle]);
+    let m = g.mapping(&m, [2.0 / period, 0.002, 0.002], [0.0; 3]);
+    let m = g.add_v(&m, json!([0.25, 0.5, 0.5]));
+    g.checker(&m, 1.0)
+}
+
+/// wallpaper in the wall's colour on a paler ground, at wall scale: the rule's colour is the print. Flat, with a little paper unevenness
+fn wallpaper(r: &mut R, cls: &str, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let u = g.wall_uv(&c);
+    let tone = r.uniform(0.55, 0.8);
+    let ground = [rgb[0] + (0.86 - rgb[0]) * tone, rgb[1] + (0.83 - rgb[1]) * tone, rgb[2] + (0.77 - rgb[2]) * tone];
+    let fac = match cls {
+        "wallpaper.Stripe" => bands(&mut g, &u, r.uniform(0.07, 0.15), 0.0),
+        "wallpaper.Pinstripe" => g.brick(&u, 1.0, 100.0, r.uniform(0.06, 0.12), 0.0, 0.004).1,
+        "wallpaper.Check" => { let p = r.uniform(0.06, 0.14); let m = g.mapping(&u, [1.0 / p, 1.0 / p, 0.0], [0.0; 3]); let m = g.add_v(&m, json!([0.0, 0.0, 0.5])); g.checker(&m, 1.0) }
+        _ => { let p = r.uniform(0.12, 0.2); let m = g.mapping(&u, [1.0, 1.0, 1.0], [0.0, 0.0, std::f64::consts::FRAC_PI_4]); g.brick(&m, 1.0, p, p, 0.0, 0.006).1 }
+    };
+    // (the print is held back toward its ground: full strength read as a circus tent)
+    let hold = r.uniform(0.25, 0.55);
+    let print = [rgb[0] + (ground[0] - rgb[0]) * hold, rgb[1] + (ground[1] - rgb[1]) * hold, rgb[2] + (ground[2] - rgb[2]) * hold];
+    let col = g.mix(fac, json!(ground), json!(print), "mix");
+    let n = g.noise(&c, 40.0, 3.0, 0.0, 0.0);
+    let tone = g.map_range(&n, 0.3, 0.7, 0.96, 1.0);
+    let color = g.mix(1.0, col, tone, "multiply");
+    g.done("shader_wallpaper", json!({"color": color, "roughness": r.uniform(0.55, 0.75)}))
+}
+
+/// painted boards on a wall: grooves as relief and a darker line
+fn boards(r: &mut R, cls: &str, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let u = g.wall_uv(&c);
+    let (row, width, mortar) = match cls {
+        "wall.Beadboard" => (100.0, r.uniform(0.08, 0.13), 0.003),
+        "wall.Shiplap" => (r.uniform(0.13, 0.2), 100.0, 0.003),
+        _ => (r.uniform(0.7, 1.0), r.uniform(0.5, 0.7), 0.006),
+    };
+    let (_, m) = g.brick(&u, 1.0, row, width, 0.0, mortar);
+    let dark = json!([rgb[0] * 0.45, rgb[1] * 0.45, rgb[2] * 0.45]);
+    let color = g.mix(m.clone(), json!(rgb), dark, "mix");
+    let h = g.mul(&m, -0.004);
+    g.done("shader_boards", json!({"color": color, "roughness": r.uniform(0.35, 0.5), "height": h}))
+}
+
+/// woven pattern in the part's colour on a pale ground, in the object's own coordinates
+fn patterned_fabric(r: &mut R, cls: &str, rgb: [f64; 3]) -> Value {
+    let mut g = G::default();
+    let c = g.coord();
+    let tone = r.uniform(0.6, 0.85);
+    let ground = [rgb[0] + (0.85 - rgb[0]) * tone, rgb[1] + (0.83 - rgb[1]) * tone, rgb[2] + (0.78 - rgb[2]) * tone];
+    let p = r.uniform(0.05, 0.11);
+    let col = match cls {
+        "fabric.Stripe" => { let f = bands(&mut g, &c, p * r.uniform(0.8, 1.6), 0.0); g.mix(f, json!(ground), json!(rgb), "mix") }
+        _ => {
+            // (woven squares: where the two band sets cross the colour doubles up)
+            let (a, b) = (bands(&mut g, &c, if cls == "fabric.Plaid" { p * 2.0 } else { p }, 0.0), bands(&mut g, &c, if cls == "fabric.Plaid" { p * 2.0 } else { p }, std::f64::consts::FRAC_PI_2));
+            let x = g.mix(a, json!(ground), json!(rgb), "mix");
+            let f = g.mul(&b, 0.5);
+            g.mix(f, x, json!(rgb), "mix")
+        }
+    };
+    let mottle = g.noise(&c, r.uniform(20.0, 35.0), 4.0, 0.0, r.uniform(0.0, 10.0));
+    let tone = g.map_range(&mottle, 0.3, 0.7, 0.93, 1.0);
+    let color = g.mix(1.0, col, tone, "multiply");
+    let wx = g.mapping(&c, [1.0, 0.25, 0.25], [0.0; 3]);
+    let wy = g.mapping(&c, [0.25, 1.0, 0.25], [0.0; 3]);
+    let a = g.noise(&wx, 160.0, 2.0, 0.0, 0.0);
+    let b = g.noise(&wy, 160.0, 2.0, 0.0, 0.0);
+    let weave = g.mix(0.5, a, b, "mix");
+    let h = g.mul(&weave, 0.001);
+    g.done("shader_fabric", json!({"color": color, "roughness": 0.92, "height": h}))
 }
 
 /// cloth in the part's own colour (white bedding stays white, where the shaders draw any colour): a fine weave as relief, and the cm-scale
