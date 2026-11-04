@@ -301,7 +301,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     li++; }
   // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
   var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
-  let sheer = textureLoad(g_mat, g, 0).w - 1.0;
+  let sheer = (textureLoad(g_mat, g, 0).w - 1.0) % 2.0;
   if (sheer > 0.001) {
     dl_ *= 1.0 - sheer;
     let rough_ = textureLoad(g_alb, g, 0).a;
@@ -416,8 +416,12 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let nbl = max(length(nb), 0.01); let ns = nb / nbl;
   let a0 = sqrt(max(rough * rough * rough * rough + (1.0 - nbl) / nbl, 0.000004));
   let vdir = normalize(p.cam.xyz - pos); let nv = max(dot(ns, vdir), 0.001);
-  // the two lamps that show most here, each with its shadow ray. Any roughness: on a rough dark wall this broad highlight is what keeps it from going black
-  var c0 = vec3<f32>(0.0); var c1 = vec3<f32>(0.0); var m0 = 0.0; var m1 = 0.0; var l0 = vec3<f32>(0.0); var l1 = vec3<f32>(0.0); var d0 = 0.0; var d1 = 0.0; var i = 0u;
+  // the lamps that show most here, each with its shadow ray and its own Fresnel, at this very angle: the averaged share used for a whole room's light is far too little at a glancing one. Any roughness: on a rough dark surface this broad highlight is most of what it shows
+  let mt_ = textureLoad(g_mat, g, 0).x; let alb_ = textureLoad(g_alb, g, 0).rgb; let coat_ = textureLoad(g_nrm, g, 0).a;
+  let f0_ = mix(vec3<f32>(0.04), alb_, mt_);
+  var cs = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+  var ls = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+  var ms = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var ds = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var i = 0u;
   loop { if (i >= p.misc.z) { break; }
     let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), 0.04); let dl = sqrt(r2); let l = v / dl;
     let ndl = dot(ns, l);
@@ -427,17 +431,22 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       let h_ = normalize(l + vdir); let ndh = max(dot(ns, h_), 0.0);
       let dn = ndh * ndh * (a * a - 1.0) + 1.0;
       let dv = keep * a * a / (PI * dn * dn + 1e-6) * 0.25 / max(mix(nv, 1.0, a * 0.5) * mix(ndl, 1.0, a * 0.5), 0.05);
+      let fc_ = pow(1.0 - max(dot(h_, vdir), 0.0), 5.0);
+      let fh = f0_ + (vec3<f32>(1.0) - f0_) * fc_ + vec3<f32>(coat_ * (0.04 + 0.96 * fc_));
       // (E / pi is what lamp() adds to the light; the sun's highlight has the same form)
-      let c = lights[i].col.xyz * PI / r2 * p.scale.x * ndl * min(dv, 200.0);
+      let c = lights[i].col.xyz * PI / r2 * p.scale.x * ndl * min(dv, 200.0) * fh;
       let m_ = dot(c, vec3<f32>(0.333));
-      if (m_ > m0) { c1 = c0; m1 = m0; l1 = l0; d1 = d0; c0 = c; m0 = m_; l0 = l; d0 = dl; }
-      else if (m_ > m1) { c1 = c; m1 = m_; l1 = l; d1 = dl; }
+      // kept in order, the brightest first
+      var k = 3;
+      if (m_ > ms[3]) {
+        loop { if (k == 0 || m_ <= ms[k - 1]) { break; } ms[k] = ms[k - 1]; cs[k] = cs[k - 1]; ls[k] = ls[k - 1]; ds[k] = ds[k - 1]; k--; }
+        ms[k] = m_; cs[k] = c; ls[k] = l; ds[k] = dl;
+      }
     }
     i++; }
   var out = vec3<f32>(0.0);
-  if (d0 > 0.0 && !occluded(o, l0, d0 - 0.02)) { out += c0; }
-  if (d1 > 0.0 && !occluded(o, l1, d1 - 0.02)) { out += c1; }
-  return min(out, vec3<f32>(500.0));
+  for (var k = 0; k < 4; k++) { if (ds[k] > 0.0 && ms[k] > 0.002 && !occluded(o, ls[k], ds[k] - 0.02)) { out += cs[k]; } }
+  return min(out, vec3<f32>(50.0));
 }
 @compute @workgroup_size(8, 8) fn trace_spec(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
@@ -476,14 +485,44 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     let spec_w = select(min(sqrt(max((1.0 - nspl) / max(nspl, 0.01), 0.0)), 0.5), 0.0, is_mirror);
     if (is_mirror) { sp = textureLoad(m_lit, px, 0).rgb; }
     for (var s = 0u; s < rays; s++) {
-      var rd = r0;
-      if (rough > 0.03 || spec_w > 0.0) { rd = cone(r0, min((rough * rough + spec_w) * 3.0, 0.8)); }
+      // the rough lobe as it really is (GGX, visible normals, Heitz 2018), each ray weighted against the share the composition step will multiply by. A narrow cone left out most of what a rough surface reflects: dark blades and metal doors
+      var rd = r0; var wt_ = vec3<f32>(1.0);
+      let al_ = min(rough * rough + spec_w, 1.0);
+      if (al_ > 0.001) {
+        let vl = -v; let bs_ = basis(n);
+        let ve = vec3<f32>(dot(vl, bs_[0]), dot(vl, bs_[1]), dot(vl, bs_[2]));
+        let vh = normalize(vec3<f32>(al_ * ve.x, al_ * ve.y, ve.z));
+        let lsq = vh.x * vh.x + vh.y * vh.y;
+        let t1_ = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(-vh.y, vh.x, 0.0) * inverseSqrt(max(lsq, 1e-9)), lsq > 1e-9);
+        let t2_ = cross(vh, t1_);
+        let u_ = rnd(); let r_ = sqrt(u_); let ph = 2.0 * PI * rnd();
+        let t1s = r_ * cos(ph); let sv = 0.5 * (1.0 + vh.z);
+        let t2s = (1.0 - sv) * sqrt(max(1.0 - t1s * t1s, 0.0)) + sv * r_ * sin(ph);
+        let nh = t1s * t1_ + t2s * t2_ + sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * vh;
+        let ne = normalize(vec3<f32>(al_ * nh.x, al_ * nh.y, max(0.0, nh.z)));
+        let h_w = bs_ * ne;
+        rd = reflect(v, h_w);
+        let nl = dot(rd, n);
+        if (nl <= 0.0) { continue; }
+        // F * G2 / G1, over what compose multiplies by
+        let vdh = max(dot(vl, h_w), 0.0); let nv_ = max(dot(n, vl), 1e-3);
+        let f0_ = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
+        let fh = f0_ + (vec3<f32>(1.0) - f0_) * pow(1.0 - vdh, 5.0);
+        let a2 = al_ * al_;
+        let g1v = 2.0 * nv_ / (nv_ + sqrt(a2 + (1.0 - a2) * nv_ * nv_));
+        let g1l = 2.0 * nl / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
+        let g2g1 = g1l / max(g1v + g1l - g1v * g1l, 1e-3) ;
+        let rc = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+        let a04 = min(rc.x * rc.x, pow(2.0, -9.28 * nv_)) * rc.x + rc.y;
+        let ab_ = vec2<f32>(-1.04, 1.04) * a04 + rc.zw;
+        wt_ = fh * g2g1 / max(f0_ * ab_.x + vec3<f32>(ab_.y), vec3<f32>(0.005));
+      }
       if (dot(rd, n) <= 0.0) { rd = r0; }
       let hh = closest(o, rd, 1000.0);
       if (hh.i < 0) {
         var l = sky_at(rd);
         if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 1.0)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 1.0)))); }
-        sp += l;
+        sp += l * wt_;
       } else {
         let t = tris[hh.i]; let m = mats[t.mat];
         var ng = normalize(cross(t.e1.xyz, t.e2.xyz));
@@ -497,15 +536,22 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
           let eh = lamp(q, ng) + portal(q, ng);
           e_hit = 0.5 * e + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
         }
-        sp += m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
+        sp += (m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit)) * wt_;
       }
     }
     if (rays > 0u) { sp /= f32(rays); }
   }
   textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), 1.0));
-  // (a rough surface's highlights go with its reflections, through the filter: unfiltered, a jump in its roughness was a hard shape across a metal door)
+  // (not through the reflections' filter: it smeared the shadow each louvre blade casts on the next. Except where roughness comes from a map: its jumps drew hard shapes across a door and blotches on a floor)
   var gl_ = lamp_glint(pos, n, o, g, rough, w, h, ss, e);
-  if (rough > 0.3 && coat < 0.25 && p.misc2.y > 0u) { sp += min(gl_, vec3<f32>(20.0)); gl_ = vec3<f32>(0.0); }
+  if (rough > 0.08 && textureLoad(g_mat, g, 0).w >= 2.9 && coat < 0.25 && p.misc2.y > 0u) {
+    let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
+    let rg = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+    let a0g = min(rg.x * rg.x, pow(2.0, -9.28 * nv_g)) * rg.x + rg.y;
+    let abg = vec2<f32>(-1.04, 1.04) * a0g + rg.zw;
+    let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
+    sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0);
+  }
   textureStore(out_glint, px, vec4<f32>(gl_, 0.0));
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }

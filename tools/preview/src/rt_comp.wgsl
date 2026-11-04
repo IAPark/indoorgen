@@ -187,7 +187,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   var refl = mix(select(e_room, e, metal >= 0.5 && !flat_here), s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
-  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_ * (fr + vec3<f32>(fc)), vec3<f32>(0.0), cloth);
+  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_, vec3<f32>(0.0), cloth);
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
   if (p.misc2.w == 9u) { textureStore(o_lit, px0, vec4<f32>(mt.w - 1.0, mt.z, a.a, 1.0)); return; }
   if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }
