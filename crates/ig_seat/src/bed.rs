@@ -1001,8 +1001,8 @@ impl Factory for Bed {
         let mut fold_p = serde_json::Value::Null;
         if s.sheet_folded {
             let theta = r.uniform(-std::f64::consts::PI / 6.0, std::f64::consts::PI / 6.0);
-            // (a tucked bed's fold lies square: stretched down the side, the rows of a slanted fold stood at different distances past the edge, and came out as a row of teeth)
-            let theta = if crate::api::tuck_hint() > 0 { 0.0 } else { theta };
+            // (a tucked bed's or a comforter's fold lies square: stretched down the side, the rows of a slanted fold stood at different distances past the edge, and on a thick layer its grid, slanting across the crease and the cells' domes, tore into a row of teeth. A thin sheet takes the slant)
+            let theta = if crate::api::tuck_hint() > 0 || s.sheet_type >= 1 { 0.0 } else { theta };
             let ym = b.size * (0.5 - r.uniform(0.1, 0.3));
             fold_p = json!({"theta": theta, "y_margin": ym});
             pre = fold(&pre, theta, ym);
@@ -1085,6 +1085,8 @@ impl Factory for Bed {
         cvm.pos = out;
         subsurf(&cvm, 2, false)
         };
+        let mut cvm = cvm;
+        if !sim { rise_over(&mut cvm, &sheet, geom.top); }
         let cbb = cvm.bounds();
         if sim {
         a.cloth.push(ClothJob { target: a.parts.len(), pre: cover.clone(), collide: vec![sheet_idx, mattress_idx], kwargs: json!({"mass": 0.05, "tension_stiffness": 2, "distance_min": 0.005}), end_frame: 80, subsurf: 2, pin: vec![], z_from: Some((sheet_idx, z_cover)), build: Some(json!({"type": "blanket", "width": cb.width, "size": cb.size, "thickness": cb.thickness, "margin": 0.0, "fold": null, "x": c.size / 2.0 + off})), post: None });
@@ -1206,7 +1208,8 @@ impl Factory for Bed {
                 let (p1, s1) = (lvl * (r.f64() * 2.0 - 0.6) * 0.3, tilt(r, 0.15, 14.0));
                 let k = 1.0 + 2.5 * lvl;
                 let sh = drape(&pre, &geom, 0.0, loft, margin, &pleats, s0, p0, k);
-                let cv = drape(&cover, &geom, loft + 0.008, 0.0, 0.0, &pleats, s1, p0.min(p1 + 0.1).max(p1), k);
+                let mut cv = drape(&cover, &geom, loft + 0.008, 0.0, 0.0, &pleats, s1, p0.min(p1 + 0.1).max(p1), k);
+                rise_over(&mut cv, &sh, geom.top);
                 let col = {
                     let (mut pos, mut faces): (Vec<V3>, Vec<Vec<u32>>) = (vec![], vec![]);
                     for mm in [&sh, &mat_mesh, &cv] {
@@ -1573,6 +1576,33 @@ fn relax_crease(m: &mut Mesh, raw: &[f64], rounded: &mut [f64], rise: (f64, f64)
         }).collect();
         for (i, v) in next.into_iter().enumerate() { m.pos[i][2] = v.0; rounded[i] = v.1; }
     }
+}
+
+/// a throw lying on the bed rises over what stands higher than it (a comforter's fold reaches twice its own loft, and came up through the throw in a row of crescents), easing back down around it
+fn rise_over(cover: &mut Mesh, under: &Mesh, top: f64) {
+    const SKIN: f64 = 0.006;
+    let col = super::cloth::Collider::new(&under.pos, &under.faces);
+    let raw: Vec<f64> = cover.pos.iter().map(|p| {
+        // (over the top only: down the side the cloth hangs against it)
+        if p[2] < top { return 0.0 }
+        let (a, b) = ([p[0], p[1], p[2] + 0.3], [p[0], p[1], p[2] - 0.1]);
+        col.segment_hit(a, b).map_or(0.0, |(t, _)| (a[2] + (b[2] - a[2]) * t + SKIN - p[2]).max(0.0))
+    }).collect();
+    if raw.iter().all(|d| *d <= 0.0) { return }
+    let mut nb: Vec<Vec<u32>> = vec![vec![]; cover.pos.len()];
+    for f in &cover.faces {
+        for k in 0..f.len() {
+            let (a, b) = (f[k], f[(k + 1) % f.len()]);
+            nb[a as usize].push(b);
+            nb[b as usize].push(a);
+        }
+    }
+    let mut d = raw.clone();
+    for _ in 0..12 {
+        let next: Vec<f64> = (0..d.len()).map(|i| if nb[i].is_empty() { d[i] } else { raw[i].max(nb[i].iter().map(|&j| d[j as usize]).sum::<f64>() / nb[i].len() as f64) }).collect();
+        d = next;
+    }
+    for (p, v) in cover.pos.iter_mut().zip(&d) { p[2] += *v; }
 }
 
 /// the height each point goes round the bed's edge at varies smoothly over the cloth. It sets how far down the side a point comes, so on a fold's slanting grid, near the hem where the fill falls off steeply,
