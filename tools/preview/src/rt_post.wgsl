@@ -67,13 +67,15 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
     // (no test on brightness: in a room lit through a window most paths find nothing, and such a test keeps exactly the noise it should take out. No clamp either: what it cut was the sun's bounce)
     e += ci.rgb * wg; ew += wg;
     let si = textureLoad(i_spec, q, 0);
-    s += si.rgb * wg; sw += wg;
+    // (reflections on a little relief: its normals differ pixel to pixel while what they reflect does not. A looser test, or a brushed fridge stayed in grains)
+    let ws = kk * pow(max(dot(n0, nq), 0.0), 6.0) * wp;
+    s += si.rgb * ws; sw += ws;
   } }
   // (one round is either the light's or the reflections': they are traced in turn)
   let spec_only = stp.z == 1u;
   let ee = select(select(c.rgb, e / max(ew, 1e-5), ew > 1e-5), c.rgb, spec_only);
   // (a mirror's picture is no noise: only rough reflections are smoothed, more the rougher)
-  let spec_rounds = select(0u, select(1u, 3u, sc.a > 0.3), sc.a > 0.08);
+  let spec_rounds = select(0u, select(1u, 3u, sc.a > 0.15), sc.a > 0.08);
   let sv = select(sc.rgb, s / max(sw, 1e-5), spec_only && sw > 1e-5 && it < spec_rounds);
   // (a sliver, alone on its surface: nothing to average its few paths with, so one lucky path is a bright dot on an edge. No brighter than what is around it)
   let lone = stp.y == 0u && stp.z == 0u && ew < 0.35 && dot(av.rgb, av.rgb) > 0.0;

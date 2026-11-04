@@ -347,12 +347,12 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     if (is_mirror) { sp = textureLoad(m_lit, px, 0).rgb; }
     for (var s = 0u; s < rays; s++) {
       var rd = r0;
-      if (rough > 0.03) { rd = cone(r0, rough * rough * 1.2); }
+      if (rough > 0.03) { rd = cone(r0, min(rough * rough * 3.0, 0.8)); }
       if (dot(rd, n) <= 0.0) { rd = r0; }
       let hh = closest(o, rd, 1000.0);
       if (hh.i < 0) {
         var l = sky_at(rd);
-        if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 0.4)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 0.4)))); }
+        if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 1.0)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 1.0)))); }
         sp += l;
       } else {
         let t = tris[hh.i]; let m = mats[t.mat];

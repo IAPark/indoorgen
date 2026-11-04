@@ -68,9 +68,20 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   }
   let vdir = normalize(g.cam_pos.xyz - v.wpos);
   if (dot(n, vdir) < 0.0) { n = -n; }
+  // (path traced: a hard edge stays hard. Normals smoothed across a louvre's blades, or a chamfer, drew them as one flat sheet)
+  if (g.params2.w > 0.5) {
+    var fn_ = cross(dpdx(v.wpos), dpdy(v.wpos));
+    if (dot(fn_, fn_) > 1e-16) {
+      fn_ = normalize(fn_);
+      if (dot(fn_, vdir) < 0.0) { fn_ = -fn_; }
+      if (dot(n, fn_) < 0.82) { n = fn_; }
+    }
+  }
   // the material graph, where the material has one (ig_shade)
   var pbr = false; var surf_color = albedo.rgb; var surf_rough = 0.5; var surf_metal = 0.0; var surf_coat = 0.0; var surf_height = 0.0;
   /*SURF*/
+  // (path traced, a material with no graph: its own roughness and metal, or a steel fridge came out as white paint)
+  if (!pbr && g.params2.w > 0.5) { surf_rough = m.p[47].x; surf_metal = m.p[47].y; }
   if (pbr) {
     albedo = vec4<f32>(surf_color, 1.0);
     // bump from the screen-space slope of the height (surface gradient)

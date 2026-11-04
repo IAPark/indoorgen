@@ -20,7 +20,7 @@ for v in views:
     s = v.split('_')[0]
     p = f'{out}/{v}_{mode}.png'
     t = time.time()
-    r = subprocess.run([preview, f'{ref}/h{s}.glb', '--cam', f'{ref}/{v}.cam.json', '--res', '960x540', '--rt', mode, '-v', '-o', p], env=env, capture_output=True, text=True)
+    r = subprocess.run([preview, f'{ref}/h{s}.glb', '--cam', f'{ref}/{v}.cam.json', '--res', '960x540', '--rt', mode, *(['--seed', s] if os.environ.get('RT_SEED_HOUSE') else []), '-v', '-o', p], env=env, capture_output=True, text=True)
     traced = [l for l in r.stderr.splitlines() if 'exposure x' in l]
     if not os.path.exists(p): print(v, 'failed', r.stderr[-400:]); continue
     a, b = Image.open(f'{ref}/{v}.png').convert('RGB').resize((960, 540)), Image.open(p).convert('RGB')

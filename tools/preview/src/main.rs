@@ -24,7 +24,7 @@ struct Globals {
 }
 /// A flat mirror's pane, by its material.
 fn is_mirror(name: &str) -> bool { name.to_lowercase().contains("mirror") }
-/// Cloth, by the material names `tools/render/render_rust.py` treats as cloth: there it gets a soft sheen, which is why dark cushions are never near black.
+/// Cloth, by the shader names `tools/render/render_rust.py` treats as cloth (the shader's, not the part's: a "sofa_fabric" can be leather): there it gets a soft sheen, which is why dark cushions are never near black.
 fn is_cloth(name: &str) -> bool {
     let n = name.to_lowercase();
     !["glass", "mirror", "lamp", "bulb", "people", "window"].iter().any(|x| n.contains(x))
@@ -285,13 +285,15 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let mi = p.mat.min(glb.mats.len().saturating_sub(1));
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
             // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
-            let is_art = m.name == "art" || m.name.starts_with("art~") || m.name.starts_with("gallery_art") || (opts.rt.is_some() && matches!(cls, "art.Art" | "art.DarkArt"));
+            // (path traced: as Blender, a print where its rule gives this picture one, and otherwise the material's own shader)
+            let rt_print = if opts.rt.is_some() && matches!(cls, "art.Art" | "art.DarkArt") { photo_art(opts.seed, &n.name, p) } else { None };
+            let is_art = if opts.rt.is_some() { rt_print.is_some() } else { m.name == "art" || m.name.starts_with("art~") || m.name.starts_with("gallery_art") };
             let shown = is_art;
             let tex = if shown {
                 let k = format!("{}:{}", m.name, n.name);
                 if !tex_views.contains_key(&k) {
                     // (path traced: Blender's own choice of print for this picture, render_rust.py _photo_art; else a painting of its own)
-                    let img = opts.rt.is_some().then(|| photo_art(opts.seed, &n.name, p)).flatten().unwrap_or_else(|| painting(&format!("{}:{}", path.display(), n.name)));
+                    let img = rt_print.clone().unwrap_or_else(|| painting(&format!("{}:{}", path.display(), n.name)));
                     tex_views.insert(k.clone(), load_texture(&gpu.dev, &gpu.q, img));
                 }
                 k
@@ -310,7 +312,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let dark_glass = glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(&m.name) { 0.25 } else if is_mirror(&m.name) { -1.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) { -1.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                if graph.is_none() { u.p[47] = if shown { [0.45, 0.0, 0.0, 0.0] } else { [m.rough, m.metal, 0.0, 0.0] }; }
                 if let Some(e) = graph {
                     for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
                     // the object frame the graph's coordinates are in (the sidecar's pose, rows of a 4x4)
@@ -1133,6 +1136,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&s.shadow_view) },
         wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }] });
     let tg = &r.tg; let fr = frustum(vp);
+    // (path traced, a whole picture: the door leaves stay, as in Blender. Hiding those by the camera is the plain preview's help)
+    let eye_leaf = if rt_q.is_some() && cam.near.is_none() && cam.only.is_none() { None } else { Some(eye) };
     {
         let sky = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
         let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
@@ -1142,8 +1147,8 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.mat, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
-        if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
+        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+        if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
     if let (Some(_), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
         // what each mirror in view shows: the scene traced from the camera mirrored in it, what lies behind the glass cut away, only over the mirror's own part of the picture. Each is finished before the main picture needs it
@@ -1208,7 +1213,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
             color_attachments: &[att(&l), att(&n), att(&a), att(&m)],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
-        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), Some(eye), cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+        rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },

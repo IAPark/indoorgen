@@ -15,7 +15,7 @@ pub struct Prim {
 }
 pub struct Node { pub name: String, pub prims: Vec<Prim> }
 /// `tex`: embedded base-colour image (PNG bytes) when the material has a baseColorTexture; `mask`: alphaMode MASK
-pub struct Mat { pub name: String, pub color: [f32; 4], pub emissive: [f32; 3], pub tex: Option<std::sync::Arc<Vec<u8>>>, pub mask: bool }
+pub struct Mat { pub name: String, pub color: [f32; 4], pub emissive: [f32; 3], pub tex: Option<std::sync::Arc<Vec<u8>>>, pub mask: bool, pub metal: f32, pub rough: f32 }
 pub struct Glb { pub nodes: Vec<Node>, pub mats: Vec<Mat>, pub chunks: Vec<Vec<u8>> }
 
 fn f3(v: &Value) -> [f32; 3] {
@@ -65,7 +65,9 @@ pub fn load(path: &Path) -> Glb {
         let es = m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"].as_f64().unwrap_or(1.0) as f32;
         let e = if m["emissiveFactor"].is_array() { f3(&m["emissiveFactor"]) } else { [0.0; 3] };
         let tex = m["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64().and_then(tex_img);
-        Mat { name: m["name"].as_str().unwrap_or("").to_string(), color: [c[0], c[1], c[2], c[3]], emissive: [e[0] * es, e[1] * es, e[2] * es], tex, mask: m["alphaMode"].as_str() == Some("MASK") }
+        Mat { name: m["name"].as_str().unwrap_or("").to_string(), color: [c[0], c[1], c[2], c[3]], emissive: [e[0] * es, e[1] * es, e[2] * es], tex, mask: m["alphaMode"].as_str() == Some("MASK"),
+            // (glTF's defaults when absent: fully metal, fully rough)
+            metal: m["pbrMetallicRoughness"]["metallicFactor"].as_f64().unwrap_or(1.0) as f32, rough: m["pbrMetallicRoughness"]["roughnessFactor"].as_f64().unwrap_or(1.0) as f32 }
     }).collect()).unwrap_or_default();
     let meshes = j["meshes"].as_array().unwrap();
     let nodes = j["nodes"].as_array().unwrap().iter().filter_map(|n| {
