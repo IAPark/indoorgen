@@ -32,6 +32,8 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(9) var out_irr: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(10) var out_spec: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(14) var out_glint: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(15) var out_lamp: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(16) var lamp_done: texture_2d<f32>;
 struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 @group(0) @binding(11) var<storage, read> wins: array<W>;
 
@@ -139,25 +141,45 @@ fn occluded(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
   return false;
 }
 // one lamp, chosen by what it gives here
-fn lamp(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+fn lamp(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> { return lamp_rest(o, n, NO_LAMP, NO_LAMP); }
+const NO_LAMP = 0xffffffu;
+// one lamp, chosen by what it gives here, leaving out two
+fn lamp_rest(o: vec3<f32>, n: vec3<f32>, ex0: u32, ex1: u32) -> vec3<f32> {
   let nl = p.misc.z; if (nl == 0u) { return vec3<f32>(0.0); }
   var total = 0.0; var i = 0u;
   loop { if (i >= nl) { break; }
-    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
-    total += dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
+    if (i != ex0 && i != ex1) {
+      let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+      total += dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
+    }
     i++; }
   if (total <= 0.0) { return vec3<f32>(0.0); }
   var pick = rnd() * total; i = 0u;
   loop { if (i >= nl) { break; }
-    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
-    let w = dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
-    if (pick < w || i == nl - 1u) {
-      if (w <= 0.0) { return vec3<f32>(0.0); }
-      if (occluded(o, l, sqrt(r2) - 0.02)) { return vec3<f32>(0.0); }
-      return lights[i].col.xyz * max(dot(n, l), 0.0) / r2 * (total / w) * p.scale.x;
+    if (i != ex0 && i != ex1) {
+      let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+      let w = dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
+      if (pick < w) {
+        if (occluded(o, l, sqrt(r2) - 0.02)) { return vec3<f32>(0.0); }
+        return lights[i].col.xyz * max(dot(n, l), 0.0) / r2 * (total / w) * p.scale.x;
+      }
+      pick -= w;
     }
-    pick -= w; i++; }
+    i++; }
   return vec3<f32>(0.0);
+}
+// how much of a lamp, a small sphere, this point sees: two rays, and more only where they differ, on a shadow's soft edge
+fn lamp_vis(o: vec3<f32>, c: vec3<f32>) -> f32 {
+  var acc = 0.0; var first = 0.0;
+  for (var k = 0; k < 8; k++) {
+    let t = vec3<f32>(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5) * 2.0 * LAMP_R;
+    let v = c + t - o; let d = length(v);
+    let seen = select(1.0, 0.0, occluded(o, v / d, d - 0.02));
+    acc += seen;
+    if (k == 0) { first = seen; }
+    if (k == 1 && seen == first) { return seen; }
+  }
+  return acc / 8.0;
 }
 fn sun_vis(o: vec3<f32>, n: vec3<f32>) -> f32 {
   let s = p.sun_dir.xyz;
@@ -256,17 +278,34 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
-  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); return; }
+  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
   seed = u32(px.x) * 73856093u ^ u32(px.y) * 19349663u ^ (p.misc.y * 83492791u);
   let o = start_at(pos, n);
+  // the two lamps that matter most here, apart from the filtered light, which would wash out their shadows
+  var k0 = NO_LAMP; var k1 = NO_LAMP; var w0 = 0.0; var w1 = 0.0; var li = 0u;
+  loop { if (li >= p.misc.z) { break; }
+    let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+    let w_ = dot(lights[li].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
+    if (w_ > w0) { k1 = k0; w1 = w0; k0 = li; w0 = w_; } else if (w_ > w1) { k1 = li; w1 = w_; }
+    li++; }
+  var dl_ = vec3<f32>(0.0);
+  if (k0 != NO_LAMP) {
+    let v = lights[k0].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
+    dl_ += lights[k0].col.xyz * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2 * p.scale.x * lamp_vis(o, lights[k0].pos.xyz);
+  }
+  if (k1 != NO_LAMP) {
+    let v = lights[k1].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
+    dl_ += lights[k1].col.xyz * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2 * p.scale.x * lamp_vis(o, lights[k1].pos.xyz);
+  }
+  textureStore(out_lamp, px, vec4<f32>(dl_, 1.0));
   var e = vec3<f32>(0.0);
   let spp = p.dims.w;
   for (var s = 0u; s < spp; s++) {
-    let es = lamp(o, n) + portal(o, n) + gather(o, n);
+    let es = lamp_rest(o, n, k0, k1) + portal(o, n) + gather(o, n);
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
@@ -320,6 +359,29 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   textureStore(out_irr, px, vec4<f32>(e, vis));
 }
 
+// The lamps' direct light, smoothed along its surface where a shadow's edge passes: a wide soft edge is more than a few rays can resolve, and came out speckled
+fn lamp_smooth(px: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, dims: vec2<f32>, w: i32, h: i32, ss: i32) -> vec3<f32> {
+  let c = textureLoad(lamp_done, px, 0).rgb;
+  let m0 = dot(c, vec3<f32>(0.333)); var lo = m0; var hi = m0;
+  for (var k = 0; k < 4; k++) {
+    let o = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2))[k];
+    let t = dot(textureLoad(lamp_done, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb, vec3<f32>(0.333));
+    lo = min(lo, t); hi = max(hi, t);
+  }
+  if (hi - lo < 0.1 * hi + 0.001) { return c; }
+  var acc = vec3<f32>(0.0); var wa = 0.0;
+  for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+    let q = px + vec2<i32>(i, j);
+    if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+    let gq = q * ss + vec2<i32>(ss / 2);
+    let dq = textureLoad(g_depth, gq, 0);
+    if (dq >= 1.0) { continue; }
+    let nq = textureLoad(g_nrm, gq, 0).xyz;
+    let wq = f32(3 - abs(i)) * f32(3 - abs(j)) * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 16.0) * exp(-abs(dot(n, world_of(gq, dq, dims, p.inv_vp) - pos)) / 0.02);
+    acc += textureLoad(lamp_done, q, 0).rgb * wq; wa += wq;
+  } }
+  return select(c, acc / wa, wa > 1e-4);
+}
 // The lamps' own highlights on a glossy surface, before Fresnel: reflections of the room carry no lamps, since a lamp is a point and no ray finds it
 fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f32, w: i32, h: i32, ss: i32, e: vec3<f32>) -> vec3<f32> {
   if (rough < 0.001 || rough > 0.45 || p.misc2.w == 8u) { return vec3<f32>(0.0); }
@@ -363,14 +425,14 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
-  if (d >= 1.0) { textureStore(out_spec, px, vec4<f32>(0.0)); textureStore(out_glint, px, vec4<f32>(0.0)); return; }
+  if (d >= 1.0) { textureStore(out_spec, px, vec4<f32>(0.0)); textureStore(out_glint, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
   seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (p.misc.y * 1103515245u);
   let o = start_at(pos, n);
-  let e = textureLoad(irr_done, px, 0).rgb;
+  let e = textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb;
   // what a glossy surface reflects
   let a = textureLoad(g_alb, g, 0);
   let rough = a.a;
@@ -409,6 +471,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     }
     if (rays > 0u) { sp /= f32(rays); }
   }
+  textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), 1.0));
   textureStore(out_glint, px, vec4<f32>(lamp_glint(pos, n, o, g, rough, w, h, ss, e), 0.0));
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }

@@ -170,7 +170,7 @@ pub fn sun_dir(p: &SkyParams) -> Vec3 {
 }
 
 pub struct Pipes {
-    pub fine: wgpu::TextureView, pub glint: wgpu::TextureView, pub trace_fine: wgpu::ComputePipeline,
+    pub fine: wgpu::TextureView, pub glint: wgpu::TextureView, pub lamp: [wgpu::TextureView; 2], pub trace_fine: wgpu::ComputePipeline,
     pub trace: wgpu::ComputePipeline, pub trace_spec: wgpu::ComputePipeline, pub denoise: wgpu::ComputePipeline, pub compose: wgpu::ComputePipeline,
     pub trace_bgl: wgpu::BindGroupLayout, pub denoise_bgl: wgpu::BindGroupLayout, pub compose_bgl: wgpu::BindGroupLayout,
     pub ubuf: wgpu::Buffer, pub step_ubufs: Vec<wgpu::Buffer>,
@@ -193,9 +193,9 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let tex = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let dep = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let out = |b| E { binding: b, visibility: c, ty: T::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: FMT, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
-    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14)] });
+    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16)] });
     let denoise_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(1), dep(2), tex(3), tex(4), tex(5), out(6), out(7)] });
-    let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10), tex(11)] });
+    let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10), tex(11), tex(12)] });
     let pipe = |bgl: &wgpu::BindGroupLayout, src: &str, ep: &str| {
         let sm = module(src);
         let l = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(bgl)], immediate_size: 0 });
@@ -209,7 +209,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let mk_at = |w: u32, h: u32| dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: FMT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING, view_formats: &[] }).create_view(&Default::default());
     let mk = || mk_at(w, h);
-    Pipes { glint: mk(), fine: mk_at(w * ss, h * ss), trace_fine, trace, trace_spec, denoise, compose, trace_bgl, denoise_bgl, compose_bgl, ubuf, step_ubufs, irr: [mk(), mk()], spec: [mk(), mk()] }
+    Pipes { lamp: [mk(), mk()], glint: mk(), fine: mk_at(w * ss, h * ss), trace_fine, trace, trace_spec, denoise, compose, trace_bgl, denoise_bgl, compose_bgl, ubuf, step_ubufs, irr: [mk(), mk()], spec: [mk(), mk()] }
 }
 
 /// triangles with their draw's index
@@ -248,26 +248,26 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     use wgpu::{BindGroupEntry as B, BindingResource as R};
     let (wx, wy) = (res.0.div_ceil(8), res.1.div_ceil(8));
     // the G-buffer's light first, then, with its clean result to shade by, the reflections. The trace writes one of the pairs and reads the other
-    let trace_bg = |irr_out: &wgpu::TextureView, spec_out: &wgpu::TextureView, irr_in: &wgpu::TextureView| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.trace_bgl, entries: &[
+    let trace_bg = |irr_out: &wgpu::TextureView, spec_out: &wgpu::TextureView, irr_in: &wgpu::TextureView, lamp_out: &wgpu::TextureView, lamp_in: &wgpu::TextureView| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.trace_bgl, entries: &[
         B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
         B { binding: 3, resource: sd.mats.as_entire_binding() }, B { binding: 4, resource: sd.lights.as_entire_binding() }, B { binding: 5, resource: sd.sky.as_entire_binding() },
         B { binding: 6, resource: R::TextureView(gb.depth) }, B { binding: 7, resource: R::TextureView(gb.nrm) }, B { binding: 8, resource: R::TextureView(gb.alb) },
-        B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }, B { binding: 13, resource: R::TextureView(gb.mirror_lit) }, B { binding: 14, resource: R::TextureView(&p.glint) }] });
+        B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }, B { binding: 13, resource: R::TextureView(gb.mirror_lit) }, B { binding: 14, resource: R::TextureView(&p.glint) }, B { binding: 15, resource: R::TextureView(lamp_out) }, B { binding: 16, resource: R::TextureView(lamp_in) }] });
     let filter = |enc: &mut wgpu::CommandEncoder, a: usize, b: usize, step: usize| {
         let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.denoise_bgl, entries: &[
             B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: p.step_ubufs[step].as_entire_binding() }, B { binding: 2, resource: R::TextureView(gb.depth) }, B { binding: 3, resource: R::TextureView(gb.nrm) },
             B { binding: 4, resource: R::TextureView(&p.irr[a]) }, B { binding: 5, resource: R::TextureView(&p.spec[a]) }, B { binding: 6, resource: R::TextureView(&p.irr[b]) }, B { binding: 7, resource: R::TextureView(&p.spec[b]) }] });
         let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.denoise); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups(wx, wy, 1);
     };
-    { let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
+    { let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
     let mut cur = 0usize;
     for i in 0..qu.denoise as usize { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
-    { let tg = trace_bg(&p.irr[1 - cur], &p.spec[cur], &p.irr[cur]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
+    { let tg = trace_bg(&p.irr[1 - cur], &p.spec[cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
     for i in 0..3usize { filter(enc, cur, 1 - cur, 6 + i); cur = 1 - cur; }
-    { let tg = trace_bg(&p.fine, &p.spec[1 - cur], &p.irr[cur]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_fine); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1); }
+    { let tg = trace_bg(&p.fine, &p.spec[1 - cur], &p.irr[cur], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_fine); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1); }
     let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.compose_bgl, entries: &[
         B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: sd.sky.as_entire_binding() }, B { binding: 2, resource: R::TextureView(gb.depth) }, B { binding: 3, resource: R::TextureView(gb.nrm) },
         B { binding: 4, resource: R::TextureView(gb.alb) }, B { binding: 5, resource: R::TextureView(gb.mat) }, B { binding: 6, resource: R::TextureView(&p.irr[cur]) }, B { binding: 7, resource: R::TextureView(&p.spec[cur]) },
-        B { binding: 8, resource: R::TextureView(gb.hdr) }, B { binding: 9, resource: R::TextureView(gb.lit) }, B { binding: 10, resource: R::TextureView(&p.fine) }, B { binding: 11, resource: R::TextureView(&p.glint) }] });
+        B { binding: 8, resource: R::TextureView(gb.hdr) }, B { binding: 9, resource: R::TextureView(gb.lit) }, B { binding: 10, resource: R::TextureView(&p.fine) }, B { binding: 11, resource: R::TextureView(&p.glint) }, B { binding: 12, resource: R::TextureView(&p.lamp[1]) }] });
     let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.compose); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1);
 }
