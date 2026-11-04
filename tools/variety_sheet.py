@@ -1,5 +1,5 @@
 # variety_sheet.py OUT SEEDS...: OUT/sheet.jpg (living rooms, then bedrooms) and how far the houses differ: the spread of each house's mean colour, across houses and within one
-import glob, os, sys, statistics as st
+import glob, json, os, sys, statistics as st
 from PIL import Image, ImageDraw
 out, seeds = sys.argv[1], sys.argv[2:]
 W, H, C = 384, 216, 5
@@ -10,6 +10,9 @@ def cols(f):
     sat = sum((max(p) - min(p)) / max(max(p), 1) for p in px) / n
     return m, sat
 rows = {'living-room': [], 'bedroom': []}
+def style(s):
+    try: return json.load(open(f'{out}/h{s}.json')).get('style') or ''
+    except (OSError, ValueError): return ''
 house = {}
 for s in seeds:
     for k in rows:
@@ -21,7 +24,7 @@ sheet = Image.new('RGB', (W * C, H * n)); d = ImageDraw.Draw(sheet); y = 0
 for k, v in rows.items():
     for i, (s, f) in enumerate(v):
         x = (i % C) * W; yy = y + (i // C) * H
-        sheet.paste(Image.open(f).convert('RGB').resize((W, H)), (x, yy)); d.text((x + 4, yy + 3), f'{s} {k}', fill=(255, 255, 0))
+        sheet.paste(Image.open(f).convert('RGB').resize((W, H)), (x, yy)); d.text((x + 4, yy + 3), f'{s} {k} {style(s)}', fill=(255, 255, 0))
     y += (len(v) + C - 1) // C * H
 sheet.save(f'{out}/sheet.jpg', quality=85)
 def mean(a): return [sum(x[i] for x in a) / len(a) for i in range(3)]

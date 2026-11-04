@@ -1,12 +1,12 @@
 #!/bin/zsh
 # variety.sh [RULES.json|-] [OUT] [SEED0] [N]: a contact sheet of living rooms and bedrooms from N fixed houses, and how far they differ, for judging material rules fast.
 # The houses (no outdoors) and their views are generated once into ~/work/bench/var/base; after that a rule file only re-runs reshade and draws the saved views.
-# Writes OUT/sheet.jpg and prints the variety numbers. After a geometry change, delete the base.
+# Writes OUT/sheet.jpg and prints the variety numbers. After a geometry change, delete the base. STYLE=name forces one style on every house.
 SELF=${0:A}; R=${0:A:h:h}
 BASE=$HOME/work/bench/var/base; CFG=$HOME/work/bench/var/cfg_noout.json; G=$R/target/fast/gen2; P=$R/tools/preview.sh; RS=$R/target/fast/reshade
 if [[ $1 == --gen ]]; then
   s=$2
-  SERIAL_ROOMS=1 $G $s LivingRoom $BASE/h$s.glb --config $CFG > $BASE/h$s.log 2>&1 || { echo "generation failed: $s"; exit 1 }
+  MATERIAL_RULES=none SERIAL_ROOMS=1 $G $s LivingRoom $BASE/h$s.glb --config $CFG > $BASE/h$s.log 2>&1 || { echo "generation failed: $s"; exit 1 }
   rm -f "$BASE/h$s.usdc"
   PREVIEW_SAVE_CAMS=$BASE/c$s $P $BASE/h$s.glb --cams 99 --res 480x270 -o $BASE/v$s > /dev/null 2>&1
   rm -rf "$BASE/v$s"
@@ -27,7 +27,7 @@ if (( ${#miss} )); then print -l $miss | xargs -P4 -n1 $SELF --gen || exit 1; fi
 for s in $seeds; do
   ln -f $BASE/h$s.glb $OUT/h$s.glb
   if [[ $RULES == - ]]; then cp $BASE/h$s.json $OUT/h$s.json
-  else $RS $BASE/h$s.json $OUT/h$s.json $RULES --seed $s 2>/dev/null || { echo "reshade failed on $s"; $RS $BASE/h$s.json $OUT/h$s.json $RULES --seed $s; exit 1 }; fi
+  else $RS $BASE/h$s.json $OUT/h$s.json $RULES --seed $s ${STYLE:+--style} $STYLE 2>/dev/null || { echo "reshade failed on $s"; $RS $BASE/h$s.json $OUT/h$s.json $RULES --seed $s ${STYLE:+--style} $STYLE; exit 1 }; fi
 done
 print -l $seeds | xargs -P4 -n1 $SELF --draw $OUT
 python3 $R/tools/variety_sheet.py $OUT $seeds

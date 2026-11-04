@@ -1,4 +1,4 @@
-//! Material rules: a data file (MATERIAL_RULES=path.json) that scores materials and sets colours, read at run time. Every material of a scene passes through
+//! Material rules: a data file (rules/styles.json, built in; MATERIAL_RULES=path.json replaces it, MATERIAL_RULES=none turns it off) that scores materials and sets colours. Every material of a scene passes through
 //! `resolve` when the sidecar is written, so a rule reaches any object without touching the code that made it, and `reshade` re-applies a file to a generated
 //! house in a fraction of a second. With no file, or no rule that matches, a material stays exactly as its factory drew it.
 //!
@@ -6,8 +6,12 @@
 //!   "set": {class: weight}   the candidates, replacing what the factory drew
 //!   "add": {class: weight}   more candidates beside it
 //!   "weight": x              multiply the candidates whose class matches when.class (0 rules them out)
-//!   "color": {"h": [a, b], "s": [a, b], "v": [a, b]} or {"palette": [[r, g, b], ...]}, with "per": "object" (default) | "room" | "house" }
+//!   "color": {"h": [a, b], "s": [a, b], "v": [a, b]} or {"palette": ["#rrggbb" or [r, g, b] linear, ...]}, with "per": "object" (default) | "room" | "house",
+//!            and "key": a name: rules with one key share their draw across slots, so same-length palettes stay paired (a sofa and its curtains)
+//!   "paint": a colour like "color" plus "amount": [a, b], mixed over the material with its texture kept; reaches classes that ignore "color" (wood stain, painted trim) }
 //! `when` fields are patterns: * wildcards, | alternatives. The slot is the material's name before any ':' or '~' (table_top, sheet, wall).
+//! The file: { "groups": {name: when}, "styles": {name: {"weight", "why", "rules": [...]}}, "rules": [...] }. A house draws one style by weight; a style's rules
+//! apply to its houses only, after the file's own. `when` can name a group ("group": "wood"), whose fields fill the ones it leaves out.
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -15,37 +19,65 @@ use std::sync::OnceLock;
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
-pub struct When { pub slot: Option<String>, pub class: Option<String>, pub object_class: Option<String>, pub room: Option<String>, pub style: Option<String> }
+pub struct When { pub group: Option<String>, pub slot: Option<String>, pub class: Option<String>, pub object_class: Option<String>, pub room: Option<String>, pub style: Option<String> }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Color {
     #[serde(default)] pub h: Option<[f64; 2]>, #[serde(default)] pub s: Option<[f64; 2]>, #[serde(default)] pub v: Option<[f64; 2]>,
-    #[serde(default)] pub palette: Option<Vec<[f64; 3]>>,
+    #[serde(default)] pub palette: Option<Vec<Swatch>>,
     #[serde(default)] pub per: Option<String>,
+    #[serde(default)] pub key: Option<String>,
+    #[serde(default)] pub amount: Option<[f64; 2]>,
+}
+
+/// a palette entry: "#rrggbb" (sRGB, as a paint chart gives it) or [r, g, b] linear
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum Swatch { Rgb([f64; 3]), Hex(String) }
+impl Swatch {
+    fn linear(&self) -> Option<[f64; 3]> {
+        match self {
+            Swatch::Rgb(c) => Some(*c),
+            Swatch::Hex(h) => { let v = u32::from_str_radix(h.strip_prefix('#')?, 16).ok().filter(|_| h.len() == 7)?; let d = |x: u32| { let c = (x & 255) as f64 / 255.0; if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } }; Some([d(v >> 16), d(v >> 8), d(v)]) }
+        }
+    }
 }
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
 pub struct Rule {
     pub when: When, pub why: String,
-    pub set: Option<BTreeMap<String, f64>>, pub add: Option<BTreeMap<String, f64>>, pub weight: Option<f64>, pub color: Option<Color>,
+    pub set: Option<BTreeMap<String, f64>>, pub add: Option<BTreeMap<String, f64>>, pub weight: Option<f64>, pub color: Option<Color>, pub paint: Option<Color>,
 }
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
-pub struct Style { pub weight: f64, pub why: String }
+pub struct Style { pub weight: f64, pub why: String, pub rules: Vec<Rule> }
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
-pub struct Config { pub styles: BTreeMap<String, Style>, pub rules: Vec<Rule> }
+pub struct Config { pub groups: BTreeMap<String, When>, pub styles: BTreeMap<String, Style>, pub rules: Vec<Rule> }
 
 impl Config {
     pub fn parse(text: &str) -> Result<Config, String> {
-        let c: Config = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let mut c: Config = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        // a style's rules join the list, marked with their style; groups fill in what a `when` leaves out
+        for (name, st) in &mut c.styles { for mut r in std::mem::take(&mut st.rules) { if r.when.style.is_some() { return Err(format!("rule ({}) in style {name} names a style", r.why)); } r.when.style = Some(name.clone()); c.rules.push(r); } }
+        for r in &mut c.rules {
+            let Some(g) = r.when.group.take() else { continue };
+            let f = c.groups.get(&g).ok_or_else(|| format!("rule ({}) names an unknown group {g}", r.why))?;
+            r.when.slot = r.when.slot.take().or_else(|| f.slot.clone()); r.when.class = r.when.class.take().or_else(|| f.class.clone());
+            r.when.object_class = r.when.object_class.take().or_else(|| f.object_class.clone()); r.when.room = r.when.room.take().or_else(|| f.room.clone());
+        }
         for (i, r) in c.rules.iter().enumerate() {
-            if r.set.is_none() && r.add.is_none() && r.weight.is_none() && r.color.is_none() { return Err(format!("rule {i} ({}) does nothing", r.why)); }
+            if r.set.is_none() && r.add.is_none() && r.weight.is_none() && r.color.is_none() && r.paint.is_none() { return Err(format!("rule {i} ({}) does nothing", r.why)); }
             if r.why.is_empty() { return Err(format!("rule {i} has no \"why\"")); }
+            for c in [&r.color, &r.paint].into_iter().flatten() {
+                if let Some(p) = &c.palette { for x in p { if x.linear().is_none() { return Err(format!("rule {i} ({}): bad colour {x:?}", r.why)); } } }
+                if let Some(per) = &c.per { if !matches!(per.as_str(), "object" | "room" | "house") { return Err(format!("rule {i} ({}): per {per}", r.why)); } }
+            }
+            if r.paint.as_ref().map_or(false, |c| c.amount.is_none()) { return Err(format!("rule {i} ({}): paint needs an amount", r.why)); }
             if let Some(s) = &r.when.style { if !s.contains('*') && !s.split('|').all(|x| c.styles.contains_key(x)) { return Err(format!("rule {i} names an unknown style {s}")); } }
         }
         Ok(c)
@@ -60,12 +92,13 @@ impl Config {
     }
 }
 
-/// the file named by MATERIAL_RULES, once; a bad file stops the run rather than quietly doing nothing
+/// rules/styles.json, or the file named by MATERIAL_RULES ("none": no rules); a bad file stops the run rather than quietly doing nothing
 pub fn loaded() -> &'static Config {
     static C: OnceLock<Config> = OnceLock::new();
-    C.get_or_init(|| match std::env::var("MATERIAL_RULES") {
-        Ok(p) => { let t = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("MATERIAL_RULES {p}: {e}")); Config::parse(&t).unwrap_or_else(|e| panic!("MATERIAL_RULES {p}: {e}")) }
-        Err(_) => Config::default(),
+    C.get_or_init(|| match std::env::var("MATERIAL_RULES").as_deref() {
+        Ok("none") => Config::default(),
+        Ok(p) => { let t = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("MATERIAL_RULES {p}: {e}")); Config::parse(&t).unwrap_or_else(|e| panic!("MATERIAL_RULES {p}: {e}")) }
+        Err(_) => Config::parse(include_str!("../../../rules/styles.json")).expect("rules/styles.json"),
     })
 }
 
@@ -95,6 +128,13 @@ pub fn slot_of(mat: &str) -> &str { mat.split(':').next().unwrap_or("").split('~
 
 const ROOMS: [&str; 12] = ["living-room", "dining-room", "bedroom", "bathroom", "kitchen", "hallway", "closet", "utility", "garage", "balcony", "office", "restroom"];
 pub fn room_of(node: &str) -> &str { ROOMS.iter().find(|r| node.contains(**r)).copied().unwrap_or("") }
+/// which room of its kind: bedroom_1, from bedroom_1/0.wall or bedroom_1_0_stand#2
+fn room_id(node: &str) -> String {
+    let room = room_of(node);
+    let Some(i) = (!room.is_empty()).then(|| node.find(room)).flatten() else { return String::new() };
+    let rest = &node[i + room.len()..];
+    format!("{room}{}", rest.strip_prefix('_').map_or(String::new(), |r| format!("_{}", r.split(|c: char| !c.is_ascii_digit()).next().unwrap_or(""))))
+}
 
 /// what `resolve` changed, for `reshade --explain`
 #[derive(Debug, Clone)]
@@ -132,16 +172,25 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
     let mut out = spec.clone();
     out["cls"] = Value::String(cls.clone());
     let mut col = rgb;
+    let draw = |c: &Color, what: &str, base: [f32; 3]| -> [f32; 3] {
+        let per = match c.per.as_deref() { Some("house") => String::new(), Some("room") => room_id(node), _ => object.to_string() };
+        let key = [house.to_string(), c.key.clone().unwrap_or_else(|| format!("{slot}/{what}")), per];
+        let d = |w: &str, a: [f64; 2]| a[0] + (a[1] - a[0]) * unit(&[&key[0], &key[1], &key[2], w]);
+        let v = if let Some(p) = c.palette.as_ref().filter(|p| !p.is_empty()) { p[((unit(&[&key[0], &key[1], &key[2], "palette"]) * p.len() as f64) as usize).min(p.len() - 1)].linear().unwrap_or([0.5; 3]) }
+            else { let hsv0 = crate::rgb_to_hsv([base[0] as f64, base[1] as f64, base[2] as f64]); crate::hsv(c.h.map_or(hsv0[0], |a| d("h", a)), c.s.map_or(hsv0[1], |a| d("s", a)), c.v.map_or(hsv0[2], |a| d("v", a))) };
+        [v[0] as f32, v[1] as f32, v[2] as f32]
+    };
     for r in &cfg.rules {
-        let Some(c) = &r.color else { continue };
         if !applies(&r.when, Some(&cls)) { continue }
-        let per = match c.per.as_deref() { Some("house") => String::new(), Some("room") => room.to_string(), _ => object.to_string() };
-        let key = [house.to_string(), slot.to_string(), per];
-        let d = |what: &str, a: [f64; 2]| a[0] + (a[1] - a[0]) * unit(&[&key[0], &key[1], &key[2], what]);
-        let v = if let Some(p) = c.palette.as_ref().filter(|p| !p.is_empty()) { p[((unit(&[&key[0], &key[1], &key[2], "palette"]) * p.len() as f64) as usize).min(p.len() - 1)] }
-            else { let hsv0 = crate::rgb_to_hsv([rgb[0] as f64, rgb[1] as f64, rgb[2] as f64]); crate::hsv(c.h.map_or(hsv0[0], |a| d("h", a)), c.s.map_or(hsv0[1], |a| d("s", a)), c.v.map_or(hsv0[2], |a| d("v", a))) };
-        col = [v[0] as f32, v[1] as f32, v[2] as f32];
-        trace.rules.push(r.why.clone());
+        if let Some(c) = &r.color { col = draw(c, "color", col); trace.rules.push(r.why.clone()); }
+        if let Some(c) = &r.paint {
+            let rgb = draw(c, "paint", col);
+            let a = c.amount.unwrap_or([1.0, 1.0]);
+            let per = match c.per.as_deref() { Some("house") => String::new(), Some("room") => room_id(node), _ => object.to_string() };
+            let amount = a[0] + (a[1] - a[0]) * unit(&[&house.to_string(), slot, &per, "amount"]);
+            out["paint"] = serde_json::json!({"rgb": rgb, "amount": amount});
+            trace.rules.push(r.why.clone());
+        }
     }
     (out, col, trace)
 }
@@ -172,7 +221,24 @@ mod tests {
         assert!(Config::parse(r#"{"rules":[{"when":{},"why":"x"}]}"#).is_err());
         assert!(Config::parse(r#"{"rules":[{"when":{"slott":"a"},"why":"x","weight":1}]}"#).is_err());
         assert!(Config::parse(r#"{"rules":[{"when":{"style":"nope"},"why":"x","weight":1}]}"#).is_err());
+        assert!(Config::parse(r#"{"rules":[{"when":{"group":"nope"},"why":"x","weight":1}]}"#).is_err());
     }
+    #[test] fn keys_pair_palettes_and_rooms_differ() {
+        let c = cfg(r##"{"rules":[{"when":{"slot":"a"},"why":"x","color":{"palette":["#000000","#ffffff"],"per":"house","key":"k"}},{"when":{"slot":"b"},"why":"x","color":{"palette":["#000000","#ffffff"],"per":"house","key":"k"}}]}"##);
+        for h in 0..20 { let f = |m: &str| resolve(&c, h, &json!({"cls":"z"}), m, "n", "", [1.0; 3]).1; assert_eq!(f("a"), f("b")); }
+        assert_eq!(room_id("bedroom_1/0.wall"), "bedroom_1"); assert_eq!(room_id("bedroom_1_0_stand#2"), "bedroom_1"); assert_eq!(room_id("skirting"), "");
+    }
+    #[test] fn paint_keeps_the_class() {
+        let c = cfg(r##"{"rules":[{"when":{"slot":"t"},"why":"x","paint":{"palette":["#ffffff"],"amount":[0.5,0.5]}}]}"##);
+        let (o, _, _) = resolve(&c, 1, &json!({"cls":"wood.Wood"}), "t", "n", "", [1.0; 3]);
+        assert_eq!(o["cls"], "wood.Wood"); assert_eq!(o["paint"]["amount"], 0.5); assert_eq!(o["paint"]["rgb"][0], 1.0);
+    }
+    #[test] fn style_rules_and_groups() {
+        let c = cfg(r##"{"groups":{"g":{"slot":"a"}},"styles":{"s":{"weight":1,"why":"w","rules":[{"when":{"group":"g"},"why":"x","color":{"palette":["#000000"]}}]}}}"##);
+        assert_eq!(resolve(&c, 1, &json!({"cls":"z"}), "a", "n", "", [1.0; 3]).1, [0.0; 3]);
+        assert_eq!(resolve(&c, 1, &json!({"cls":"z"}), "b", "n", "", [1.0; 3]).1, [1.0; 3]);
+    }
+    #[test] fn the_shipped_file_parses() { assert!(Config::parse(include_str!("../../../rules/styles.json")).is_ok()); }
     #[test] fn patterns() {
         assert!(matches("*Glass*", "ceramic.GlassVolume")); assert!(matches("wood.*|metal.*", "metal.Basic")); assert!(!matches("wood.*", "ceramic.Wood")); assert!(matches("a*c", "abc"));
     }

@@ -782,7 +782,7 @@ impl Scene {
         // the plain (non-spec) material values, for importers that take geometry only (usdc)
         let materials_json: Vec<_> = self.materials.iter().map(|m| json!({"name": m.name, "color": m.color, "metallic": m.metallic, "roughness": m.roughness, "emissive": m.emissive, "emissive_strength": m.emissive_strength})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
-        let mut sidecar = json!({"house_seed": house_seed(), "nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json, "graphs": graphs});
+        let mut sidecar = json!({"house_seed": house_seed(), "style": ig_shade::rules::loaded().style_of(house_seed()), "nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json, "graphs": graphs});
         if !self.lights_off.is_empty() {
             sidecar["lights_off"] = self.lights_off.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
         }

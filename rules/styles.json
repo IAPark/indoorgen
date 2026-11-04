@@ -1,0 +1,113 @@
+{
+  "groups": {
+    "paint":    {"slot": "wall|wall_alt", "class": "ceramic.Plaster"},
+    "wood":     {"slot": "chair_wood|console_body|console_front|nightstand_body|nightstand_front|wardrobe_body|wardrobe_door|table_top|table_leg|sofa_leg|bed_frame|bed_limb|bed_panel|bench_leg|shelf_wood|shelf_wood_z|wshelf|bi_wood|photo_frame|beam", "class": "wood.*|shader.wood.*"},
+    "trim":     {"slot": "skirting_floor|skirting_ceiling|door_casing"},
+    "doors":    {"slot": "door*", "class": "wood.*|plastic.*"},
+    "windows":  {"slot": "window*", "class": "wood.*"},
+    "seating":  {"slot": "sofa_fabric|chair_fabric|seat|bench"},
+    "headboard":{"slot": "bed_headboard"},
+    "cushions": {"slot": "cushion|seat_cushion|seat_pillow"},
+    "rugs":     {"slot": "rug"},
+    "curtains": {"slot": "window*.curtain", "class": "fabric.*"},
+    "bedding":  {"slot": "sheet|pillow|folded|blanket"},
+    "floors":   {"slot": "floor", "room": "living-room|dining-room|bedroom|hallway|office"}
+  },
+  "rules": [
+    {"when": {"slot": "wall|wall_alt", "class": "ceramic.Tile", "room": "living-room|dining-room|bedroom|hallway|office", "style": "scandi|traditional|midcentury|industrial|coastal|moody|seventies|maximalist"}, "why": "a styled dry room is painted, not tiled", "set": {"ceramic.Plaster": 1}}
+  ],
+  "styles": {
+    "plain": {"weight": 22, "why": "the factories' own mixed neutrals", "rules": []},
+
+    "scandi": {"weight": 14, "why": "white rooms, pale wood, soft greys with one muted accent", "rules": [
+      {"when": {"group": "paint"}, "why": "nearly white", "color": {"palette": ["#f1efe9", "#eeece6", "#f4f2ee", "#e9e8e3"], "per": "house"}},
+      {"when": {"group": "wood"}, "why": "pale birch and ash", "paint": {"palette": ["#d8c4a4", "#e0d0b6", "#cdb892"], "amount": [0.55, 0.7], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "oat and grey", "color": {"palette": ["#b9b6ae", "#9ea2a3", "#c8c0b2", "#8b9499"], "per": "house"}},
+      {"when": {"group": "cushions"}, "why": "one muted accent", "color": {"palette": ["#a9755a", "#6e8a86", "#c4a35a", "#8a93a8"], "per": "house", "key": "accent"}},
+      {"when": {"group": "rugs"}, "why": "pale wool", "color": {"palette": ["#ddd8cc", "#cfcfca", "#c9c0b0"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "linen", "color": {"palette": ["#e6e1d6", "#d6d3cb"], "per": "house"}},
+      {"when": {"group": "floors"}, "why": "pale boards", "set": {"wood.HardwoodFloor": 1}, "color": {"palette": ["#d9c6a5", "#cfb995", "#e2d3b8"], "per": "house"}}
+    ]},
+
+    "traditional": {"weight": 14, "why": "warm painted walls, dark stained wood, rich upholstery", "rules": [
+      {"when": {"group": "paint"}, "why": "cream, sage, dusty blue", "color": {"palette": ["#e5d9bf", "#c5cdb2", "#b8c6cc", "#dcc7a8", "#d6c3b4"], "per": "room"}},
+      {"when": {"group": "wood"}, "why": "walnut and mahogany", "paint": {"palette": ["#4a2d1c", "#5b3621", "#3c2318"], "amount": [0.65, 0.8], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "oxblood, forest, tan", "set": {"fabric.Velvet": 1, "fabric.Leather": 1}, "color": {"palette": ["#6e2a2a", "#2f4a3a", "#9a6b3f", "#2f3d57"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "headboard"}, "why": "matches the seating", "color": {"palette": ["#6e2a2a", "#2f4a3a", "#9a6b3f", "#2f3d57"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "cushions"}, "why": "gold and cream", "color": {"palette": ["#b8934a", "#e0d4b8", "#8a3b34"], "per": "object"}},
+      {"when": {"group": "rugs"}, "why": "deep reds and blues", "color": {"palette": ["#7a2f2a", "#2f3f5e", "#6b4a2f"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "heavy, matches the seating", "color": {"palette": ["#7e3a38", "#3d5a48", "#a57d52", "#3e4e6b"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "trim"}, "why": "white woodwork", "paint": {"palette": ["#ece8dd"], "amount": [1, 1], "per": "house"}},
+      {"when": {"group": "floors"}, "why": "dark oak", "set": {"wood.HardwoodFloor": 1}, "color": {"palette": ["#6b4a2e", "#7d5836", "#5a3d26"], "per": "house"}},
+      {"when": {"group": "bedding"}, "why": "ivory", "color": {"palette": ["#e8e0cd", "#efe8d8"], "per": "room"}}
+    ]},
+
+    "midcentury": {"weight": 12, "why": "walnut, off-white walls, one strong colour on the seating", "rules": [
+      {"when": {"group": "paint"}, "why": "warm off-white", "color": {"palette": ["#ece6d8", "#e6dfcf", "#efe9dd"], "per": "house"}},
+      {"when": {"group": "wood"}, "why": "walnut and teak", "paint": {"palette": ["#7a4e2d", "#8a5a33", "#6b4426"], "amount": [0.6, 0.75], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "mustard, teal, rust, olive", "color": {"palette": ["#c79a2f", "#2c6e70", "#b3552c", "#6f7a3a"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "headboard"}, "why": "matches the seating", "color": {"palette": ["#c79a2f", "#2c6e70", "#b3552c", "#6f7a3a"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "cushions"}, "why": "cream against the colour", "color": {"palette": ["#e5dcc5", "#3b3a36", "#d8843b"], "per": "object"}},
+      {"when": {"group": "rugs"}, "why": "muted geometric ground", "color": {"palette": ["#d9cdb4", "#8a6a43", "#4f5a57"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "plain neutral", "color": {"palette": ["#ddd2bb", "#c9b99a"], "per": "house"}},
+      {"when": {"group": "floors"}, "why": "mid oak", "set": {"wood.HardwoodFloor": 1}, "color": {"palette": ["#a97f50", "#b58c5c", "#9a7246"], "per": "house"}}
+    ]},
+
+    "industrial": {"weight": 10, "why": "greys, black steel and wood, worn leather", "rules": [
+      {"when": {"group": "paint"}, "why": "greys", "color": {"palette": ["#a8a6a0", "#8f908d", "#b5b2aa", "#797b7b"], "per": "room"}},
+      {"when": {"group": "wood"}, "why": "ebonised and smoked", "paint": {"palette": ["#201c19", "#2e2823", "#3a3029"], "amount": [0.7, 0.85], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "cognac and black leather", "set": {"fabric.Leather": 3, "fabric.CoarseKnitFabric": 1}, "color": {"palette": ["#8a4f27", "#262422", "#5f3a22"], "per": "house"}},
+      {"when": {"group": "cushions"}, "why": "dull canvas", "color": {"palette": ["#6d6a60", "#8d8b80", "#3e4449"], "per": "object"}},
+      {"when": {"group": "rugs"}, "why": "charcoal", "color": {"palette": ["#3a3a3a", "#555350"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "dark grey", "color": {"palette": ["#4d4f50", "#66665f"], "per": "house"}},
+      {"when": {"group": "trim"}, "why": "painted black", "paint": {"palette": ["#2a2a2a", "#3a3b3b"], "amount": [1, 1], "per": "house"}},
+      {"when": {"group": "doors"}, "why": "painted black", "paint": {"palette": ["#242424", "#34302c"], "amount": [0.9, 0.95], "per": "house"}},
+      {"when": {"group": "windows"}, "why": "steel-black frames", "paint": {"palette": ["#1f1f1f"], "amount": [0.9, 0.95], "per": "house"}},
+      {"when": {"group": "floors"}, "why": "bare concrete", "set": {"ceramic.Concrete": 1}, "color": {"palette": ["#8b8a85", "#76756f", "#9b9a93"], "per": "house"}}
+    ]},
+
+    "coastal": {"weight": 10, "why": "pale blues and sand, whitewashed wood, navy", "rules": [
+      {"when": {"group": "paint"}, "why": "sea blue and sand", "color": {"palette": ["#cfdfe3", "#e9e4d4", "#bcd4d6", "#dfe6e2"], "per": "room"}},
+      {"when": {"group": "wood"}, "why": "whitewash", "paint": {"palette": ["#e6e0d2", "#d9d3c4"], "amount": [0.65, 0.8], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "navy, seafoam, white", "color": {"palette": ["#23395b", "#7fb0a6", "#dcd8cc", "#3f6c8a"], "per": "house"}},
+      {"when": {"group": "cushions"}, "why": "coral and sand", "color": {"palette": ["#d98a70", "#e4d7bd", "#4d7f97"], "per": "object"}},
+      {"when": {"group": "rugs"}, "why": "jute and blue", "color": {"palette": ["#c9b48f", "#7f9db0"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "white", "color": {"palette": ["#efece4"], "per": "house"}},
+      {"when": {"group": "floors"}, "why": "bleached boards", "set": {"wood.HardwoodFloor": 1}, "color": {"palette": ["#d5ccb8", "#c6bda6"], "per": "house"}},
+      {"when": {"group": "bedding"}, "why": "white and pale blue", "color": {"palette": ["#f0f0ea", "#d5e2e8"], "per": "room"}}
+    ]},
+
+    "moody": {"weight": 8, "why": "dark walls and velvet, trim painted to match", "rules": [
+      {"when": {"group": "paint"}, "why": "navy, forest, aubergine, charcoal", "color": {"palette": ["#22344a", "#26402f", "#3d2438", "#33363a"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "trim"}, "why": "same as the walls", "paint": {"palette": ["#22344a", "#26402f", "#3d2438", "#33363a"], "amount": [1, 1], "per": "house", "key": "scheme"}},
+      {"when": {"group": "wood"}, "why": "dark walnut", "paint": {"palette": ["#3b2619", "#2f2017"], "amount": [0.65, 0.8], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "velvet that lifts off the wall", "set": {"fabric.Velvet": 1}, "color": {"palette": ["#b08a3c", "#a8583e", "#c7bda8", "#7c8c78"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "cushions"}, "why": "brass and blush", "color": {"palette": ["#c9a24a", "#c48f83", "#ded3bf"], "per": "object"}},
+      {"when": {"group": "rugs"}, "why": "dark and patterned ground", "color": {"palette": ["#3a2c2a", "#2c2f3a"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "heavy velvet", "color": {"palette": ["#2a3b52", "#2e4a38", "#4a2d44", "#3d4045"], "per": "house", "key": "scheme"}},
+      {"when": {"group": "floors"}, "why": "very dark boards", "set": {"wood.HardwoodFloor": 1}, "color": {"palette": ["#3f2b1c", "#4c3322"], "per": "house"}}
+    ]},
+
+    "seventies": {"weight": 5, "why": "unusual: orange, avocado and brown, as bought in 1974", "rules": [
+      {"when": {"group": "paint"}, "why": "harvest colours", "color": {"palette": ["#c9863a", "#8f9148", "#b86a3a", "#d8b45a"], "per": "room"}},
+      {"when": {"group": "wood"}, "why": "orange pine", "paint": {"palette": ["#a2622a", "#8d4f22"], "amount": [0.6, 0.8], "per": "house"}},
+      {"when": {"group": "seating"}, "why": "brown and avocado", "set": {"fabric.Velvet": 1, "fabric.CoarseKnitFabric": 1}, "color": {"palette": ["#5e4023", "#6f7430", "#a65a1f"], "per": "house"}},
+      {"when": {"group": "cushions"}, "why": "orange and cream", "color": {"palette": ["#d0702a", "#e5cf9a", "#7a4a24"], "per": "object"}},
+      {"when": {"group": "rugs"}, "why": "shag", "color": {"palette": ["#b5672a", "#7c6a2c", "#d3b25e"], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "orange", "color": {"palette": ["#c77a30", "#a9882f"], "per": "house"}},
+      {"when": {"group": "floors"}, "why": "brown carpet", "set": {"fabric.Rug": 1}, "color": {"palette": ["#6e4b28", "#85622f", "#5d5426"], "per": "house"}},
+      {"when": {"group": "bedding"}, "why": "brown and mustard", "color": {"palette": ["#c7a24d", "#a56a33", "#e2cd9a"], "per": "room"}}
+    ]},
+
+    "maximalist": {"weight": 5, "why": "unusual: every room a different saturated colour", "rules": [
+      {"when": {"group": "paint"}, "why": "saturated, room by room", "color": {"palette": ["#c23a6b", "#1f8a8a", "#e0a81f", "#3f4fb5", "#d9562b", "#3e9a55"], "per": "room"}},
+      {"when": {"group": "seating"}, "why": "clashing", "set": {"fabric.Velvet": 1}, "color": {"palette": ["#e0559a", "#17a0a8", "#f0c030", "#5a3fc0", "#e8622a"], "per": "object"}},
+      {"when": {"group": "headboard"}, "why": "clashing", "color": {"palette": ["#e0559a", "#17a0a8", "#f0c030", "#5a3fc0"], "per": "object"}},
+      {"when": {"group": "cushions"}, "why": "anything", "color": {"h": [0, 1], "s": [0.6, 0.9], "v": [0.35, 0.8]}},
+      {"when": {"group": "rugs"}, "why": "anything", "color": {"h": [0, 1], "s": [0.5, 0.9], "v": [0.25, 0.6], "per": "room"}},
+      {"when": {"group": "curtains"}, "why": "anything", "color": {"h": [0, 1], "s": [0.5, 0.85], "v": [0.3, 0.7], "per": "room"}},
+      {"when": {"group": "wood"}, "why": "painted furniture", "paint": {"palette": ["#1f2a44", "#7a1f3d", "#14564f", "#e6c43a", "#f2efe6"], "amount": [0.85, 0.95], "per": "object"}},
+      {"when": {"group": "bedding"}, "why": "colour too", "color": {"palette": ["#e7b7c8", "#a8d8d0", "#f0dc90", "#b9b4e8"], "per": "room"}}
+    ]}
+  }
+}

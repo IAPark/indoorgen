@@ -1,4 +1,4 @@
-//! reshade IN.json OUT.json RULES.json [--seed N] [--explain NODE]: re-apply material rules to a generated house's sidecar, without generating it again. Put OUT.json
+//! reshade IN.json OUT.json RULES.json [--seed N] [--style NAME] [--explain NODE]: re-apply material rules to a generated house's sidecar, without generating it again. Put OUT.json
 //! beside a link to the house's .glb and preview that. Needs a sidecar from a gen2 that writes each node's "ext".
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -7,7 +7,11 @@ fn main() {
     if a.len() < 3 { eprintln!("reshade IN.json OUT.json RULES.json [--seed N] [--explain NODE]"); std::process::exit(2) }
     let opt = |k: &str| a.iter().position(|x| x == k).and_then(|i| a.get(i + 1)).cloned();
     let mut side: Value = serde_json::from_slice(&std::fs::read(&a[0]).expect("sidecar")).expect("sidecar json");
-    let cfg = ig_shade::rules::Config::parse(&std::fs::read_to_string(&a[2]).expect("rules")).unwrap_or_else(|e| { eprintln!("{}: {e}", a[2]); std::process::exit(2) });
+    let mut cfg = ig_shade::rules::Config::parse(&std::fs::read_to_string(&a[2]).expect("rules")).unwrap_or_else(|e| { eprintln!("{}: {e}", a[2]); std::process::exit(2) });
+    if let Some(st) = opt("--style") {
+        if !cfg.styles.contains_key(&st) { eprintln!("no style {st}"); std::process::exit(2) }
+        for (k, v) in cfg.styles.iter_mut() { v.weight = if *k == st { 1.0 } else { 0.0 }; }
+    }
     let house = opt("--seed").and_then(|s| s.parse().ok()).or_else(|| side["house_seed"].as_u64()).unwrap_or(0);
     let explain = opt("--explain");
     let mut graphs: Vec<Value> = vec![];
@@ -31,6 +35,7 @@ fn main() {
         o.insert("spec".into(), spec);
     }
     side["graphs"] = Value::Array(graphs);
+    side["style"] = json!(cfg.style_of(house));
     std::fs::write(&a[1], serde_json::to_vec(&side).unwrap()).expect("write");
     eprintln!("{n_changed} of {n_nodes} parts changed, style {:?}", cfg.style_of(house));
 }
