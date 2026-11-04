@@ -67,6 +67,8 @@ pub struct Item {
     #[serde(default)] pub solid: bool,
     /// the walk must reach its front
     #[serde(default)] pub reach: bool,
+    /// what opens out of it (a desk's drawers) does not keep the floor before it: its own chair stands there
+    #[serde(default)] pub opens_over_chair: bool,
     /// its soft parts keep to the walk and the doors like hard ones (foliage; bedding may spread over them)
     #[serde(default)] pub soft_blocks: bool,
     /// it lies on the floor under what stands there: only the walls limit it (a rug)

@@ -924,7 +924,8 @@ pub fn build_scene(p: &Params) -> Built {
                 }
             }
             let local = match gen.class.as_str() {
-                "CeilingLightFactory" => Some([0.0, 0.0, -0.03]),
+                // (a fitting hanging lower: the light where its glass is)
+                "CeilingLightFactory" => Some([0.0, 0.0, if o.geom.lo[2] < -0.2 { o.geom.lo[2] + 0.08 } else { -0.03 }]),
                 "CeilingClassicLampFactory" => Some([0.0, 0.0, o.geom.lo[2] - 0.03]),
                 "DeskLampFactory" | "FloorLampFactory" | "LampFactory" => {
                     // python lamp.py create_asset: `if np.random.uniform() < 0.6` (first draw of the spawn_asset instance stream) adds the

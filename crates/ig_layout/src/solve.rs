@@ -224,7 +224,10 @@ fn poses(room: &Room, it: &Item, v: &Variant, s: &Shape, state: &State) -> Vec<(
             let mut x = a[0];
             while x < b[0] { let mut y = a[1]; while y < b[1] {
                 let at = [x, y];
-                if crate::house::inside(&room.outline, at) && crate::house::edge_dist(&room.outline, at) >= wall_clear + room.wall_t / 2.0 + l.hypot(w) / 2.0 {
+                // (a fitting that hangs low stays out of the way into a door)
+                let hanging = s.hi[2] - s.lo[2] > 0.12;
+                let by_door = hanging && room.doors.iter().any(|d| { let v = [at[0] - d.at[0], at[1] - d.at[1]]; let (a, b) = (v[0] * d.u[0] + v[1] * d.u[1], v[0] * d.n[0] + v[1] * d.n[1]); let r = (s.hi[0] - s.lo[0]).max(s.hi[1] - s.lo[1]) / 2.0; a.abs() < d.hw + r + 0.05 && b > -0.3 && b < 0.75 + r });
+                if !by_door && crate::house::inside(&room.outline, at) && crate::house::edge_dist(&room.outline, at) >= wall_clear + room.wall_t / 2.0 + l.hypot(w) / 2.0 {
                     out.push((Pose { yaw: 0.0, t: [x - c[0], y - c[1]], z: top }, 0.0, 1.0));
                 }
                 y += 0.25; } x += 0.25; }
@@ -488,7 +491,7 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
                     rep.placed = true;
                     rep.variant = format!("{}{}", v.piece, if v.side { "+side" } else { "" });
                     let mut w2 = st.world.clone();
-                    w2.add(&ps);
+                    if it.opens_over_chair { let hard: Vec<Prism> = ps.iter().filter(|q| q.role != crate::world::OPENING).cloned().collect(); w2.add(&hard); } else { w2.add(&ps); }
                     if it.front > 0.0 { let f = front_prism(&s, &pose, it.front); w2.add(&[f]); }
                     let mut rings = st.rings.clone();
                     rings.push(ring);

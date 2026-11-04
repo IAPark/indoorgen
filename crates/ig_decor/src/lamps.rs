@@ -9,6 +9,9 @@ pub fn handles(c: &str) -> bool {
 }
 
 pub struct CeilingLight {
+    /// 0 the puck, then the forms of `forms`; a stream of its own, so the puck's draws stay as they were
+    form: u8,
+    form_seed: u64,
     radius: f64,
     thickness: f64,
     inner_radius: f64,
@@ -41,7 +44,119 @@ impl CeilingLight {
         let height = 0.7 * clip_gaussian(&mut r, 0.09, 0.03, 0.07, 0.15);
         let inner_height = height * r.uniform(0.5, 1.1);
         let curvature = r.uniform(0.1, 0.5);
-        CeilingLight { radius, thickness, inner_radius, height, inner_height, curvature, seed: r.randint(0, 1_000_000) as u64 }
+        CeilingLight { form: 0, form_seed: 0, radius, thickness, inner_radius, height, inner_height, curvature, seed: r.randint(0, 1_000_000) as u64 }
+    }
+}
+
+/// which form a fitting takes: one main form per house (rules/styles.json params light_*), some fittings another
+const FORMS: [(&str, f64); 8] = [("light_puck", 2.0), ("light_recessed", 2.0), ("light_drum", 1.5), ("light_dome", 1.5), ("light_globe", 1.0), ("light_sputnik", 0.6), ("light_track", 0.7), ("light_panel", 0.7)];
+fn draw_form(fs: u64) -> (u8, u64) {
+    let pick = |u: f64| -> u8 {
+        let w: Vec<f64> = FORMS.iter().map(|(k, d)| crate::mesh::style_param(k, *d).max(0.0)).collect();
+        let mut x = u * w.iter().sum::<f64>();
+        for (i, v) in w.iter().enumerate() { if x < *v { return i as u8 } x -= v; }
+        0
+    };
+    let h = crate::mesh::house_seed();
+    let main = pick(Rng::seeded(crate::int_hash(&[&h.to_string(), "light_form"])).f64());
+    let mut r = Rng::seeded(crate::int_hash(&[&fs.to_string(), "light_form"]));
+    let form = if r.f64() < 0.7 { main } else { pick(r.f64()) };
+    (form, r.randint(0, 1 << 40) as u64)
+}
+
+impl CeilingLight {
+    /// (the shell, the diffuser the light passes through, metal): z = 0 the ceiling, down is negative
+    fn form_meshes(&self) -> (Mesh, Mesh, Mesh, [f64; 3], [f64; 3]) {
+        let mut r = Rng::seeded(self.form_seed);
+        let (mut shell, mut glow, mut metal) = (Mesh::new(), Mesh::new(), Mesh::new());
+        match self.form {
+            1 => {
+                // recessed can: a trim ring and a lens almost flush
+                let a = r.uniform(0.05, 0.09);
+                metal.append(&ring_flat(a, a + 0.014, -0.006, 32));
+                metal.append(&open_tube(a + 0.014, -0.006, 0.0, 32));
+                glow.append(&Mesh::cylinder(0.0, 0.0, -0.004, 0.0, a, 32));
+            }
+            2 => {
+                // a drum of cloth, a diffuser across its bottom
+                let (a, h) = (r.uniform(0.17, 0.3), r.uniform(0.09, 0.16));
+                let mut w = open_tube(a, -h - 0.02, -0.02, 48);
+                w.append(&open_tube(a - 0.002, -h - 0.02, -0.02, 48).flipped());
+                shell.append(&w);
+                glow.append(&Mesh::cylinder(0.0, 0.0, -h - 0.012, -h - 0.008, a - 0.004, 48));
+                metal.append(&Mesh::cylinder(0.0, 0.0, -0.02, 0.0, a * 0.35, 24));
+            }
+            3 => {
+                // an opal dome on a rim
+                let (a, h) = (r.uniform(0.12, 0.22), r.uniform(0.07, 0.13));
+                metal.append(&Mesh::cylinder(0.0, 0.0, -0.018, 0.0, a + 0.006, 40));
+                let m = Mesh::ellipsoid([0.0, 0.0, -0.018], [a, a, h], 32, 12);
+                let mut low = Mesh::new();
+                for t in &m.triangles() {
+                    let c = [m.pos[t[0] as usize][2], m.pos[t[1] as usize][2], m.pos[t[2] as usize][2]];
+                    if (c[0] + c[1] + c[2]) / 3.0 < -0.018 { low.add_tri(m.pos[t[0] as usize], m.pos[t[1] as usize], m.pos[t[2] as usize]); }
+                }
+                glow.append(&low);
+            }
+            4 => {
+                // a globe on a short rod
+                let (a, rod) = (r.uniform(0.08, 0.14), r.uniform(0.12, 0.3));
+                metal.append(&Mesh::cylinder(0.0, 0.0, -0.02, 0.0, 0.05, 20));
+                metal.append(&Mesh::cylinder(0.0, 0.0, -rod, 0.0, 0.007, 10));
+                glow.append(&Mesh::ellipsoid([0.0, 0.0, -rod - a * 0.9], [a, a, a], 20, 12));
+            }
+            5 => {
+                // a sputnik: arms out from a hub, a small globe on each
+                let (n, reach, drop) = (r.randint(5, 10) as usize, r.uniform(0.22, 0.42), r.uniform(0.25, 0.42));
+                metal.append(&Mesh::cylinder(0.0, 0.0, -0.02, 0.0, 0.05, 20));
+                metal.append(&Mesh::cylinder(0.0, 0.0, -drop, 0.0, 0.007, 10));
+                metal.append(&Mesh::ellipsoid([0.0, 0.0, -drop], [0.03, 0.03, 0.03], 12, 8));
+                for i in 0..n {
+                    let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                    let (dx, dy) = (a.cos(), a.sin());
+                    let up = if i % 2 == 0 { 0.08 } else { -0.05 };
+                    let tip = [dx * reach, dy * reach, -drop + up];
+                    let t = 0.005;
+                    let (px, py) = (-dy * t, dx * t);
+                    let hub = [0.0, 0.0, -drop];
+                    metal.add_quad([hub[0] + px, hub[1] + py, hub[2] - t], [tip[0] + px, tip[1] + py, tip[2] - t], [tip[0] + px, tip[1] + py, tip[2] + t], [hub[0] + px, hub[1] + py, hub[2] + t]);
+                    metal.add_quad([hub[0] - px, hub[1] - py, hub[2] + t], [tip[0] - px, tip[1] - py, tip[2] + t], [tip[0] - px, tip[1] - py, tip[2] - t], [hub[0] - px, hub[1] - py, hub[2] - t]);
+                    glow.append(&Mesh::ellipsoid(tip, [0.03, 0.03, 0.03], 12, 8));
+                }
+            }
+            6 => {
+                // a track with spots along it
+                let (len, n) = (r.uniform(0.7, 1.3), r.randint(3, 5) as usize);
+                metal.append(&Mesh::cuboid([-len / 2.0, -0.018, -0.025], [len / 2.0, 0.018, 0.0]));
+                for i in 0..n {
+                    let x = -len / 2.0 + len * (i as f64 + 0.5) / n as f64;
+                    metal.append(&Mesh::cylinder(x, 0.0, -0.05, -0.025, 0.008, 10));
+                    let rs = 0.035;
+                    let mut w = open_tube(rs, -0.14, -0.05, 20);
+                    w.append(&Mesh::cylinder(0.0, 0.0, -0.052, -0.05, rs, 20));
+                    let tilt = r.uniform(-0.25, 0.25);
+                    w.transform(&crate::mesh::Mat4::translation([0.0, 0.0, 0.095]));
+                    w.transform(&crate::mesh::Mat4::rot_x(tilt));
+                    w.transform(&crate::mesh::Mat4::translation([x, 0.0, -0.095]));
+                    metal.append(&w);
+                    let mut lens = Mesh::cylinder(0.0, 0.0, -0.138, -0.134, rs - 0.002, 20);
+                    lens.transform(&crate::mesh::Mat4::translation([0.0, 0.0, 0.095]));
+                    lens.transform(&crate::mesh::Mat4::rot_x(tilt));
+                    lens.transform(&crate::mesh::Mat4::translation([x, 0.0, -0.095]));
+                    glow.append(&lens);
+                }
+            }
+            _ => {
+                // a flat panel, square or long
+                let (a, b) = (r.uniform(0.2, 0.3), if r.bool(0.5) { r.uniform(0.2, 0.3) } else { r.uniform(0.5, 0.6) });
+                metal.append(&Mesh::cuboid([-b - 0.008, -a - 0.008, -0.03], [b + 0.008, a + 0.008, 0.0]));
+                glow.append(&Mesh::cuboid([-b, -a, -0.034], [b, a, -0.03]));
+            }
+        }
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        for m in [&shell, &glow, &metal] { for p in &m.pos { for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); } } }
+        (shell, glow, metal, lo, hi)
     }
 }
 
@@ -49,6 +164,7 @@ impl Factory for CeilingLight {
     /// collision: the housing (radius + thickness, height down from the ceiling) and the bulb cover's cylinder and its cap
     fn volumes(&self, _i: u64) -> Option<Vec<crate::piece::Volume>> {
         use crate::piece::Volume;
+        if self.form != 0 { let (_, _, _, lo, hi) = self.form_meshes(); let m = 0.002; return Some(vec![Volume::hard([lo[0] - m, lo[1] - m, lo[2] - m], [hi[0] + m, hi[1] + m, m])]) }
         let (r, ri, m) = (self.radius + self.thickness + 0.002, self.inner_radius + 0.002, 0.002);
         Some(vec![
             Volume::hard([-r, -r, -self.height - m], [r, r, m]),
@@ -56,6 +172,19 @@ impl Factory for CeilingLight {
         ])
     }
     fn asset(&self, _i: u64) -> Asset {
+        if self.form != 0 {
+            let (shell, glow, metal, _, _) = self.form_meshes();
+            let mut a = Asset::default();
+            let mut r = Rng::seeded(self.form_seed ^ 0x51);
+            let (mc, mrgb) = [("metal.BrushedBlackMetal", [0.03, 0.03, 0.03]), ("metal.MetalBasic", [0.72, 0.56, 0.3]), ("metal.BrushedMetal", [0.7, 0.7, 0.72]), ("lamp_shaders.shader_black", [0.85, 0.85, 0.83])][r.choice_idx(4)];
+            let m = spec_material("ceiling_metal", json!({"cls": mc, "kwargs": {}, "seed": self.form_seed}), [mrgb[0] as f32, mrgb[1] as f32, mrgb[2] as f32]);
+            let g = spec_material("ceiling_bulb", json!({"cls": "lamp_shaders.shader_lamp_bulb_nonemissive", "kwargs": {}, "seed": self.form_seed}), [0.95, 0.93, 0.88]);
+            let cloth = spec_material("lampshade", json!({"cls": "lamp_shaders.LampShade", "kwargs": {}, "seed": self.form_seed}), [0.8, 0.77, 0.7]);
+            if !shell.pos.is_empty() { a.mesh(shell, &cloth, None); }
+            if !metal.pos.is_empty() { a.mesh(metal, &m, None); }
+            if !glow.pos.is_empty() { a.mesh(glow, &g, None); }
+            return a;
+        }
         let black = spec_material("ceiling_black", json!({"cls": "lamp_shaders.shader_black", "kwargs": {}, "seed": self.seed}), [0.15, 0.15, 0.15]);
         let white = spec_material("ceiling_bulb", json!({"cls": "lamp_shaders.shader_lamp_bulb_nonemissive", "kwargs": {}, "seed": self.seed}), [0.8, 0.75, 0.65]);
         let (r, t, h) = (self.radius, self.thickness, self.height);
@@ -111,7 +240,11 @@ fn ring_flat(r0: f64, r1: f64, z: f64, n: usize) -> Mesh {
 
 pub fn make(c: &str, rng: &mut Rng, fs: u64) -> Option<Box<dyn Factory>> {
     Some(match c {
-        "CeilingLightFactory" => Box::new(CeilingLight::new(rng)),
+        "CeilingLightFactory" => {
+            let mut l = CeilingLight::new(rng);
+            (l.form, l.form_seed) = draw_form(fs);
+            Box::new(l)
+        }
         "DeskLampFactory" => Box::new(StandLamp::new(fs, true)),
         "FloorLampFactory" | "LampFactory" => Box::new(StandLamp::new(fs, false)),
         _ => return None,

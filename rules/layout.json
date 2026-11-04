@@ -812,7 +812,8 @@
         "name": "center_on_wall",
         "w": 0.3
        }
-      ]
+      ],
+      "opens_over_chair": true
      },
      {
       "id": "desk_chair",
