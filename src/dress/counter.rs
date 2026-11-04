@@ -206,7 +206,7 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
             // (about the item's box centre, as place() sets it on (x, y): a pan's handle moves that 9 cm off its body, and the lift
             // probed the hob where the pan was not -- seeds 310, 615: 1-2 cm into the pan supports)
             let (icx, icy) = { let (l, h) = item.bounds(); ((l[0] + h[0]) / 2.0, (l[1] + h[1]) / 2.0) };
-            let mut zt = zt;
+            let (zt0, mut zt) = (zt, zt);
             let mut seen: std::collections::HashSet<(i64, i64)> = Default::default();
             for p in item.parts.iter().flat_map(|p| p.mesh.pos.iter()) {
                 if p[2] > ilo + 0.012 { continue }
@@ -229,6 +229,8 @@ pub fn dress(scene: &mut Scene, state: &State, visuals: &std::collections::HashM
                 if gx * gx + gy * gy > br * br * 0.8 { continue }
                 for z in heights(&tris, bcx + gx, bcy + gy) { if z > zt && z <= band.1 + 0.12 { zt = z; } }
             }}
+            // (lifted well clear of the burner, it rests on the control panel beside it, not the hob: a pan hung 9 cm over the grate)
+            if zt - zt0 > 0.03 { continue }
             // (a spot where something still rises into the vessel's body after the lift -- the back guard behind a rear burner -- is no
             // spot: a pan stood 19 mm into it)
             let hb = sc * (item.bounds().1[2] - ilo);

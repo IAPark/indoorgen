@@ -1435,14 +1435,24 @@ impl DrapeGeom {
 
     /// `s` of cloth past the mattress's edge, `gap` to the rail: out by h at height z, and the surface's normal (nh, nz) there -- over the
     /// edge's roll, down and out to the rail, straight down, then running out on the floor
+    /// the angle the cloth turns through at the mattress's edge, for a hang `gap` out and `drop` down from the end of a quarter turn
+    fn turn(gap: f64, drop: f64) -> f64 {
+        let (ex, ey) = (DRAPE_R + gap, -drop.max(1e-3));
+        (ex.atan2(ey) - (DRAPE_R / ex.hypot(ey)).min(1.0).acos()).clamp(0.0, std::f64::consts::FRAC_PI_2)
+    }
+
     fn profile(&self, s: f64, gap: f64, lift: f64) -> (f64, f64, f64, f64) {
         let r = DRAPE_R;
         let top = self.top + lift;
-        let arc = std::f64::consts::FRAC_PI_2 * r;
-        if s < arc { let a = s / r; return (r * a.sin(), top - r * (1.0 - a.cos()), a.sin(), a.cos()) }
         let drop = top - r - self.rail;
-        let l = gap.hypot(drop);
-        if s < arc + l { let t = (s - arc) / l; return (r + gap * t, top - r - drop * t, drop / l, gap / l) }
+        // round the edge until heading straight for where it hangs from (r + gap, rail). (A quarter turn and then a slant: the surface's normal jumped there, and a thick layer stood off along it in a step, a jagged line round the bed)
+        let th = Self::turn(gap, drop);
+        let arc = r * th;
+        if s < arc { let a = s / r; return (r * a.sin(), top - r * (1.0 - a.cos()), a.sin(), a.cos()) }
+        let (ph, pz) = (r * th.sin(), top - r * (1.0 - th.cos()));
+        let (ex, ez) = (r + gap, self.rail);
+        let l = (ex - ph).hypot(ez - pz);
+        if s < arc + l { let t = (s - arc) / l; return (ph + (ex - ph) * t, pz + (ez - pz) * t, th.sin(), th.cos()) }
         // (tucked in: what is left goes under the mattress at the rail)
         if self.tuck { return (r + gap, self.rail, 1.0, 0.0) }
         let v = self.rail - self.floor - 0.004;
@@ -1589,7 +1599,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
         // (round the mattress's edge a thick layer's outer face travels further than its centre: at 3.5 cm radius a comforter's cells stretched fivefold into slivers,
         // and its quilting folded them into a saw. The layer goes round by its own arc. Not each point by its own: a cell's dome then stood up to 11 cm higher than its seam, folding over it in a jagged cliff)
-        let arc = std::f64::consts::FRAC_PI_2 * DRAPE_R;
+        let arc = DRAPE_R * DrapeGeom::turn(gap, g.top - DRAPE_R - g.rail);
         let grow = 1.0 + lay.max(0.0) / DRAPE_R;
         // (and makes it up over the next 30 cm of the drop: the layers reach the hem together, or it came out torn)
         let se = arc_length(s, arc, grow);
