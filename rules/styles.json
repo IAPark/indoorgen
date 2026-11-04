@@ -1,9 +1,10 @@
 {
+  "params": {"vanity_p": 0.7, "vanity_double_p": 0.15, "vanity_floating_p": 0.25, "wainscot_p": 0.35, "wainscot_room_p": 0.75, "picture_rail_p": 0.15},
   "jitter": {"h": 0.012, "s": 0.1, "v": 0.08},
   "groups": {
     "paint":    {"slot": "wall|wall_alt", "class": "ceramic.Plaster"},
     "wood":     {"slot": "chair_wood|console_body|console_front|nightstand_body|nightstand_front|wardrobe_body|wardrobe_door|table_top|table_leg|sofa_leg|bed_frame|bed_limb|bed_panel|bench_leg|shelf_wood|shelf_wood_z|wshelf|bi_wood|photo_frame|beam", "class": "wood.*|shader.wood.*"},
-    "trim":     {"slot": "skirting_floor|skirting_ceiling|door_casing"},
+    "trim":     {"slot": "skirting_floor|skirting_ceiling|door_casing|wainscot|wainscot_board|picture_rail"},
     "doors":    {"slot": "door*", "class": "wood.*|plastic.*"},
     "windows":  {"slot": "window*", "class": "wood.*"},
     "seating":  {"slot": "sofa_fabric|chair_fabric|seat|bench"},
@@ -13,7 +14,9 @@
     "curtains": {"slot": "window*.curtain", "class": "fabric.*"},
     "bedding":  {"slot": "sheet|pillow|folded|blanket"},
     "floors":   {"slot": "floor", "room": "living-room|dining-room|bedroom|hallway|office"},
-    "cabinets": {"slot": "kitchen_paint"},
+    "cabinets": {"slot": "kitchen_paint|vanity_body"},
+    "wainscots":{"slot": "wainscot|wainscot_board"},
+    "vanity_tops":{"slot": "vanity_top|bar_top"},
     "counters": {"slot": "counter_marble"},
     "wet_walls":{"slot": "wall|wall_alt", "room": "bathroom|restroom", "class": "ceramic.Tile"},
     "wet_floors":{"slot": "floor", "room": "bathroom|restroom|kitchen|utility"},
@@ -26,7 +29,7 @@
   "styles": {
     "plain": {"weight": 22, "why": "the factories' own mixed neutrals", "rules": []},
 
-    "scandi": {"weight": 14, "why": "white rooms, pale wood, soft greys with one muted accent", "rules": [
+    "scandi": {"weight": 14, "why": "white rooms, pale wood, soft greys with one muted accent", "params": {"mudroom_mult": 1.5, "vanity_floating_p": 0.5, "wainscot_p": 0.25, "wainscot_bead": 3, "wainscot_panel": 0.5, "wainscot_rail": 0.5}, "rules": [
       {"when": {"group": "paint"}, "why": "nearly white", "color": {"palette": ["#f1efe9", "#eeece6", "#f4f2ee", "#e9e8e3"], "per": {"house": 3, "room": 1}}},
       {"when": {"group": "wood"}, "why": "pale birch and ash", "paint": {"palette": ["#d8c4a4", "#e0d0b6", "#cdb892"], "amount": [0.55, 0.7], "per": {"house": 3, "object": 1}}},
       {"when": {"group": "seating"}, "why": "oat and grey", "color": {"palette": ["#b9b6ae", "#9ea2a3", "#c8c0b2", "#8b9499", "#6d7f76", "#a58d76"], "per": {"house": 4, "room": 1}, "stray": 0.12, "stray_palette": ["#7c8c86", "#b08a68", "#5e6a73"]}},
@@ -43,10 +46,11 @@
       {"when": {"group": "curtains"}, "chance": {"p": 0.25, "per": "house"}, "why": "ticking curtains", "set": {"fabric.Stripe": 1}, "color": {"palette": ["#8a9aa3", "#b8ae9c"], "per": "house"}},
       {"when": {"group": "cabinets"}, "chance": 0.35, "why": "pale painted kitchen", "paint": {"palette": ["#c6c9c2", "#9fa89d", "#b7c0c6"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.5, "per": "room"}, "why": "pale tile", "color": {"palette": ["#e6e6e0", "#c9d3d3", "#d8d3c8"], "per": "room"}},
-      {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "plain grey or stone tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#b9b6ae", "#d6d1c5", "#8f9498"], "per": "room"}}
+      {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "plain grey or stone tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#b9b6ae", "#d6d1c5", "#8f9498"], "per": "room"}},
+      {"when": {"group": "vanity_tops"}, "why": "pale stone or birch", "set": {"ceramic.Marble": 1, "wood.Wood": 1}, "color": {"palette": ["#e9e7e0", "#c8c5bd"], "per": "house"}}
     ]},
 
-    "traditional": {"weight": 14, "why": "warm painted walls, dark stained wood, rich upholstery", "rules": [
+    "traditional": {"weight": 14, "why": "warm painted walls, dark stained wood, rich upholstery", "params": {"mudroom_mult": 1.3, "vanity_p": 0.55, "wainscot_p": 0.7, "wainscot_panel": 4, "wainscot_batten": 1, "picture_rail_p": 0.4}, "rules": [
       {"when": {"group": "paint"}, "why": "cream, sage, dusty blue", "color": {"palette": ["#e5d9bf", "#c5cdb2", "#b8c6cc", "#dcc7a8", "#d6c3b4"], "per": "room"}},
       {"when": {"group": "wood"}, "why": "walnut and mahogany", "paint": {"palette": ["#4a2d1c", "#5b3621", "#3c2318", "#6a4426"], "amount": [0.6, 0.8], "per": {"house": 2, "room": 1, "object": 1}, "stray": 0.08, "stray_palette": ["#e5dcc8", "#3f4f4a"]}},
       {"when": {"group": "seating"}, "why": "oxblood, forest, tan", "set": {"fabric.Velvet": 1, "fabric.Leather": 1}, "color": {"palette": ["#6e2a2a", "#2f4a3a", "#9a6b3f", "#2f3d57"], "per": {"house": 3, "room": 1}, "key": "scheme", "stray": 0.15, "stray_palette": ["#a58a60", "#7d6a5a", "#596b5f"]}},
@@ -68,10 +72,12 @@
       {"when": {"group": "curtains"}, "chance": {"p": 0.3, "per": "house"}, "why": "patterned drapes", "set": {"fabric.Plaid": 1, "fabric.Stripe": 1}, "color": {"palette": ["#7e3a38", "#3d5a48", "#3e4e6b"], "per": "house"}},
       {"when": {"group": "cabinets"}, "chance": 0.5, "why": "painted shaker kitchen", "paint": {"palette": ["#3f4f4a", "#2f3f57", "#e5dcc8", "#6e7560"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.5, "per": "room"}, "why": "period tile", "color": {"palette": ["#e2dccb", "#9db0a0", "#a9bcc2"], "per": "room"}},
-      {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "stone or terracotta", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#c9c3b4", "#8a8378", "#7c5a4a"], "per": "room"}}
+      {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "stone or terracotta", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#c9c3b4", "#8a8378", "#7c5a4a"], "per": "room"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.45, "key": "wainscot_colour"}, "why": "painted panelling", "paint": {"palette": ["#7f8f80", "#8d9aa0", "#3f4f4a", "#6e7560", "#e5dcc8"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}},
+      {"when": {"group": "vanity_tops"}, "why": "marble tops", "set": {"ceramic.Marble": 1}, "color": {"palette": ["#e6e2d8", "#3a3a3c"], "per": "house"}}
     ]},
 
-    "midcentury": {"weight": 12, "why": "walnut, off-white walls, one strong colour on the seating", "rules": [
+    "midcentury": {"weight": 12, "why": "walnut, off-white walls, one strong colour on the seating", "params": {"wet_bar_mult": 2.0, "vanity_floating_p": 0.5, "wainscot_p": 0.12, "wainscot_rail": 3}, "rules": [
       {"when": {"group": "paint"}, "why": "warm off-white", "color": {"palette": ["#ece6d8", "#e6dfcf", "#efe9dd"], "per": "house"}},
       {"when": {"group": "wood"}, "why": "walnut and teak", "paint": {"palette": ["#7a4e2d", "#8a5a33", "#6b4426"], "amount": [0.6, 0.75], "per": {"house": 3, "object": 1}, "stray": 0.1, "stray_palette": ["#2b2a28", "#d9c9a8"]}},
       {"when": {"group": "seating"}, "why": "mustard, teal, rust, olive", "color": {"palette": ["#c79a2f", "#2c6e70", "#b3552c", "#6f7a3a"], "per": {"house": 3, "room": 2}, "key": "scheme", "stray": 0.2, "stray_palette": ["#8a8378", "#3e4a50", "#caa98a"]}},
@@ -90,10 +96,12 @@
       {"when": {"group": "cabinets"}, "chance": 0.6, "why": "walnut or painted fronts", "paint": {"palette": ["#7a4e2d", "#2c6e70", "#c79a2f", "#d9c9a8"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.4, "per": "room"}, "why": "coloured tile", "color": {"palette": ["#2c6e70", "#c79a2f", "#d39a78", "#e6dfcf"], "per": "room"}},
       {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "mosaic-toned floor", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#3b3a36", "#b9b2a4", "#8d7a5a"], "per": "room"}},
-      {"when": {"group": "suite"}, "chance": {"p": 0.12, "key": "suite"}, "why": "a coloured suite", "paint": {"palette": ["#d7b7a0", "#9db6ae", "#d9c98f"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}}
+      {"when": {"group": "suite"}, "chance": {"p": 0.12, "key": "suite"}, "why": "a coloured suite", "paint": {"palette": ["#d7b7a0", "#9db6ae", "#d9c98f"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.5, "key": "wainscot_colour"}, "why": "walnut or a strong colour below the rail", "paint": {"palette": ["#7a4e2d", "#8a5a33", "#c79a2f", "#2c6e70"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}},
+      {"when": {"group": "vanity_tops"}, "why": "terrazzo-ish tops", "set": {"ceramic.Concrete": 1, "wood.Wood": 1}, "color": {"palette": ["#d9d3c4", "#3b3a36"], "per": "house"}}
     ]},
 
-    "industrial": {"weight": 10, "why": "greys, black steel and wood, worn leather", "rules": [
+    "industrial": {"weight": 10, "why": "greys, black steel and wood, worn leather", "params": {"wet_bar_mult": 2.0, "vanity_floating_p": 0.3, "wainscot_p": 0.15, "wainscot_batten": 3}, "rules": [
       {"when": {"group": "paint"}, "why": "greys", "color": {"palette": ["#a8a6a0", "#8f908d", "#b5b2aa", "#797b7b"], "per": "room"}},
       {"when": {"group": "wood"}, "why": "ebonised and smoked", "paint": {"palette": ["#201c19", "#2e2823", "#3a3029"], "amount": [0.7, 0.85], "per": "house"}},
       {"when": {"group": "seating"}, "why": "cognac and black leather", "set": {"fabric.Leather": 3, "fabric.CoarseKnitFabric": 1}, "color": {"palette": ["#8a4f27", "#262422", "#5f3a22", "#4d5a4a"], "per": {"house": 2, "object": 1}, "stray": 0.1, "stray_palette": ["#6d6a60", "#3e4449"]}},
@@ -112,10 +120,12 @@
       {"when": {"group": "bedding"}, "chance": {"p": 0.45, "per": "room"}, "why": "dull greys on the bed", "set": {"fabric.Stripe": 1, "fabric.FineKnitFabric": 3}, "color": {"palette": ["#4d4f50", "#7c7a70", "#3e4449"], "per": "room"}},
       {"when": {"group": "cabinets"}, "chance": 0.7, "why": "dark steel-look fronts", "paint": {"palette": ["#2a2a2a", "#3f4447", "#55574f"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.6, "per": "room"}, "why": "metro tile", "color": {"palette": ["#3a3a3a", "#ece9e1", "#8b8a85"], "per": "room"}},
-      {"when": {"group": "wet_floors"}, "chance": {"p": 0.6, "per": "room"}, "why": "grey tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#55534e", "#8b8a85"], "per": "room"}}
+      {"when": {"group": "wet_floors"}, "chance": {"p": 0.6, "per": "room"}, "why": "grey tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#55534e", "#8b8a85"], "per": "room"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.6, "key": "wainscot_colour"}, "why": "dark boards", "paint": {"palette": ["#3a3c3c", "#54564f", "#2a2a2a"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}},
+      {"when": {"group": "vanity_tops"}, "why": "concrete tops", "set": {"ceramic.Concrete": 2, "ceramic.Marble": 1}, "color": {"palette": ["#6d6c68", "#2c2c2e"], "per": "house"}}
     ]},
 
-    "coastal": {"weight": 10, "why": "pale blues and sand, whitewashed wood, navy", "rules": [
+    "coastal": {"weight": 10, "why": "pale blues and sand, whitewashed wood, navy", "params": {"mudroom_mult": 1.8, "wainscot_p": 0.6, "wainscot_bead": 4, "wainscot_batten": 2}, "rules": [
       {"when": {"group": "paint"}, "why": "sea blue and sand", "color": {"palette": ["#cfdfe3", "#e9e4d4", "#bcd4d6", "#dfe6e2"], "per": "room"}},
       {"when": {"group": "wood"}, "why": "whitewash", "paint": {"palette": ["#e6e0d2", "#d9d3c4", "#b49a78"], "amount": [0.55, 0.8], "per": {"house": 2, "object": 1}}},
       {"when": {"group": "seating"}, "why": "navy, seafoam, white", "color": {"palette": ["#23395b", "#7fb0a6", "#dcd8cc", "#3f6c8a", "#c8b58f"], "per": {"house": 3, "room": 1, "object": 1}, "stray": 0.12, "stray_palette": ["#c97f62", "#b9a57f"]}},
@@ -134,10 +144,12 @@
       {"when": {"group": "curtains"}, "chance": {"p": 0.3, "per": "house"}, "why": "striped curtains", "set": {"fabric.Stripe": 1}, "color": {"palette": ["#3f6c8a", "#7fb0a6"], "per": "house"}},
       {"when": {"group": "cabinets"}, "chance": 0.5, "why": "sea-coloured kitchen", "paint": {"palette": ["#cfdfe3", "#7fa8bd", "#e6e0d2"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.6, "per": "room"}, "why": "sea-coloured tile", "color": {"palette": ["#bcd4d6", "#7fb0a6", "#f0efe9", "#50788f"], "per": "room"}},
-      {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "sand tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#d9cdb4", "#e6e4dc"], "per": "room"}}
+      {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "sand tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#d9cdb4", "#e6e4dc"], "per": "room"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.25, "key": "wainscot_colour"}, "why": "sea-coloured boards", "paint": {"palette": ["#7fa8bd", "#b8d0d4"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}},
+      {"when": {"group": "vanity_tops"}, "why": "pale tops", "set": {"ceramic.Marble": 1, "wood.Wood": 1}, "color": {"palette": ["#e6e2d8", "#b9a57f"], "per": "house"}}
     ]},
 
-    "moody": {"weight": 8, "why": "dark walls and velvet, trim painted to match", "rules": [
+    "moody": {"weight": 8, "why": "dark walls and velvet, trim painted to match", "params": {"wet_bar_mult": 2.5, "wainscot_p": 0.55, "wainscot_panel": 4, "picture_rail_p": 0.35}, "rules": [
       {"when": {"group": "paint"}, "why": "navy, forest, aubergine, charcoal", "color": {"palette": ["#22344a", "#26402f", "#3d2438", "#33363a"], "per": "house", "key": "scheme"}},
       {"when": {"group": "trim"}, "why": "same as the walls", "paint": {"palette": ["#22344a", "#26402f", "#3d2438", "#33363a"], "amount": [1, 1], "per": "house", "key": "scheme"}},
       {"when": {"group": "wood"}, "why": "dark walnut", "paint": {"palette": ["#3b2619", "#2f2017"], "amount": [0.65, 0.8], "per": "house"}},
@@ -156,10 +168,12 @@
       {"when": {"group": "cabinets"}, "chance": 0.7, "why": "dark kitchen", "paint": {"palette": ["#22344a", "#26402f", "#2a2e33", "#3d2438"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.6, "per": "room"}, "why": "dark tile", "color": {"palette": ["#22344a", "#26402f", "#1f1f24", "#3d2438"], "per": "room"}},
       {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "near-black tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#2a2a2e", "#4c4a48"], "per": "room"}},
-      {"when": {"group": "suite"}, "chance": {"p": 0.1, "key": "suite"}, "why": "a black suite", "paint": {"palette": ["#23262b"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}}
+      {"when": {"group": "suite"}, "chance": {"p": 0.1, "key": "suite"}, "why": "a black suite", "paint": {"palette": ["#23262b"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.5, "key": "wainscot_colour"}, "why": "panelling dark as the walls", "paint": {"palette": ["#22344a", "#26402f", "#3d2438", "#33363a"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}},
+      {"when": {"group": "vanity_tops"}, "why": "dark or pale marble", "set": {"ceramic.Marble": 1}, "color": {"palette": ["#1f1f22", "#d8d2c4"], "per": "house"}}
     ]},
 
-    "seventies": {"weight": 5, "why": "unusual: orange, avocado and brown, as bought in 1974", "rules": [
+    "seventies": {"weight": 5, "why": "unusual: orange, avocado and brown, as bought in 1974", "params": {"wet_bar_mult": 2.5, "vanity_p": 0.8, "vanity_floating_p": 0, "wainscot_p": 0.3, "wainscot_rail": 2}, "rules": [
       {"when": {"group": "paint"}, "why": "harvest colours", "color": {"palette": ["#c9863a", "#8f9148", "#b86a3a", "#d8b45a"], "per": "room"}},
       {"when": {"group": "wood"}, "why": "orange pine", "paint": {"palette": ["#a2622a", "#8d4f22"], "amount": [0.6, 0.8], "per": "house"}},
       {"when": {"group": "seating"}, "why": "brown and avocado", "set": {"fabric.Velvet": 1, "fabric.CoarseKnitFabric": 1}, "color": {"palette": ["#5e4023", "#6f7430", "#a65a1f"], "per": "house"}},
@@ -176,10 +190,11 @@
       {"when": {"group": "cabinets"}, "chance": 0.8, "why": "avocado, pine or harvest gold", "paint": {"palette": ["#8d4f22", "#6f7430", "#c79a2f"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.8, "per": "room"}, "why": "coloured tile", "color": {"palette": ["#6f7430", "#b5672a", "#c79a2f", "#7a4a24"], "per": "room"}},
       {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "brown tile", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#5d5426", "#85622f"], "per": "room"}},
-      {"when": {"group": "suite"}, "chance": {"p": 0.6, "key": "suite"}, "why": "avocado or harvest-gold suite", "paint": {"palette": ["#7f8440", "#b98a3a", "#b5824f", "#c9a8a0"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}}
+      {"when": {"group": "suite"}, "chance": {"p": 0.6, "key": "suite"}, "why": "avocado or harvest-gold suite", "paint": {"palette": ["#7f8440", "#b98a3a", "#b5824f", "#c9a8a0"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.6, "key": "wainscot_colour"}, "why": "stained boards", "paint": {"palette": ["#8d4f22", "#6f7430"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}}
     ]},
 
-    "maximalist": {"weight": 5, "why": "unusual: every room a different saturated colour", "rules": [
+    "maximalist": {"weight": 5, "why": "unusual: every room a different saturated colour", "params": {"wainscot_p": 0.5}, "rules": [
       {"when": {"group": "paint"}, "why": "saturated, room by room", "color": {"palette": ["#c23a6b", "#1f8a8a", "#e0a81f", "#3f4fb5", "#d9562b", "#3e9a55"], "per": "room"}},
       {"when": {"group": "seating"}, "why": "clashing", "set": {"fabric.Velvet": 1}, "color": {"palette": ["#e0559a", "#17a0a8", "#f0c030", "#5a3fc0", "#e8622a"], "per": "object"}},
       {"when": {"group": "headboard"}, "why": "clashing", "color": {"palette": ["#e0559a", "#17a0a8", "#f0c030", "#5a3fc0"], "per": "object"}},
@@ -196,7 +211,8 @@
       {"when": {"group": "cabinets"}, "chance": 0.8, "why": "painted fronts", "paint": {"palette": ["#c23a6b", "#1f8a8a", "#3f4fb5", "#e0a81f"], "amount": [0.85, 0.95], "per": "house"}},
       {"when": {"group": "wet_walls"}, "chance": {"p": 0.8, "per": "room"}, "why": "saturated tile", "color": {"palette": ["#c23a6b", "#1f8a8a", "#e0a81f", "#3f4fb5"], "per": "room"}},
       {"when": {"group": "wet_floors"}, "chance": {"p": 0.5, "per": "room"}, "why": "saturated floor", "set": {"ceramic.Tile": 1}, "color": {"palette": ["#1f1f24", "#e0a81f", "#1f8a8a"], "per": "room"}},
-      {"when": {"group": "suite"}, "chance": {"p": 0.3, "key": "suite"}, "why": "pink or teal suite", "paint": {"palette": ["#d98ca8", "#6fb8b4"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}}
+      {"when": {"group": "suite"}, "chance": {"p": 0.3, "key": "suite"}, "why": "pink or teal suite", "paint": {"palette": ["#d98ca8", "#6fb8b4"], "amount": [0.9, 0.95], "per": "house", "key": "suite"}},
+      {"when": {"group": "wainscots"}, "chance": {"p": 0.7, "key": "wainscot_colour"}, "why": "painted boards", "paint": {"palette": ["#c23a6b", "#1f8a8a", "#e0a81f", "#3f4fb5"], "amount": [1, 1], "per": "house", "key": "wainscot_colour"}}
     ]}
   }
 }

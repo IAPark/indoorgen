@@ -333,6 +333,8 @@ fn term_value(tm: &crate::rules::Term, room: &Room, c: Xy, t: f64, len: f64, st:
     let door = room.doors.iter().map(|d| (d.at[0] - c[0]).hypot(d.at[1] - c[1])).fold(4.0f64, f64::min);
     match name {
         "far_from_door" => (door / 4.0).min(1.0),
+        // (its back against a wall with a window, the window centred on it)
+        "under_window" => wl_room_window(room, c),
         "center_on_wall" => 1.0 - ((t - len / 2.0).abs() / (len / 2.0).max(0.1)).min(1.0),
         "long_wall" => (len / 5.0).min(1.0),
         "corner" => 1.0 - (t.min(len - t) / (len / 2.0).max(0.1)).min(1.0),
@@ -533,4 +535,13 @@ fn solve_program(room: &Room, rules: &RoomRules, program: &[Item], arrangement: 
     let (seen, joined) = best.world.flood(&walk, room);
     let w: Vec<u8> = (0..walk.len()).map(|k| if seen[k] { 2 } else if walk[k] { 1 } else { 0 }).collect();
     Solution { arrangement: arrangement.to_string(), room: room.clone(), placed: best.items, report, score: best.score, ms: t0.elapsed().as_secs_f64() * 1000.0, walk: w, nx: best.world.nx, ny: best.world.ny, ox: best.world.ox, oy: best.world.oy, why_item, doors_joined: joined }
+}
+
+/// how squarely a piece stands under a window of its wall: 1 centred, 0 not under one
+fn wl_room_window(room: &Room, c: Xy) -> f64 {
+    room.windows.iter().map(|w| {
+        let d = [c[0] - w.at[0], c[1] - w.at[1]];
+        let (along, off) = ((d[0] * w.u[0] + d[1] * w.u[1]).abs(), (d[0] * w.n[0] + d[1] * w.n[1]).abs());
+        if off > 1.4 { 0.0 } else { (1.0 - along / (w.hw + 0.8)).max(0.0) }
+    }).fold(0.0, f64::max)
 }

@@ -73,11 +73,11 @@ pub struct Rule {
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
-pub struct Style { pub weight: f64, pub why: String, pub rules: Vec<Rule> }
+pub struct Style { pub weight: f64, pub why: String, pub rules: Vec<Rule>, pub params: BTreeMap<String, f64> }
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
-pub struct Config { pub jitter: Option<Jitter>, pub groups: BTreeMap<String, When>, pub styles: BTreeMap<String, Style>, pub rules: Vec<Rule> }
+pub struct Config { pub params: BTreeMap<String, f64>, pub jitter: Option<Jitter>, pub groups: BTreeMap<String, When>, pub styles: BTreeMap<String, Style>, pub rules: Vec<Rule> }
 
 impl Config {
     pub fn parse(text: &str) -> Result<Config, String> {
@@ -108,6 +108,10 @@ impl Config {
         }
         Ok(c)
     }
+    /// a number decided per style: its "params", else the file's, else the default
+    pub fn param(&self, house: u64, key: &str, default: f64) -> f64 {
+        self.style_of(house).and_then(|s| self.styles.get(s)).and_then(|s| s.params.get(key)).or_else(|| self.params.get(key)).copied().unwrap_or(default)
+    }
     /// the house's style: a draw over the styles' weights
     pub fn style_of(&self, house: u64) -> Option<&str> {
         let total: f64 = self.styles.values().map(|s| s.weight.max(0.0)).sum();
@@ -121,11 +125,14 @@ impl Config {
 /// rules/styles.json, or the file named by MATERIAL_RULES ("none": no rules); a bad file stops the run rather than quietly doing nothing
 pub fn loaded() -> &'static Config {
     static C: OnceLock<Config> = OnceLock::new();
-    C.get_or_init(|| match std::env::var("MATERIAL_RULES").as_deref() {
+    C.get_or_init(|| { let mut c = match std::env::var("MATERIAL_RULES").as_deref() {
         Ok("none") => Config::default(),
         Ok(p) => { let t = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("MATERIAL_RULES {p}: {e}")); Config::parse(&t).unwrap_or_else(|e| panic!("MATERIAL_RULES {p}: {e}")) }
         Err(_) => Config::parse(include_str!("../../../rules/styles.json")).expect("rules/styles.json"),
-    })
+    };
+    // (FORCE_STYLE=name: every house in that style, to review one style's geometry)
+    if let Ok(st) = std::env::var("FORCE_STYLE") { assert!(c.styles.contains_key(&st), "FORCE_STYLE {st}"); for (k, v) in c.styles.iter_mut() { v.weight = if *k == st { 1.0 } else { 0.0 }; } }
+    c })
 }
 
 fn unit(parts: &[&str]) -> f64 {

@@ -394,6 +394,7 @@ impl Factory for Bathtub {
 }
 
 pub struct Sink {
+    pub vanity: Option<super::vanity::Vanity>,
     pub width: f64,
     pub size: f64,
     pub depth: f64,
@@ -457,13 +458,14 @@ impl Sink {
             has_stand = true;
         }
         let tub2 = Bathtub { width, size, depth, alcove, thickness, alcove_levels, disp_x: [tub.disp_x[0], tub.disp_x[0]], has_curve: tub.has_curve, has_legs: tub.has_legs, disp_y: tub.disp_y, leg_height: tub.leg_height, leg_radius: tub.leg_radius, hole_radius: tub.hole_radius, seed: tub.seed, taper: tub.taper, fseed: 0, leg_side: tub.leg_side, leg_y_scale: tub.leg_y_scale, leg_sub: tub.leg_sub, stretch: tub.stretch, beveler_amount: tub.beveler_amount };
-        Sink { width, size, depth, alcove, has_extrude, has_stand, alcove_levels, thickness, size_extrude, tap_offset, stand_radius, stand_bottom, stand_height, stand_circular, disp_x: tub.disp_x[0], disp_y: tub.disp_y, tap_h: r.uniform(0.5, 1.0), seed: r.randint(0, 1_000_000) as u64, tub: tub2, fseed: 0 }
+        Sink { vanity: None, width, size, depth, alcove, has_extrude, has_stand, alcove_levels, thickness, size_extrude, tap_offset, stand_radius, stand_bottom, stand_height, stand_circular, disp_x: tub.disp_x[0], disp_y: tub.disp_y, tap_h: r.uniform(0.5, 1.0), seed: r.randint(0, 1_000_000) as u64, tub: tub2, fseed: 0 }
     }
 }
 
 impl Factory for Sink {
     fn placeholder(&self, _i: u64) -> Option<Asset> {
         let mut a = Asset::default();
+        if let Some(v) = &self.vanity { let (lo, hi) = v.bounds(self); a.cuboid(lo, hi, &mat("ph", [0.5; 3], 0.5)); return Some(a) }
         a.cuboid([-(self.size_extrude + 1.0) * self.size, 0.0, if self.has_stand { -self.stand_height } else { 0.0 }], [0.0, self.width, self.depth], &mat("ph", [0.5; 3], 0.5));
         Some(a)
     }
@@ -473,10 +475,20 @@ impl Factory for Sink {
         let mut r = inst_rng(self.fseed, i);
         let b = super::bathsink::build(self, &mut r);
         let mut a = Asset::default();
-        a.mesh(b.body, &ceramic, None);
-        a.mesh(b.hole, &metal, None);
-        if let Some(t) = b.tap {
-            a.mesh(t, &metal, None);
+        // (a vanity: the basin once or twice, on its cabinet)
+        let at: Vec<f64> = self.vanity.as_ref().map_or(vec![0.0], |v| v.basins(self));
+        let shift = |m: &crate::mesh::Mesh, dy: f64| { let mut o = m.clone(); for p in o.pos.iter_mut() { p[1] += dy; } o };
+        for dy in at {
+            a.mesh(shift(&b.body, dy), &ceramic, None);
+            a.mesh(shift(&b.hole, dy), &metal, None);
+            if let Some(t) = &b.tap { a.mesh(shift(t, dy), &metal, None); }
+        }
+        if let Some(v) = &self.vanity {
+            let (body, top, handles) = v.parts(self, &super::vanity::rim_of(&b.body, self.depth, 0.012));
+            let [mb, mt, mh] = v.materials();
+            a.mesh(body, &mb, None);
+            a.mesh(top, &mt, None);
+            if !handles.pos.is_empty() { a.mesh(handles, &mh, None); }
         }
         a
     }
@@ -487,7 +499,10 @@ impl Factory for Sink {
         let x0 = -(if self.has_extrude { self.size_extrude } else { 0.0 } + 1.0) * self.size;
         let z0 = if self.has_stand { -self.stand_height } else { 0.0 };
         let m = 0.002;
-        let mut v = vec![Volume::hard([x0 - m, -m, z0 - m], [m, self.width + m, self.depth + m])];
+        let mut v = vec![match &self.vanity {
+            Some(va) => { let (lo, hi) = va.bounds(self); Volume::hard([lo[0] - m, lo[1] - m, lo[2] - m], [hi[0] + m, hi[1] + m, hi[2] + m]) }
+            None => Volume::hard([x0 - m, -m, z0 - m], [m, self.width + m, self.depth + m]),
+        }];
         if self.has_extrude {
             // the build's draws before the tap's seed: the pedestal's cuts, a free basin's drain spot
             let mut r = inst_rng(self.fseed, i);
@@ -496,7 +511,9 @@ impl Factory for Sink {
             let seed = r.randint(0, 10_000_000) as u64;
             let (lo, hi) = super::taps::tap_bounds(self.fseed, seed);
             let tx = (-1.0 - self.size_extrude + self.tap_offset) * self.size;
-            v.push(Volume::hard([tx, self.width / 2.0 + lo[1], self.depth + lo[2]], [tx + hi[0] - lo[0], self.width / 2.0 + hi[1], self.depth + hi[2]]));
+            for dy in self.vanity.as_ref().map_or(vec![0.0], |va| va.basins(self)) {
+                v.push(Volume::hard([tx, dy + self.width / 2.0 + lo[1], self.depth + lo[2]], [tx + hi[0] - lo[0], dy + self.width / 2.0 + hi[1], self.depth + hi[2]]));
+            }
         }
         Some(v)
     }
@@ -656,6 +673,11 @@ pub fn make(c: &str, rng: &mut Rng, fseed: u64) -> Option<Box<dyn Factory>> {
             k.fseed = fseed;
             k.tub.fseed = fseed;
             k.tub.alcove = k.alcove;
+            // (its own stream: the basin's draws stay as they were)
+            if c == "StandingSinkFactory" && ig_kit::api::tuck_hint() == 0 {
+                let mut vr = Rng::seeded(crate::int_hash(&[&fseed.to_string(), "vanity"]));
+                if vr.f64() < ig_core::mesh::style_param("vanity_p", 0.7) { k.vanity = Some(super::vanity::Vanity::draw(vr.randint(0, 1 << 40) as u64)); }
+            }
             Box::new(k)
         }
         "HardwareFactory" => {

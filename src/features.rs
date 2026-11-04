@@ -27,12 +27,18 @@ pub struct RoomFeatures {
     /// Probability of a window seat under a window.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub window_seat: f64,
+    /// Probability of a wet bar, times the style's `wet_bar_mult` (rules/styles.json params).
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub wet_bar: f64,
+    /// Probability of a mudroom bench, times the style's `mudroom_mult`.
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub mudroom: f64,
     /// At most this many features per room.
     #[schemars(range(min = 0, max = 6))]
     pub max: usize,
 }
 impl Default for RoomFeatures {
-    fn default() -> Self { RoomFeatures { fireplace: 0.0, bookshelf_wall: 0.0, window_seat: 0.0, max: 1 } }
+    fn default() -> Self { RoomFeatures { fireplace: 0.0, bookshelf_wall: 0.0, window_seat: 0.0, wet_bar: 0.0, mudroom: 0.0, max: 1 } }
 }
 
 /// Room features config (section `features`).
@@ -48,8 +54,8 @@ pub struct Features {
 }
 impl Default for Features {
     fn default() -> Self {
-        let rf = |fireplace, bookshelf_wall, window_seat, max| RoomFeatures { fireplace, bookshelf_wall, window_seat, max };
-        let rooms = [("LivingRoom", rf(0.5, 0.4, 0.35, 3)), ("Bedroom", rf(0.0, 0.25, 0.4, 2)), ("DiningRoom", rf(0.0, 0.2, 0.2, 1))]
+        let rf = |fireplace, bookshelf_wall, window_seat, wet_bar, mudroom, max| RoomFeatures { fireplace, bookshelf_wall, window_seat, wet_bar, mudroom, max };
+        let rooms = [("LivingRoom", rf(0.5, 0.4, 0.35, 0.12, 0.0, 3)), ("Bedroom", rf(0.0, 0.25, 0.4, 0.0, 0.0, 2)), ("DiningRoom", rf(0.0, 0.2, 0.2, 0.2, 0.0, 1)), ("Hallway", rf(0.0, 0.0, 0.0, 0.0, 0.35, 1))]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
@@ -97,7 +103,7 @@ impl FeatureCfg {
             FeatureMode::Random => if f.rooms.is_empty() { Features::default().rooms } else { f.rooms.clone() },
             FeatureMode::Force => {
                 let base = if f.rooms.is_empty() { Features::default().rooms } else { f.rooms.clone() };
-                base.into_iter().map(|(k, r)| (k, RoomFeatures { fireplace: 1.0, bookshelf_wall: 1.0, window_seat: 1.0, max: r.max.max(3) })).collect()
+                base.into_iter().map(|(k, r)| (k, RoomFeatures { fireplace: 1.0, bookshelf_wall: 1.0, window_seat: 1.0, wet_bar: 1.0, mudroom: 1.0, max: r.max.max(3) })).collect()
             }
         };
         FeatureCfg { seed, rooms }
@@ -132,6 +138,21 @@ impl PlacedFeature {
         let (c, s) = (self.yaw.cos(), self.yaw.sin());
         [self.origin[0] + c * p[0] - s * p[1], self.origin[1] + s * p[0] + c * p[1]]
     }
+}
+
+/// with the built feature on the floor, can someone still walk between the room's doors
+fn passable(fa: &FeatureAsset, s: &Span, poly: &G, c: &RoomConstants, cutters: &[Cutter], room: &str) -> bool {
+    let (cs, sn) = (s.yaw.cos(), s.yaw.sin());
+    let mut ring: Vec<[f64; 2]> = fa.footprint.iter().map(|p| [s.origin[0] + cs * p[0] - sn * p[1], s.origin[1] + sn * p[0] + cs * p[1]]).collect();
+    let Some(f) = ring.first().copied() else { return true };
+    ring.push(f);
+    let Ok(fp) = crate::shp::polygon(&ring, &[]) else { return true };
+    let inner = crate::shp::buffer_mitre(poly, -c.wall_thickness / 2.0);
+    let walk = crate::shp::buffer_quad(&crate::shp::difference(&inner, &fp), -0.3, 4);
+    if crate::shp::is_empty(&walk) { return false }
+    let comps: Vec<G> = crate::shp::parts(&walk).into_iter().filter(|g| !crate::shp::is_empty(g)).collect();
+    let doors: Vec<G> = cutters.iter().filter(|ct| ct.kind != CutKind::Window && ct.rooms.iter().any(|r| r == room)).map(|ct| crate::shp::point(ct.loc[0], ct.loc[1])).collect();
+    comps.iter().any(|k| doors.iter().all(|d| crate::shp::distance(k, d) < 0.45))
 }
 
 /// a straight inner wall face of a room
@@ -205,11 +226,11 @@ pub fn wall_spans(room_name: &str, room_poly: &G, c: &RoomConstants, cutters: &[
 fn registry() -> Vec<(&'static str, Box<dyn Feature>)> {
     let mut v: Vec<(&'static str, Box<dyn Feature>)> = vec![("fireplace", Box::new(FireplaceFeature))];
     for f in ig_features::builtin_features() {
-        let kind = match f.class() { "BookshelfWallFeature" => "bookshelf_wall", "WindowSeatFeature" => "window_seat", _ => continue };
+        let kind = match f.class() { "BookshelfWallFeature" => "bookshelf_wall", "WindowSeatFeature" => "window_seat", "WetBarFeature" => "wet_bar", "MudroomFeature" => "mudroom", _ => continue };
         v.push((kind, f));
     }
     // window seats before bookshelf walls: the seat needs its window wall, the bookshelf takes whatever wall is left
-    v.sort_by_key(|(k, _)| match *k { "fireplace" => 0, "window_seat" => 1, _ => 2 });
+    v.sort_by_key(|(k, _)| match *k { "fireplace" => 0, "window_seat" => 1, "bookshelf_wall" => 2, "wet_bar" => 3, _ => 4 });
     v
 }
 
@@ -218,6 +239,8 @@ fn prob(rf: &RoomFeatures, kind: &str) -> f64 {
         "fireplace" => rf.fireplace,
         "bookshelf_wall" => rf.bookshelf_wall,
         "window_seat" => rf.window_seat,
+        "wet_bar" => rf.wet_bar * ig_core::mesh::style_param("wet_bar_mult", 1.0),
+        "mudroom" => rf.mudroom * ig_core::mesh::style_param("mudroom_mult", 1.0),
         _ => 0.0,
     }
 }
@@ -236,7 +259,7 @@ pub fn plan(cfg: &FeatureCfg, c: &RoomConstants, room_polys: &[(String, G)], cut
         let mut n = 0usize;
         // one feature per 14 m2 of floor at most: a bookshelf wall + window seat in a 16 m2 bedroom left no wall for the bed
         // (bedrooms 18 m2: bed + wardrobe + nightstands need most of the walls)
-        let per_m2 = if rt == "Bedroom" { 18.0 } else { 14.0 };
+        let per_m2 = if rt == "Bedroom" { 18.0 } else if rt == "Hallway" { 5.0 } else { 14.0 };
         let max_n = rf.max.min((crate::shp::area(poly) / per_m2) as usize);
         for (kind, feat) in &reg {
             // draws are made for every (room, kind) whether or not the feature fits, so one kind's fit does not shift another's stream
@@ -273,6 +296,8 @@ pub fn plan(cfg: &FeatureCfg, c: &RoomConstants, room_polys: &[(String, G)], cut
                 if blo[0] < -0.005 || bhi[0] > s.span.length + 0.005 || blo[1] < -0.005 { continue } // past the span ends / behind the wall face
                 if blocks_opening(&fa, s, c, cutters, room) { continue }
                 if !inside_room(&fa, s, &inner_ring) { continue } // e.g. a seat on a diagonal wall whose ends cross the neighbouring walls
+                // (a hallway or a small room keeps a way through past a bench or a bar: half a person each side of a walker, door to door)
+                if matches!(fa.class, "WetBarFeature" | "MudroomFeature") && !passable(&fa, s, poly, c, cutters, room) { continue }
                 if fa.class == "FireplaceFeature" && !seating_zone(&fa, s, &inner_ring, cutters, room) { continue }
                 let fp = world_aabb(&fa.footprint, s);
                 if out.iter().any(|o| o.room == *room && aabb_overlap(fp, poly_aabb(&o.footprint)) > 0.0025) { continue }

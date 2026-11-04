@@ -104,9 +104,12 @@ pub fn build(s: &Sink, r: &mut Rng) -> SinkBuilt {
         obj = compact(&obj);
     }
     if s.has_stand {
+        // (drawn for a vanity too: the tap's seed comes after it, and the collision reads the same stream)
         let cuts = r.randint(3, 6);
-        let st = stand_mesh(s, cuts);
-        obj = join(&[&obj, &st]);
+        if s.vanity.is_none() {
+            let st = stand_mesh(s, cuts);
+            obj = join(&[&obj, &st]);
+        }
     }
     stage(&mut stages, "prehole", "prehole", &obj);
     let hole = bathtub::add_hole(t, &obj, r, true, true);

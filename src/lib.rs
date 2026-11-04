@@ -18,6 +18,7 @@ pub use ig_features as feature_kit;
 pub mod budget;
 pub mod config;
 pub mod features;
+pub mod wainscot;
 pub mod rules;
 pub mod openings;
 pub mod unified;

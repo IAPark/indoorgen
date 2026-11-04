@@ -573,7 +573,9 @@ pub struct Light {
 static HOUSE_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// the house being written, which chooses its style in the material rules
 pub fn set_house_seed(seed: u64) { HOUSE_SEED.store(seed, std::sync::atomic::Ordering::Relaxed); }
-fn house_seed() -> u64 { HOUSE_SEED.load(std::sync::atomic::Ordering::Relaxed) }
+/// a number from the rule file, this house's style first (rules/styles.json "params"), for what is decided while a house is built
+pub fn style_param(key: &str, default: f64) -> f64 { ig_shade::rules::loaded().param(house_seed(), key, default) }
+pub fn house_seed() -> u64 { HOUSE_SEED.load(std::sync::atomic::Ordering::Relaxed) }
 
 fn node_extent(n: &Node) -> [f64; 3] {
     let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);

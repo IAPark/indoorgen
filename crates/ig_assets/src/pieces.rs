@@ -176,7 +176,8 @@ impl Piece for FactoryPiece {
         Some(Box::new(p))
     }
     fn tucked(&self) -> Option<Box<dyn Piece>> {
-        if self.class != "BedFactory" || self.tuck >= 2 { return None }
+        // (a basin's tight spot: the pedestal in place of its vanity)
+        if !(self.class == "BedFactory" && self.tuck < 2 || self.class == "StandingSinkFactory" && self.tuck < 1) { return None }
         let mut p = FactoryPiece::new(&self.class, self.seed, self.size);
         p.tuck = self.tuck + 1;
         p.volumes();

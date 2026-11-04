@@ -22,6 +22,7 @@ pub mod aquarium;
 pub mod bathfree;
 pub mod bathroom;
 pub mod bathsink;
+pub mod vanity;
 pub mod bathtub;
 pub mod bevelgn;
 pub mod cabdoor;

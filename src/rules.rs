@@ -356,7 +356,7 @@ pub fn vocab(program: &Value) -> Vocab {
         }
     }
     // room features (src/features.rs): fixed objects with support surfaces, usable as relation parents (on:FireplaceFeature)
-    gens.extend(["FireplaceFeature", "BookshelfWallFeature", "WindowSeatFeature"].map(String::from));
+    gens.extend(["FireplaceFeature", "BookshelfWallFeature", "WindowSeatFeature", "WetBarFeature", "MudroomFeature"].map(String::from));
     Vocab { gens, sems, furniture_gens, lighting_gens, furniture_sems }
 }
 

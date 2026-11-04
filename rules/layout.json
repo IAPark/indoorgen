@@ -689,6 +689,971 @@
       "chance": 0.45
      }
     ]
+   },
+   {
+    "name": "with_desk",
+    "weight": 1.5,
+    "min_area": 11.0,
+    "program": [
+     {
+      "id": "bed",
+      "class": "BedFactory",
+      "tier": 0,
+      "place": "wall",
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       },
+       {
+        "piece": "compact"
+       },
+       {
+        "piece": "compact",
+        "side": true
+       },
+       {
+        "piece": "compact",
+        "over_window": true
+       },
+       {
+        "piece": "compact",
+        "side": true,
+        "over_window": true
+       }
+      ],
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 1.0
+       },
+       {
+        "name": "long_wall",
+        "w": 0.5
+       },
+       {
+        "name": "far_from_door",
+        "w": 1.0
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "stand_a",
+      "class": "SideTableFactory",
+      "tier": 1,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": 1,
+        "gap": 0.02
+       }
+      },
+      "fit": {
+       "max_w": 0.7
+      }
+     },
+     {
+      "id": "stand_b",
+      "class": "SideTableFactory",
+      "tier": 2,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": -1,
+        "gap": 0.02
+       }
+      },
+      "fit": {
+       "max_w": 0.7
+      },
+      "chance": 0.8
+     },
+     {
+      "id": "wardrobe",
+      "class": "WardrobeFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "front": 0.6,
+      "reach": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 1.0
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "desk",
+      "class": "SimpleDeskFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": false,
+      "reach": true,
+      "fit": {
+       "max_w": 1.5
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "of": "bed",
+        "w": 0.6
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.3
+       }
+      ]
+     },
+     {
+      "id": "desk_chair",
+      "class": "OfficeChairFactory",
+      "tier": 1,
+      "requires": [
+       "desk"
+      ],
+      "place": {
+       "around": {
+        "parent": "desk",
+        "spacing": 0.6,
+        "tuck": 0.12,
+        "end_from": 99.0
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ]
+     },
+     {
+      "id": "desk_lamp",
+      "class": "DeskLampFactory",
+      "tier": 2,
+      "chance": 0.7,
+      "requires": [
+       "desk"
+      ],
+      "place": {
+       "setting": {
+        "parent": "desk",
+        "inset": 0.2,
+        "side": 0.45
+       }
+      }
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "bed",
+        "add_w": 1.0,
+        "share": 0.7,
+        "past": 0.45,
+        "w": [
+         1.6,
+         3.0
+        ],
+        "d": [
+         1.2,
+         2.0
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "chance": 0.7
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "bed",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.85
+     },
+     {
+      "id": "art_b",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "w": 0.5
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.45
+     }
+    ]
+   },
+   {
+    "name": "twin_beds",
+    "weight": 1.0,
+    "min_area": 12.0,
+    "program": [
+     {
+      "id": "bed",
+      "class": "BedFactory",
+      "tier": 0,
+      "place": "wall",
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       },
+       {
+        "piece": "compact"
+       },
+       {
+        "piece": "compact",
+        "side": true
+       },
+       {
+        "piece": "compact",
+        "over_window": true
+       },
+       {
+        "piece": "compact",
+        "side": true,
+        "over_window": true
+       }
+      ],
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 1.0
+       },
+       {
+        "name": "long_wall",
+        "w": 0.5
+       },
+       {
+        "name": "far_from_door",
+        "w": 1.0
+       }
+      ],
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.3
+      }
+     },
+     {
+      "id": "bed_b",
+      "class": "BedFactory",
+      "tier": 1,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": 1,
+        "gap": 0.6
+       }
+      },
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       }
+      ],
+      "terms": [],
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.3
+      }
+     },
+     {
+      "id": "stand_a",
+      "class": "SideTableFactory",
+      "tier": 1,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": 1,
+        "gap": 0.03
+       }
+      },
+      "fit": {
+       "max_w": 0.55
+      },
+      "requires": [
+       "bed_b"
+      ]
+     },
+     {
+      "id": "wardrobe",
+      "class": "WardrobeFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "front": 0.6,
+      "reach": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 1.0
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "mirror",
+      "class": "MirrorFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.0,
+       "draws": 16
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.55
+        ],
+        "tall_from": 1.2,
+        "tall_bottom": 0.2
+       }
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ],
+      "chance": 0.4
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "bed",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.85
+     },
+     {
+      "id": "art_b",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "w": 0.5
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.45
+     }
+    ]
+   },
+   {
+    "name": "under_window",
+    "weight": 1.0,
+    "program": [
+     {
+      "id": "bed",
+      "class": "BedFactory",
+      "tier": 0,
+      "place": "wall",
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       },
+       {
+        "piece": "compact"
+       },
+       {
+        "piece": "compact",
+        "side": true
+       },
+       {
+        "piece": "compact",
+        "over_window": true
+       },
+       {
+        "piece": "compact",
+        "side": true,
+        "over_window": true
+       }
+      ],
+      "terms": [
+       {
+        "name": "under_window",
+        "w": 2.5
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.6
+       }
+      ],
+      "avoid_window": false
+     },
+     {
+      "id": "stand_a",
+      "class": "SideTableFactory",
+      "tier": 1,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": 1,
+        "gap": 0.02
+       }
+      },
+      "fit": {
+       "max_w": 0.7
+      }
+     },
+     {
+      "id": "stand_b",
+      "class": "SideTableFactory",
+      "tier": 2,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": -1,
+        "gap": 0.02
+       }
+      },
+      "fit": {
+       "max_w": 0.7
+      },
+      "chance": 0.8
+     },
+     {
+      "id": "wardrobe",
+      "class": "WardrobeFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "front": 0.6,
+      "reach": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 1.0
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "plant",
+      "class": "LargePlantContainerFactory",
+      "tier": 2,
+      "min_area": 14.0,
+      "place": "wall",
+      "avoid_window": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 0.5
+       }
+      ],
+      "soft_blocks": true,
+      "chance": 0.5
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "bed",
+        "add_w": 1.0,
+        "share": 0.7,
+        "past": 0.45,
+        "w": [
+         1.6,
+         3.0
+        ],
+        "d": [
+         1.2,
+         2.0
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "chance": 0.7
+     },
+     {
+      "id": "mirror",
+      "class": "MirrorFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.0,
+       "draws": 16
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.55
+        ],
+        "tall_from": 1.2,
+        "tall_bottom": 0.2
+       }
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ],
+      "chance": 0.4
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "bed",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.85
+     },
+     {
+      "id": "art_b",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "w": 0.5
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.45
+     }
+    ]
+   },
+   {
+    "name": "reading_corner",
+    "weight": 1.0,
+    "min_area": 15.0,
+    "program": [
+     {
+      "id": "bed",
+      "class": "BedFactory",
+      "tier": 0,
+      "place": "wall",
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       },
+       {
+        "piece": "compact"
+       },
+       {
+        "piece": "compact",
+        "side": true
+       },
+       {
+        "piece": "compact",
+        "over_window": true
+       },
+       {
+        "piece": "compact",
+        "side": true,
+        "over_window": true
+       }
+      ],
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 1.0
+       },
+       {
+        "name": "long_wall",
+        "w": 0.5
+       },
+       {
+        "name": "far_from_door",
+        "w": 1.0
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "stand_a",
+      "class": "SideTableFactory",
+      "tier": 1,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": 1,
+        "gap": 0.02
+       }
+      },
+      "fit": {
+       "max_w": 0.7
+      }
+     },
+     {
+      "id": "stand_b",
+      "class": "SideTableFactory",
+      "tier": 2,
+      "place": {
+       "beside": {
+        "parent": "bed",
+        "side": -1,
+        "gap": 0.02
+       }
+      },
+      "fit": {
+       "max_w": 0.7
+      },
+      "chance": 0.8
+     },
+     {
+      "id": "wardrobe",
+      "class": "WardrobeFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "front": 0.6,
+      "reach": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 1.0
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "reading_chair",
+      "class": "ArmChairFactory",
+      "tier": 1,
+      "place": "wall",
+      "reach": true,
+      "avoid_window": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "of": "bed",
+        "w": 0.5
+       }
+      ]
+     },
+     {
+      "id": "reading_table",
+      "class": "SideTableFactory",
+      "tier": 2,
+      "chance": 0.6,
+      "requires": [
+       "reading_chair"
+      ],
+      "place": {
+       "beside": {
+        "parent": "reading_chair",
+        "side": -1,
+        "gap": 0.04
+       }
+      },
+      "fit": {
+       "max_w": 0.6
+      }
+     },
+     {
+      "id": "floor_lamp",
+      "class": "FloorLampFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "requires": [
+       "reading_chair"
+      ],
+      "place": {
+       "beside": {
+        "parent": "reading_chair",
+        "side": 1,
+        "gap": 0.06
+       }
+      },
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       }
+      ],
+      "terms": [
+       {
+        "name": "near",
+        "of": "reading_chair",
+        "w": 1.5
+       },
+       {
+        "name": "corner",
+        "w": 0.3
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "bed",
+        "add_w": 1.0,
+        "share": 0.7,
+        "past": 0.45,
+        "w": [
+         1.6,
+         3.0
+        ],
+        "d": [
+         1.2,
+         2.0
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "chance": 0.7
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "bed",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.85
+     },
+     {
+      "id": "art_b",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "apart",
+        "w": 0.5
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       }
+      ],
+      "chance": 0.45
+     }
+    ]
    }
   ],
   "also": [
@@ -1296,6 +2261,14 @@
       "class": "StandingSinkFactory",
       "tier": 0,
       "place": "wall",
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       }
+      ],
       "avoid_window": true,
       "reach": true,
       "front": 0.55,
@@ -1408,6 +2381,14 @@
       "class": "StandingSinkFactory",
       "tier": 0,
       "place": "wall",
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       }
+      ],
       "avoid_window": true,
       "reach": true,
       "front": 0.55,
@@ -1539,6 +2520,14 @@
       "class": "StandingSinkFactory",
       "tier": 0,
       "place": "wall",
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       }
+      ],
       "avoid_window": true,
       "reach": true,
       "front": 0.55,
@@ -1633,6 +2622,14 @@
       "class": "StandingSinkFactory",
       "tier": 0,
       "place": "wall",
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "tucked"
+       }
+      ],
       "avoid_window": true,
       "reach": true,
       "front": 0.55,
@@ -2934,6 +3931,638 @@
        }
       ],
       "min_area": 0.0
+     }
+    ]
+   },
+   {
+    "name": "library",
+    "weight": 0.7,
+    "min_area": 17.0,
+    "program": [
+     {
+      "id": "shelf_a",
+      "class": "LargeShelfFactory",
+      "tier": 1,
+      "chance": 1.0,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "solid": true,
+      "terms": [
+       {
+        "name": "long_wall",
+        "w": 1.0
+       }
+      ]
+     },
+     {
+      "id": "sofa",
+      "class": "SofaFactory",
+      "tier": 0,
+      "place": {
+       "facing": {
+        "parent": "tv_stand",
+        "min": 1.3,
+        "max": 4.0,
+        "lateral": 0.5
+       }
+      },
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.8
+       },
+       {
+        "piece": "as_is",
+        "width": 1.4
+       },
+       {
+        "piece": "as_is",
+        "width": 1.0
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.8,
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.4,
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.0,
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "class": "ArmChairFactory",
+        "place": "wall"
+       }
+      ],
+      "terms": [
+       {
+        "name": "backed",
+        "w": 1.0
+       },
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ],
+      "all_variants": true,
+      "avoid_window": true
+     },
+     {
+      "id": "coffee",
+      "class": "CoffeeTableFactory",
+      "tier": 1,
+      "reach": true,
+      "place": {
+       "front": {
+        "parent": "sofa",
+        "gap": 0.4,
+        "width_share": 0.75
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ]
+     },
+     {
+      "id": "shelf_b",
+      "class": "LargeShelfFactory",
+      "tier": 2,
+      "chance": 1.0,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "solid": true,
+      "terms": [
+       {
+        "name": "long_wall",
+        "w": 0.6
+       },
+       {
+        "name": "near",
+        "of": "shelf_a",
+        "w": 0.6
+       }
+      ]
+     },
+     {
+      "id": "shelf_c",
+      "class": "LargeShelfFactory",
+      "tier": 2,
+      "chance": 0.6,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "solid": true,
+      "terms": [
+       {
+        "name": "long_wall",
+        "w": 0.6
+       },
+       {
+        "name": "near",
+        "of": "shelf_a",
+        "w": 0.6
+       }
+      ]
+     },
+     {
+      "id": "armchair_a",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "reach": true,
+      "place": {
+       "flank": {
+        "parent": "sofa",
+        "side": 1,
+        "gap": 0.1,
+        "forward": 0.5
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       },
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       }
+      ],
+      "variants": [
+       {
+        "piece": "as_is",
+        "requires": [
+         "coffee"
+        ]
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "sofa",
+        "add_w": 0.6,
+        "share": 2.2,
+        "past": 1.3,
+        "w": [
+         1.6,
+         3.4
+        ],
+        "d": [
+         1.4,
+         2.6
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ]
+     },
+     {
+      "id": "floor_lamp",
+      "class": "FloorLampFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "requires": [
+       "sofa"
+      ],
+      "place": {
+       "beside": {
+        "parent": "sofa",
+        "side": 1,
+        "gap": 0.06
+       }
+      },
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       }
+      ],
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.5
+       },
+       {
+        "name": "corner",
+        "w": 0.3
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "chance": 0.9,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "reading_room",
+    "weight": 1.0,
+    "program": [
+     {
+      "id": "sofa",
+      "class": "SofaFactory",
+      "tier": 0,
+      "place": {
+       "facing": {
+        "parent": "tv_stand",
+        "min": 1.3,
+        "max": 4.0,
+        "lateral": 0.5
+       }
+      },
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.8
+       },
+       {
+        "piece": "as_is",
+        "width": 1.4
+       },
+       {
+        "piece": "as_is",
+        "width": 1.0
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.8,
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.4,
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.0,
+        "place": "wall"
+       },
+       {
+        "piece": "as_is",
+        "class": "ArmChairFactory",
+        "place": "wall"
+       }
+      ],
+      "terms": [
+       {
+        "name": "backed",
+        "w": 1.0
+       },
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ],
+      "all_variants": true,
+      "avoid_window": true
+     },
+     {
+      "id": "coffee",
+      "class": "CoffeeTableFactory",
+      "tier": 1,
+      "reach": true,
+      "place": {
+       "front": {
+        "parent": "sofa",
+        "gap": 0.4,
+        "width_share": 0.75
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       }
+      ]
+     },
+     {
+      "id": "armchair_a",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "reach": true,
+      "place": {
+       "flank": {
+        "parent": "sofa",
+        "side": 1,
+        "gap": 0.1,
+        "forward": 0.5
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       },
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       }
+      ],
+      "variants": [
+       {
+        "piece": "as_is",
+        "requires": [
+         "coffee"
+        ]
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "armchair_b",
+      "class": "ArmChairFactory",
+      "tier": 2,
+      "min_area": 30.0,
+      "reach": true,
+      "place": {
+       "flank": {
+        "parent": "sofa",
+        "side": -1,
+        "gap": 0.1,
+        "forward": 0.5
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 1.0
+       },
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       }
+      ],
+      "variants": [
+       {
+        "piece": "as_is",
+        "requires": [
+         "coffee"
+        ]
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "floor_lamp",
+      "class": "FloorLampFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "requires": [
+       "sofa"
+      ],
+      "place": {
+       "beside": {
+        "parent": "sofa",
+        "side": -1,
+        "gap": 0.06
+       }
+      },
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "place": "wall"
+       }
+      ],
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.5
+       },
+       {
+        "name": "corner",
+        "w": 0.3
+       }
+      ],
+      "avoid_window": true
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "sofa",
+        "add_w": 0.6,
+        "share": 2.2,
+        "past": 1.3,
+        "w": [
+         1.6,
+         3.4
+        ],
+        "d": [
+         1.4,
+         2.6
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ]
+     },
+     {
+      "id": "bookcase",
+      "class": "SimpleBookcaseFactory",
+      "tier": 2,
+      "min_area": 20.0,
+      "chance": 0.7,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "terms": [
+       {
+        "name": "apart",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.3
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "plant",
+      "class": "LargePlantContainerFactory",
+      "tier": 2,
+      "chance": 0.5,
+      "soft_blocks": true,
+      "place": "wall",
+      "avoid_window": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 0.5
+       }
+      ]
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "chance": 0.9,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "sofa",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ]
+     },
+     {
+      "id": "art_b",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "chance": 0.5,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ]
      }
     ]
    }
@@ -4576,6 +6205,599 @@
       }
      }
     ]
+   },
+   {
+    "name": "sideboard",
+    "weight": 1.0,
+    "program": [
+     {
+      "id": "table",
+      "class": "TableDiningFactory",
+      "tier": 0,
+      "reach": true,
+      "place": {
+       "free": {
+        "wall_clear": 0.75,
+        "door_clear": 1.0
+       }
+      },
+      "terms": [
+       {
+        "name": "center_room",
+        "w": 1.0
+       },
+       {
+        "name": "ideal",
+        "w": 1.5
+       }
+      ],
+      "all_variants": true,
+      "variants": [
+       {
+        "piece": "as_is"
+       },
+       {
+        "piece": "as_is",
+        "width": 1.6
+       },
+       {
+        "piece": "as_is",
+        "width": 1.2
+       },
+       {
+        "piece": "as_is",
+        "width": 0.9
+       }
+      ]
+     },
+     {
+      "id": "chair_a",
+      "class": "ChairFactory",
+      "repeat": 2,
+      "tier": 0,
+      "place": {
+       "around": {
+        "parent": "table",
+        "spacing": 0.6,
+        "tuck": 0.25,
+        "end_from": 1.2
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "set": "chairs",
+      "avoid_window": true
+     },
+     {
+      "id": "chair_b",
+      "class": "ChairFactory",
+      "repeat": 2,
+      "tier": 1,
+      "place": {
+       "around": {
+        "parent": "table",
+        "spacing": 0.6,
+        "tuck": 0.25,
+        "end_from": 1.2
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "set": "chairs",
+      "avoid_window": true
+     },
+     {
+      "id": "sideboard",
+      "class": "SingleCabinetFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "front": 0.5,
+      "fit": {
+       "max_w": 1.8,
+       "max_h": 1.1
+      },
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 1.0
+       }
+      ]
+     },
+     {
+      "id": "side_mirror",
+      "class": "MirrorFactory",
+      "tier": 2,
+      "chance": 0.7,
+      "requires": [
+       "sideboard"
+      ],
+      "place": {
+       "over": {
+        "parent": "sideboard",
+        "center": 1.6,
+        "gap": 0.1
+       }
+      },
+      "fit": {
+       "max_w": 1.0,
+       "max_h": 1.0
+      },
+      "avoid_window": true
+     },
+     {
+      "id": "chair_c",
+      "class": "ChairFactory",
+      "repeat": 2,
+      "tier": 2,
+      "place": {
+       "around": {
+        "parent": "table",
+        "spacing": 0.6,
+        "tuck": 0.25,
+        "end_from": 1.2
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ],
+      "set": "chairs",
+      "avoid_window": true
+     },
+     {
+      "id": "rug",
+      "class": "RugFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "cover": true,
+      "place": {
+       "under": {
+        "parent": "table",
+        "add_w": 1.2,
+        "add_d": 1.2,
+        "w": [
+         1.6,
+         3.4
+        ],
+        "d": [
+         1.6,
+         2.6
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "ideal",
+        "w": 2.0
+       }
+      ]
+     },
+     {
+      "id": "sideboard",
+      "class": "SimpleBookcaseFactory",
+      "tier": 1,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "variants": [
+       {
+        "piece": "as_is",
+        "width": 1.3,
+        "height": 0.9
+       },
+       {
+        "piece": "as_is",
+        "width": 1.0,
+        "height": 0.9
+       }
+      ],
+      "terms": [
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "far_from_door",
+        "w": 0.5
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "cabinet",
+      "class": "SimpleBookcaseFactory",
+      "tier": 2,
+      "min_area": 18.0,
+      "place": "wall",
+      "avoid_window": true,
+      "reach": true,
+      "terms": [
+       {
+        "name": "apart",
+        "w": 1.0
+       }
+      ],
+      "solid": true
+     },
+     {
+      "id": "plant",
+      "class": "LargePlantContainerFactory",
+      "tier": 2,
+      "chance": 0.6,
+      "soft_blocks": true,
+      "place": "wall",
+      "avoid_window": true,
+      "terms": [
+       {
+        "name": "corner",
+        "w": 1.0
+       },
+       {
+        "name": "apart",
+        "w": 0.5
+       }
+      ]
+     },
+     {
+      "id": "art_a",
+      "class": "WallArtFactory",
+      "tier": 2,
+      "chance": 0.8,
+      "avoid_window": true,
+      "fit": {
+       "max_w": 1.2,
+       "max_h": 0.9,
+       "draws": 24
+      },
+      "place": {
+       "hang": {
+        "centers": [
+         1.5,
+         1.75
+        ]
+       }
+      },
+      "terms": [
+       {
+        "name": "near",
+        "of": "sideboard",
+        "w": 1.0
+       },
+       {
+        "name": "center_on_wall",
+        "w": 0.5
+       },
+       {
+        "name": "apart",
+        "w": 0.3
+       }
+      ]
+     },
+     {
+      "id": "plate0",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork0",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife0",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass0",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate1",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork1",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife1",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass1",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_a#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_a#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate2",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork2",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife2",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate2"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass2",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#0"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#0",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "plate3",
+      "class": "PlateFactory",
+      "set": "plates",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18
+       }
+      }
+     },
+     {
+      "id": "fork3",
+      "class": "ForkFactory",
+      "set": "forks",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": -0.19
+       }
+      }
+     },
+     {
+      "id": "knife3",
+      "class": "KnifeFactory",
+      "set": "knives",
+      "tier": 2,
+      "chance": 0.45,
+      "chance_key": "laid",
+      "requires": [
+       "plate3"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.18,
+        "side": 0.19
+       }
+      }
+     },
+     {
+      "id": "glass3",
+      "class": "WineglassFactory",
+      "set": "glasses",
+      "tier": 2,
+      "chance": 0.6,
+      "chance_key": "glasses",
+      "requires": [
+       "chair_b#1"
+      ],
+      "place": {
+       "setting": {
+        "parent": "table",
+        "towards": "chair_b#1",
+        "inset": 0.37,
+        "side": 0.14
+       }
+      }
+     },
+     {
+      "id": "vase",
+      "class": "VaseFactory",
+      "tier": 2,
+      "chance": 0.3,
+      "place": {
+       "setting": {
+        "parent": "table"
+       }
+      }
+     }
+    ],
+    "min_area": 12.0
    }
   ],
   "also": [

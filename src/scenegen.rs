@@ -191,6 +191,7 @@ pub fn build_scene(p: &Params) -> Built {
     ig_core::envx::progress("floor plan + furniture solve");
     // the rooms the rules cover go to the unified solver (crates/ig_layout) alone; a single-room or parity run keeps the old passes
     let unified = cfg.program.realism && !orig_prog && !only_target;
+    ig_core::mesh::set_house_seed(seed);
     let mk_at = |nudges: Vec<(String, String, f64)>, plan_attempt: u32| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges, solver_rooms: if unified { indoorgen::unified::kinds() } else { vec![] }, plan_attempt };
     let mk = |nudges: Vec<(String, String, f64)>| mk_at(nudges, 0);
     let mut g = generate(&mk(vec![]), &assets, prog);
@@ -415,6 +416,10 @@ pub fn build_scene(p: &Params) -> Built {
             let mi = scene.material(skm);
             scene.add(nm, "skirting", sk.mesh, mi);
         }
+    }
+    for (name, cls, mesh) in indoorgen::wainscot::build(&g, seed) {
+        let mi = scene.material(indoorgen::wainscot::material(cls, &name, seed));
+        scene.add(&name, "room", mesh, mi);
     }
     // mess pass, part 1 (before openings, whose doors avoid the moved furniture): furniture states on the solved layout (no-op at --mess 0)
     let jit = indoorgen::variation::jitter_furniture(&mut g.state, &var.furniture, seed);

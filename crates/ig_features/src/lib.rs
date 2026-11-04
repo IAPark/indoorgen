@@ -60,10 +60,11 @@ pub trait Feature: Send + Sync {
 }
 
 pub mod bookshelf;
+pub mod builtins;
 pub mod util;
 pub mod windowseat;
 
 /// the built-in feature generators implemented in this crate (the fireplace worker adds FireplaceFeature to its own list)
 pub fn builtin_features() -> Vec<Box<dyn Feature>> {
-    vec![Box::new(bookshelf::BookshelfWallFeature), Box::new(windowseat::WindowSeatFeature)]
+    vec![Box::new(bookshelf::BookshelfWallFeature), Box::new(windowseat::WindowSeatFeature), Box::new(builtins::WetBarFeature), Box::new(builtins::MudroomFeature)]
 }

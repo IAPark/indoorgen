@@ -6,7 +6,7 @@ SELF=${0:A}; R=${0:A:h:h}
 BASE=$HOME/work/bench/var/base; CFG=$HOME/work/bench/var/cfg_noout.json; G=$R/target/fast/gen2; P=$R/tools/preview.sh; RS=$R/target/fast/reshade
 if [[ $1 == --gen ]]; then
   s=$2
-  MATERIAL_RULES=none SERIAL_ROOMS=1 $G $s LivingRoom $BASE/h$s.glb --config $CFG > $BASE/h$s.log 2>&1 || { echo "generation failed: $s"; exit 1 }
+  SERIAL_ROOMS=1 $G $s LivingRoom $BASE/h$s.glb --config $CFG > $BASE/h$s.log 2>&1 || { echo "generation failed: $s"; exit 1 }
   rm -f "$BASE/h$s.usdc"
   PREVIEW_SAVE_CAMS=$BASE/c$s $P $BASE/h$s.glb --cams 99 --res 480x270 -o $BASE/v$s > /dev/null 2>&1
   rm -rf "$BASE/v$s"
