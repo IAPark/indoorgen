@@ -1267,6 +1267,13 @@ fn fold(m: &Mesh, theta: f64, ym: f64) -> Mesh {
     o.transform(&Mat4::rot_z(theta));
     o.transform(&Mat4::translation([0.0, -ym, 0.0]));
     let mut o = bisect_y(&o);
+    // (cut along the rise too, so its vertices stand in lines along the crease: on the grid, slanting across it, the steep rise came out in a row of teeth)
+    for k in 1..=5 {
+        let c = k as f64 * 0.012;
+        for p in o.pos.iter_mut() { p[1] -= c; }
+        o = bisect_y(&o);
+        for p in o.pos.iter_mut() { p[1] += c; }
+    }
     for p in o.pos.iter_mut() {
         if p[1] > 0.0 {
             // (the height turns over across 6 cm: at once, the two sides of the crease did not meet, and the shell gaped in grey lenses along it)
@@ -1526,6 +1533,34 @@ fn arc_length(s: f64, arc: f64, grow: f64) -> f64 {
     line + knee(a, m1 - m0) + knee(b, 1.0 - m1)
 }
 
+/// a fold's rise: the points on their way between the layers (`raw`: their fold heights) take the height midway between their neighbours. Read straight from the fold height,
+/// the bottom layer shot up to the top's in a centimetre, and that cliff, on a grid slanting across the crease, came out in a row of teeth
+fn relax_crease(m: &mut Mesh, raw: &[f64], rounded: &mut [f64]) {
+    const SETTLED: [f64; 4] = [0.0, 0.01, 0.04, 0.05];
+    let n = m.pos.len();
+    let mut free: Vec<bool> = raw.iter().map(|d| SETTLED.iter().all(|s| (d - s).abs() > 0.001)).collect();
+    if !free.iter().any(|f| *f) { return }
+    let mut nb: Vec<Vec<u32>> = vec![vec![]; n];
+    for f in &m.faces {
+        for k in 0..f.len() {
+            let (a, b) = (f[k], f[(k + 1) % f.len()]);
+            nb[a as usize].push(b);
+            nb[b as usize].push(a);
+        }
+    }
+    // (a point passing a settled height on its way up is still on its way)
+    let was = free.clone();
+    for i in 0..n { if !was[i] && !nb[i].is_empty() && nb[i].iter().all(|&j| was[j as usize]) { free[i] = true; } }
+    for _ in 0..24 {
+        let next: Vec<(f64, f64)> = (0..n).map(|i| {
+            if !free[i] || nb[i].is_empty() { return (m.pos[i][2], rounded[i]) }
+            let k = nb[i].len() as f64;
+            (nb[i].iter().map(|&j| m.pos[j as usize][2]).sum::<f64>() / k, nb[i].iter().map(|&j| rounded[j as usize]).sum::<f64>() / k)
+        }).collect();
+        for (i, v) in next.into_iter().enumerate() { m.pos[i][2] = v.0; rounded[i] = v.1; }
+    }
+}
+
 /// a flat cloth (lying at its lowest z, its layers and any fold above that) laid over the bed without simulating it. It is subdivided first,
 /// each point keeping which layer it is on; then a comforter's top layer stands `loft` over its bottom, easing to nothing at its edges and,
 /// a box comforter (`margin`, its seams' spacing), domed over each cell; then each point is laid: over the mattress it follows the top; past
@@ -1551,6 +1586,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         two_layers && (0..n).map(|i| { let (a, b) = (m.pos[f[i] as usize], m.pos[f[(i + 1) % n] as usize]); a[0] * b[1] - b[0] * a[1] }).sum::<f64>() < 1e-9
     }).collect();
     let mut rounded = Vec::with_capacity(m.pos.len());
+    let raw: Vec<f64> = m.pos.iter().map(|p| p[2]).collect();
     for p in m.pos.iter_mut() {
         let d = p[2];
         let (layer, stack) = if !two_layers { (0.0, (d / 0.05).clamp(0.0, 1.0)) }
@@ -1566,6 +1602,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         // (the height the layer goes round the bed's edge at, without the cells' domes)
         rounded.push(p[2] - loft * layer * (fill - flat));
     }
+    relax_crease(&mut m, &raw, &mut rounded);
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (sy, cy) = slide[1].sin_cos();
     // tucked in, the hem reaches the rail all round (a short overhang rode up at the middle of the foot, showing the mattress)

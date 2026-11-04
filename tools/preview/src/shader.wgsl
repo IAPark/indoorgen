@@ -81,7 +81,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     // (a limit on the slope, and none past what a pixel can show: a joint's step within a pixel is noise, and drew dashes along the tile)
     let adet = max(abs(det), 1e-9);
     let g0 = grad / adet;
-    if (m.flags.y < 0.5) { let sl = length(g0); n = normalize(n - g0 * min(1.0, 0.35 / max(sl, 1e-6)) * (1.0 - smoothstep(0.6, 1.5, sl))); }
+    if (m.flags.y < 0.5) { let sl = length(g0); n = normalize(n - g0 * min(1.0, 0.35 / max(sl, 1e-6)) * (1.0 - smoothstep(0.2, 0.5, sl))); }
   }
   let sun = g.sun_dir.xyz;
   let ndl = max(dot(n, sun), 0.0);
