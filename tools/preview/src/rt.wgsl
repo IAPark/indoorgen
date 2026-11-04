@@ -1,0 +1,305 @@
+struct P { inv_vp: mat4x4<f32>, cam: vec4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, dims: vec4<u32>, misc: vec4<u32>, misc2: vec4<u32>, scale: vec4<f32> };
+struct N { lo: vec3<f32>, a: u32, hi: vec3<f32>, b: u32 };
+struct T { v0: vec3<f32>, mat: u32, e1: vec4<f32>, e2: vec4<f32> };
+struct M { albedo: vec4<f32>, emissive: vec4<f32> };
+struct L { pos: vec4<f32>, col: vec4<f32> };
+const PI = 3.14159265;
+
+// ---- shared
+fn world_of(px: vec2<i32>, d: f32, dims: vec2<f32>, inv_vp: mat4x4<f32>) -> vec3<f32> {
+  let ndc = vec2<f32>((f32(px.x) + 0.5) / dims.x * 2.0 - 1.0, 1.0 - (f32(px.y) + 0.5) / dims.y * 2.0);
+  let w = inv_vp * vec4<f32>(ndc, d, 1.0);
+  return w.xyz / w.w;
+}
+fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
+  let az = fract(atan2(d.y, d.x) / (2.0 * PI));
+  let v = sqrt(asin(clamp(d.z, 0.0, 1.0)) / (PI * 0.5));
+  return vec2<f32>(az * f32(sw) - 0.5, v * f32(sh) - 0.5);
+}
+
+// ---- trace
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> nodes: array<N>;
+@group(0) @binding(2) var<storage, read> tris: array<T>;
+@group(0) @binding(3) var<storage, read> mats: array<M>;
+@group(0) @binding(4) var<storage, read> lights: array<L>;
+@group(0) @binding(5) var<storage, read> sky_t: array<vec4<f32>>;
+@group(0) @binding(6) var g_depth: texture_depth_2d;
+@group(0) @binding(7) var g_nrm: texture_2d<f32>;
+@group(0) @binding(8) var g_alb: texture_2d<f32>;
+@group(0) @binding(12) var irr_done: texture_2d<f32>;
+@group(0) @binding(9) var out_irr: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(10) var out_spec: texture_storage_2d<rgba16float, write>;
+struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
+@group(0) @binding(11) var<storage, read> wins: array<W>;
+
+fn sky_at(d: vec3<f32>) -> vec3<f32> {
+  // (below the horizon Blender's sky does not stop: the horizon's colour, fading out by 45 degrees down. A warm fill for a low sun)
+  var dd = d; var fade = 1.0;
+  if (d.z <= 0.0) {
+    let el = asin(clamp(d.z, -1.0, 0.0));
+    fade = max(1.0 + el * 2.0 / (PI * 0.5), 0.0); fade = fade * fade * fade;
+    if (fade <= 0.0) { return vec3<f32>(0.0); }
+    dd = normalize(vec3<f32>(d.x, d.y, 1e-4));
+  }
+  let sw = i32(p.misc.w); let sh = i32(p.misc2.x);
+  let uv = sky_uv(dd, u32(sw), u32(sh));
+  let x0 = i32(floor(uv.x)); let y0 = clamp(i32(floor(uv.y)), 0, sh - 1); let y1 = min(y0 + 1, sh - 1);
+  let fx = uv.x - floor(uv.x); let fy = clamp(uv.y - floor(uv.y), 0.0, 1.0);
+  let xa = (x0 + sw) % sw; let xb = (x0 + 1 + sw) % sw;
+  let a = mix(sky_t[y0 * sw + xa].rgb, sky_t[y0 * sw + xb].rgb, fx);
+  let b = mix(sky_t[y1 * sw + xa].rgb, sky_t[y1 * sw + xb].rgb, fx);
+  return mix(a, b, fy) * p.scale.y * fade;
+}
+
+var<private> seed: u32;
+fn rnd() -> f32 {
+  seed = seed * 747796405u + 2891336453u;
+  var w = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u;
+  w = (w >> 22u) ^ w;
+  return f32(w) / 4294967296.0;
+}
+fn basis(n: vec3<f32>) -> mat3x3<f32> {
+  let s = select(-1.0, 1.0, n.z >= 0.0);
+  let a = -1.0 / (s + n.z); let b = n.x * n.y * a;
+  return mat3x3<f32>(vec3<f32>(1.0 + s * n.x * n.x * a, s * b, -s * n.x), vec3<f32>(b, s + n.y * n.y * a, -n.y), n);
+}
+fn cosine(n: vec3<f32>) -> vec3<f32> {
+  let u = rnd(); let v = rnd();
+  let r = sqrt(u); let a = 2.0 * PI * v;
+  return basis(n) * vec3<f32>(r * cos(a), r * sin(a), sqrt(max(1.0 - u, 0.0)));
+}
+fn cone(d: vec3<f32>, angle: f32) -> vec3<f32> {
+  let u = rnd(); let v = rnd();
+  let r = angle * sqrt(u); let a = 2.0 * PI * v;
+  return normalize(basis(d) * vec3<f32>(r * cos(a), r * sin(a), 1.0));
+}
+
+fn box_t(n: N, o: vec3<f32>, inv: vec3<f32>, tmax: f32) -> f32 {
+  let t0 = (n.lo - o) * inv; let t1 = (n.hi - o) * inv;
+  let a = min(t0, t1); let b = max(t0, t1);
+  let near = max(max(a.x, a.y), max(a.z, 0.0));
+  let far = min(min(b.x, b.y), min(b.z, tmax));
+  return select(1e30, near, near <= far);
+}
+fn tri_t(t: T, o: vec3<f32>, d: vec3<f32>) -> f32 {
+  let pv = cross(d, t.e2.xyz); let det = dot(t.e1.xyz, pv);
+  if (abs(det) < 1e-12) { return -1.0; }
+  let inv = 1.0 / det; let tv = o - t.v0;
+  let u = dot(tv, pv) * inv; if (u < 0.0 || u > 1.0) { return -1.0; }
+  let qv = cross(tv, t.e1.xyz); let v = dot(d, qv) * inv; if (v < 0.0 || u + v > 1.0) { return -1.0; }
+  return dot(t.e2.xyz, qv) * inv;
+}
+struct Hit { t: f32, i: i32 };
+fn closest(o: vec3<f32>, d: vec3<f32>, tmax0: f32) -> Hit {
+  var st: array<u32, 48>; var sp = 0; var cur = 0u; var tmax = tmax0; var best = -1;
+  let inv = 1.0 / d;
+  loop {
+    let n = nodes[cur];
+    if (n.b > 0u) {
+      for (var k = 0u; k < n.b; k++) {
+        let t = tri_t(tris[n.a + k], o, d);
+        if (t > 0.0005 && t < tmax) { tmax = t; best = i32(n.a + k); }
+      }
+    } else {
+      let l = n.a; let r = n.a + 1u;
+      let tl = box_t(nodes[l], o, inv, tmax); let tr = box_t(nodes[r], o, inv, tmax);
+      let hl = tl < 1e29; let hr = tr < 1e29;
+      if (hl && hr) {
+        if (sp < 47) { if (tl < tr) { st[sp] = r; cur = l; } else { st[sp] = l; cur = r; } sp++; continue; }
+      } else if (hl) { cur = l; continue; } else if (hr) { cur = r; continue; }
+    }
+    if (sp == 0) { break; }
+    sp--; cur = st[sp];
+  }
+  return Hit(tmax, best);
+}
+fn occluded(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
+  var st: array<u32, 48>; var sp = 0; var cur = 0u;
+  let inv = 1.0 / d;
+  loop {
+    let n = nodes[cur];
+    if (n.b > 0u) {
+      for (var k = 0u; k < n.b; k++) {
+        let t = tri_t(tris[n.a + k], o, d);
+        if (t > 0.0005 && t < tmax) { return true; }
+      }
+    } else {
+      let l = n.a; let r = n.a + 1u;
+      let tl = box_t(nodes[l], o, inv, tmax); let tr = box_t(nodes[r], o, inv, tmax);
+      let hl = tl < 1e29; let hr = tr < 1e29;
+      if (hl && hr) { if (sp < 47) { st[sp] = r; sp++; cur = l; continue; } }
+      else if (hl) { cur = l; continue; } else if (hr) { cur = r; continue; }
+    }
+    if (sp == 0) { break; }
+    sp--; cur = st[sp];
+  }
+  return false;
+}
+// one lamp, chosen by what it gives here
+fn lamp(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+  let nl = p.misc.z; if (nl == 0u) { return vec3<f32>(0.0); }
+  var total = 0.0; var i = 0u;
+  loop { if (i >= nl) { break; }
+    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
+    total += dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
+    i++; }
+  if (total <= 0.0) { return vec3<f32>(0.0); }
+  var pick = rnd() * total; i = 0u;
+  loop { if (i >= nl) { break; }
+    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+    let w = dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
+    if (pick < w || i == nl - 1u) {
+      if (w <= 0.0) { return vec3<f32>(0.0); }
+      if (occluded(o, l, sqrt(r2) - 0.02)) { return vec3<f32>(0.0); }
+      return lights[i].col.xyz * max(dot(n, l), 0.0) / r2 * (total / w) * p.scale.x;
+    }
+    pick -= w; i++; }
+  return vec3<f32>(0.0);
+}
+fn sun_vis(o: vec3<f32>, n: vec3<f32>) -> f32 {
+  let s = p.sun_dir.xyz;
+  if (dot(n, s) <= 0.0) { return 0.0; }
+  return select(1.0, 0.0, occluded(o, cone(s, p.scale.w), 1000.0));
+}
+// the sky seen through one window, chosen by what it gives here: most of a room's light comes in through a small part of what it sees, and rays sent at random rarely find it
+fn portal(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+  let nw = p.misc2.z; if (nw == 0u) { return vec3<f32>(0.0); }
+  var total = 0.0; var i = 0u;
+  loop { if (i >= nw) { break; }
+    let w = wins[i]; let v = w.c.xyz - o; let r2 = max(dot(v, v), 0.05); let l = v * inverseSqrt(r2);
+    total += w.c.w * max(dot(n, l), 0.03) * max(abs(dot(l, w.n.xyz)), 0.1) / r2;
+    i++; }
+  if (total <= 0.0) { return vec3<f32>(0.0); }
+  var pick = rnd() * total; i = 0u;
+  loop { if (i >= nw) { break; }
+    let w = wins[i]; let v = w.c.xyz - o; let r2 = max(dot(v, v), 0.05); let l0 = v * inverseSqrt(r2);
+    let wt = w.c.w * max(dot(n, l0), 0.03) * max(abs(dot(l0, w.n.xyz)), 0.1) / r2;
+    if (pick < wt || i == nw - 1u) {
+      let x = w.c.xyz + w.u.xyz * (2.0 * rnd() - 1.0) + w.v.xyz * (2.0 * rnd() - 1.0);
+      let d = x - o; let d2 = dot(d, d); let dl = sqrt(d2); let l = d / dl;
+      let cn = dot(n, l); let cw = abs(dot(l, w.n.xyz));
+      if (cn <= 0.0 || cw <= 0.0) { return vec3<f32>(0.0); }
+      if (occluded(o, l, 1000.0)) { return vec3<f32>(0.0); }
+      // (close to the pane the estimate runs away: a surface there sees at most the sky itself)
+      let est = sky_at(l) * cn * cw * w.c.w / (d2 * PI) * (total / max(wt, 1e-6));
+      let m_ = max(max(est.x, est.y), est.z);
+      return est * min(1.0, 4.0 / max(m_, 1e-5));
+    }
+    pick -= wt; i++; }
+  return vec3<f32>(0.0);
+}
+// does a ray that escaped leave by a window: portal() has counted that light
+fn through_window(o: vec3<f32>, d: vec3<f32>) -> bool {
+  let nw = p.misc2.z; var i = 0u;
+  loop { if (i >= nw) { break; }
+    let w = wins[i];
+    let dn = dot(d, w.n.xyz);
+    if (abs(dn) > 1e-4) {
+      let t = dot(w.c.xyz - o, w.n.xyz) / dn;
+      if (t > 0.0) {
+        let q = o + d * t - w.c.xyz;
+        let uu = dot(w.u.xyz, w.u.xyz); let vv = dot(w.v.xyz, w.v.xyz);
+        if (abs(dot(q, w.u.xyz)) < uu && abs(dot(q, w.v.xyz)) < vv) { return true; }
+      }
+    }
+    i++; }
+  return false;
+}
+// light arriving at a surface directly
+fn direct(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+  return p.sun_col.rgb * max(dot(n, p.sun_dir.xyz), 0.0) * sun_vis(o, n) / PI + lamp(o, n) + portal(o, n);
+}
+// light gathered from the hemisphere over n, by paths (lit units: E / pi)
+fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
+  var o = o0; var n = n0; var tp = vec3<f32>(1.0); var e = vec3<f32>(0.0);
+  let bounces = p.misc.x;
+  for (var b = 0u; b <= bounces; b++) {
+    let d = cosine(n);
+    let h = closest(o, d, 1000.0);
+    if (h.i < 0) { if (!through_window(o, d)) { e += tp * sky_at(d); } break; }
+    let t = tris[h.i];
+    let m = mats[t.mat];
+    var ng = normalize(cross(t.e1.xyz, t.e2.xyz));
+    if (dot(ng, d) > 0.0) { ng = -ng; }
+    let q = o + d * h.t + ng * 0.002;
+    e += tp * m.emissive.rgb;
+    tp *= m.albedo.rgb;
+    e += tp * direct(q, ng);
+    o = q; n = ng;
+  }
+  return e;
+}
+
+@compute @workgroup_size(8, 8) fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
+  let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let g = px * ss + vec2<i32>(ss / 2);
+  let dims = vec2<f32>(f32(w * ss), f32(h * ss));
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); return; }
+  let pos = world_of(g, d, dims, p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  seed = u32(px.x) * 73856093u ^ u32(px.y) * 19349663u ^ (p.misc.y * 83492791u);
+  let o = pos + n * 0.004;
+  var e = vec3<f32>(0.0); var vis = 0.0;
+  let spp = p.dims.w;
+  for (var s = 0u; s < spp; s++) {
+    vis += sun_vis(o, n);
+    let es = lamp(o, n) + portal(o, n) + gather(o, n);
+    // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
+    e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
+  }
+  e /= f32(spp); vis /= f32(spp);
+  textureStore(out_irr, px, vec4<f32>(e, vis));
+}
+
+@compute @workgroup_size(8, 8) fn trace_spec(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
+  let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let g = px * ss + vec2<i32>(ss / 2);
+  let dims = vec2<f32>(f32(w * ss), f32(h * ss));
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { textureStore(out_spec, px, vec4<f32>(0.0)); return; }
+  let pos = world_of(g, d, dims, p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (p.misc.y * 1103515245u);
+  let o = pos + n * 0.004;
+  let e = textureLoad(irr_done, px, 0).rgb;
+  // what a glossy surface reflects
+  let a = textureLoad(g_alb, g, 0);
+  // (a clear coat is smoother than what lies under it, though Blender's fine relief scatters what it mirrors)
+  let coat = textureLoad(g_nrm, g, 0).a;
+  let rough = select(a.a, min(a.a, 0.4), coat > 0.25);
+  var sp = vec3<f32>(0.0);
+  if (rough < 0.55 && p.misc2.y > 0u) {
+    let v = normalize(pos - p.cam.xyz);
+    let r0 = reflect(v, n);
+    for (var s = 0u; s < p.misc2.y; s++) {
+      var rd = r0;
+      if (rough > 0.03) { rd = cone(r0, rough * rough * 1.2); }
+      if (dot(rd, n) <= 0.0) { rd = r0; }
+      let hh = closest(o, rd, 1000.0);
+      if (hh.i < 0) {
+        var l = sky_at(rd);
+        if (dot(rd, p.sun_dir.xyz) > cos(p.scale.w + rough * rough * 0.4)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w + rough * rough * 0.4)))); }
+        sp += l;
+      } else {
+        let t = tris[hh.i]; let m = mats[t.mat];
+        var ng = normalize(cross(t.e1.xyz, t.e2.xyz));
+        if (dot(ng, rd) > 0.0) { ng = -ng; }
+        let q = o + rd * hh.t + ng * 0.002;
+        // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
+        sp += m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e);
+      }
+    }
+    sp /= f32(p.misc2.y);
+  }
+  textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
+}

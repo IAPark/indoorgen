@@ -37,7 +37,7 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) wpos: vec3<f32>, 
   return o;
 }
 
-struct FOut { @location(0) color: vec4<f32>, @location(1) nrm: vec4<f32> };
+struct FOut { @location(0) color: vec4<f32>, @location(1) nrm: vec4<f32>, @location(2) alb: vec4<f32>, @location(3) mat: vec4<f32> };
 
 fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   let ndl = clamp(dot(n, g.sun_dir.xyz), 0.0, 1.0);
@@ -123,7 +123,17 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   var a = 1.0;
   if (m.flags.x > 1.5) { a = select(0.18, m.flags.z, m.flags.z > 0.0); }
   out.color = vec4<f32>(col, a);
-  out.nrm = vec4<f32>(n, 1.0);
+  out.nrm = vec4<f32>(n, surf_coat);
+  // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
+  out.alb = vec4<f32>(albedo.rgb, surf_rough);
+  out.mat = vec4<f32>(surf_metal, surf_coat, 0.0, 1.0);
+  if (g.params2.w > 0.5 && m.flags.x < 1.5) { out.color = vec4<f32>(m.emissive.rgb, 1.0); }
+  // (glass, over the traced picture: a little is lost in it; what lies behind is already lit)
+  if (g.params2.w > 0.5 && m.flags.x > 1.5) {
+    // (and it mirrors the room, more at a glancing angle)
+    let fr = 0.04 + 0.96 * pow(1.0 - abs(dot(n, vdir)), 5.0);
+    out.color = vec4<f32>(g.ground.rgb, max(fr, select(0.06, m.flags.z * 0.5, m.flags.z > 0.0)));
+  }
   return out;
 }
 
@@ -145,6 +155,20 @@ fn world_at(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
 }
 fn hash(p: vec2<f32>) -> f32 { return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453); }
 
+// AgX, as Blender's view transform, with its Medium High Contrast look (Wrensch's fit)
+fn agx(c: vec3<f32>) -> vec3<f32> {
+  let ins = mat3x3<f32>(vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051), vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336), vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
+  let outs = mat3x3<f32>(vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438), vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241), vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116));
+  var v = ins * max(c, vec3<f32>(1e-10));
+  v = clamp((log2(v) + 12.47393) / 16.5, vec3<f32>(0.0), vec3<f32>(1.0));
+  let x2 = v * v; let x4 = x2 * x2;
+  v = 15.5 * x4 * x2 - 40.14 * x4 * v + 31.96 * x4 - 6.868 * x2 * v + 0.4298 * x2 + 0.1191 * v - 0.00232;
+  // look: contrast about mid grey
+  let luma = dot(v, vec3<f32>(0.2126, 0.7152, 0.0722));
+  v = pow(max(v, vec3<f32>(0.0)), vec3<f32>(g.cam_fwd.w));
+  v = outs * v;
+  return pow(clamp(v, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(2.2));
+}
 fn aces(x: vec3<f32>) -> vec3<f32> {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
 }
@@ -202,6 +226,7 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
   }
   // ao only attenuates the indirect part; approximated by scaling the whole radiance gently
   var c = hdr * mix(1.0, ao, 0.9) * g.params.y;
+  if (g.params2.w > 0.5) { return agx(hdr * g.params.y); }
   // sky where nothing was drawn (outdoor views went black) and aerial perspective toward the horizon colour on geometry
   let ndc = vec2<f32>((f32(px.x) + 0.5) / dims.x * 2.0 - 1.0, 1.0 - (f32(px.y) + 0.5) / dims.y * 2.0);
   let far = g.inv_viewproj * vec4<f32>(ndc, 0.9999, 1.0);

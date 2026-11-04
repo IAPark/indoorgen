@@ -991,7 +991,7 @@ if os.environ.get('DEBUGL'):
     print('LIGHTS', Counter((o.data.type, round(o.data.energy,1), getattr(o.data.cycles,'is_portal',False)) for o in bpy.data.objects if o.type=='LIGHT'))
     for n in sc.world.node_tree.nodes:
         if n.type=='BACKGROUND': print('BG', n.inputs[1].default_value)
-        if n.type=='TEX_SKY': print('SKY', n.sun_elevation, n.sun_rotation, n.air_density, n.dust_density, getattr(n,'sun_intensity',None))
+        if n.type=='TEX_SKY': print('SKY', n.sun_elevation, n.sun_rotation, n.air_density, getattr(n,'aerosol_density',None), getattr(n,'sun_intensity',None))
     print('VIEW', sc.view_settings.view_transform, sc.view_settings.exposure, sc.cycles.film_exposure)
 phase("sky lights cam")
 if os.environ.get("DUMPSIG"):
@@ -1008,6 +1008,13 @@ if os.environ.get("DUMPLIGHTS"):
     json.dump(sorted([[o.name, o.type, [round(x, 3) for x in o.matrix_world.translation], round(o.data.energy, 3) if o.type == 'LIGHT' else None,
                        o.data.type if o.type == 'LIGHT' else None, getattr(o.data.cycles, 'is_portal', None) if o.type == 'LIGHT' else None] for o in bpy.data.objects if o.type != 'MESH']),
               open(os.environ["DUMPLIGHTS"], "w"))
+# light fittings let their own lamp's light out: the lamp sits inside the fitting, and an opaque cover (since materials moved to the Rust graphs) left every ceiling light shut in
+for _o in bpy.data.objects:
+    if _o.type == "MESH" and (any(k in _o.name for k in ("CeilingLightFactory", "_light_", "LampFactory", "_lamp", "pendant_")) or any(_m and _m.name in ("rs_shader_bulb", "rs_shader_lampshade") for _m in _o.data.materials)): _o.visible_shadow = False
+if os.environ.get("DEBUGL"):
+    print("FITTINGS", sum(1 for _o in bpy.data.objects if _o.type == "MESH" and not _o.visible_shadow), "of", sum(1 for _o in bpy.data.objects if _o.type == "MESH"))
+    print("CEILOBJ", [(_o.name, [_m.name for _m in _o.data.materials if _m], _o.visible_shadow) for _o in bpy.data.objects if _o.type == "MESH" and ("Ceiling" in _o.name or "_light_" in _o.name)][:8])
+    print("LAMPS", [(_o.name, round(_o.data.energy, 1), [round(v, 2) for v in _o.location], _o.hide_render) for _o in bpy.data.objects if _o.type == "LIGHT"][:8])
 if args.norender: print('NORENDER done'); sys.exit(0)
 auto_exposure(sc)
 if os.environ.get("ENGINE") == "EEVEE":  # fast material-accurate preview (no path tracing)

@@ -2,6 +2,7 @@
 # preview.sh SCENE.glb [SCENE2.glb ...] [cams options] -o OUT.png|OUT_DIR   (real-time wgpu/Metal preview, ~2 s per scene)
 # options: --cams N (auto cameras, 2 per room), --cam cam.json (render_rust.py format), --view cam0|NAME (sidecar camera),
 #   --at ex,ey,ez,tx,ty,tz[,lens], --person I, --top, --sheet (contact sheet of all cameras/scenes), --res WxH, --sun az,el,
+#   --rt fast|full (path traced to look like Blender: about 0.4-0.8 s and 0.8-1.8 s a frame at 960x540 once loaded; --seed N: Blender's sky for that --seed),
 #   --exposure E, --ao A, --no-ceiling, -v (timings). Output: OUT.png = one image (sheet if several), OUT_DIR = one png per camera.
 # Positional shorthand: preview.sh X.glb OUT.png   (3 auto cameras -> sheet)
 D=${0:A:h}/preview; B=$D/target/release/preview
