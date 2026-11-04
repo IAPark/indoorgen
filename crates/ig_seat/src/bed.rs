@@ -1573,6 +1573,23 @@ fn relax_crease(m: &mut Mesh, raw: &[f64], rounded: &mut [f64], rise: (f64, f64)
     }
 }
 
+/// the height each point goes round the bed's edge at varies smoothly over the cloth. It sets how far down the side a point comes, so on a fold's slanting grid, near the hem where the fill falls off steeply,
+/// a jump between neighbours came out as a row of long spikes, stretched further on a tucked cloth
+fn smooth_rounded(m: &Mesh, rounded: &mut [f64]) {
+    let mut nb: Vec<Vec<u32>> = vec![vec![]; m.pos.len()];
+    for f in &m.faces {
+        for k in 0..f.len() {
+            let (a, b) = (f[k], f[(k + 1) % f.len()]);
+            nb[a as usize].push(b);
+            nb[b as usize].push(a);
+        }
+    }
+    for _ in 0..30 {
+        let next: Vec<f64> = (0..rounded.len()).map(|i| if nb[i].is_empty() { rounded[i] } else { nb[i].iter().map(|&j| rounded[j as usize]).sum::<f64>() / nb[i].len() as f64 }).collect();
+        rounded.copy_from_slice(&next);
+    }
+}
+
 /// a flat cloth (lying at its lowest z, its layers and any fold above that) laid over the bed without simulating it. It is subdivided first,
 /// each point keeping which layer it is on; then a comforter's top layer stands `loft` over its bottom, easing to nothing at its edges and,
 /// a box comforter (`margin`, its seams' spacing), domed over each cell; then each point is laid: over the mattress it follows the top; past
@@ -1615,6 +1632,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         rounded.push(p[2] - loft * layer * (fill - flat));
     }
     relax_crease(&mut m, &raw, &mut rounded, if two_layers { (0.012, 0.038) } else { (0.002, 0.048) });
+    smooth_rounded(&m, &mut rounded);
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (sy, cy) = slide[1].sin_cos();
     // tucked in, the hem reaches the rail all round (a short overhang rode up at the middle of the foot, showing the mattress)
@@ -1644,6 +1662,8 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         let wave = pl.at(u);
         // the hem's length waves with the folds
         let s = stretch * s0 * (1.0 + 0.06 * pl.at(u * 0.37 + 11.0));
+        // (tucked in, a short overhang is stretched down the whole side, and its cells' relief with it, each step between neighbours a long spike: stretched, it hangs at the layer's smoothed height)
+        let off = if g.tuck { let t = (s / 0.1).min(1.0); lay + (off - lay) * (1.0 - t) * (1.0 - t) } else { off };
         let gap = nx.max(0.0) * g.gap_foot + ny.abs() * g.gap_side;
         // (round the mattress's edge a thick layer's outer face travels further than its centre: at 3.5 cm radius a comforter's cells stretched fivefold into slivers,
         // and its quilting folded them into a saw. The layer goes round by its own arc. Not each point by its own: a cell's dome then stood up to 11 cm higher than its seam, folding over it in a jagged cliff)
