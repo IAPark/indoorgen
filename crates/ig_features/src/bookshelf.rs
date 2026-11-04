@@ -237,7 +237,7 @@ pub fn tall_unit(st: &Style, o: &mut Out, rng: &mut Rng, a: f64, b: f64, top: f6
             fronts(st, o, rng, a + step * k as f64 + ts, a + step * (k + 1) as f64, st.ph + tb, lh, true);
         }
         zb = lh + st.ct;
-        bx(&mut o.counter, a, b, 0.0, d + st.co, lh, lh + st.ct);
+        bx(&mut o.counter, a - 0.003, b + 0.003, 0.0, d + st.co, lh, lh + st.ct);
         o.supports.push(([a, 0.0, lh], [b, d + st.co, lh + st.ct]));
     } else {
         o.supports.push(([a + ts, 0.012, st.ph], [b - ts, d - 0.004, st.ph + tb]));
@@ -368,7 +368,8 @@ impl BookshelfWallFeature {
             bx(&mut o.case, a, b, 0.0, st.d, st.ph, st.ph + st.tb);
             if lh > 0.4 {
                 under_block(&st, &mut o, &mut rng, a, b, lh, false);
-                bx(&mut o.counter, a, b, 0.0, st.d + st.co, lh, lh + st.ct);
+                // (3 mm past the panels: flush, its free end fought with the end panel in a dashed line)
+                bx(&mut o.counter, a - 0.003, b + 0.003, 0.0, st.d + st.co, lh, lh + st.ct);
                 o.supports.push(([a, 0.0, lh], [b, st.d + st.co, lh + st.ct]));
             }
             // shelf row above the window head
