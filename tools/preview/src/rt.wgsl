@@ -459,7 +459,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let rough = a.a;
   var sp = vec3<f32>(0.0);
   let coat = textureLoad(g_nrm, g, 0).a;
-  if ((rough < 0.03 || (coat < 0.25 && rough < 0.5)) && p.misc2.y > 0u) {
+  if ((rough < 0.03 || (coat < 0.25 && rough < 0.6)) && p.misc2.y > 0u) {
     let v = normalize(pos - p.cam.xyz);
     let r0 = reflect(v, n);
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
