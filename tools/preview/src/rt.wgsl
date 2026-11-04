@@ -141,30 +141,28 @@ fn occluded(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
   return false;
 }
 // one lamp, chosen by what it gives here
-fn lamp(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> { return lamp_rest(o, n, NO_LAMP, NO_LAMP); }
-const NO_LAMP = 0xffffffu;
-// one lamp, chosen by what it gives here, leaving out two
-fn lamp_rest(o: vec3<f32>, n: vec3<f32>, ex0: u32, ex1: u32) -> vec3<f32> {
+fn lamp(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> { return lamp_rest(o, n, false); }
+// each lamp's share of the direct light traced apart at this pixel: the rest of it goes with the filtered light
+var<private> lamp_share: array<f32, 64>;
+// one lamp, chosen by what it gives here; with `rest`, only what is left after each lamp's share
+fn lamp_rest(o: vec3<f32>, n: vec3<f32>, rest: bool) -> vec3<f32> {
   let nl = p.misc.z; if (nl == 0u) { return vec3<f32>(0.0); }
   var total = 0.0; var i = 0u;
   loop { if (i >= nl) { break; }
-    if (i != ex0 && i != ex1) {
-      let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
-      total += dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
-    }
+    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+    total += select(1.0, 1.0 - lamp_share[i], rest) * dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
     i++; }
   if (total <= 0.0) { return vec3<f32>(0.0); }
   var pick = rnd() * total; i = 0u;
   loop { if (i >= nl) { break; }
-    if (i != ex0 && i != ex1) {
-      let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
-      let w = dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
-      if (pick < w) {
-        if (occluded(o, l, sqrt(r2) - 0.02)) { return vec3<f32>(0.0); }
-        return lights[i].col.xyz * max(dot(n, l), 0.0) / r2 * (total / w) * p.scale.x;
-      }
-      pick -= w;
+    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+    let keep = select(1.0, 1.0 - lamp_share[i], rest);
+    let w = keep * dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
+    if (pick < w) {
+      if (occluded(o, l, sqrt(r2) - 0.02)) { return vec3<f32>(0.0); }
+      return keep * lights[i].col.xyz * max(dot(n, l), 0.0) / r2 * (total / w) * p.scale.x;
     }
+    pick -= w;
     i++; }
   return vec3<f32>(0.0);
 }
@@ -285,27 +283,25 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   n = normalize(n);
   seed = u32(px.x) * 73856093u ^ u32(px.y) * 19349663u ^ (p.misc.y * 83492791u);
   let o = start_at(pos, n);
-  // the two lamps that matter most here, apart from the filtered light, which would wash out their shadows
-  var k0 = NO_LAMP; var k1 = NO_LAMP; var w0 = 0.0; var w1 = 0.0; var li = 0u;
-  loop { if (li >= p.misc.z) { break; }
-    let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
-    let w_ = dot(lights[li].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
-    if (w_ > w0) { k1 = k0; w1 = w0; k0 = li; w0 = w_; } else if (w_ > w1) { k1 = li; w1 = w_; }
+  // the lamps that matter here, apart from the filtered light, which would wash out their shadows. Each comes in gradually with its share of the light: a fixed number of lamps per pixel let a lamp drop out all at once, and cut its shadow off in a straight line across a wall
+  var ltotal = 0.0; var li = 0u;
+  loop { if (li >= min(p.misc.z, 64u)) { break; }
+    let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
+    ltotal += dot(lights[li].col.xyz, vec3<f32>(0.333)) * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     li++; }
-  var dl_ = vec3<f32>(0.0);
-  if (k0 != NO_LAMP) {
-    let v = lights[k0].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
-    dl_ += lights[k0].col.xyz * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2 * p.scale.x * lamp_vis(o, lights[k0].pos.xyz);
-  }
-  if (k1 != NO_LAMP) {
-    let v = lights[k1].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
-    dl_ += lights[k1].col.xyz * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2 * p.scale.x * lamp_vis(o, lights[k1].pos.xyz);
-  }
+  var dl_ = vec3<f32>(0.0); li = 0u;
+  loop { if (li >= min(p.misc.z, 64u)) { break; }
+    let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), 0.04);
+    let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
+    let f_ = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
+    lamp_share[li] = f_;
+    if (f_ > 0.0) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
+    li++; }
   textureStore(out_lamp, px, vec4<f32>(dl_, 1.0));
   var e = vec3<f32>(0.0);
   let spp = p.dims.w;
   for (var s = 0u; s < spp; s++) {
-    let es = lamp_rest(o, n, k0, k1) + portal(o, n) + gather(o, n);
+    let es = lamp_rest(o, n, true) + portal(o, n) + gather(o, n);
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
