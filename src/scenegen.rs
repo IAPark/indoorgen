@@ -966,11 +966,19 @@ pub fn build_scene(p: &Params) -> Built {
             m.transform(&pose_m);
             if let Some(cs) = cutters.get(k) {
                 for c in cs {
-                    let (clo, chi) = c.bounds();
                     // piece by piece: a part can hold a whole cabinet run, and cutting it all tore the door fronts beside the sink
+                    // (chosen in the object's own frame: on a unit standing at an angle the cutter's world box was wider than the sink, took in the door, and the boolean tore it)
                     let tb = web_time::Instant::now();
                     let nv0 = m.pos.len();
-                    let (keep, cut) = split_for_cut(&m, clo, chi);
+                    let to_local = |q: V3| { let r = &o.pose.r; let d = [q[0] - o.pose.t[0], q[1] - o.pose.t[1], q[2] - o.pose.t[2]]; [r[0][0] * d[0] + r[1][0] * d[1] + r[2][0] * d[2], r[0][1] * d[0] + r[1][1] * d[1] + r[2][1] * d[2], r[0][2] * d[0] + r[1][2] * d[1] + r[2][2] * d[2]] };
+                    let mut local_c = c.clone();
+                    for q in local_c.pos.iter_mut() { *q = to_local(*q); }
+                    let mut local_m = m.clone();
+                    for q in local_m.pos.iter_mut() { *q = to_local(*q); }
+                    let (clo, chi) = local_c.bounds();
+                    let (mut keep, mut cut) = split_for_cut(&local_m, clo, chi);
+                    keep.pos = m.pos.clone();
+                    cut.pos = m.pos.clone();
                     if !cut.faces.is_empty() {
                         let mut r = mesh_diff(&cut, c);
                         r.append(&keep);

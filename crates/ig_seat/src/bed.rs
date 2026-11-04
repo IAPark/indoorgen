@@ -898,20 +898,18 @@ impl Factory for Bed {
                 let thin = if h[0] - l[0] < h[1] - l[1] { 0 } else { 1 };
                 let long = 1 - thin;
                 let out = if (l[thin] + h[thin]) / 2.0 < (sl[thin] + sh[thin]) / 2.0 { l[thin] - 0.002 } else { h[thin] + 0.002 };
-                let mut pts: Vec<[f64; 2]> = g.pos.iter().map(|q| [q[long], q[2]]).collect();
-                pts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5);
-                let cr = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-                let mut hull: Vec<[f64; 2]> = vec![];
-                for pass in 0..2 {
-                    let start = hull.len();
-                    let it: Vec<[f64; 2]> = if pass == 0 { pts.clone() } else { pts.iter().rev().cloned().collect() };
-                    for q in it {
-                        while hull.len() >= start + 2 && cr(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 1e-9 { hull.pop(); }
-                        hull.push(q);
-                    }
-                    hull.pop();
+                // (within the panel's own outline: its convex hull stood out past an arched top, a straight-edged sheet behind the curve)
+                const BINS: usize = 64;
+                const INSET: f64 = 0.003;
+                let width = (h[long] - l[long]).max(1e-6);
+                let mut env = [(f64::MAX, f64::MIN); BINS];
+                for q in &g.pos {
+                    let k = (((q[long] - l[long]) / width * BINS as f64) as usize).min(BINS - 1);
+                    env[k] = (env[k].0.min(q[2]), env[k].1.max(q[2]));
                 }
+                let filled: Vec<(usize, f64, f64)> = env.iter().enumerate().filter(|(_, e)| e.1 - e.0 > 2.0 * INSET).map(|(k, e)| (k, e.0 + INSET, e.1 - INSET)).collect();
+                let at = |k: usize| (l[long] + INSET + (width - 2.0 * INSET) * k as f64 / (BINS - 1) as f64).clamp(l[long] + INSET, h[long] - INSET);
+                let hull: Vec<[f64; 2]> = filled.iter().map(|f| [at(f.0), f.1]).chain(filled.iter().rev().map(|f| [at(f.0), f.2])).collect();
                 if hull.len() < 3 { continue }
                 let mut b = Mesh::new();
                 let face: Vec<V3> = hull.iter().map(|q| { let mut v = [0.0; 3]; v[thin] = out; v[long] = q[0]; v[2] = q[1]; v }).collect();
