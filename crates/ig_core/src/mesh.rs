@@ -597,11 +597,13 @@ pub struct Scene {
 impl Scene {
     pub fn material(&mut self, m: Material) -> usize {
         // (the same name is the same material only with the same spec: by name alone, every table in a house took the first one's top, a glass coffee table turning a wooden drum into a ghost of a table)
-        if let Some(i) = self.materials.iter().position(|x| x.name == m.name && x.spec == m.spec) {
+        // (by the name before its ~N: against the suffixed name, nothing matched after the first, and one table's four legs came out as four materials)
+        let base = |n: &str| n.split('~').next().unwrap_or("").to_string();
+        if let Some(i) = self.materials.iter().position(|x| base(&x.name) == m.name && x.spec == m.spec) {
             return i;
         }
         let mut m = m;
-        let same = self.materials.iter().filter(|x| x.name == m.name || x.name.starts_with(&format!("{}~", m.name))).count();
+        let same = self.materials.iter().filter(|x| base(&x.name) == m.name).count();
         if same > 0 { m.name = format!("{}~{same}", m.name); }
         self.materials.push(m);
         self.materials.len() - 1

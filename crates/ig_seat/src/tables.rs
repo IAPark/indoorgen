@@ -199,7 +199,8 @@ impl Table {
     fn build(&self) -> Asset {
         let mut r = Rng::seeded(self.seed);
         let top_cls = weighted(&mut r, TOP);
-        let topm = spec_material("table_top", json!({"cls": top_cls, "kwargs": {}, "seed": self.seed}), [0.55, 0.40, 0.26]);
+        // (a glass top's plain colour pale: the preview draws glass in it, and the wood brown made a table of amber)
+        let topm = spec_material("table_top", json!({"cls": top_cls, "kwargs": {}, "seed": self.seed}), if top_cls.contains("Glass") { [0.85, 0.9, 0.9] } else { [0.55, 0.40, 0.26] });
         // a slab / drum base is the top's own material (a waterfall table, a solid block)
         // (not glass: a solid block of it was a ghost of a table)
         let legm = if matches!(self.base, Base::Slab | Base::Drum) && !top_cls.contains("Glass") { topm.clone() } else {
