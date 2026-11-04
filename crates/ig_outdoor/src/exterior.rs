@@ -327,12 +327,13 @@ pub fn add_house(scene: &mut Scene, tag: &str, outer: &[[f64; 2]], cutters: &[Cu
                     wbox(&mut p.trim, a, u, n, (am - 0.02, am + 0.02), (-0.05, -0.02), (h.z0, h.z1));
                     wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (-0.05, -0.02), (zm - 0.02, zm + 0.02));
                 }
-                // reveals: the opening's sides back to the glass
-                wbox(&mut p.trim, a, u, n, (h.a0 - 0.01, h.a0), (-0.06, SIDING_OUT), (h.z0, h.z1));
-                wbox(&mut p.trim, a, u, n, (h.a1, h.a1 + 0.01), (-0.06, SIDING_OUT), (h.z0, h.z1));
-                wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (-0.06, SIDING_OUT), (h.z1, h.z1 + 0.01));
-                if !h.door { wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (-0.06, SIDING_OUT), (h.z0 - 0.01, h.z0)); }
             }
+            // reveals: the opening's sides, back to the glass of a neighbour's shell, and on the house itself back to its rooms' walls, which stop at the wall's centre line (a gap there showed the siding's back past a window's frame)
+            let back = if fill { -0.06 } else { -(wall_t / 2.0 + 0.005) };
+            wbox(&mut p.trim, a, u, n, (h.a0 - 0.01, h.a0), (back, SIDING_OUT), (h.z0, h.z1));
+            wbox(&mut p.trim, a, u, n, (h.a1, h.a1 + 0.01), (back, SIDING_OUT), (h.z0, h.z1));
+            wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (back, SIDING_OUT), (h.z1, h.z1 + 0.01));
+            if !h.door { wbox(&mut p.trim, a, u, n, (h.a0, h.a1), (back, SIDING_OUT), (h.z0 - 0.01, h.z0)); }
             let dd = (SIDING_OUT, SIDING_OUT + 0.02);
             wbox(&mut p.trim, a, u, n, (h.a0 - TRIM_W, h.a0), dd, (h.z0 - if h.door { 0.0 } else { TRIM_W }, h.z1 + TRIM_W));
             wbox(&mut p.trim, a, u, n, (h.a1, h.a1 + TRIM_W), dd, (h.z0 - if h.door { 0.0 } else { TRIM_W }, h.z1 + TRIM_W));
