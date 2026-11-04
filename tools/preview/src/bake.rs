@@ -679,13 +679,16 @@ fn mirrors(f: &Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, gl: &Glob
 fn surfaces_and_light(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, cam: &Cam, xp: f32, jitter: bool) -> (Mat4, Vec3, wgpu::CommandEncoder) {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let (w, h) = (f.gb.w, f.gb.h);
-    let jit = if jitter { let k = f.n % 16 + 1; ((halton(k, 2) - 0.5) * 2.0 / w as f32, (halton(k, 3) - 0.5) * 2.0 / h as f32) } else { (0.0, 0.0) };
+    // (a video at a quarter: flicker on edges goes with the jitter's size, 17 levels a frame at full and about 1 at none. A still averages its frames, so it takes it all)
+    let jsc = std::env::var("BAKE_JIT").ok().and_then(|v| v.parse().ok()).unwrap_or(if o.bake.as_deref().map_or(false, |m| m.starts_with("video")) { 0.25f32 } else { 1.0 });
+    let jit = if jitter { let k = f.n % 16 + 1; (jsc * (halton(k, 2) - 0.5) * 2.0 / w as f32, jsc * (halton(k, 3) - 0.5) * 2.0 / h as f32) } else { (0.0, 0.0) };
     let (mut gl, vp, eye) = globals(s, cam, o, res_aspect(f), jit);
     gl.sun_vp = gl.viewproj;
     q.write_buffer(&f.ub_g, 0, bytemuck::bytes_of(&gl));
     let fr = frustum(vp);
     for (parts, boxes) in &f.doors {
-        let hide = boxes.iter().any(|(lo, hi)| { let d = (eye.clamp(*lo, *hi) - eye).truncate().length(); let w = (*hi - *lo).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) });
+        // (a video walks through doorways, so a leaf in the way goes; a still shows it, as Blender does)
+        let hide = o.bake.as_deref().map_or(false, |m| m.starts_with("video")) && boxes.iter().any(|(lo, hi)| { let d = (eye.clamp(*lo, *hi) - eye).truncate().length(); let w = (*hi - *lo).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) });
         for &i in parts { f.hidden[i as usize] = hide; }
     }
     mirrors(f, r, s, pp, bk, &gl, vp, eye, &fr);

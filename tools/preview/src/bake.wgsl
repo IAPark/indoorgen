@@ -279,10 +279,11 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let d = textureLoad(g_depth, g, 0);
   if (d >= 1.0) { textureStore(o_out, px, vec4<f32>(0.0)); return; }
   let a = textureLoad(g_alb, g, 0); let rough = a.a; let nc = textureLoad(g_nrm, g, 0); let coat = nc.a;
-  if (!(rough >= 0.001 && (rough < 0.03 || (coat < 0.25 && rough < 0.5)))) { textureStore(o_out, px, vec4<f32>(0.0, 0.0, 0.0, rough)); return; }
+  if (!(rough >= 0.001 && (rough < 0.03 || coat < 0.25))) { textureStore(o_out, px, vec4<f32>(0.0, 0.0, 0.0, rough)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = nc.xyz; if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); } n = normalize(n);
-  seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (b.frame.x * 1103515245u); seed = seed * 747796405u + 2891336453u;
+  // (rough surfaces keep the same rays from frame to frame: the filter hides their pattern in one picture, and fresh ones shimmered across walls and floors. Polished ones average out over frames)
+  seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (select(b.frame.x, 0u, rough > 0.08) * 1103515245u); seed = seed * 747796405u + 2891336453u;
   let o = start_at(pos, n);
   let r0 = reflect(normalize(pos - p.cam.xyz), n);
   var sp = vec3<f32>(0.0);
@@ -290,7 +291,7 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let rays = select(1u, 4u, rough > 0.03);
   for (var ri = 0u; ri < rays; ri++) {
   var rd = r0;
-  if (rough > 0.03) { rd = cone(r0, rough * rough * 1.2); }
+  if (rough > 0.03) { rd = cone(r0, min(rough * rough * 3.0, 0.8)); }
   if (dot(rd, n) <= 0.0) { rd = r0; }
   let hh = closest(o, rd, 1000.0);
   var c_ = vec3<f32>(0.0);
@@ -383,7 +384,14 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let vdir = normalize(p.cam.xyz - pos);
   let lit = e + p.sun_col.rgb * b.scales.z * ndl * v / PI;
   let f0 = mix(vec3<f32>(0.04), a.rgb, metal);
-  let nv = max(dot(n, vdir), 0.001);
+  // (specular anti-aliasing, as rt_comp.wgsl)
+  var nbar = n;
+  for (var k = 0; k < 4; k++) {
+    let o = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1))[k];
+    let nq = textureLoad(g_nrm, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).xyz;
+    if (dot(nq, nq) > 0.25) { nbar += nq; } else { nbar += n; }
+  }
+  let nv = max(max(dot(n, vdir), dot(normalize(nbar), vdir)), 0.001);
   let r_ = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
   let a004 = min(r_.x * r_.x, pow(2.0, -9.28 * nv)) * r_.x + r_.y;
   let ab = vec2<f32>(-1.04, 1.04) * a004 + r_.zw;
@@ -406,7 +414,8 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     }
     flat_here = off_ < 2;
   }
-  let traced = rough < 0.03 || (coat < 0.25 && rough < 0.5 && flat_here);
+  // (at any roughness, as rt_comp.wgsl: a roughness that jumps must not jump between two kinds of reflection)
+  let traced = (rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && flat_here);
   var s = e;
   if (b.frame.w == 2u && rough < 0.001) {
     // (a mirror in a mirror's own picture: the room's light)
@@ -490,7 +499,7 @@ fn hist_at(uv: vec2<f32>, dims: vec2<f32>) -> vec3<f32> {
       m1 += t; m2 += t * t;
     } }
     m1 /= 9.0; m2 /= 9.0;
-    let sg = sqrt(max(m2 - m1 * m1, vec3<f32>(0.0))) * 1.25;
+    let sg = sqrt(max(m2 - m1 * m1, vec3<f32>(0.0))) * 3.0; // (wide: the scene holds still and reprojection is exact. A tight box followed the jitter, and high-contrast edges crawled even with the camera still)
     let dh = textureLoad(f_hist, clamp(vec2<i32>(uv * dims), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a;
     let expect = length(pos - b.prev_eye.xyz);
     if (abs(dh - expect) > 0.05 * expect + 0.03) { al = max(al, 0.5); }
