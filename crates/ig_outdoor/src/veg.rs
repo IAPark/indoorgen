@@ -112,7 +112,8 @@ pub(super) fn plant_community(t: &Terrain, cfg: &OutdoorCfg, r: &mut Rng, centre
     // (saplings only in the fine grid: past it they are invisible and only cost geometry)
     let trees: Vec<&Pl> = pls.iter().filter(|q| {
         let near = (q.p[0] - centre[0]).abs() < e && (q.p[1] - centre[1]).abs() < e;
-        q.alive && q.r >= if near { 0.9 } else { 2.2 }
+        // (and its crown clear of the house, not only its trunk: the clearance is checked as a seed, and a grown oak's branches and leaves came through a bathroom wall)
+        q.alive && q.r >= if near { 0.9 } else { 2.2 } && (!near || t.dist(q.p[0], q.p[1]) >= 1.25 * q.r + 0.5)
     }).collect();
     let n_near = trees.iter().filter(|q| (q.p[0] - centre[0]).abs() < e && (q.p[1] - centre[1]).abs() < e).count();
     let mut by_sp = [0usize; 5];
