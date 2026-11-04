@@ -1167,12 +1167,15 @@ fn split_for_cut(m: &Mesh, clo: V3, chi: V3) -> (Mesh, Mesh) {
     let roots: Vec<usize> = face_roots.iter().map(|&r| find(&mut parent, r)).collect();
     let mut wants: std::collections::HashMap<usize, f64> = Default::default();
     let mut board: std::collections::HashSet<usize> = Default::default();
+    let mut reach: std::collections::HashSet<usize> = Default::default();
+    let mut heights: std::collections::HashMap<usize, (f64, f64)> = Default::default();
     for (fi, f) in m.faces.iter().enumerate() {
         let ps: Vec<V3> = f.iter().map(|&i| m.pos[i as usize]).collect();
         let (fl, fh) = ps.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), q| ([l[0].min(q[0]), l[1].min(q[1]), l[2].min(q[2])], [h[0].max(q[0]), h[1].max(q[1]), h[2].max(q[2])]));
+        { let e = heights.entry(roots[fi]).or_insert((f64::MAX, f64::MIN)); e.0 = e.0.min(fl[2]); e.1 = e.1.max(fh[2]); }
         if !(0..3).all(|d| fl[d] < chi[d] && fh[d] > clo[d]) { continue }
         let ins = 0.04;
-        if (0..2).all(|d| fl[d] < chi[d] - ins && fh[d] > clo[d] + ins) && fh[2] > clo[2] + 0.02 && fh[2] - fl[2] > 0.1 { board.insert(roots[fi]); }
+        if (0..2).all(|d| fl[d] < chi[d] - ins && fh[d] > clo[d] + ins) && fh[2] > clo[2] + 0.02 { reach.insert(roots[fi]); }
         let mut nrm = [0.0; 3];
         for i in 0..ps.len() { let (a, b) = (ps[i], ps[(i + 1) % ps.len()]); nrm[0] += (a[1] - b[1]) * (a[2] + b[2]); nrm[1] += (a[2] - b[2]) * (a[0] + b[0]); nrm[2] += (a[0] - b[0]) * (a[1] + b[1]); }
         let area = 0.5 * dot(nrm, nrm).sqrt();
@@ -1181,6 +1184,8 @@ fn split_for_cut(m: &Mesh, clo: V3, chi: V3) -> (Mesh, Mesh) {
             *wants.entry(roots[fi]).or_insert(0.0) += area.min(overlap);
         }
     }
+    // (the board's height, not one face's: a divider cut into short faces was left standing through the basin's floor)
+    for r in reach { if heights.get(&r).map_or(false, |h| h.1 - h.0 > 0.1) { board.insert(r); } }
     let foot = (chi[0] - clo[0]) * (chi[1] - clo[1]);
     let (mut keep, mut cut) = (Mesh::new(), Mesh::new());
     keep.pos = m.pos.clone();

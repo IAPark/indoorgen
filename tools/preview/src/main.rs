@@ -737,8 +737,14 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             cm.near = Some(0.3);
             // (past the wall's inner face: the trim stops up to 3 cm short of it, and a plane in front of the face kept the wall)
             let m_ = |t: f32, b: f32| if (t - b).abs() > 1e-3 { 0.06 } else { 0.02 };
-            cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { tl.x + m_(tl.x, lo.x) } else { -th.x + m_(th.x, hi.x) }];
-            cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { tl.y + m_(tl.y, lo.y) } else { -th.y + m_(th.y, hi.y) }];
+            // (and short of what stands against that wall: from behind, a plane 3 cm into the room took a wardrobe's back off, and showed it hollow)
+            let in_room: Vec<(Vec3, Vec3)> = sh.boxes.iter().filter(|b| { let m = (b.0 + b.1) * 0.5; m.x > lo.x && m.x < hi.x && m.y > lo.y && m.y < hi.y }).map(|b| (b.0, b.1)).collect();
+            let short_of = |w: f32, face: f32, m: f32, s: f32, ax: usize| { let front = in_room.iter().map(|b| if s > 0.0 { b.0[ax] } else { -b.1[ax] }).fold(f32::MAX, f32::min); w.min(front - 0.002).max(face + if m > 0.03 { 0.03 } else { 0.002 }) };
+            let (fx, fy) = (if sx > 0.0 { tl.x } else { -th.x }, if sy > 0.0 { tl.y } else { -th.y });
+            let (mx_, my_) = (if sx > 0.0 { m_(tl.x, lo.x) } else { m_(th.x, hi.x) }, if sy > 0.0 { m_(tl.y, lo.y) } else { m_(th.y, hi.y) });
+            cm.clip = [sx, 0.0, 0.0, short_of(fx + mx_, fx, mx_, sx, 0)];
+            cm.clip2 = [0.0, sy, 0.0, short_of(fy + my_, fy, my_, sy, 1)];
+            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CUTS {} lo {:?} hi {:?} tl {:?} th {:?} clip {:?} {:?}", rm.name, lo, hi, tl, th, cm.clip, cm.clip2); }
             cm.only = Some((lo, hi, rm.name.clone(), [cm.clip, cm.clip2]));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
