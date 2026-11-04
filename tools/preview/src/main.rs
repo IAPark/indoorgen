@@ -744,7 +744,6 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let (mx_, my_) = (if sx > 0.0 { m_(tl.x, lo.x) } else { m_(th.x, hi.x) }, if sy > 0.0 { m_(tl.y, lo.y) } else { m_(th.y, hi.y) });
             cm.clip = [sx, 0.0, 0.0, short_of(fx + mx_, fx, mx_, sx, 0)];
             cm.clip2 = [0.0, sy, 0.0, short_of(fy + my_, fy, my_, sy, 1)];
-            if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("CUTS {} lo {:?} hi {:?} tl {:?} th {:?} clip {:?} {:?}", rm.name, lo, hi, tl, th, cm.clip, cm.clip2); }
             cm.only = Some((lo, hi, rm.name.clone(), [cm.clip, cm.clip2]));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
@@ -956,6 +955,8 @@ fn cut_plane(eye: Option<Vec3>, lo: &Vec3, hi: &Vec3) -> (f32, f32, f32, f32) {
 }
 fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wgpu::RenderPipeline>, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String, [[f32; 4]; 2])>) {
     let mut bound = None;
+    // (the house's rooms, to tell what belongs to another one)
+    let rooms: Vec<String> = if only.is_some() { s.glb.nodes.iter().filter(|n| n.name.ends_with(".floor")).map(|n| n.name.replace('/', "_").trim_end_matches(".floor").to_string()).collect() } else { vec![] };
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
         if leaf_in_the_way(s, d, eye, cut) { continue; }
@@ -974,6 +975,8 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
             if low.starts_with("door") && !low.starts_with("doorclear") && !low.contains("frame") && !low.contains("casing") { continue; }
             if low.contains(".wall") || low.contains(".floor") { if !nm.starts_with(&format!("{room}.")) { continue; } }
             else if (low.starts_with("door") || low.starts_with("window") || low.contains("curtain")) && { let c = (d.bmin + d.bmax) * 0.5; let n = [cut_plane(eye, lo, hi)]; n[0].0 * c.x < n[0].1 + 0.3 * 1.0 && n[0].0 != 0.0 || n[0].2 * c.y < n[0].3 + 0.3 && n[0].2 != 0.0 } { continue; }
+            // (another room's things, in a notch of this room's box: a neighbour's books and vase hung in the air outside the walls)
+            else if rooms.iter().any(|r| r != room && nm.contains(r.as_str())) { continue; }
             else { let c = (d.bmin + d.bmax) * 0.5; if c.x < lo.x - 0.15 || c.x > hi.x + 0.15 || c.y < lo.y - 0.15 || c.y > hi.y + 0.15 { continue; }
                 // (what hangs on a cut wall goes with it: a picture was left hanging in the air)
                 // (measured from the planes that cut it: the room's box runs on through a door's threshold, 25 cm past the wall, and a towel rail stayed behind)
