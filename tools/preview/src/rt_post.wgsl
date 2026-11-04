@@ -68,7 +68,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
     e += ci.rgb * wg; ew += wg;
     let si = textureLoad(i_spec, q, 0);
     // (reflections on a little relief: its normals differ pixel to pixel while what they reflect does not. A looser test, or a brushed fridge stayed in grains)
-    let ws = kk * pow(max(dot(n0, nq), 0.0), 6.0) * wp;
+    let ws = kk * pow(max(dot(n0, nq), 0.0), 24.0) * wp; // (but not across a real crease: on near-black louvres the reflection is all there is, and it smeared them flat)
     s += si.rgb * ws; sw += ws;
   } }
   // (one round is either the light's or the reflections': they are traced in turn)

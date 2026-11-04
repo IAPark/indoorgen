@@ -687,8 +687,8 @@ fn surfaces_and_light(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &B
     q.write_buffer(&f.ub_g, 0, bytemuck::bytes_of(&gl));
     let fr = frustum(vp);
     for (parts, boxes) in &f.doors {
-        // (a video walks through doorways, so a leaf in the way goes; a still shows it, as Blender does)
-        let hide = o.bake.as_deref().map_or(false, |m| m.starts_with("video")) && boxes.iter().any(|(lo, hi)| { let d = (eye.clamp(*lo, *hi) - eye).truncate().length(); let w = (*hi - *lo).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) });
+        // (leaves never go, in stills or video: one vanishing as the camera neared it was plain to see. BAKE_DOORS=hide brings the old rule back for a path that must pass through one)
+        let hide = std::env::var("BAKE_DOORS").as_deref() == Ok("hide") && boxes.iter().any(|(lo, hi)| { let d = (eye.clamp(*lo, *hi) - eye).truncate().length(); let w = (*hi - *lo).truncate().max_element(); d < 1.5 || (d < 2.6 && w / d > 0.33) });
         for &i in parts { f.hidden[i as usize] = hide; }
     }
     mirrors(f, r, s, pp, bk, &gl, vp, eye, &fr);
@@ -857,8 +857,7 @@ pub fn auto_path(s: &Scene, frames: usize) -> Vec<(Vec3, Vec3)> {
     for d in &s.draws {
         let nm = s.glb.nodes[d.node].name.to_lowercase();
         if nm.ends_with(".floor") || nm.contains("ceiling") || nm.starts_with("outdoor") || nm.starts_with("exterior") { continue }
-        // (door leaves swing out of the way: the path goes through their opening)
-        if nm.starts_with("door") && !nm.contains("frame") && !nm.contains("casing") && !d.glass { continue }
+        // (door leaves are solid: the path goes only through doors that stand open. It used to walk through shut ones, and the frame filled with door)
         if d.bmin.z > floor_z + 2.1 || d.bmax.z < floor_z + 0.15 { continue }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
@@ -909,7 +908,9 @@ pub fn auto_path(s: &Scene, frames: usize) -> Vec<(Vec3, Vec3)> {
     let mut stops: Vec<usize> = floors.iter().filter_map(|f| snap(f.1)).collect();
     if stops.is_empty() { return vec![] }
     // the rooms, nearest next, from the most connected
-    let mut route: Vec<usize> = vec![]; let mut at = stops.remove(0);
+    // (the room that reaches the most: with doors solid, a shut bathroom is a place of its own, and a walk begun there saw nothing but tile)
+    let first = (0..stops.len()).max_by_key(|&k| { let (c, _) = dijkstra(stops[k]); c.iter().filter(|v| **v < f32::MAX).count() }).unwrap_or(0);
+    let mut route: Vec<usize> = vec![]; let mut at = stops.remove(first);
     let want = frames as f32 / 30.0 * 1.0 / C; // cells of walk wanted, at 1 m/s
     let mut guard = 0;
     loop {
@@ -936,9 +937,10 @@ pub fn auto_path(s: &Scene, frames: usize) -> Vec<(Vec3, Vec3)> {
     let at_s = |t: f32| -> Vec3 { let t = t.clamp(0.0, total); let k = acc.partition_point(|v| *v < t).clamp(1, pts.len() - 1); let f = (t - acc[k - 1]) / (acc[k] - acc[k - 1]).max(1e-5); pts[k - 1].lerp(pts[k], f) };
     let speed = 1.0f32; let mut fwd = (at_s(1.2) - at_s(0.0)).normalize_or_zero();
     (0..frames).map(|f| {
-        let t = (f as f32 / 30.0 * speed).min(total);
+        // (back along the way when it runs out, rather than standing at its end staring at a wall)
+        let t0 = (f as f32 / 30.0 * speed) % (2.0 * total.max(0.1)); let t = if t0 > total { 2.0 * total - t0 } else { t0 };
         let e = at_s(t);
-        let aim = at_s(t + 1.2) - e; if aim.length() > 0.05 { fwd = fwd.lerp(aim.normalize(), 0.06).normalize(); }
+        let aim = if t0 > total { at_s(t - 1.2) - e } else { at_s(t + 1.2) - e }; if aim.length() > 0.05 { fwd = fwd.lerp(aim.normalize(), 0.06).normalize(); }
         // (it looks about, gently, and a little down)
         let yaw = 0.2 * (f as f32 / 30.0 * 0.5).sin();
         let lookdir = Mat4::from_rotation_z(yaw).transform_vector3(fwd) + Vec3::new(0.0, 0.0, -0.1);

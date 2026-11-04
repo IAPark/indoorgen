@@ -395,7 +395,9 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let r_ = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
   let a004 = min(r_.x * r_.x, pow(2.0, -9.28 * nv)) * r_.x + r_.y;
   let ab = vec2<f32>(-1.04, 1.04) * a004 + r_.zw;
-  let fr = f0 * ab.x + vec3<f32>(ab.y);
+  // (what bounces more than once off a rough surface's relief, Fdez-Aguera's way: one bounce alone keeps half the light at high roughness, and rough metal came out far too dark. Cycles counts it)
+  let ess_ = clamp(ab.x + ab.y, 0.0, 1.0); let favg_ = f0 + (vec3<f32>(1.0) - f0) / 21.0;
+  let fr = (f0 * ab.x + vec3<f32>(ab.y)) * (vec3<f32>(1.0) + favg_ * (1.0 - ess_) / max(vec3<f32>(1.0) - favg_ * (1.0 - ess_), vec3<f32>(0.01)) / max(ess_, 0.05) * 1.0);
   let fc = coat * (0.04 + 0.96 * pow(1.0 - nv, 5.0));
   let h_ = normalize(sun + vdir);
   let r2 = max(rough * rough, 0.002); let ndh = max(dot(n, h_), 0.0);
