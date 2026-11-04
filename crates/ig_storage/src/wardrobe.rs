@@ -159,7 +159,8 @@ impl Wardrobe {
                 let (by0, by1) = (dw0 * bi as f64, dw0 * (bi + 1) as f64);
                 if by0 > 0.0 { cab.append(&Mesh::cuboid([0.0, 0.0, p], [x0, by0, h])); }
                 if by1 < w { cab.append(&Mesh::cuboid([0.0, by1, p], [x0, w, h])); }
-                cab.append(&Mesh::cuboid([0.0, by0, p], [x0, by1, self.zd().max(p + 0.018)])); // the bay's floor, down to the plinth behind any drawers
+                // (under the lining's floor and behind its front edge: level with them, the two fought in a black and white pattern)
+                cab.append(&Mesh::cuboid([0.0, by0, p], [x0 - 0.001, by1, self.zd() + 0.016])); // the bay's floor, down to the plinth behind any drawers
                 // (a carcass round it: at an end bay only the white lining stood there, a pale side stopping in mid air over the drawers' level)
                 const SKIN: f64 = 0.012;
                 cab.append(&Mesh::cuboid([0.0, by0, p], [SKIN, by1, h]));
