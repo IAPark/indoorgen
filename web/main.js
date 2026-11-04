@@ -624,7 +624,7 @@ function bakedFrame() {
   if (c.key !== lastCamKey) { lastCamKey = c.key; lastMove = now; }
   baked.draw(c.et, c.lens);
   // exposure, as a camera's: settled again once it has stopped somewhere else
-  if (exposedAt !== c.key && now - lastMove > 500) {
+  if (exposedAt !== c.key && now - lastMove > 200) {
     exposedAt = c.key; bakeExposing = true;
     baked.expose(c.et, c.lens).catch(() => {}).finally(() => { bakeExposing = false; });
   }
@@ -659,7 +659,7 @@ async function bakeNow() {
     const c = bakedCamera();
     const t0 = performance.now();
     const seed = parseInt($('seed').value, 10) || 0;
-    baked = await bakeMod.bake_scene(bakeCanvas, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), seed, 0, c.et, c.lens, (p) => setStatus(p > 0 ? `baking light: ${Math.round(Math.min(p, 1) * 100)} % settled` : 'baking light: measuring...'));
+    baked = await bakeMod.bake_scene(bakeCanvas, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), seed, +new URLSearchParams(location.search).get('bakebar') || 0, c.et, c.lens, (p) => setStatus(p > 0 ? `baking light: ${Math.round(Math.min(p, 1) * 100)} % settled` : 'baking light: measuring...'));
     exposedAt = c.key;
     bakeCanvas.style.display = 'block';
     $('bakebtn').textContent = 'Baked: back to preview';
