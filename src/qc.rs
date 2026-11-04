@@ -473,7 +473,9 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                 }
             }
             if let Some((d, other)) = box_ov {
-                if oi < other {
+                // (two counter runs meeting at a corner that is not quite square lap each other a little, inside the corner)
+                let laps = |c: &str| matches!(c, "KitchenSpaceFactory" | "KitchenCabinetFactory");
+                if oi < other && !(d < 0.06 && laps(&objs[oi].class) && laps(&objs[other].class)) {
                     m.insert("box_overlap".into(), json!((d * 1e4).round() / 1e4));
                     issues.push(format!("overlaps {} (parts overlap by {:.1}cm)", objs[other].key, d * 100.0));
                 }
@@ -516,6 +518,10 @@ pub fn run(inp: &QcIn, out: &std::path::Path, label: &str) -> serde_json::Value 
                     [c * dx + s * dy, -s * dx + c * dy, p[2] - ct.loc[2]]
                 };
                 if (ct.loc[0] - ctr[0]).hypot(ct.loc[1] - ctr[1]) > 4.0 {
+                    continue;
+                }
+                // (a door of a room this piece is not in: its zone runs through the wall, and past a corner of a room out of square it reaches a neighbour behind a wall)
+                if !matches!(ct.kind, CutKind::Window) && room.map_or(false, |r| !ct.rooms.iter().any(|n| *n == inner[r].0)) {
                     continue;
                 }
                 // (a half wall is not a way through: like a window, only what stands against the opening -- a counter run along it

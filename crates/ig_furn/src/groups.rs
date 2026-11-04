@@ -1107,7 +1107,7 @@ fn place_bed(state: &mut State, bed: &str) -> Option<String> {
             }).count() as f64;
             let centred = 1.0 - ((t - len / 2.0).abs() / (len / 2.0)).min(1.0);
             // a bed square to the room: walls at an angle only when no straight wall works
-            let straight = (n[0].abs() < 1e-3 || n[1].abs() < 1e-3) as i32 as f64;
+            let straight = (n[0].abs() < 0.09 || n[1].abs() < 0.09) as i32 as f64;
             // (both slots free weighs most: a bed with one nightstand read as unfinished)
             // (a headboard against a window read as a bed blocking the window)
             let win = Tag::sem("Window");
@@ -2410,7 +2410,7 @@ pub fn square_up(state: &mut State) -> Vec<String> {
         if y.min(90.0 - y) < 3.0 { continue }
         let Some(room) = layout2d::room_of(state, &k) else { continue };
         let p0 = [state.objs[&k].pose.t[0], state.objs[&k].pose.t[1]];
-        let straight_ok = |n: [f64; 2]| n[0].abs() < 1e-3 || n[1].abs() < 1e-3;
+        let straight_ok = |n: [f64; 2]| n[0].abs() < 0.09 || n[1].abs() < 0.09;
         // score: straight walls only, nearest to the old spot
         let segs = wall_segments(state, &room);
         if !segs.iter().any(|s| straight_ok(s.2)) { continue }

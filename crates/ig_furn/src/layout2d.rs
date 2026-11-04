@@ -271,6 +271,8 @@ pub fn room_floor(state: &State, room: &str) -> Arc<shp::G> {
     // distance of a wall-face vertex from the floor outline)
     let outline = shp::boundary(&g);
     let half = w.tris.iter().enumerate().filter(|(i, _)| o.geom.tris[*i].tags & super::geom::WALL != 0).flat_map(|(_, t)| t.iter().map(|v| shp::distance(&outline, &shp::point(v[0], v[1]))).collect::<Vec<_>>()).filter(|d| *d > 1e-3).fold(f64::INFINITY, f64::min);
+    // (a floor whose tagged triangles came to almost nothing, seen on a room out of square: the room's own outline, or nothing would count as walkable)
+    let g = match &o.polygon { Some(p) if shp::area(&g) < 0.5 * shp::area(p) => p.clone(), _ => g };
     let g = if half.is_finite() && half < 0.5 { shp::buffer_mitre(&g, -half) } else { g };
     let arc = Arc::new(g);
     FLOORS.with(|c| c.borrow_mut().insert(room.to_string(), (o.version, arc.clone())));

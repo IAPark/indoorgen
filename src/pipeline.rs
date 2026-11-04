@@ -154,8 +154,16 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     if crate::rooms::plan_rules::get().merge_hallways {
         for l in crate::rooms::nudge::merge_useless_hallways(&mut st, &mut graph0) { if std::env::var_os("GROUPDBG").is_some() { eprintln!("PLAN {l}"); } }
     }
+    // walls out of square (plan_rules.wall_skew_deg), from a stream of its own so that nothing else's draws change
+    let skew = crate::rooms::plan_rules::get().wall_skew_deg;
+    if skew > 0.0 {
+        let mut r = Rng::seeded(int_hash(&[&seed.to_string(), "wall_skew"]));
+        let amount = skew * r.uniform(0.35, 1.0);
+        crate::rooms::skew::skew_plan(&mut st, || r.uniform(-amount, amount));
+    }
     let sol = Solidifier { c: &c, graph: &graph0, level: 0, enable_open: false, passage_prob: opt.passage_prob };
     let mut res = sol.solidify(&mut Rng::seeded(seed), &st);
+    if skew > 0.0 { crate::rooms::skew::drop_collinear(&mut st); }
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(path) = std::env::var("PLAN_DUMP") {
         // floor plan only (room polygons + door / window / entrance cutters), then exit: no furniture

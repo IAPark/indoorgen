@@ -476,15 +476,24 @@ impl<'a> Solidifier<'a> {
     fn make_door_cutter(&self, rng: &mut Rng, mls: &G, direction: P2) -> Cutter {
         let m = self.c.door_margin + self.c.door_width / 2.0;
         let (mut x, mut y, x_, y_) = max_mls(mls);
-        let vertical = (x - x_).abs() < 0.1;
+        // (a wall out of square drifts along its length: on a long one more than the 10 cm that told vertical from horizontal)
+        let vertical = (x - x_).abs() < 0.1 || (x - x_).abs() < 0.1 * (y - y_).abs();
         let wt = self.c.wall_thickness;
-        let z_rot;
+        let mut z_rot;
+        let (x0, y0) = (x, y);
         if vertical {
             y = rng.uniform(y.min(y_) + m, y.max(y_) - m);
             z_rot = if direction[0] > 0.0 { -std::f64::consts::FRAC_PI_2 } else { std::f64::consts::FRAC_PI_2 };
+            if x0 != x_ { x = x0 + (x_ - x0) * (y - y0) / (y_ - y0); }
         } else {
             x = rng.uniform(x.min(x_) + m, x.max(x_) - m);
             z_rot = if direction[1] > 0.0 { 0.0 } else { std::f64::consts::PI };
+            if y0 != y_ { y = y0 + (y_ - y0) * (x - x0) / (x_ - x0); }
+        }
+        // (along the wall itself, the way the door faced on the grid)
+        if (vertical && x0 != x_) || (!vertical && y0 != y_) {
+            let a = (y_ - y0).atan2(x_ - x0);
+            z_rot = if (a - z_rot).cos() >= 0.0 { a } else { a + std::f64::consts::PI };
         }
         Cutter {
             kind: CutKind::Door,

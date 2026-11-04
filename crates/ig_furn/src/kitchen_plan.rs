@@ -780,10 +780,22 @@ fn place_planned(state: &mut State, name: &str, l: &Line, t: f64, planned: &Tag)
     let others: Vec<String> = state.objs.iter().filter(|(k, o)| k.as_str() != name && o.tags.contains(planned.clone()) && !o.tags.contains(nc.clone())).map(|(k, _)| k.clone()).collect();
     for k in &others { state.objs.get_mut(k).unwrap().tags.insert(nc.clone()); state.touch(k); }
     let fits = place_along(state, name, l.a, l.u, l.n, t);
+    let (l_u, l_n) = (l.u, l.n);
     for k in &others { state.objs.get_mut(k).unwrap().tags.remove(nc.clone()); state.touch(k); }
-    // (in plan, boxes: the walls here are axis-aligned)
-    let (l0, h0) = layout2d::lohi_world(state, name);
-    fits && !others.iter().any(|k| { let (l1, h1) = layout2d::lohi_world(state, k); (0..2).all(|d| l0[d].max(l1[d]) < h0[d].min(h1[d]) - 0.04) && l0[2].max(l1[2]) < h0[2].min(1.2).min(h1[2]) })
+    // (in plan, boxes in the wall's own frame: a world box round a cabinet on a wall out of square grows by its tilt and found its neighbour)
+    let along = |k: &str| -> ([f64; 3], [f64; 3]) {
+        let o = &state.objs[k];
+        let (l, h) = (o.geom.lo, o.geom.hi);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for i in 0..8 {
+            let w = o.pose.apply([if i & 1 == 0 { l[0] } else { h[0] }, if i & 2 == 0 { l[1] } else { h[1] }, if i & 4 == 0 { l[2] } else { h[2] }]);
+            let v = [w[0] * l_u[0] + w[1] * l_u[1], w[0] * l_n[0] + w[1] * l_n[1], w[2]];
+            for d in 0..3 { lo[d] = lo[d].min(v[d]); hi[d] = hi[d].max(v[d]); }
+        }
+        (lo, hi)
+    };
+    let (l0, h0) = along(name);
+    fits && !others.iter().any(|k| { let (l1, h1) = along(k); (0..2).all(|d| l0[d].max(l1[d]) < h0[d].min(h1[d]) - 0.04) && l0[2].max(l1[2]) < h0[2].min(1.2).min(h1[2]) })
 }
 
 #[allow(clippy::too_many_arguments)]

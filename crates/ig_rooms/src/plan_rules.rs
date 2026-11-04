@@ -24,6 +24,8 @@ pub struct PlanRules {
     pub other_windows: usize,
     /// chance of a second door between public rooms that share a wall
     pub extra_door_p: f64,
+    /// walls out of square: each straight wall line of a house tilts by up to this many degrees (the house draws how much of it it uses); 0 keeps every wall on the grid
+    pub wall_skew_deg: f64,
     /// chance a corner of the outline is cut or rounded
     pub angled_corner_p: f64,
     /// weight of the usable-rectangle term in the room solver (share of a main room in its largest rectangle, narrow rooms)
@@ -47,7 +49,7 @@ pub struct PlanRules {
 impl Default for PlanRules {
     fn default() -> Self {
         PlanRules { bedroom_m2: 14.0, living_m2: 22.0, kitchen_m2: 15.0, dining_m2: 13.0, bathroom_m2: 7.5, closet_windows: 0, bathroom_windows: 1, bedroom_windows: 1,
-            living_windows: 2, dining_windows: 1, kitchen_windows: 1, hallway_windows: 0, other_windows: 1, extra_door_p: 0.7, angled_corner_p: 0.08, shape_w: 120.0,
+            living_windows: 2, dining_windows: 1, kitchen_windows: 1, hallway_windows: 0, other_windows: 1, extra_door_p: 0.7, wall_skew_deg: 2.5, angled_corner_p: 0.08, shape_w: 120.0,
             patio_door_p: 0.5, double_door_p: 0.4, sliding_closet_p: 0.5, sliding_interior_p: 0.3, open_plan_p: 0.3, half_wall_p: 0.85, merge_hallways: true }
     }
 }
