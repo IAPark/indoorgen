@@ -570,6 +570,11 @@ pub struct Light {
 }
 
 /// a node's size in its object frame (world size where it has no pose)
+static HOUSE_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// the house being written, which chooses its style in the material rules
+pub fn set_house_seed(seed: u64) { HOUSE_SEED.store(seed, std::sync::atomic::Ordering::Relaxed); }
+fn house_seed() -> u64 { HOUSE_SEED.load(std::sync::atomic::Ordering::Relaxed) }
+
 fn node_extent(n: &Node) -> [f64; 3] {
     let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
     for p in &n.mesh.pos {
@@ -759,8 +764,13 @@ impl Scene {
         let nodes_json: Vec<_> = self.nodes.iter().map(|n| {
             let mt = &self.materials[n.material];
             let mut j = json!({"name": n.name, "class": n.class, "material": mt.name, "spec": mt.spec, "pose": n.pose});
-            if let Some(spec) = &mt.spec {
-                let g = ig_shade::for_material(spec, &mt.name, &n.name, node_extent(n), [mt.color[0], mt.color[1], mt.color[2]]);
+            if let Some(spec0) = &mt.spec {
+                // (the material rules, MATERIAL_RULES: what reshade starts from is kept beside the result)
+                let (ext, rgb0) = (node_extent(n), [mt.color[0], mt.color[1], mt.color[2]]);
+                let (spec, rgb, _) = ig_shade::rules::resolve(ig_shade::rules::loaded(), house_seed(), spec0, &mt.name, &n.name, &n.class, rgb0);
+                j["spec0"] = spec0.clone(); j["rgb0"] = json!(rgb0); j["ext"] = json!(ext); j["spec"] = spec.clone();
+                let (spec, rgb) = (&spec, rgb);
+                let g = ig_shade::for_material(spec, &mt.name, &n.name, ext, rgb);
                 if let Some(g) = g {
                     let key = g.to_string();
                     let id = *graph_ids.entry(key).or_insert_with(|| { graphs.push(g); graphs.len() - 1 });
@@ -772,7 +782,7 @@ impl Scene {
         // the plain (non-spec) material values, for importers that take geometry only (usdc)
         let materials_json: Vec<_> = self.materials.iter().map(|m| json!({"name": m.name, "color": m.color, "metallic": m.metallic, "roughness": m.roughness, "emissive": m.emissive, "emissive_strength": m.emissive_strength})).collect();
         let lights_json: Vec<_> = self.lights.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
-        let mut sidecar = json!({"nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json, "graphs": graphs});
+        let mut sidecar = json!({"house_seed": house_seed(), "nodes": nodes_json, "lights": lights_json, "cloth": self.cloth, "materials": materials_json, "graphs": graphs});
         if !self.lights_off.is_empty() {
             sidecar["lights_off"] = self.lights_off.iter().map(|l| json!({"name": l.name, "loc": l.loc, "watt": l.watt, "radius": l.radius, "temperature": l.temperature})).collect();
         }

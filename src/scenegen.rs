@@ -319,6 +319,7 @@ pub fn build_scene(p: &Params) -> Built {
     let mut scene = Scene::default();
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
     let room_list: Vec<(String, String)> = g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect();
+    ig_core::mesh::set_house_seed(seed);
     let mut decos = indoorgen::materials::decorate_rooms(seed, &room_list);
     // variation: wall / ceiling / floor base colours (own seeds; the procedural material specs are untouched, the renderer reads `variation.walls` etc.)
     let (wall_cols, ceil_cols, floor_cols) = (var.walls.pick_all(seed, "walls", &room_list), var.ceiling.pick_all(seed, "ceiling", &room_list), var.floor.pick_all(seed, "floor", &room_list));

@@ -1,10 +1,19 @@
 //! Materials as data: each class draws its parameters and builds a shader graph (JSON). Two backends read the same graph: `wgsl` for the
 //! previewer, tools/render/shade_graph.py for Blender. Ported from infinigen/assets/materials (close look-alikes, no bit parity).
 pub mod classes;
+pub mod rules;
 pub mod wgsl;
 use serde_json::{json, Value};
 
 pub use classes::for_material;
+
+/// the inverse of `hsv`
+pub fn rgb_to_hsv(c: [f64; 3]) -> [f64; 3] {
+    let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+    let d = mx - mn;
+    let h = if d <= 0.0 { 0.0 } else if mx == c[0] { ((c[1] - c[2]) / d).rem_euclid(6.0) / 6.0 } else if mx == c[1] { ((c[2] - c[0]) / d + 2.0) / 6.0 } else { ((c[0] - c[1]) / d + 4.0) / 6.0 };
+    [h, if mx > 0.0 { d / mx } else { 0.0 }, mx]
+}
 
 /// the material's own random stream, from its seed
 pub struct R(fastrand::Rng);

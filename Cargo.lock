@@ -1379,6 +1379,7 @@ dependencies = [
  "crc32fast",
  "fastrand",
  "palette",
+ "serde",
  "serde_json",
 ]
 

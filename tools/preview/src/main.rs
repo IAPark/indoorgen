@@ -1155,6 +1155,18 @@ fn main() {
             s.flat = false;
             for fr in frames.iter_mut() { if let Some(&i) = chosen.get(&fr.0) { fr.1 = exposed(&mut r, &mut s, &cams[i], &o); } }
         }
+        // (PREVIEW_SAVE_CAMS=dir: the views chosen, for --cam next time: the search is most of a render's time. Not a cutaway's: it needs its clipping too)
+        if let Some(d) = std::env::var_os("PREVIEW_SAVE_CAMS") {
+            std::fs::create_dir_all(&d).ok();
+            for (key, &i) in &chosen {
+                let c = &cams[i];
+                if c.near.is_some() || c.only.is_some() { continue }
+                let m = c.view.to_cols_array();
+                let rows: Vec<Vec<f32>> = (0..4).map(|r| (0..4).map(|k| m[k * 4 + r]).collect()).collect();
+                let j = serde_json::json!({"matrix": rows, "lens": 18.0 / (c.fov_x * 0.5).tan(), "sensor_width": 36.0});
+                std::fs::write(Path::new(&d).join(format!("{}.json", key.strip_prefix(&format!("{}_", s.name)).unwrap_or(key))), j.to_string()).ok();
+            }
+        }
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
     }
     if frames.is_empty() { eprintln!("no frames"); std::process::exit(2); }
