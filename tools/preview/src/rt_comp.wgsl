@@ -171,7 +171,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   }
   // (not by roughness alone under a coat: where a ceramic's roughness varies across 0.03, a hard switch between sharp and blurred drew camouflage on a sink)
   // (blended out by roughness, not cut: a surface whose roughness wanders across a limit came out in hard patches, on a metal door and a tile floor)
-  let traced = select(0.0, select(1.0 - smoothstep(0.35, 0.6, rough), 1.0, rough < 0.03 && (metal >= 0.5 || coat < 0.25)), ((rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && rough < 0.6 && flat_here)) && fine.r < 0.0);
+  // (at any roughness: a material whose roughness jumps between two values came out in hard patches when one of them took the blurred room light, on a metal door and a tile floor)
+  let traced = select(0.0, 1.0, ((rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && flat_here)) && fine.r < 0.0);
   // (what a rough surface reflects is the room: a lamp's own highlight is the glint below. With its direct light here too, tile seen at a glancing angle near a lamp washed out)
   // (thin brushed metal takes the lamps too: its wide highlights are mostly them, and frames came out black)
   var refl = mix(select(e_room, e, metal >= 0.5 && !flat_here), s, traced) * (fr + vec3<f32>(fc));

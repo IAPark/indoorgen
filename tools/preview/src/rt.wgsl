@@ -459,7 +459,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let rough = a.a;
   var sp = vec3<f32>(0.0);
   let coat = textureLoad(g_nrm, g, 0).a;
-  if ((rough < 0.03 || (coat < 0.25 && rough < 0.6)) && p.misc2.y > 0u) {
+  if ((rough < 0.03 || coat < 0.25) && p.misc2.y > 0u) {
     let v = normalize(pos - p.cam.xyz);
     let r0 = reflect(v, n);
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
@@ -482,10 +482,11 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         let q = o + rd * hh.t + ng * 0.002;
         // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
         // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
+        // (by one sample of the lamps and windows, the same at any roughness: a limit here drew the jumps in a material's roughness across a floor)
         var e_hit = e;
-        if (rough > 0.15 && p.misc2.y > 1u) { // (not in the stripped mode)
-          let eh = lamp(q, ng) + portal(q, ng) + gather(q, ng);
-          e_hit = eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
+        if (rough > 0.15 && p.misc2.y > 1u) {
+          let eh = lamp(q, ng) + portal(q, ng);
+          e_hit = 0.5 * e + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
         }
         sp += m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
       }
@@ -493,6 +494,9 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     if (rays > 0u) { sp /= f32(rays); }
   }
   textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), 1.0));
-  textureStore(out_glint, px, vec4<f32>(lamp_glint(pos, n, o, g, rough, w, h, ss, e), 0.0));
+  // (a rough surface's highlights go with its reflections, through the filter: unfiltered, a jump in its roughness was a hard shape across a metal door)
+  var gl_ = lamp_glint(pos, n, o, g, rough, w, h, ss, e);
+  if (rough > 0.3 && coat < 0.25 && p.misc2.y > 0u) { sp += min(gl_, vec3<f32>(20.0)); gl_ = vec3<f32>(0.0); }
+  textureStore(out_glint, px, vec4<f32>(gl_, 0.0));
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }

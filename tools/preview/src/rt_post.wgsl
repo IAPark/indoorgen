@@ -75,7 +75,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   let spec_only = stp.z == 1u;
   let ee = select(select(c.rgb, e / max(ew, 1e-5), ew > 1e-5), c.rgb, spec_only);
   // (a mirror's picture is no noise: only rough reflections are smoothed, more the rougher)
-  let spec_rounds = select(0u, select(1u, 3u, sc.a > 0.15), sc.a > 0.08);
+  let spec_rounds = select(0u, select(select(1u, 3u, sc.a > 0.15), 5u, sc.a > 0.3), sc.a > 0.08);
   let sv = select(sc.rgb, s / max(sw, 1e-5), spec_only && sw > 1e-5 && it < spec_rounds);
   // (a sliver, alone on its surface: nothing to average its few paths with, so one lucky path is a bright dot on an edge. No brighter than what is around it)
   let lone = stp.y == 0u && stp.z == 0u && ew < 0.35 && dot(av.rgb, av.rgb) > 0.0;
