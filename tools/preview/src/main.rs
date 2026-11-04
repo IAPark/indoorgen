@@ -23,7 +23,7 @@ struct Globals {
 struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 4]; 4], p: [[f32; 4]; 48] }
 
 #[derive(Clone)]
-struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String)>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the room's floor in view, walls considered */ cover: f32, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
+struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String, [[f32; 4]; 2])>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the room's floor in view, walls considered */ cover: f32, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
 
 struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
@@ -739,7 +739,7 @@ fn auto_cams(s: &Scene, n: usize) -> Vec<Cam> {
             let m_ = |t: f32, b: f32| if (t - b).abs() > 1e-3 { 0.06 } else { 0.02 };
             cm.clip = [sx, 0.0, 0.0, if sx > 0.0 { tl.x + m_(tl.x, lo.x) } else { -th.x + m_(th.x, hi.x) }];
             cm.clip2 = [0.0, sy, 0.0, if sy > 0.0 { tl.y + m_(tl.y, lo.y) } else { -th.y + m_(th.y, hi.y) }];
-            cm.only = Some((lo, hi, rm.name.clone()));
+            cm.only = Some((lo, hi, rm.name.clone(), [cm.clip, cm.clip2]));
             cm.name = format!("{}_A~h", rm.name);
             out.push(cm);
         } else if rm.area < 40.0 && rm.name.starts_with("hallway") {
@@ -948,7 +948,7 @@ fn cut_plane(eye: Option<Vec3>, lo: &Vec3, hi: &Vec3) -> (f32, f32, f32, f32) {
     let (sx, sy) = (if e.x < c.x { 1.0 } else { -1.0 }, if e.y < c.y { 1.0 } else { -1.0 });
     (sx, if sx > 0.0 { lo.x } else { -hi.x }, sy, if sy > 0.0 { lo.y } else { -hi.y })
 }
-fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wgpu::RenderPipeline>, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String)>) {
+fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wgpu::RenderPipeline>, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String, [[f32; 4]; 2])>) {
     let mut bound = None;
     for d in &s.draws {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
@@ -960,7 +960,7 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
             let low = s.glb.nodes[d.node].name.to_lowercase();
             if low.contains(".wall") || low.contains("ceiling") || low.starts_with("door") || (low.starts_with("window") && !low.starts_with("windowseat")) || low.contains("curtain") || low.contains("skirting") || low.starts_with("outdoor") || low.starts_with("exterior") || low.contains(".glass") || low.contains(".rod") { continue; }
         }
-        if let Some((lo, hi, room)) = only {
+        if let Some((lo, hi, room, cuts)) = only {
             let nm = s.glb.nodes[d.node].name.replace('/', "_");
             let low = nm.to_lowercase();
             if low.contains(".ceiling") || low.contains("ceiling") || low.starts_with("outdoor") || low.starts_with("exterior") || low.contains("skirting") || low.contains("pendant") || low.contains("_light") || low.starts_with("beam") { continue; }
@@ -970,8 +970,9 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
             else if (low.starts_with("door") || low.starts_with("window") || low.contains("curtain")) && { let c = (d.bmin + d.bmax) * 0.5; let n = [cut_plane(eye, lo, hi)]; n[0].0 * c.x < n[0].1 + 0.3 * 1.0 && n[0].0 != 0.0 || n[0].2 * c.y < n[0].3 + 0.3 && n[0].2 != 0.0 } { continue; }
             else { let c = (d.bmin + d.bmax) * 0.5; if c.x < lo.x - 0.15 || c.x > hi.x + 0.15 || c.y < lo.y - 0.15 || c.y > hi.y + 0.15 { continue; }
                 // (what hangs on a cut wall goes with it: a picture was left hanging in the air)
-                let thin = (d.bmax - d.bmin).truncate().min_element() < 0.12; let n = cut_plane(eye, lo, hi);
-                if thin && d.bmin.z > lo.z + 0.3 && ((n.0 != 0.0 && n.0 * c.x < n.1 + 0.3) || (n.2 != 0.0 && n.2 * c.y < n.3 + 0.3)) { continue; } }
+                // (measured from the planes that cut it: the room's box runs on through a door's threshold, 25 cm past the wall, and a towel rail stayed behind)
+                let thin = (d.bmax - d.bmin).truncate().min_element() < 0.12;
+                if thin && d.bmin.z > lo.z + 0.3 && cuts.iter().any(|k| Vec3::new(k[0], k[1], k[2]).dot(c) < k[3] + 0.3) { continue; } }
         }
         if let Some(f) = fr { if !visible(f, d.bmin, d.bmax) { continue; } }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
