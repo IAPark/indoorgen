@@ -84,7 +84,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   // (path traced, a material with no graph: its own roughness and metal, or a steel fridge came out as white paint)
   if (!pbr && g.params2.w > 0.5) { surf_rough = m.p[47].x; surf_metal = m.p[47].y; }
   // (floors, as render_rust.py makes them: satin at most, a little less saturated, hardly any coat. As mirrors they caught a lamp in a blaze of glare)
-  if (m.emissive.w > 0.5 && g.params2.w > 0.5) {
+  if (m.emissive.w > 1.5 && g.params2.w > 0.5) {
     surf_rough = max(surf_rough, 0.42); surf_coat = min(surf_coat, 0.1);
     let top = max(surf_color.r, max(surf_color.g, surf_color.b));
     surf_color = 0.97 * (vec3<f32>(top) - 0.72 * (vec3<f32>(top) - surf_color));
@@ -144,7 +144,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   out.nrm = vec4<f32>(n, surf_coat);
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
   out.alb = vec4<f32>(albedo.rgb, select(max(surf_rough, 0.002), 0.0, m.flags.w < -0.5));
-  out.mat = vec4<f32>(surf_metal, surf_coat, max(m.flags.w, 0.0), 1.0);
+  out.mat = vec4<f32>(surf_metal, surf_coat, max(m.flags.w, 0.0), 1.0 + select(m.emissive.w, 0.0, m.emissive.w > 1.5)); // (1 + how sheer: the albedo probe takes a alpha of 0 for nothing drawn
   if (g.params2.w > 0.5 && m.flags.x < 1.5) { out.color = vec4<f32>(m.emissive.rgb, 1.0); }
   // (glass, over the traced picture: a little is lost in it; what lies behind is already lit)
   if (g.params2.w > 0.5 && m.flags.x > 1.5) {
@@ -155,7 +155,9 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     if (m.flags.w < -1.5) {
       // (the near face only: both of a slab's added up to a grey sheet)
       let mt = textureLoad(mirror_tex, vec2<i32>(v.clip.xy / g.params2.y), 0);
-      if (mt.a > 0.0 && ff) { out.color = vec4<f32>(mt.rgb, 0.04 + 0.96 * pow(1.0 - abs(dot(n, vdir)), 5.0)); }
+      // (a pane almost edge-on is a sliver thinner than a pixel: at full Fresnel it was opaque in dots along the rail. Faded out there, and never a solid wall of reflection)
+      let nv_ = abs(dot(n, vdir));
+      if (mt.a > 0.0 && ff) { out.color = vec4<f32>(mt.rgb, min(0.04 + 0.96 * pow(1.0 - nv_, 5.0), 0.5) * smoothstep(0.02, 0.15, nv_)); }
     }
   }
   return out;

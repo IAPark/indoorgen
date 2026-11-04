@@ -34,6 +34,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(14) var out_glint: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(15) var out_lamp: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(16) var lamp_done: texture_2d<f32>;
+@group(0) @binding(17) var g_mat: texture_2d<f32>;
 struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 @group(0) @binding(11) var<storage, read> wins: array<W>;
 
@@ -298,6 +299,28 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     lamp_share[li] = f_;
     if (f_ > 0.0) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
     li++; }
+  // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
+  var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
+  let sheer = textureLoad(g_mat, g, 0).w - 1.0;
+  if (sheer > 0.001) {
+    dl_ *= 1.0 - sheer;
+    let rough_ = textureLoad(g_alb, g, 0).a;
+    let vd = normalize(pos - p.cam.xyz);
+    var thru = vec3<f32>(0.0);
+    for (var k = 0; k < 2; k++) {
+      let rd = cone(vd, min(rough_ * rough_, 0.8));
+      let hh = closest(pos + vd * 0.012, rd, 1000.0);
+      if (hh.i < 0) { thru += sky_at(rd); } else {
+        let t_ = tris[hh.i]; let m_ = mats[t_.mat];
+        var ng = normalize(cross(t_.e1.xyz, t_.e2.xyz));
+        if (dot(ng, rd) > 0.0) { ng = -ng; }
+        let q = pos + vd * 0.012 + rd * hh.t + ng * 0.002;
+        thru += m_.emissive.rgb + m_.albedo.rgb * direct(q, ng);
+      }
+    }
+    thru *= 0.5;
+    thru_e = sheer * thru;
+  }
   textureStore(out_lamp, px, vec4<f32>(dl_, 1.0));
   var e = vec3<f32>(0.0);
   let spp = p.dims.w;
@@ -306,7 +329,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
-  e /= f32(spp);
+  e = e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e;
   textureStore(out_irr, px, vec4<f32>(e, 0.0));
 }
 
@@ -379,26 +402,13 @@ fn lamp_smooth(px: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, dims: vec2<f32>, w: 
   } }
   return select(c, acc / wa, wa > 1e-4);
 }
-// How bright a lamp itself looks along this pixel's view ray, if one lies before the point seen
-fn lamp_sphere(pos: vec3<f32>) -> f32 {
-  let c = p.cam.xyz; let dv = pos - c; let dl = length(dv); let d = dv / dl;
-  var best = 0.0; var i = 0u;
-  loop { if (i >= p.misc.z) { break; }
-    let v = lights[i].pos.xyz - c; let t = dot(v, d);
-    if (t > 0.0 && t < dl + 0.05) {
-      let m2 = dot(v, v) - t * t;
-      if (m2 < LAMP_R * LAMP_R) { best = max(best, dot(lights[i].col.xyz, vec3<f32>(0.333)) * p.scale.x / (LAMP_R * LAMP_R)); }
-    }
-    i++; }
-  return best;
-}
 // The lamps' own highlights on a glossy surface, before Fresnel: reflections of the room carry no lamps, since a lamp is a point and no ray finds it
 fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f32, w: i32, h: i32, ss: i32, e: vec3<f32>) -> vec3<f32> {
-  if (rough < 0.001 || rough > 0.45 || p.misc2.w == 8u) { return vec3<f32>(0.0); }
+    if (rough < 0.001 || rough > 0.45 || p.misc2.w == 8u) { return vec3<f32>(0.0); }
   // relief finer than a pixel widens the highlight (Toksvig)
   var nb = n;
   for (var k = 0; k < 4; k++) {
-    let dq = array<vec2<i32>, 4>(vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1))[k] * max(ss / 2, 1);
+    let dq = array<vec2<i32>, 4>(vec2<i32>(1, 1), vec2<i32>(-1, 1), vec2<i32>(1, -1), vec2<i32>(-1, -1))[k] * ss; // (over the whole traced pixel: what it covers is what widens the highlight)
     let nq = textureLoad(g_nrm, clamp(g + dq, vec2<i32>(0), vec2<i32>(w * ss - 1, h * ss - 1)), 0).xyz;
     nb += select(n, nq, dot(nq, n) > 0.5);
   }
@@ -426,7 +436,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     i++; }
   if (bd <= 0.0 || occluded(o, bl, bd - 0.02)) { return vec3<f32>(0.0); }
   // (faded in from there, or the glow ended in a hard edge)
-  return min(out, vec3<f32>(500.0)) * clamp(best / floor_ - 1.0, 0.0, 1.0);
+  // (and by roughness: on a tile whose roughness varies, a hard limit made it dots)
+  return min(out, vec3<f32>(500.0)) * clamp(best / floor_ - 1.0, 0.0, 1.0) * (1.0 - smoothstep(0.2, 0.45, rough));
 }
 @compute @workgroup_size(8, 8) fn trace_spec(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
@@ -435,7 +446,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
-  if (d >= 1.0) { textureStore(out_spec, px, vec4<f32>(0.0)); textureStore(out_glint, px, vec4<f32>(0.0, 0.0, 0.0, lamp_sphere(world_of(g, 0.9999, dims, p.inv_vp)))); textureStore(out_lamp, px, vec4<f32>(0.0)); return; }
+  if (d >= 1.0) { textureStore(out_spec, px, vec4<f32>(0.0)); textureStore(out_glint, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
@@ -482,6 +493,6 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     if (rays > 0u) { sp /= f32(rays); }
   }
   textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), 1.0));
-  textureStore(out_glint, px, vec4<f32>(lamp_glint(pos, n, o, g, rough, w, h, ss, e), lamp_sphere(pos)));
+  textureStore(out_glint, px, vec4<f32>(lamp_glint(pos, n, o, g, rough, w, h, ss, e), 0.0));
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }

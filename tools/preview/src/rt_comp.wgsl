@@ -95,6 +95,14 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let t = textureLoad(c_fine, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a;
     v_lo = min(v_lo, t); v_hi = max(v_hi, t);
   }
+  // (a sliver no traced pixel landed on, lit by the sun alone among what is around it: a ray slipping past a wall's edge, a broken bright line along a join. Its sun is what its neighbours have)
+  if (fine.r >= 0.0 && v > v_lo) {
+    v = v_lo; for (var k = 0; k < 4; k++) {
+      let o = array<vec2<i32>, 4>(vec2<i32>(ss, 0), vec2<i32>(-ss, 0), vec2<i32>(0, ss), vec2<i32>(0, -ss))[k];
+      v = max(v, textureLoad(c_fine, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a);
+    }
+    v = min(v, fine.a);
+  }
   if (v_hi > v_lo) {
     var vs = 0.0; var vc = 0.0;
     for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
@@ -157,9 +165,9 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
       let o = array<vec2<i32>, 4>(vec2<i32>(r_, 0), vec2<i32>(-r_, 0), vec2<i32>(0, r_), vec2<i32>(0, -r_))[k];
       let qq = clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1));
       let nq = textureLoad(c_nrm, qq, 0).xyz;
-      if (dot(n, nq) < 0.98 * length(nq) || textureLoad(c_mat, qq, 0).x < 0.5) { off_++; }
+      if ((ss > 1 && dot(n, nq) < 0.98 * length(nq)) || textureLoad(c_mat, qq, 0).x < 0.5 || textureLoad(c_alb, qq, 0).a < 0.001) { off_++; } // (a mirror beside it is no more of the same metal)
     }
-    flat_here = off_ < 2 || ss == 1;
+    flat_here = off_ < 2;
   }
   // (not by roughness alone under a coat: where a ceramic's roughness varies across 0.03, a hard switch between sharp and blurred drew camouflage on a sink)
   let traced = ((rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && rough < 0.5 && flat_here)) && fine.r < 0.0;
@@ -168,14 +176,9 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   var refl = select(select(e_room, e, metal >= 0.5 && !flat_here), s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
-  // a lamp the camera sees: a small very bright sphere, as Cycles draws a point light
-  var sphere = 0.0;
-  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
-    let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
-    sphere += textureLoad(c_glint, q, 0).a * (1.0 - abs(f.x - f32(b.x + i))) * (1.0 - abs(f.y - f32(b.y + j)));
-  } }
-  let col = vec3<f32>(sphere) + textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_ * (fr + vec3<f32>(fc)), vec3<f32>(0.0), cloth);
+  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_ * (fr + vec3<f32>(fc)), vec3<f32>(0.0), cloth);
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
+  if (p.misc2.w == 9u) { textureStore(o_lit, px0, vec4<f32>(mt.w - 1.0, mt.z, a.a, 1.0)); return; }
   if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }
   if (p.misc2.w == 5u) { textureStore(o_lit, px0, vec4<f32>(vec3<f32>(v), 1.0)); return; }
   if (p.misc2.w == 6u) { textureStore(o_lit, px0, vec4<f32>(n * 0.5 + 0.5, 1.0)); return; }
