@@ -83,6 +83,12 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   /*SURF*/
   // (path traced, a material with no graph: its own roughness and metal, or a steel fridge came out as white paint)
   if (!pbr && g.params2.w > 0.5) { surf_rough = m.p[47].x; surf_metal = m.p[47].y; }
+  // (floors, as render_rust.py makes them: satin at most, a little less saturated, hardly any coat. As mirrors they caught a lamp in a blaze of glare)
+  if (m.emissive.w > 0.5 && g.params2.w > 0.5) {
+    surf_rough = max(surf_rough, 0.42); surf_coat = min(surf_coat, 0.1);
+    let top = max(surf_color.r, max(surf_color.g, surf_color.b));
+    surf_color = 0.97 * (vec3<f32>(top) - 0.72 * (vec3<f32>(top) - surf_color));
+  }
   if (pbr) {
     albedo = vec4<f32>(surf_color, 1.0);
     // bump from the screen-space slope of the height (surface gradient)
@@ -144,11 +150,12 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   if (g.params2.w > 0.5 && m.flags.x > 1.5) {
     // (and it mirrors the room, more at a glancing angle)
     let fr = 0.02 + 0.6 * pow(1.0 - abs(dot(n, vdir)), 5.0);
-    out.color = vec4<f32>(g.ground.rgb, max(fr, select(0.0, m.flags.z * 0.5, m.flags.z > 0.0)));
+    out.color = vec4<f32>(g.ground.rgb, select(max(fr, select(0.0, m.flags.z * 0.5, m.flags.z > 0.0)), 0.0, m.flags.w < -1.5));
     // (a flat pane of real glass: the room it mirrors, traced like a mirror's, by Fresnel. At a glancing angle a shower's pane is mostly this)
     if (m.flags.w < -1.5) {
+      // (the near face only: both of a slab's added up to a grey sheet)
       let mt = textureLoad(mirror_tex, vec2<i32>(v.clip.xy / g.params2.y), 0);
-      if (mt.a > 0.0) { out.color = vec4<f32>(mt.rgb, 0.04 + 0.96 * pow(1.0 - abs(dot(n, vdir)), 5.0)); }
+      if (mt.a > 0.0 && ff) { out.color = vec4<f32>(mt.rgb, 0.04 + 0.96 * pow(1.0 - abs(dot(n, vdir)), 5.0)); }
     }
   }
   return out;

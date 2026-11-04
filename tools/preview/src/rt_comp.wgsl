@@ -108,7 +108,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     if (vc > 0.0) { v = vs / vc; }
   }
   // (the filtered light has no strong lamps in it: the nearest lamps' direct light, with its shadows, comes on top. A surface traced on its own has them already)
-  if (fine.r >= 0.0) { e = min(fine.rgb, (e + dl_) * 1.2); } else { e += dl_; }
+  let e_room = select(e, min(fine.rgb, (e + dl_) * 1.2), fine.r >= 0.0);
+  if (fine.r >= 0.0) { e = e_room; } else { e += dl_; }
   let metal = mt.x;
   // (cloth is matte, as render_rust.py makes it: very rough, a weak specular)
   let cloth = mt.z > 0.0;
@@ -160,7 +161,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   }
   // (not by roughness alone under a coat: where a ceramic's roughness varies across 0.03, a hard switch between sharp and blurred drew camouflage on a sink)
   let traced = ((rough < 0.03 && (metal >= 0.5 || coat < 0.25)) || (coat < 0.25 && rough < 0.5 && flat_here)) && fine.r < 0.0;
-  var refl = select(e, s, traced) * (fr + vec3<f32>(fc));
+  // (what a rough surface reflects is the room: a lamp's own highlight is the glint below. With its direct light here too, tile seen at a glancing angle near a lamp washed out)
+  var refl = select(e_room, s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
   let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_ * (fr + vec3<f32>(fc)), vec3<f32>(0.0), cloth);

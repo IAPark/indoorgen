@@ -112,6 +112,21 @@ fn look_at_rh(eye: Vec3, tgt: Vec3, up: Vec3) -> Mat4 {
     let f = (tgt - eye).normalize(); let s = f.cross(up).normalize(); let u = s.cross(f);
     Mat4::from_cols(Vec4::new(s.x, u.x, -f.x, 0.0), Vec4::new(s.y, u.y, -f.y, 0.0), Vec4::new(s.z, u.z, -f.z, 0.0), Vec4::new(-s.dot(eye), -u.dot(eye), f.dot(eye), 1.0))
 }
+/// A black body's colour in linear Rec.709 at luminance 1, as Blender's node gives (Planck's law over the CIE curves, Wyman's fit). The other one below is an 8-bit display colour: as light, it made lamps far too white
+fn blackbody_linear(t: f32) -> Vec3 {
+    let g = |x: f32, m: f32, s1: f32, s2: f32| { let d = (x - m) / if x < m { s1 } else { s2 }; (-0.5 * d * d).exp() };
+    let (mut x_, mut y_, mut z_) = (0f64, 0f64, 0f64);
+    for l in (380..=780).step_by(5) {
+        let l = l as f32;
+        let m = l as f64 * 1e-9;
+        let b = 1.0 / (m.powi(5) * ((1.4388e-2 / (m * t as f64)).exp() - 1.0));
+        x_ += b * (1.056 * g(l, 599.8, 37.9, 31.0) + 0.362 * g(l, 442.0, 16.0, 26.7) - 0.065 * g(l, 501.1, 20.4, 26.2)) as f64;
+        y_ += b * (0.821 * g(l, 568.8, 46.9, 40.5) + 0.286 * g(l, 530.9, 16.3, 31.1)) as f64;
+        z_ += b * (1.217 * g(l, 437.0, 11.8, 36.0) + 0.681 * g(l, 459.0, 26.0, 13.8)) as f64;
+    }
+    let (x_, y_, z_) = ((x_ / y_) as f32, 1.0f32, (z_ / y_) as f32);
+    Vec3::new(3.2406 * x_ - 1.5372 * y_ - 0.4986 * z_, -0.9689 * x_ + 1.8758 * y_ + 0.0415 * z_, 0.0557 * x_ - 0.2040 * y_ + 1.0570 * z_).max(Vec3::ZERO)
+}
 fn blackbody(t: f32) -> Vec3 {
     let t = t / 100.0;
     let r = if t <= 66.0 { 255.0 } else { (329.698727446 * (t - 60.0).powf(-0.1332047592)).clamp(0.0, 255.0) };
@@ -157,13 +172,12 @@ fn flat_columns(im: &image::RgbaImage) -> f32 {
 }
 
 /// a small abstract painting, its own for each frame (by name)
-fn photo_art(seed: u64, node: &str, p: &glb::Prim) -> Option<image::RgbaImage> {
+fn photo_art(seed: u64, node: &str, ex: f32, ey: f32, ez: f32) -> Option<image::RgbaImage> {
     let dir = std::env::var("ART_PHOTOS").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("work/assets/art_photos"));
     let mut files: Vec<String> = std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok()?.file_name().into_string().ok()).filter(|f| f.ends_with(".jpg")).collect();
     files.sort();
     let h = rt::crc32(format!("{seed}:{}", node.split('#').next().unwrap_or(node)).as_bytes());
     if h % 100 < 15 || files.is_empty() { return None }
-    let (ex, ey, ez) = (p.bmax[0] - p.bmin[0], p.bmax[1] - p.bmin[1], p.bmax[2] - p.bmin[2]);
     let asp = ex.max(ey) / ez.max(1e-3);
     let best = [("0.75", 0.75f32), ("1.0", 1.0), ("1.33", 1.33), ("1.5", 1.5)].into_iter().min_by(|a, b| (a.1 / asp.max(1e-3)).ln().abs().partial_cmp(&(b.1 / asp.max(1e-3)).ln().abs()).unwrap())?.0;
     let cands: Vec<&String> = files.iter().filter(|f| f.contains(&format!("_{best}_"))).collect();
@@ -288,7 +302,18 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
             // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
             // (path traced: as Blender, a print where its rule gives this picture one, and otherwise the material's own shader)
-            let rt_print = if opts.rt.is_some() && matches!(cls, "art.Art" | "art.DarkArt") { photo_art(opts.seed, &n.name, p) } else { None };
+            // (in the part's own frame, the sidecar's pose: render_rust.py moves the mesh into it, and takes the picture's size and direction from there)
+            let art_frame = (opts.rt.is_some() && matches!(cls, "art.Art" | "art.DarkArt")).then(|| {
+                let inv = side_nodes.get(n.name.as_str()).and_then(|x| x["pose"].as_array()).map(|pr| {
+                    let g_ = |r: usize, c: usize| pr[r][c].as_f64().unwrap_or(0.0) as f32;
+                    Mat4::from_cols_array_2d(&[[g_(0, 0), g_(1, 0), g_(2, 0), g_(3, 0)], [g_(0, 1), g_(1, 1), g_(2, 1), g_(3, 1)], [g_(0, 2), g_(1, 2), g_(2, 2), g_(3, 2)], [g_(0, 3), g_(1, 3), g_(2, 3), g_(3, 3)]]).inverse()
+                }).unwrap_or(Mat4::IDENTITY);
+                let c = &glb.chunks[p.pos.chunk][p.pos.off as usize..(p.pos.off + p.pos.len) as usize];
+                let loc: Vec<Vec3> = (0..p.vcount as usize).map(|k| { let f = |d: usize| f32::from_le_bytes(c[(k * 3 + d) * 4..(k * 3 + d) * 4 + 4].try_into().unwrap()); inv.transform_point3(Vec3::new(f(0), f(1), f(2))) }).collect();
+                let (lo, hi) = loc.iter().fold((Vec3::splat(1e9), Vec3::splat(-1e9)), |(a, b), v| (a.min(*v), b.max(*v)));
+                (loc, lo, hi)
+            });
+            let rt_print = art_frame.as_ref().and_then(|(_, lo, hi)| photo_art(opts.seed, &n.name, hi.x - lo.x, hi.y - lo.y, hi.z - lo.z));
             let is_art = if opts.rt.is_some() { rt_print.is_some() } else { m.name == "art" || m.name.starts_with("art~") || m.name.starts_with("gallery_art") };
             let shown = is_art;
             let tex = if shown {
@@ -312,10 +337,10 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                 pipes.len() - 1
             }));
             // (an appliance's door: dark in Cycles, where nothing lights the inside. Here the racks behind it stood fully lit)
-            let dark_glass = glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
+            let dark_glass = opts.rt.is_none() && glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], if lname.contains(".floor") { 1.0 } else { 0.0 }], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else { 0.0 }, if dark_glass { 0.85 } else if opts.rt.is_none() && m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
                 if graph.is_none() { u.p[47] = if shown { [0.45, 0.0, 0.0, 0.0] } else { [m.rough, m.metal, 0.0, 0.0] }; }
                 if let Some(e) = graph {
                     for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
@@ -340,14 +365,12 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let vw = |v: &glb::View| (v.chunk, v.off, v.len);
             // (a print laid on as Blender does it, from the part's own extents along the wall and up: art meshes need have no coordinates of their own)
             let art_uv = (opts.rt.is_some() && is_art).then(|| {
-                let c = &glb.chunks[p.pos.chunk][p.pos.off as usize..(p.pos.off + p.pos.len) as usize];
-                let (ex, ey) = (p.bmax[0] - p.bmin[0], p.bmax[1] - p.bmin[1]);
-                let (ax, lo, ext) = if ex >= ey { (0usize, p.bmin[0], ex) } else { (1usize, p.bmin[1], ey) };
+                let (loc, lo, hi) = art_frame.as_ref().unwrap();
+                let ax = if hi.x - lo.x >= hi.y - lo.y { 0usize } else { 1 };
                 let mut uv = Vec::with_capacity(p.vcount as usize * 8);
-                for k in 0..p.vcount as usize {
-                    let f = |d: usize| f32::from_le_bytes(c[(k * 3 + d) * 4..(k * 3 + d) * 4 + 4].try_into().unwrap());
-                    uv.extend_from_slice(&((f(ax) - lo) / ext.max(1e-4)).to_le_bytes());
-                    uv.extend_from_slice(&((f(2) - p.bmin[2]) / (p.bmax[2] - p.bmin[2]).max(1e-4)).to_le_bytes());
+                for v in loc {
+                    uv.extend_from_slice(&((v[ax] - lo[ax]) / (hi[ax] - lo[ax]).max(1e-4)).to_le_bytes());
+                    uv.extend_from_slice(&((v.z - lo.z) / (hi.z - lo.z).max(1e-4)).to_le_bytes());
                 }
                 bufs.push(gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &uv, usage: wgpu::BufferUsages::VERTEX }));
                 (bufs.len() - 1, 0u64, uv.len() as u64)
@@ -357,7 +380,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
         }
     }
     let lights: Vec<Light> = side["lights"].as_array().map(|ls| ls.iter().map(|l| {
-        let loc = &l["loc"]; let w = l["watt"].as_f64().unwrap_or(50.0) as f32; let c = blackbody(l["temperature"].as_f64().unwrap_or(5000.0) as f32);
+        let loc = &l["loc"]; let w = l["watt"].as_f64().unwrap_or(50.0) as f32; let tk = l["temperature"].as_f64().unwrap_or(5000.0) as f32; let c = if opts.rt.is_some() { blackbody_linear(tk) } else { blackbody(tk) };
         Light { pos: Vec3::new(loc[0].as_f64().unwrap() as f32, loc[1].as_f64().unwrap() as f32, loc[2].as_f64().unwrap() as f32), color: c * (w / (4.0 * std::f32::consts::PI * std::f32::consts::PI)) * opts.light_scale }
     }).collect()).unwrap_or_default();
     // sun
