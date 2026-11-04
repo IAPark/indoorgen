@@ -274,11 +274,10 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   let e = textureLoad(irr_done, px, 0).rgb;
   // what a glossy surface reflects
   let a = textureLoad(g_alb, g, 0);
-  // (a clear coat is smoother than what lies under it, though Blender's fine relief scatters what it mirrors)
-  let coat = textureLoad(g_nrm, g, 0).a;
-  let rough = select(a.a, min(a.a, 0.4), coat > 0.25);
+  let rough = a.a;
   var sp = vec3<f32>(0.0);
-  if (rough < 0.55 && p.misc2.y > 0u) {
+  let coat = textureLoad(g_nrm, g, 0).a;
+  if ((rough < 0.03 || (coat < 0.25 && rough < 0.5)) && p.misc2.y > 0u) {
     let v = normalize(pos - p.cam.xyz);
     let r0 = reflect(v, n);
     for (var s = 0u; s < p.misc2.y; s++) {

@@ -238,7 +238,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     }
     let side: Value = std::fs::read(path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
     if opts.verbose { eprintln!("  glb parse {:.2}s ({} nodes, {} chunks)", t.elapsed().as_secs_f32(), glb.nodes.len(), glb.chunks.len()); }
-    let bufs: Vec<wgpu::Buffer> = glb.chunks.iter().map(|c| gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: c,
+    let mut bufs: Vec<wgpu::Buffer> = glb.chunks.iter().map(|c| gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: c,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX })).collect();
     let maxv = glb.nodes.iter().flat_map(|n| n.prims.iter()).map(|p| p.vcount).max().unwrap_or(1) as u64;
     let zeros = gpu.dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: maxv * 12, usage: wgpu::BufferUsages::VERTEX, mapped_at_creation: false });
@@ -277,7 +277,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let mi = p.mat.min(glb.mats.len().saturating_sub(1));
             let tex = if m.tex.is_some() { format!("glb:{mi}") } else { tex.clone() };
             // (art and mirrors are the renderer's shaders: here a painting of its own for each, and a silver sheen, not flat tan and white boards)
-            let is_art = m.name == "art" || m.name.starts_with("art~") || m.name.starts_with("gallery_art");
+            let is_art = m.name == "art" || m.name.starts_with("art~") || m.name.starts_with("gallery_art") || (opts.rt.is_some() && matches!(cls, "art.Art" | "art.DarkArt"));
             let shown = is_art;
             let tex = if shown {
                 let k = format!("{}:{}", m.name, n.name);
@@ -323,7 +323,21 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             if !is_ceil && !lname.starts_with("skirting_ceiling") { bmin = bmin.min(lo); bmax = bmax.max(hi); }
             if !lname.starts_with("outdoor") { sh_lo = sh_lo.min(lo); sh_hi = sh_hi.max(hi); }
             let vw = |v: &glb::View| (v.chunk, v.off, v.len);
-            draws.push(Draw { mat: mi, node: ni, pos: vw(&p.pos), nrm: p.nrm.as_ref().map(vw), uv: p.uv.as_ref().map(vw), idx: vw(&p.idx), u16: p.idx_u16, icount: p.icount, vcount: p.vcount,
+            // (a print laid on as Blender does it, from the part's own extents along the wall and up: art meshes need have no coordinates of their own)
+            let art_uv = (opts.rt.is_some() && is_art).then(|| {
+                let c = &glb.chunks[p.pos.chunk][p.pos.off as usize..(p.pos.off + p.pos.len) as usize];
+                let (ex, ey) = (p.bmax[0] - p.bmin[0], p.bmax[1] - p.bmin[1]);
+                let (ax, lo, ext) = if ex >= ey { (0usize, p.bmin[0], ex) } else { (1usize, p.bmin[1], ey) };
+                let mut uv = Vec::with_capacity(p.vcount as usize * 8);
+                for k in 0..p.vcount as usize {
+                    let f = |d: usize| f32::from_le_bytes(c[(k * 3 + d) * 4..(k * 3 + d) * 4 + 4].try_into().unwrap());
+                    uv.extend_from_slice(&((f(ax) - lo) / ext.max(1e-4)).to_le_bytes());
+                    uv.extend_from_slice(&((f(2) - p.bmin[2]) / (p.bmax[2] - p.bmin[2]).max(1e-4)).to_le_bytes());
+                }
+                bufs.push(gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &uv, usage: wgpu::BufferUsages::VERTEX }));
+                (bufs.len() - 1, 0u64, uv.len() as u64)
+            });
+            draws.push(Draw { mat: mi, node: ni, pos: vw(&p.pos), nrm: p.nrm.as_ref().map(vw), uv: art_uv.or(p.uv.as_ref().map(vw)), idx: vw(&p.idx), u16: p.idx_u16, icount: p.icount, vcount: p.vcount,
                 mat_bg: bi, pipe, glass, shadow: !glass && !(opts.no_ceiling && is_ceil), bmin: lo, bmax: hi });
         }
     }

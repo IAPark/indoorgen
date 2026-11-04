@@ -97,16 +97,20 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let ab = vec2<f32>(-1.04, 1.04) * a004 + r_.zw;
   let fr = f0 * ab.x + vec3<f32>(ab.y);
   let coat = textureLoad(c_nrm, px, 0).a;
-  let fc = coat * 0.7 * (0.04 + 0.96 * pow(1.0 - nv, 5.0));
+  let fc = coat * (0.04 + 0.96 * pow(1.0 - nv, 5.0));
   let h_ = normalize(sun + vdir);
   let r2 = max(rough * rough, 0.002); let ndh = max(dot(n, h_), 0.0);
   let dn = ndh * ndh * (r2 * r2 - 1.0) + 1.0;
   let ggx = r2 * r2 / (PI * dn * dn + 1e-6);
   let vf = 0.25 / max(mix(nv, 1.0, r2 * 0.5) * mix(ndl, 1.0, r2 * 0.5), 0.05);
   let spec_sun = (f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(h_, vdir), 0.0), 5.0)) * min(ggx * vf, 40.0) * ndl * p.sun_col.rgb * v;
-  // (rays were sent only for the glossy: a matt surface mirrors the room's light, blurred)
-  let traced = rough < 0.55 || coat > 0.25;
+  // (rays only for the truly glossy: anything rougher, or a coat over fine relief as Blender's surfaces have, gives back the room's light, blurred. Traced, floors came out in sharp glare)
+  let traced = rough < 0.03 || (coat < 0.25 && rough < 0.5);
   var refl = select(e, s, traced) * (fr + vec3<f32>(fc));
   let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) + refl + spec_sun;
+  // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
+  if (p.misc2.w == 2u) { textureStore(o_lit, px0, vec4<f32>(a.rgb, 1.0)); return; }
+  if (p.misc2.w == 3u) { textureStore(o_lit, px0, vec4<f32>(lit, 1.0)); return; }
+  if (p.misc2.w == 4u) { textureStore(o_lit, px0, vec4<f32>(refl + spec_sun, 1.0)); return; }
   textureStore(o_lit, px0, vec4<f32>(col, 1.0));
 }
