@@ -886,6 +886,21 @@ impl Factory for Bed {
             let wide = panels.iter().filter(|g| { let (l, h) = g.bounds(); h[2] > top + 0.2 && l[2] < top + 0.1 }).filter_map(|g| span(&[g])).fold(0.0f64, |w, s| w.max(s.1 - s.0));
             let (lo, hi) = rails.iter().map(|m| m.bounds()).fold(([f64::MAX; 3], [f64::MIN; 3]), |(l, h), (a, b)| ([l[0].min(a[0]), l[1].min(a[1]), l[2].min(a[2])], [h[0].max(b[0]), h[1].max(b[1]), h[2].max(b[2])]));
             if n > 0 && wide > (hi[0] - lo[0]).max(hi[1] - lo[1]) - 0.015 { limbs.truncate(limbs.len() - n); }
+            else if n == 2 {
+                // bars between posts end at the posts' inner faces (run through them, their fronts lay in the posts' plane and fought in black blotches)
+                let long = if hi[0] - lo[0] > hi[1] - lo[1] { 0 } else { 1 };
+                let mid = (lo[long] + hi[long]) / 2.0;
+                for g in panels.iter_mut() {
+                    let (l, h) = g.bounds();
+                    if h[2] <= top + 0.2 || h[long] - l[long] < 0.5 * (hi[long] - lo[long]) { continue }
+                    let near = |below: bool| rails.iter().flat_map(|m| m.pos.iter()).filter(move |q| q[2] >= l[2] && q[2] <= h[2] && (q[long] < mid) == below).map(|q| q[long]);
+                    let (a, b) = (near(true).fold(f64::NEG_INFINITY, f64::max), near(false).fold(f64::INFINITY, f64::min));
+                    if !a.is_finite() || !b.is_finite() || a >= b { continue }
+                    let (a, b) = (a - 0.001, b + 0.001);
+                    if l[long] >= a && h[long] <= b { continue }
+                    for q in g.pos.iter_mut() { q[long] = a + (q[long] - l[long]) / (h[long] - l[long]) * (b - a); }
+                }
+            }
         }
         let mut frame_all = Mesh::new();
         let mut frame_idx: Vec<usize> = vec![];
@@ -1535,10 +1550,10 @@ fn arc_length(s: f64, arc: f64, grow: f64) -> f64 {
 
 /// a fold's rise: the points on their way between the layers (`raw`: their fold heights) take the height midway between their neighbours. Read straight from the fold height,
 /// the bottom layer shot up to the top's in a centimetre, and that cliff, on a grid slanting across the crease, came out in a row of teeth
-fn relax_crease(m: &mut Mesh, raw: &[f64], rounded: &mut [f64]) {
-    const SETTLED: [f64; 4] = [0.0, 0.01, 0.04, 0.05];
+fn relax_crease(m: &mut Mesh, raw: &[f64], rounded: &mut [f64], rise: (f64, f64)) {
     let n = m.pos.len();
-    let mut free: Vec<bool> = raw.iter().map(|d| SETTLED.iter().all(|s| (d - s).abs() > 0.001)).collect();
+    // (only between the layer below the fold and the fold itself: a comforter's quilting has heights within its layers, and relaxing those flattened its cells into plateaus)
+    let free: Vec<bool> = raw.iter().map(|d| *d > rise.0 && *d < rise.1).collect();
     if !free.iter().any(|f| *f) { return }
     let mut nb: Vec<Vec<u32>> = vec![vec![]; n];
     for f in &m.faces {
@@ -1548,9 +1563,6 @@ fn relax_crease(m: &mut Mesh, raw: &[f64], rounded: &mut [f64]) {
             nb[b as usize].push(a);
         }
     }
-    // (a point passing a settled height on its way up is still on its way)
-    let was = free.clone();
-    for i in 0..n { if !was[i] && !nb[i].is_empty() && nb[i].iter().all(|&j| was[j as usize]) { free[i] = true; } }
     for _ in 0..24 {
         let next: Vec<(f64, f64)> = (0..n).map(|i| {
             if !free[i] || nb[i].is_empty() { return (m.pos[i][2], rounded[i]) }
@@ -1602,7 +1614,7 @@ fn drape(pre: &Mesh, g: &DrapeGeom, lift: f64, loft: f64, margin: f64, pl: &Plea
         // (the height the layer goes round the bed's edge at, without the cells' domes)
         rounded.push(p[2] - loft * layer * (fill - flat));
     }
-    relax_crease(&mut m, &raw, &mut rounded);
+    relax_crease(&mut m, &raw, &mut rounded, if two_layers { (0.012, 0.038) } else { (0.002, 0.048) });
     let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let (sy, cy) = slide[1].sin_cos();
     // tucked in, the hem reaches the rail all round (a short overhang rode up at the middle of the foot, showing the mattress)
