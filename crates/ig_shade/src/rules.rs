@@ -10,7 +10,10 @@
 //!            and "key": a name: rules with one key share their draw across slots, so same-length palettes stay paired (a sofa and its curtains)
 //!   "paint": a colour like "color" plus "amount": [a, b], mixed over the material with its texture kept; reaches classes that ignore "color" (wood stain, painted trim) }
 //! `when` fields are patterns: * wildcards, | alternatives. The slot is the material's name before any ':' or '~' (table_top, sheet, wall).
-//! The file: { "groups": {name: when}, "styles": {name: {"weight", "why", "rules": [...]}}, "rules": [...] }. A house draws one style by weight; a style's rules
+//! Variety inside a style: "chance" on a rule: 0.3, or {"p": 0.3, "per": "house"|"room"|"object", "key": a name rules share} (default per house), so houses use different
+//! parts of a recipe. A colour's "per" can be odds, {"house": 3, "room": 1}, drawn per house. "stray": 0.15 with "stray_palette": that share of objects leave the scheme
+//! (no palette: they keep the colour they had). "jitter": {"h", "s", "v"} moves a drawn colour by up to that much (h in turns, s and v as a fraction); the file's own "jitter" is the default for palettes.
+//! The file: { "jitter", "groups": {name: when}, "styles": {name: {"weight", "why", "rules": [...]}}, "rules": [...] }. A house draws one style by weight; a style's rules
 //! apply to its houses only, after the file's own. `when` can name a group ("group": "wood"), whose fields fill the ones it leaves out.
 use serde::Deserialize;
 use serde_json::Value;
@@ -26,10 +29,27 @@ pub struct When { pub group: Option<String>, pub slot: Option<String>, pub class
 pub struct Color {
     #[serde(default)] pub h: Option<[f64; 2]>, #[serde(default)] pub s: Option<[f64; 2]>, #[serde(default)] pub v: Option<[f64; 2]>,
     #[serde(default)] pub palette: Option<Vec<Swatch>>,
-    #[serde(default)] pub per: Option<String>,
+    #[serde(default)] pub per: Option<Per>,
     #[serde(default)] pub key: Option<String>,
+    #[serde(default)] pub stray: Option<f64>,
+    #[serde(default)] pub stray_palette: Option<Vec<Swatch>>,
+    #[serde(default)] pub jitter: Option<Jitter>,
     #[serde(default)] pub amount: Option<[f64; 2]>,
 }
+
+/// how widely one draw is shared: one scope, or odds over scopes drawn per house
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum Per { One(String), Odds(BTreeMap<String, f64>) }
+impl Per { fn scopes(&self) -> Vec<&str> { match self { Per::One(s) => vec![s.as_str()], Per::Odds(m) => m.keys().map(|k| k.as_str()).collect() } } }
+
+#[derive(Deserialize, Default, Clone, Copy, Debug)]
+#[serde(deny_unknown_fields, default)]
+pub struct Jitter { pub h: f64, pub s: f64, pub v: f64 }
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum Chance { P(f64), Full { p: f64, #[serde(default)] per: Option<String>, #[serde(default)] key: Option<String> } }
 
 /// a palette entry: "#rrggbb" (sRGB, as a paint chart gives it) or [r, g, b] linear
 #[derive(Deserialize, Clone, Debug)]
@@ -48,7 +68,7 @@ impl Swatch {
 #[serde(deny_unknown_fields, default)]
 pub struct Rule {
     pub when: When, pub why: String,
-    pub set: Option<BTreeMap<String, f64>>, pub add: Option<BTreeMap<String, f64>>, pub weight: Option<f64>, pub color: Option<Color>, pub paint: Option<Color>,
+    pub set: Option<BTreeMap<String, f64>>, pub add: Option<BTreeMap<String, f64>>, pub weight: Option<f64>, pub color: Option<Color>, pub paint: Option<Color>, pub chance: Option<Chance>,
 }
 
 #[derive(Deserialize, Default, Clone, Debug)]
@@ -57,7 +77,7 @@ pub struct Style { pub weight: f64, pub why: String, pub rules: Vec<Rule> }
 
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
-pub struct Config { pub groups: BTreeMap<String, When>, pub styles: BTreeMap<String, Style>, pub rules: Vec<Rule> }
+pub struct Config { pub jitter: Option<Jitter>, pub groups: BTreeMap<String, When>, pub styles: BTreeMap<String, Style>, pub rules: Vec<Rule> }
 
 impl Config {
     pub fn parse(text: &str) -> Result<Config, String> {
@@ -75,7 +95,13 @@ impl Config {
             if r.why.is_empty() { return Err(format!("rule {i} has no \"why\"")); }
             for c in [&r.color, &r.paint].into_iter().flatten() {
                 if let Some(p) = &c.palette { for x in p { if x.linear().is_none() { return Err(format!("rule {i} ({}): bad colour {x:?}", r.why)); } } }
-                if let Some(per) = &c.per { if !matches!(per.as_str(), "object" | "room" | "house") { return Err(format!("rule {i} ({}): per {per}", r.why)); } }
+                for x in c.stray_palette.iter().flatten() { if x.linear().is_none() { return Err(format!("rule {i} ({}): bad colour {x:?}", r.why)); } }
+                if let Some(per) = &c.per { for x in per.scopes() { if !matches!(x, "object" | "room" | "house") { return Err(format!("rule {i} ({}): per {x}", r.why)); } } }
+            }
+            match &r.chance {
+                Some(Chance::P(p)) | Some(Chance::Full { p, .. }) if !(0.0..=1.0).contains(p) => return Err(format!("rule {i} ({}): chance {p}", r.why)),
+                Some(Chance::Full { per: Some(x), .. }) if !matches!(x.as_str(), "object" | "room" | "house") => return Err(format!("rule {i} ({}): chance per {x}", r.why)),
+                _ => {}
             }
             if r.paint.as_ref().map_or(false, |c| c.amount.is_none()) { return Err(format!("rule {i} ({}): paint needs an amount", r.why)); }
             if let Some(s) = &r.when.style { if !s.contains('*') && !s.split('|').all(|x| c.styles.contains_key(x)) { return Err(format!("rule {i} names an unknown style {s}")); } }
@@ -152,10 +178,17 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
             && w.room.as_ref().map_or(true, |p| matches(p, room)) && w.style.as_ref().map_or(true, |p| style.map_or(false, |s| matches(p, s)))
             && cls.map_or(true, |c| w.class.as_ref().map_or(true, |p| matches(p, c)))
     };
+    let scope = |per: &str| match per { "house" => String::new(), "room" => room_id(node), _ => object.to_string() };
+    // (a rule's chance: one draw per house, room or object, so the class and colour halves of a rule agree)
+    let active = |r: &Rule| match &r.chance {
+        None => true,
+        Some(Chance::P(p)) => unit(&[&house.to_string(), "chance", &r.why]) < *p,
+        Some(Chance::Full { p, per, key }) => unit(&[&house.to_string(), "chance", key.as_deref().unwrap_or(&r.why), &scope(per.as_deref().unwrap_or("house"))]) < *p,
+    };
     let mut cands: Vec<(String, f64)> = vec![(cls0.to_string(), 1.0)];
     let mut touched = false;
     for r in &cfg.rules {
-        if !applies(&r.when, None) { continue }
+        if !applies(&r.when, None) || !active(r) { continue }
         if let Some(set) = &r.set { if r.when.class.as_ref().map_or(true, |p| matches(p, cls0)) { cands = set.iter().map(|(k, v)| (k.clone(), *v)).collect(); touched = true; trace.rules.push(r.why.clone()); } }
         if let Some(add) = &r.add { if r.when.class.as_ref().map_or(true, |p| matches(p, cls0)) { for (k, v) in add { match cands.iter_mut().find(|c| c.0 == *k) { Some(c) => c.1 += v, None => cands.push((k.clone(), *v)) } } touched = true; trace.rules.push(r.why.clone()); } }
         if let Some(w) = r.weight { for c in cands.iter_mut() { if r.when.class.as_ref().map_or(true, |p| matches(p, &c.0)) { c.1 *= w; touched = true; trace.rules.push(r.why.clone()); } } }
@@ -172,22 +205,47 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
     let mut out = spec.clone();
     out["cls"] = Value::String(cls.clone());
     let mut col = rgb;
+    let name = |c: &Color, what: &str| c.key.clone().unwrap_or_else(|| format!("{slot}/{what}"));
+    let per_of = |c: &Color, what: &str| -> String {
+        match &c.per {
+            None => scope("object"),
+            Some(Per::One(x)) => scope(x),
+            Some(Per::Odds(m)) => {
+                let mut u = unit(&[&house.to_string(), &name(c, what), "per"]) * m.values().map(|w| w.max(0.0)).sum::<f64>();
+                for (k, w) in m { if u < w.max(0.0) { return scope(k) } u -= w.max(0.0); }
+                scope(m.keys().next_back().map_or("object", |k| k.as_str()))
+            }
+        }
+    };
+    let pick = |p: &[Swatch], parts: &[&str]| p[((unit(parts) * p.len() as f64) as usize).min(p.len() - 1)].linear().unwrap_or([0.5; 3]);
     let draw = |c: &Color, what: &str, base: [f32; 3]| -> [f32; 3] {
-        let per = match c.per.as_deref() { Some("house") => String::new(), Some("room") => room_id(node), _ => object.to_string() };
-        let key = [house.to_string(), c.key.clone().unwrap_or_else(|| format!("{slot}/{what}")), per];
-        let d = |w: &str, a: [f64; 2]| a[0] + (a[1] - a[0]) * unit(&[&key[0], &key[1], &key[2], w]);
-        let v = if let Some(p) = c.palette.as_ref().filter(|p| !p.is_empty()) { p[((unit(&[&key[0], &key[1], &key[2], "palette"]) * p.len() as f64) as usize).min(p.len() - 1)].linear().unwrap_or([0.5; 3]) }
+        let h = house.to_string();
+        // (a stray piece leaves the scheme: it takes the stray palette, or keeps the colour it had)
+        if c.stray.map_or(false, |p| unit(&[&h, "stray", slot, object, what]) < p) {
+            return match c.stray_palette.as_ref().filter(|p| !p.is_empty()) {
+                Some(p) => { let v = pick(p, &[&h, "strayc", slot, object, what]); [v[0] as f32, v[1] as f32, v[2] as f32] }
+                None => base,
+            };
+        }
+        let (k, per) = (name(c, what), per_of(c, what));
+        let d = |w: &str, a: [f64; 2]| a[0] + (a[1] - a[0]) * unit(&[&h, &k, &per, w]);
+        let palette = c.palette.as_ref().filter(|p| !p.is_empty());
+        let mut v = if let Some(p) = palette { pick(p, &[&h, &k, &per, "palette"]) }
             else { let hsv0 = crate::rgb_to_hsv([base[0] as f64, base[1] as f64, base[2] as f64]); crate::hsv(c.h.map_or(hsv0[0], |a| d("h", a)), c.s.map_or(hsv0[1], |a| d("s", a)), c.v.map_or(hsv0[2], |a| d("v", a))) };
+        if let Some(j) = c.jitter.or(if palette.is_some() { cfg.jitter } else { None }) {
+            let q = crate::rgb_to_hsv(v);
+            let t = |w: &str, a: f64| d(w, [-a, a]);
+            v = crate::hsv(q[0] + t("jh", j.h), (q[1] * (1.0 + t("js", j.s))).clamp(0.0, 1.0), (q[2] * (1.0 + t("jv", j.v))).clamp(0.0, 1.0));
+        }
         [v[0] as f32, v[1] as f32, v[2] as f32]
     };
     for r in &cfg.rules {
-        if !applies(&r.when, Some(&cls)) { continue }
+        if !applies(&r.when, Some(&cls)) || !active(r) { continue }
         if let Some(c) = &r.color { col = draw(c, "color", col); trace.rules.push(r.why.clone()); }
         if let Some(c) = &r.paint {
             let rgb = draw(c, "paint", col);
             let a = c.amount.unwrap_or([1.0, 1.0]);
-            let per = match c.per.as_deref() { Some("house") => String::new(), Some("room") => room_id(node), _ => object.to_string() };
-            let amount = a[0] + (a[1] - a[0]) * unit(&[&house.to_string(), slot, &per, "amount"]);
+            let amount = a[0] + (a[1] - a[0]) * unit(&[&house.to_string(), slot, &per_of(c, "paint"), "amount"]);
             out["paint"] = serde_json::json!({"rgb": rgb, "amount": amount});
             trace.rules.push(r.why.clone());
         }
@@ -237,6 +295,23 @@ mod tests {
         let c = cfg(r##"{"groups":{"g":{"slot":"a"}},"styles":{"s":{"weight":1,"why":"w","rules":[{"when":{"group":"g"},"why":"x","color":{"palette":["#000000"]}}]}}}"##);
         assert_eq!(resolve(&c, 1, &json!({"cls":"z"}), "a", "n", "", [1.0; 3]).1, [0.0; 3]);
         assert_eq!(resolve(&c, 1, &json!({"cls":"z"}), "b", "n", "", [1.0; 3]).1, [1.0; 3]);
+    }
+    #[test] fn chance_and_stray() {
+        let c = cfg(r##"{"rules":[{"when":{"slot":"a"},"why":"x","chance":0.5,"color":{"palette":["#000000"]}}]}"##);
+        let on = (0..200).filter(|h| resolve(&c, *h, &json!({"cls":"z"}), "a", "n", "", [1.0; 3]).1 == [0.0; 3]).count();
+        assert!((60..140).contains(&on), "{on}");
+        let c = cfg(r##"{"rules":[{"when":{"slot":"a"},"why":"x","color":{"palette":["#000000"],"per":"house","stray":0.5}}]}"##);
+        let kept = (0..200).filter(|i| resolve(&c, 1, &json!({"cls":"z"}), "a", &format!("o{i}#0"), "", [1.0; 3]).1 == [1.0; 3]).count();
+        assert!((60..140).contains(&kept), "{kept}");
+        // parts of one piece stray together
+        assert_eq!(resolve(&c, 1, &json!({"cls":"z"}), "a", "o7#0", "", [1.0; 3]).1, resolve(&c, 1, &json!({"cls":"z"}), "a", "o7#3", "", [1.0; 3]).1);
+    }
+    #[test] fn per_odds_and_jitter_with_shared_keys() {
+        let c = cfg(r##"{"jitter":{"h":0.02,"s":0.1,"v":0.1},"rules":[{"when":{"slot":"a|b"},"why":"x","color":{"palette":["#804020"],"per":{"house":1,"room":1},"key":"k"}}]}"##);
+        for h in 0..20 { let f = |m: &str| resolve(&c, h, &json!({"cls":"z"}), m, "bedroom_0_0_x#0", "", [1.0; 3]).1; assert_eq!(f("a"), f("b")); }
+        let v: Vec<_> = (0..20).map(|h| resolve(&c, h, &json!({"cls":"z"}), "a", "n", "", [1.0; 3]).1[0]).collect();
+        assert!(v.windows(2).any(|w| w[0] != w[1]));
+        assert!(Config::parse(r##"{"rules":[{"when":{},"why":"x","chance":2,"weight":1}]}"##).is_err());
     }
     #[test] fn the_shipped_file_parses() { assert!(Config::parse(include_str!("../../../rules/styles.json")).is_ok()); }
     #[test] fn patterns() {
