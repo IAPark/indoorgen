@@ -282,7 +282,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
-  seed = u32(px.x) * 73856093u ^ u32(px.y) * 19349663u ^ (p.misc.y * 83492791u);
+  seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 19349663u) ^ (p.misc.y * 83492791u);
   let o = start_at(pos, n);
   // the lamps that matter here, apart from the filtered light, which would wash out their shadows. Each comes in gradually with its share of the light: a fixed number of lamps per pixel let a lamp drop out all at once, and cut its shadow off in a straight line across a wall
   // (close up, with only the lamp's own size as a limit: a ceiling beside a lamp is really that bright, and a floor on the distance left it dull)
@@ -451,7 +451,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
-  seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (p.misc.y * 1103515245u);
+  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 40503u) ^ (p.misc.y * 1103515245u);
   let o = start_at(pos, n);
   let e = textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb;
   // what a glossy surface reflects

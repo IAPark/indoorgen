@@ -259,6 +259,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -878,8 +888,6 @@ dependencies = [
 [[package]]
 name = "obvhs"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e079e5dff9fc17017bfb526d5b71fe077e603de662e4b22f6deb4b6b36e5895"
 dependencies = [
  "bytemuck",
  "glam",
@@ -887,6 +895,7 @@ dependencies = [
  "log",
  "rdst",
  "static_assertions",
+ "web-time",
 ]
 
 [[package]]
@@ -1053,13 +1062,19 @@ name = "preview"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "console_error_panic_hook",
  "glam",
  "ig_shade",
  "image",
+ "js-sys",
  "obvhs",
  "pollster",
  "rayon",
  "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "wgpu",
 ]
 
@@ -1513,6 +1528,16 @@ name = "web-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88261b9deccee56594c11a3460c462c41f58d148598fe70ad77070126a68aba4"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

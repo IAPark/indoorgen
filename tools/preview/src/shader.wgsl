@@ -1,3 +1,4 @@
+diagnostic(off, derivative_uniformity);
 /*LIB*/
 struct G {
   viewproj: mat4x4<f32>,

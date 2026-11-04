@@ -16,6 +16,7 @@ rm -rf "$D"; mkdir -p "$D/site"
 cp "$W/index.html" "$W"/*.js "$W/style.css" "$D/site/"
 cp -R "$W/vendor" "$D/site/vendor"
 [ -d "$W/pkg" ] && mkdir -p "$D/site/pkg" && cp "$W/pkg/ig_wasm.js" "$W/pkg/ig_wasm_bg.wasm" "$D/site/pkg/"
+[ -d "$W/pkg-rt" ] && mkdir -p "$D/site/pkg-rt" && cp "$W/pkg-rt/preview.js" "$W/pkg-rt/preview_bg.wasm" "$D/site/pkg-rt/"
 
 # (b) single file
 ALIAS=(--alias:three="$W/vendor/three.module.js" --alias:three/addons="$W/vendor")

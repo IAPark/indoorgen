@@ -201,6 +201,7 @@ function topDown() {
 }
 
 async function showGlb(buf, name, sc) {
+  if (typeof bakedOff === 'function' && baked) bakedOff();
   const gltf = await new Promise((res, rej) => loader.parse(buf.slice(0), '', res, rej));
   disposeContent();
   content = gltf.scene;
@@ -589,15 +590,84 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
+
+// ---------------------------------------------------------------- baked render (WebGPU): path traced light, baked once, then every frame live
+// tools/preview in the browser: tools/web_rt/build.sh
+const bakeCanvas = $('bakeview');
+let baked = null, baking = false, bakeMod = null, bakeReady = false, bakeExposing = false;
+let lastMove = 0, lastCamKey = '', exposedAt = null;
+function bakedCamera() {
+  // three (y up) to the house's own frame (z up): (x, y, z) -> (x, -z, y)
+  const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+  // (a camera looking straight down has no up: a little off it)
+  if (Math.abs(f.y) > 0.999) { f.z -= 0.02; f.normalize(); }
+  const p = cam.position;
+  const et = new Float32Array([p.x, -p.z, p.y, p.x + f.x, -(p.z + f.z), p.y + f.y]);
+  const a = bakeCanvas.width / bakeCanvas.height;
+  const tanX = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * a;
+  return { et, lens: 18 / tanX, key: Array.from(et).map((v) => v.toFixed(3)).join() };
+}
+function bakedFrame() {
+  if (!baked) return false;
+  if (bakeExposing) return true;
+  const c = bakedCamera(), now = performance.now();
+  if (c.key !== lastCamKey) { lastCamKey = c.key; lastMove = now; }
+  baked.draw(c.et, c.lens);
+  // exposure, as a camera's: settled again once it has stopped somewhere else
+  if (exposedAt !== c.key && now - lastMove > 500) {
+    exposedAt = c.key; bakeExposing = true;
+    baked.expose(c.et, c.lens).catch(() => {}).finally(() => { bakeExposing = false; });
+  }
+  return true;
+}
+function bakedOff() {
+  baked = null; exposedAt = null;
+  bakeCanvas.style.display = 'none';
+  $('bakebtn').textContent = 'Bake';
+  $('bakebtn').classList.remove('on');
+}
+async function bakeNow() {
+  if (baking) return;
+  if (baked) { bakedOff(); return; }
+  if (!lastGlb) { setStatus('generate or load a house first'); return; }
+  // (a page can offer WebGPU and still get no adapter, in a frame or on a blocked GPU)
+  let adapter = null; try { adapter = navigator.gpu && await navigator.gpu.requestAdapter(); } catch (_) {}
+  if (!adapter) { setStatus('The baked render needs WebGPU, which is not available here. Try opening the page in Chrome or Edge on its own.', true); return; }
+  baking = true; $('bakebtn').disabled = true; $('gen').disabled = true;
+  try {
+    setStatus('baking: loading renderer...');
+    bakeMod = bakeMod || await import('./pkg-rt/preview.js');
+    if (!bakeReady) { await bakeMod.default(); bakeReady = true; }
+  } catch (e) { setStatus('baked render failed to load: ' + (e.message || e), true); baking = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady; return; }
+  try {
+    const a = Math.max(0.5, Math.min(2.5, innerWidth / Math.max(1, innerHeight)));
+    bakeCanvas.height = 540; bakeCanvas.width = Math.round(540 * a / 2) * 2;
+    const c = bakedCamera();
+    const t0 = performance.now();
+    const seed = parseInt($('seed').value, 10) || 0;
+    baked = await bakeMod.bake_scene(bakeCanvas, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), seed, 0, c.et, c.lens, (p) => setStatus(p > 0 ? `baking light: ${Math.round(Math.min(p, 1) * 100)} % settled` : 'baking light: measuring...'));
+    exposedAt = c.key;
+    bakeCanvas.style.display = 'block';
+    $('bakebtn').textContent = 'Baked: back to preview';
+    $('bakebtn').classList.add('on');
+    setStatus(`baked in ${((performance.now() - t0) / 1000).toFixed(1)} s. Move around as usual`); console.log('bake', baked.stats());
+  } catch (e) { setStatus('bake failed: ' + (e.message || e), true); bakedOff(); }
+  baking = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady;
+}
+$('bakebtn').onclick = bakeNow;
+if (!navigator.gpu) { $('bakebtn').disabled = true; $('bakebtn').title = 'Needs WebGPU, which this browser does not offer'; $('baknote').hidden = false; }
+
 let last = performance.now();
 renderer.setAnimationLoop(() => {
   const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (mode === 'walk') walkStep(dt); else orbit.update();
-  renderer.render(scene, cam);
+  // (nothing else on the GPU during a bake: drawing the preview's millions of triangles alongside starved it, and the light came out in blotches)
+  if (baking) return;
+  if (!bakedFrame()) renderer.render(scene, cam);
 });
 
-window.__ig = { scene, cam, renderer, applyPreset, topDown, setCeiling, setMode, get presets() { return presets; }, generate };
+window.__ig = { get sidecarJson() { return JSON.stringify(sidecar); }, bakeNow, get baked() { return baked; }, scene, cam, renderer, applyPreset, topDown, setCeiling, setMode, get presets() { return presets; }, generate };
 loadFromQuery().catch((e) => setStatus('load failed: ' + e, true));
 if (!new URLSearchParams(location.search).has('glb')) startWorker();
 

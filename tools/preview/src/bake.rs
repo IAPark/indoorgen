@@ -410,7 +410,21 @@ fn params(s: &Scene, inv_vp: Mat4, eye: Vec3, w: u32, h: u32, show: u32) -> rt::
         dims: [w, h, 1, 1], misc: [0, 1, sd.nlights, sd.sky_wh.0], misc2: [sd.sky_wh.1, 0, sd.nwins, show], scale: [1.0, sd.skyp.strength, 1.0, sd.skyp.sun_size * 0.5] }
 }
 fn wait(dev: &wgpu::Device) { dev.poll(wgpu::PollType::wait_indefinitely()).unwrap(); }
-pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> Baked {
+/// how far the bake has got, for a page to show
+#[cfg(target_arch = "wasm32")]
+pub fn progress(f: f32) { crate::web::progress(f); }
+#[cfg(not(target_arch = "wasm32"))]
+pub fn progress(_f: f32) {}
+/// When a bake stops: after so many seconds, or when the light has settled to this estimated error (mean relative error of a cell; `Stop::CEILING` seconds at most)
+#[derive(Clone, Copy, Debug)]
+pub enum Stop { Time(f32), Quality(f32) }
+impl Stop {
+    pub const DEFAULT: Stop = Stop::Quality(0.08);
+    pub const CEILING: f32 = 180.0;
+    /// "25": seconds. "q0.04": a quality bar. Nothing: the default bar
+    pub fn parse(s: &str) -> Stop { if let Some(q) = s.strip_prefix('q') { Stop::Quality(q.parse().expect("bar")) } else if s.is_empty() { Stop::DEFAULT } else { Stop::Time(s.parse().expect("seconds")) } }
+}
+pub async fn bake(r: &Renderer, s: &Scene, pp: &Pipes, stop: Stop, verbose: bool) -> Baked {
     let t0 = Instant::now();
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let sd = s.rt.as_ref().unwrap();
@@ -441,13 +455,13 @@ pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> 
         base.run = [0, off, np, 0]; q.write_buffer(&ub, 0, bytemuck::bytes_of(&base));
         let mut enc = dev.create_command_encoder(&Default::default());
         dispatch(&mut enc, &pp.validate.0, &g0, &bgv, chunk / 64, 1);
-        q.submit([enc.finish()]); wait(dev);
+        q.submit([enc.finish()]); gpu_done(dev, q).await;
     }
     let mut aliases: Vec<(u32, u32, u32)> = vec![];
     let mut enc = dev.create_command_encoder(&Default::default());
     enc.copy_buffer_to_buffer(&flb, 0, &rbf, 0, pts.len() as u64 * 4);
     q.submit([enc.finish()]);
-    rbf.slice(..).map_async(wgpu::MapMode::Read, |_| {}); wait(dev);
+    map_read(dev, &[rbf.slice(..)]).await;
     {
         let data = rbf.slice(..).get_mapped_range().unwrap(); let fl: &[u32] = bytemuck::cast_slice(&data);
         let (mut k2, mut p2) = (Vec::with_capacity(keys.len()), Vec::with_capacity(pts.len()));
@@ -480,7 +494,7 @@ pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> 
     let nc = keys.len() as u32; let nslots = slots.len() as u32;
     let tb = sto(dev, bytemuck::cast_slice(&slots), wgpu::BufferUsages::empty());
     let ptb = sto(dev, bytemuck::cast_slice(&pts), wgpu::BufferUsages::empty());
-    let cv = |_: u32| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: nc as u64 * 96, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let cv = |_: u32| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: nc as u64 * 96, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
     let cvs = [cv(0), cv(1)];
     let bgr = [0, 1].map(|i: usize| bg!(dev, &pp.round.1, 0 => ub.as_entire_binding(), 1 => tb.as_entire_binding(), 2 => ptb.as_entire_binding(), 3 => cvs[i].as_entire_binding(), 4 => cvs[1 - i].as_entire_binding()));
     let lmb = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: nc as u64 * 8, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
@@ -489,23 +503,54 @@ pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> 
         base.run = [0, off, nc, 0]; q.write_buffer(&ub, 0, bytemuck::bytes_of(&base));
         let mut enc = dev.create_command_encoder(&Default::default());
         dispatch(&mut enc, &pp.lamps.0, &g0, &bgl_, (1 << 17) / 64, 1);
-        q.submit([enc.finish()]); wait(dev);
+        q.submit([enc.finish()]); gpu_done(dev, q).await;
     }
     if verbose { eprintln!("  bake: lamps seen, {:.2}s", t0.elapsed().as_secs_f32()); }
     let samples = 2u32; let (mut round, mut cur) = (0u32, 0usize);
     let chunk = 1u32 << 17;
     let t_r = Instant::now();
-    while (t0.elapsed().as_secs_f32() < budget || round < 4) && round < 2000 {
+    // How settled the light is: a random sample of cells compared between two rounds. Their difference over the rounds between says what error remains (of a running mean: |X(n+k) - X(n)| * sqrt(n / k))
+    // (16 runs of cells spread through the buffer: cells lie part by part, so one run would see a single object)
+    let run_cells = (nc as u64 / 16).min(4096);
+    let sample = run_cells * 96 * 16;
+    let rb_err = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: sample, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    // (only cells inside the house's own box: what is looked at. A garden's leaves are the noisiest cells and hardly seen)
+    let inside: Vec<bool> = (0..16u64).flat_map(|r| (0..run_cells).map(move |i| (r * (nc as u64 / 16) + i) as usize)).map(|i| { let q = Vec3::from(pts[i * K_PTS].pos); q.cmpge(lo).all() && q.cmple(hi).all() }).collect();
+    let mut prev_light: Option<(Vec<f32>, u32)> = None; let mut err = f32::MAX; let mut next_check = 4u32;
+    let done = |round: u32, err: f32, t: f32| match stop { Stop::Time(b) => t >= b && round >= 4, Stop::Quality(q) => err <= q || t >= Stop::CEILING };
+    while !done(round, err, t0.elapsed().as_secs_f32()) && round < 4000 {
+        progress(match stop { Stop::Time(b) => t0.elapsed().as_secs_f32() / b.max(0.1), Stop::Quality(q) => if err == f32::MAX { 0.0 } else { (q / err) * (q / err) } });
         base.fl[0] = 2.0 / (round as f32 + 2.0);
         for off in (0..nc).step_by(chunk as usize) {
             base.run = [round, off, nc, samples]; q.write_buffer(&ub, 0, bytemuck::bytes_of(&base));
             let mut enc = dev.create_command_encoder(&Default::default());
             dispatch(&mut enc, &pp.round.0, &g0, &bgr[cur], chunk / 64, 1);
-            q.submit([enc.finish()]); wait(dev);
+            q.submit([enc.finish()]); gpu_done(dev, q).await;
         }
         cur = 1 - cur; round += 1;
+        if round == next_check {
+            let mut enc = dev.create_command_encoder(&Default::default());
+            for k in 0..16u64 { enc.copy_buffer_to_buffer(&cvs[cur], k * (nc as u64 / 16) * 96, &rb_err, k * run_cells * 96, run_cells * 96); }
+            q.submit([enc.finish()]);
+            map_read(dev, &[rb_err.slice(..)]).await;
+            let light: Vec<f32> = { let m = rb_err.slice(..).get_mapped_range().unwrap(); let v: &[f32] = bytemuck::cast_slice(&m);
+                v.chunks_exact(24).map(|c| (0..6).map(|i| c[i * 4] + c[i * 4 + 1] + c[i * 4 + 2]).sum::<f32>()).collect() };
+            rb_err.unmap();
+            if let Some((p, n)) = &prev_light {
+                // cell by cell, so a dim room counts as much as the sunlit outside of the house, which settles at once and would swamp a sum by brightness. (Cells far below the typical one are as good as dark: their noise doesn't show)
+                let mut sorted: Vec<f32> = light.iter().copied().filter(|v| *v > 0.0).collect();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let floor = if sorted.is_empty() { 1e-6 } else { sorted[sorted.len() / 2] * 0.1 };
+                let (mut d, mut c) = (0f32, 0f32);
+                for (k, (a, b)) in light.iter().zip(p).enumerate() { if *a + *b > 0.0 && inside[k] { d += (a - b).abs() / (0.5 * (a + b) + floor); c += 1.0; } }
+                err = d / c.max(1.0) * (*n as f32 / (round - n) as f32).sqrt();
+                if std::env::var_os("BAKE_ERRLOG").is_some() { eprintln!("  round {round} err {err:.4} {:.1}s", t0.elapsed().as_secs_f32()); }
+            }
+            prev_light = Some((light, round));
+            next_check = round + (round / 4).max(4);
+        }
     }
-    if verbose { eprintln!("  bake: {round} rounds, {:.2}s each, {:.2}s total", t_r.elapsed().as_secs_f32() / round.max(1) as f32, t0.elapsed().as_secs_f32()); }
+    if verbose { eprintln!("  bake: {round} rounds, error {err:.4}, {:.2}s each, {:.2}s total", t_r.elapsed().as_secs_f32() / round.max(1) as f32, t0.elapsed().as_secs_f32()); }
     let tf = Instant::now();
     let passes: Vec<u32> = std::env::var("BAKE_FILTER").unwrap_or("4,2,1".into()).split(',').filter_map(|v| v.parse().ok()).collect();
     let bgf = [0, 1].map(|i: usize| bg!(dev, &pp.filter.1, 0 => ub.as_entire_binding(), 1 => tb.as_entire_binding(), 3 => cvs[i].as_entire_binding(), 4 => cvs[1 - i].as_entire_binding()));
@@ -514,7 +559,7 @@ pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> 
             base.run = [st, off, nslots, 0]; q.write_buffer(&ub, 0, bytemuck::bytes_of(&base));
             let mut enc = dev.create_command_encoder(&Default::default());
             dispatch(&mut enc, &pp.filter.0, &g0, &bgf[cur], (1 << 18) / 64, 1);
-            q.submit([enc.finish()]); wait(dev);
+            q.submit([enc.finish()]); gpu_done(dev, q).await;
         }
         cur = 1 - cur;
     }
@@ -528,7 +573,7 @@ pub fn bake(r: &Renderer, s: &Scene, pp: &Pipes, budget: f32, verbose: bool) -> 
         base.run = [0, off, nslots, 0]; q.write_buffer(&ub, 0, bytemuck::bytes_of(&base));
         let mut enc = dev.create_command_encoder(&Default::default());
         dispatch(&mut enc, &pp.mix.0, &g0, &bgm, (1 << 20) / 64, 1);
-        q.submit([enc.finish()]); wait(dev);
+        q.submit([enc.finish()]); gpu_done(dev, q).await;
     }
     base.run = [0; 4];
     Baked { table, base, ncells: nc, nslots, seconds: t0.elapsed().as_secs_f32(), rounds: round }
@@ -756,12 +801,12 @@ fn post(f: &mut Frame, r: &Renderer, pp: &Pipes, bk: &Baked, enc: &mut wgpu::Com
     dispatch(enc, &pp.fin.0, &f.g0, &f.b_fin[f.cur], f.res.0.div_ceil(8), f.res.1.div_ceil(8));
     f.prev_vp = vp_eye.0; f.prev_eye = vp_eye.1;
 }
-fn read_img(f: &Frame, r: &Renderer, mut enc: wgpu::CommandEncoder) -> image::RgbaImage {
+async fn read_img(f: &Frame, r: &Renderer, mut enc: wgpu::CommandEncoder) -> image::RgbaImage {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &f.out.0, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &f.rb, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(f.bpr), rows_per_image: Some(f.res.1) } }, wgpu::Extent3d { width: f.res.0, height: f.res.1, depth_or_array_layers: 1 });
     q.submit([enc.finish()]);
-    let sl = f.rb.slice(..); sl.map_async(wgpu::MapMode::Read, |_| {}); wait(dev);
+    let sl = f.rb.slice(..); map_read(dev, &[f.rb.slice(..)]).await;
     let data = sl.get_mapped_range().unwrap();
     let mut img = image::RgbaImage::new(f.res.0, f.res.1);
     for y in 0..f.res.1 as usize { let row = &data[y * f.bpr as usize..y * f.bpr as usize + f.res.0 as usize * 4]; img.as_mut()[y * f.res.0 as usize * 4..(y + 1) * f.res.0 as usize * 4].copy_from_slice(row); }
@@ -769,10 +814,10 @@ fn read_img(f: &Frame, r: &Renderer, mut enc: wgpu::CommandEncoder) -> image::Rg
     img
 }
 /// Blender's rule, as `exposed`: a mean of 0.45 over the middle 90 percent, a guard on near-clipped pixels
-fn expose(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, cam: &Cam) -> f32 {
+pub async fn expose(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, cam: &Cam) -> f32 {
     let (vp, eye, mut enc) = surfaces_and_light(f, r, s, pp, bk, o, cam, 1.0, false);
     post(f, r, pp, bk, &mut enc, 1.0, 1.0, false, (vp, eye));
-    let mut img = read_img(f, r, enc);
+    let mut img = read_img(f, r, enc).await;
     let stat = |img: &image::RgbaImage| { let mut lum: Vec<f32> = img.pixels().map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect();
         lum.sort_by(|a, b| a.partial_cmp(b).unwrap()); let core = &lum[lum.len() / 20..lum.len() * 19 / 20];
         (core.iter().sum::<f32>() / core.len().max(1) as f32, lum.iter().filter(|v| **v > 0.95).count() as f32 / lum.len().max(1) as f32) };
@@ -785,7 +830,7 @@ fn expose(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Op
         xp = (lo * hi).sqrt();
         let mut enc = r.gpu.dev.create_command_encoder(&Default::default());
         post(f, r, pp, bk, &mut enc, xp, 1.0, false, (vp, eye));
-        img = read_img(f, r, enc);
+        img = read_img(f, r, enc).await;
     }
     xp
 }
@@ -793,7 +838,7 @@ fn expose(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Op
 fn still(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, cam: &Cam, frames: u32) -> image::RgbaImage {
     let scale = std::env::var("BAKE_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1.5f32);
     let mut f = make_frame(r, s, pp, bk, o.res, scale);
-    let xp = expose(&mut f, r, s, pp, bk, o, cam);
+    let xp = pollster::block_on(expose(&mut f, r, s, pp, bk, o, cam));
     if o.verbose { eprintln!("  exposure x{xp:.2}"); }
     let mut img = None;
     for k in 0..frames {
@@ -802,20 +847,21 @@ fn still(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, cam: &Cam, f
         let (vp, eye, mut enc) = surfaces_and_light(&mut f, r, s, pp, bk, o, cam, xp, true);
         f.cur = 1 - f.cur;
         post(&mut f, r, pp, bk, &mut enc, xp, 1.0 / (k as f32 + 1.0), false, (vp, eye));
-        if k + 1 == frames { img = Some(read_img(&f, r, enc)); } else { r.gpu.q.submit([enc.finish()]); wait(&r.gpu.dev); }
+        if k + 1 == frames { img = Some(pollster::block_on(read_img(&f, r, enc))); } else { r.gpu.q.submit([enc.finish()]); wait(&r.gpu.dev); }
         if o.verbose && k < 4 { eprintln!("  frame {k}: {:.1} ms", t.elapsed().as_secs_f32() * 1000.0); }
     }
     img.unwrap()
 }
 pub fn run(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
-    let spec = o.bake.clone().unwrap(); let (mode, secs) = spec.split_once(':').unwrap_or((spec.as_str(), "25"));
+    let spec = o.bake.clone().unwrap(); let (mode, secs) = spec.split_once(':').unwrap_or((spec.as_str(), ""));
     if mode == "measure" { return measure(r, s, o, cams); }
     let t0 = Instant::now();
     ensure_rt(r, s, o);
     if o.verbose { eprintln!("  scene for rays {:.2}s", t0.elapsed().as_secs_f32()); }
     let pp = make_pipes(r);
     if o.verbose { eprintln!("  pipelines {:.2}s", t0.elapsed().as_secs_f32()); }
-    let bk = bake(r, s, &pp, secs.parse::<f32>().unwrap() - t0.elapsed().as_secs_f32(), o.verbose);
+    let stop = match Stop::parse(secs) { Stop::Time(b) => Stop::Time(b - t0.elapsed().as_secs_f32()), q => q };
+    let bk = pollster::block_on(bake(r, s, &pp, stop, o.verbose));
     eprintln!("baked in {:.2}s total: {} cells, {} slots, {} rounds", t0.elapsed().as_secs_f32(), bk.ncells, bk.nslots, bk.rounds);
     let _ = bk.seconds;
     let frames = std::env::var("BAKE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(16u32);
@@ -958,7 +1004,7 @@ fn video(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, path: &[(Vec
     // exposure: set here, for places along the path, and eased between them
     let te = Instant::now();
     let step = 15usize;
-    let keys: Vec<f32> = (0..path.len()).step_by(step).map(|k| expose(&mut f, r, s, pp, bk, o, &cam_at(k)).max(1e-3).ln()).collect();
+    let keys: Vec<f32> = (0..path.len()).step_by(step).map(|k| pollster::block_on(expose(&mut f, r, s, pp, bk, o, &cam_at(k))).max(1e-3).ln()).collect();
     let keyd: Vec<f32> = (0..keys.len()).map(|i| { let (mut a, mut w) = (0.0, 0.0); for j in 0..keys.len() { let d = (i as f32 - j as f32) / 3.0; let g = (-d * d).exp(); a += keys[j] * g; w += g; } a / w }).collect();
     let xp_at = |k: usize| { let u = k as f32 / step as f32; let i = (u as usize).min(keyd.len() - 1); let j = (i + 1).min(keyd.len() - 1); (keyd[i] + (keyd[j] - keyd[i]) * (u - i as f32)).exp() };
     eprintln!("exposure keys {}, {:.2}s; since the start of the bake {:.2}s", keys.len(), te.elapsed().as_secs_f32(), t_start.elapsed().as_secs_f32());
@@ -1037,4 +1083,29 @@ fn video(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, o: &Opts, path: &[(Vec
     let (mut worst, mut sum, mut a) = (0f32, 0f32, 0usize);
     for b in 0..times.len() { sum += times[b]; while b - a >= 30 { sum -= times[a]; a += 1; } if b >= 29 { worst = worst.max(sum); } }
     println!("FRAMES {n} in {total:.2}s (written and encoded): {:.1} fps; frame ms p50 {:.1} p95 {:.1} p99 {:.1} max {:.1}; slowest 30 frames {:.1} fps; encode-side CPU p50 {:.1} ms; codec {}", n as f32 / total, pct(&times, 0.5), pct(&times, 0.95), pct(&times, 0.99), pct(&times, 1.0), 30000.0 / worst.max(1.0), pct(&enc_ms, 0.5), if is_vid { codec } else { "none".into() });
+}
+
+/// A bake kept for drawing live in a page, frame by frame, as the camera goes
+pub struct Live { pp: Pipes, bk: Baked, f: Frame, pub xp: f32, n: u32 }
+impl Live { pub fn stats(&self) -> String { format!("{} cells, {} slots, {} rounds, {:.1} s bake, exposure x{:.2}", self.bk.ncells, self.bk.nslots, self.bk.rounds, self.bk.seconds, self.xp) } }
+pub async fn live_start(r: &mut Renderer, s: &mut Scene, o: &Opts, stop: Stop, cam: &Cam) -> Live {
+    ensure_rt_async(r, s, o).await;
+    let pp = make_pipes(r);
+    let bk = bake(r, s, &pp, stop, false).await;
+    let mut f = make_frame(r, s, &pp, &bk, o.res, 1.5);
+    let xp = expose(&mut f, r, s, &pp, &bk, o, cam).await;
+    Live { pp, bk, f, xp, n: 0 }
+}
+pub fn live_draw(l: &mut Live, r: &Renderer, s: &Scene, o: &Opts, cam: &Cam, target: &wgpu::Texture) {
+    l.f.n = l.n;
+    let (vp, eye, mut enc) = surfaces_and_light(&mut l.f, r, s, &l.pp, &l.bk, o, cam, l.xp, true);
+    l.f.cur = 1 - l.f.cur;
+    post(&mut l.f, r, &l.pp, &l.bk, &mut enc, l.xp, if l.n == 0 { 1.0 } else { 0.12 }, true, (vp, eye));
+    enc.copy_texture_to_texture(l.f.out.0.as_image_copy(), target.as_image_copy(), wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 });
+    r.gpu.q.submit([enc.finish()]);
+    l.n += 1;
+}
+pub async fn live_expose(l: &mut Live, r: &Renderer, s: &Scene, o: &Opts, cam: &Cam) {
+    l.xp = expose(&mut l.f, r, s, &l.pp, &l.bk, o, cam).await;
+    l.n = 0;
 }

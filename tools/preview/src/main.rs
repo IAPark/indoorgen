@@ -4,11 +4,13 @@ mod bake;
 mod glb;
 mod rt;
 mod vox;
+#[cfg(target_arch = "wasm32")]
+mod web;
 use glam::{Mat4, Vec3, Vec4, Vec2};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use web_time::Instant;
 use wgpu::util::DeviceExt;
 
 const SHADOW: u32 = 4096;
@@ -85,7 +87,7 @@ fn parse_args() -> Opts {
         }
         i += 1;
     }
-    assert!(!o.inputs.is_empty(), "usage: preview [--cam cam.json | --cams N|cam0 | --at ex,ey,ez,tx,ty,tz[,lens] | --person I | --top]... [--sheet] [--res WxH] [--ss N] [--sun az,el] [--exposure E] [--ao A] [--no-ceiling] -o OUT scene.glb...");
+    assert!(cfg!(target_arch = "wasm32") || !o.inputs.is_empty(), "usage: preview [--cam cam.json | --cams N|cam0 | --at ex,ey,ez,tx,ty,tz[,lens] | --person I | --top]... [--sheet] [--res WxH] [--ss N] [--sun az,el] [--exposure E] [--ao A] [--no-ceiling] -o OUT scene.glb...");
     o
 }
 
@@ -262,7 +264,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             glb.nodes.push(n);
         }
     }
-    let side: Value = std::fs::read(path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+    let side: Value = glb::read_file(&path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
     if opts.verbose { eprintln!("  glb parse {:.2}s ({} nodes, {} chunks)", t.elapsed().as_secs_f32(), glb.nodes.len(), glb.chunks.len()); }
     let mut bufs: Vec<wgpu::Buffer> = glb.chunks.iter().map(|c| gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: c,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX })).collect();
@@ -1002,9 +1004,12 @@ fn make_main_pipe(dev: &wgpu::Device, sm: &wgpu::ShaderModule, g_bgl: &wgpu::Bin
 
 fn init(o: &Opts) -> Renderer {
     let inst = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let ad = pollster::block_on(inst.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() })).expect("no adapter");
+    pollster::block_on(init_with(&inst, None, o))
+}
+async fn init_with(inst: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, o: &Opts) -> Renderer {
+    let ad = inst.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, compatible_surface: surface, ..Default::default() }).await.expect("no adapter");
     if o.verbose { eprintln!("adapter: {:?}", ad.get_info().name); }
-    let (dev, q) = pollster::block_on(ad.request_device(&wgpu::DeviceDescriptor { required_limits: ad.limits(), ..Default::default() })).expect("device");
+    let (dev, q) = ad.request_device(&wgpu::DeviceDescriptor { required_limits: ad.limits(), ..Default::default() }).await.expect("device");
     let uni = |b: u32, vis| wgpu::BindGroupLayoutEntry { binding: b, visibility: vis, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None };
     let tex2d = |b: u32, depth: bool, vis| wgpu::BindGroupLayoutEntry { binding: b, visibility: vis, ty: wgpu::BindingType::Texture { sample_type: if depth { wgpu::TextureSampleType::Depth } else { wgpu::TextureSampleType::Float { filterable: true } }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let vf = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT; let f = wgpu::ShaderStages::FRAGMENT;
@@ -1435,11 +1440,12 @@ fn post_again(r: &mut Renderer, o: &Opts, xp: f32) -> image::RgbaImage {
 }
 
 /// the traced scene: built once, on the first render
-fn ensure_rt(r: &mut Renderer, s: &mut Scene, o: &Opts) {
+fn ensure_rt(r: &mut Renderer, s: &mut Scene, o: &Opts) { pollster::block_on(ensure_rt_async(r, s, o)) }
+async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss)); }
     if s.rt.is_some() { return }
     let t = Instant::now();
-    let mats = probe_albedos(r, s, o);
+    let mats = probe_albedos(r, s, o).await;
     if o.verbose { eprintln!("  albedo probe {:.2}s", t.elapsed().as_secs_f32()); }
     // what light passes: glass, and the fittings around the lamps (a lamp shut in its own housing lit nothing)
     let passes = |d: &Draw| { let n = &s.glb.mats[d.mat].name; d.glass || n.starts_with("ceiling_") || n.starts_with("pendant_") || n.starts_with("lamp") };
@@ -1480,8 +1486,22 @@ fn ensure_rt(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if o.verbose { eprintln!("  rt scene ready {:.2}s", t.elapsed().as_secs_f32()); }
 }
 
+/// wait for buffers to map: a desktop can block on the GPU, a browser has to give way to it
+async fn map_read(dev: &wgpu::Device, slices: &[wgpu::BufferSlice<'_>]) {
+    #[cfg(not(target_arch = "wasm32"))]
+    { for b in slices { b.map_async(wgpu::MapMode::Read, |_| {}); } dev.poll(wgpu::PollType::wait_indefinitely()).unwrap(); }
+    #[cfg(target_arch = "wasm32")]
+    { let _ = dev; for b in slices { let p = js_sys::Promise::new(&mut |res, _| { b.map_async(wgpu::MapMode::Read, move |_| { res.call0(&wasm_bindgen::JsValue::NULL).ok(); }); }); wasm_bindgen_futures::JsFuture::from(p).await.ok(); } }
+}
+/// wait for what was submitted to finish
+async fn gpu_done(dev: &wgpu::Device, q: &wgpu::Queue) {
+    #[cfg(not(target_arch = "wasm32"))]
+    { let _ = q; dev.poll(wgpu::PollType::wait_indefinitely()).unwrap(); }
+    #[cfg(target_arch = "wasm32")]
+    { let _ = dev; let p = js_sys::Promise::new(&mut |res, _| { q.on_submitted_work_done(move || { res.call0(&wasm_bindgen::JsValue::NULL).ok(); }); }); wasm_bindgen_futures::JsFuture::from(p).await.ok(); }
+}
 /// each part's mean colour, from its own material drawn small: what a bounce sees of it
-fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> {
+async fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> {
     const T: u32 = 16; let cols = 64u32; let rows = (s.draws.len() as u32 / cols + 1).min(64);
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let (w, h) = (cols * T, rows * T);
@@ -1538,8 +1558,7 @@ fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> {
         wgpu::TexelCopyBufferInfo { buffer: b, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
     copy(&mut enc, &c2, &rb_a); copy(&mut enc, &c3, &rb_m);
     q.submit([enc.finish()]);
-    for b in [&rb_a, &rb_m] { b.slice(..).map_async(wgpu::MapMode::Read, |_| {}); }
-    dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    map_read(dev, &[rb_a.slice(..), rb_m.slice(..)]).await;
     let (da, dm) = (rb_a.slice(..).get_mapped_range().unwrap(), rb_m.slice(..).get_mapped_range().unwrap());
     let half = |b: &[u8], x: u32, y: u32, c: usize| -> f32 { let o = (y * bpr + x * 8) as usize + c * 2; half_f32(u16::from_le_bytes([b[o], b[o + 1]])) };
     let mut out = vec![];
@@ -1584,6 +1603,9 @@ fn save_png(img: &image::RgbaImage, p: &Path) {
     enc.write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8).unwrap();
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() { console_error_panic_hook::set_once(); }
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let t0 = Instant::now();
     let o = parse_args();

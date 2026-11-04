@@ -23,8 +23,16 @@ fn f3(v: &Value) -> [f32; 3] {
     [a[0], a[1], a[2]]
 }
 
+// files by path: the disk, or in a browser what the page handed over
+thread_local! { pub static FILES: std::cell::RefCell<std::collections::HashMap<String, Vec<u8>>> = Default::default(); }
+pub fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    if cfg!(target_arch = "wasm32") {
+        return FILES.with(|f| f.borrow().get(&path.display().to_string()).cloned()).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no file"));
+    }
+    std::fs::read(path)
+}
 pub fn load(path: &Path) -> Glb {
-    let data = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let data = read_file(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     assert!(&data[0..4] == b"glTF", "not a glb");
     let jl = u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
     let j: Value = serde_json::from_slice(&data[20..20 + jl]).expect("glb json");

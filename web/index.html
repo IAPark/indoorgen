@@ -12,6 +12,7 @@
 </head>
 <body>
 <canvas id="view"></canvas>
+<canvas id="bakeview" width="960" height="540"></canvas>
 <button id="menu" aria-label="Show or hide the menu" aria-expanded="true" title="Show / hide menu (M)">&#x2630;</button>
 <div id="panel">
   <h1>Indoorgen</h1>
@@ -45,6 +46,8 @@
   </details>
   <button id="gen" class="primary">Generate</button>
   <div id="status">idle</div>
+  <button id="bakebtn" title="Trace the house's light until it settles, then draw it live at close to Blender's quality">Bake</button>
+  <div id="baknote" hidden>The baked render needs WebGPU, which this browser doesn't offer.</div>
   <hr>
   <div class="row">
     <label>View</label>

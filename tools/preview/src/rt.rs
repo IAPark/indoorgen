@@ -215,7 +215,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
 /// triangles with their draw's index
 pub fn build_scene(dev: &wgpu::Device, tris_in: &[([Vec3; 3], u32)], mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, verbose: bool) -> SceneData {
     use obvhs::triangle::Triangle;
-    let t0 = std::time::Instant::now();
+    let t0 = web_time::Instant::now();
     let tris_o: Vec<Triangle> = tris_in.iter().map(|(t, _)| Triangle { v0: t[0].into(), v1: t[1].into(), v2: t[2].into() }).collect();
     let mut core = std::time::Duration::ZERO;
     let mut params = if std::env::var_os("RT_BVH_FAST").is_some() { obvhs::BvhBuildParams::fast_build() } else { obvhs::BvhBuildParams::medium_build() };
@@ -249,12 +249,12 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     let (wx, wy) = (res.0.div_ceil(8), res.1.div_ceil(8));
     // (RT_PROF=1: each pass alone, timed)
     let prof = std::env::var_os("RT_PROF").is_some();
-    let t0 = std::cell::Cell::new(std::time::Instant::now());
+    let t0 = std::cell::Cell::new(web_time::Instant::now());
     let lap = |enc: &mut wgpu::CommandEncoder, name: &str| {
         if !prof { return; }
         let done = std::mem::replace(enc, dev.create_command_encoder(&Default::default()));
         q.submit([done.finish()]); dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        eprintln!("  prof {name:14} {:7.1} ms", t0.get().elapsed().as_secs_f32() * 1000.0); t0.set(std::time::Instant::now());
+        eprintln!("  prof {name:14} {:7.1} ms", t0.get().elapsed().as_secs_f32() * 1000.0); t0.set(web_time::Instant::now());
     };
     lap(enc, "before trace");
     // the G-buffer's light first, then, with its clean result to shade by, the reflections. The trace writes one of the pairs and reads the other

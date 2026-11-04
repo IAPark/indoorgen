@@ -98,6 +98,9 @@ fn cell_at(q: vec3<f32>, n: vec3<f32>, id: u32) -> i32 {
   seed = (i * 2654435761u) ^ (round * 83492791u); seed = seed * 747796405u + 2891336453u;
   var sun = vec3<f32>(0.0); var vis = 0.0; var sky = vec3<f32>(0.0); var lmp = vec3<f32>(0.0); var isun = vec3<f32>(0.0); var isky = vec3<f32>(0.0); var ilmp = vec3<f32>(0.0);
   let ns = b.run.w; let c0 = cur[i];
+  // (outside the house's own box, one round in eight: rays go to the rooms, and a garden's leaves are hardly seen. The first rounds light everything)
+  let p0 = pts[i * K_PTS].pos;
+  if (round >= 8u && (round & 7u) != 0u && (any(p0 < b.lo.xyz) || any(p0 > b.hi.xyz))) { nxt[i] = c0; return; }
   for (var k = 0u; k < ns; k++) {
     let pt = pts[i * K_PTS + (k + round) % K_PTS];
     let n = dec_n(pt.nrm); let o0 = pt.pos + n * 0.002;
@@ -283,7 +286,7 @@ fn lamps_here(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = nc.xyz; if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); } n = normalize(n);
   // (rough surfaces keep the same rays from frame to frame: the filter hides their pattern in one picture, and fresh ones shimmered across walls and floors. Polished ones average out over frames)
-  seed = u32(px.x) * 2654435761u ^ u32(px.y) * 40503u ^ (select(b.frame.x, 0u, rough > 0.08) * 1103515245u); seed = seed * 747796405u + 2891336453u;
+  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 40503u) ^ (select(b.frame.x, 0u, rough > 0.08) * 1103515245u); seed = seed * 747796405u + 2891336453u;
   let o = start_at(pos, n);
   let r0 = reflect(normalize(pos - p.cam.xyz), n);
   var sp = vec3<f32>(0.0);
