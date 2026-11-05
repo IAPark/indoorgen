@@ -11,6 +11,7 @@ opt-level = 3
 debug = false
 
 [dependencies]
+half = "2"
 ig_shade = { path = "../../crates/ig_shade" }
 bytemuck = "1.25.2"
 glam = "0.34.1"
@@ -35,4 +36,3 @@ console_error_panic_hook = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libloading = "0.8"
-half = "2"

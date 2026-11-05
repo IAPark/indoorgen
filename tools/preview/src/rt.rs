@@ -271,6 +271,12 @@ fn learned_filter(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEn
         wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(res.0 * 8), rows_per_image: Some(res.1) }, wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 });
 }
 
+/// on a page the denoiser runs in the page, which takes waiting: one trace to hand the light over (`Capture`, stopping there), one to put the result in its place (`Inject`)
+#[cfg(target_arch = "wasm32")]
+pub enum WebDn { Off, Capture(Option<(wgpu::Buffer, wgpu::Buffer, u32, u32)>), Inject(Vec<u8>) }
+#[cfg(target_arch = "wasm32")]
+thread_local! { pub static WEB_DN: std::cell::RefCell<WebDn> = std::cell::RefCell::new(WebDn::Off); }
+
 pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, gb: &Gb, res: (u32, u32), ss: u32, qu: Quality, vp: Mat4, eye: Vec3, frame: u32, scales: [f32; 3], cutaway: bool) {
     let mut qu = qu; if ss > 1 { if let Some(n) = std::env::var("RT_SPP").ok().and_then(|v| v.parse().ok()) { qu.spp = n; } }
     let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
@@ -303,11 +309,38 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     { let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
     lap(enc, "trace");
     let mut cur = 0usize;
+    #[cfg(target_arch = "wasm32")]
+    let mut capture_stop = false;
     // the light's filter: the learned one where there is one (not for a mirror's small picture), or the a-trous rounds
     #[cfg(not(target_arch = "wasm32"))]
     let learned = ss > 1 && qu.denoise > 0 && crate::oidn::available() && std::env::var_os("RT_NOFILTER").is_none();
     #[cfg(target_arch = "wasm32")]
-    let learned = false;
+    let learned = if ss == 1 { false } else {
+        WEB_DN.with(|d| {
+            let mut d = d.borrow_mut();
+            match &mut *d {
+                WebDn::Off => None,
+                WebDn::Capture(slot) => {
+                    let (nw, nh) = (res.0 * ss, res.1 * ss); let bpr = (res.0 * 8 + 255) / 256 * 256; let nbpr = (nw * 8 + 255) / 256 * 256;
+                    let mk = |sz: u64| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: sz, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+                    let (bi, bn) = (mk((bpr * res.1) as u64), mk((nbpr * nh) as u64));
+                    let copy = |e: &mut wgpu::CommandEncoder, t: &wgpu::Texture, b: &wgpu::Buffer, r_: u32, ww: u32, hh: u32| e.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        wgpu::TexelCopyBufferInfo { buffer: b, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(r_), rows_per_image: Some(hh) } }, wgpu::Extent3d { width: ww, height: hh, depth_or_array_layers: 1 });
+                    copy(enc, p.irr[cur].texture(), &bi, bpr, res.0, res.1); copy(enc, gb.nrm.texture(), &bn, nbpr, nw, nh);
+                    *slot = Some((bi, bn, bpr, nbpr));
+                    Some(true)
+                }
+                WebDn::Inject(bytes) => {
+                    let done = std::mem::replace(enc, dev.create_command_encoder(&Default::default())); q.submit([done.finish()]);
+                    q.write_texture(wgpu::TexelCopyTextureInfo { texture: p.irr[cur].texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, bytes,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(res.0 * 8), rows_per_image: Some(res.1) }, wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 });
+                    Some(false)
+                }
+            }
+        }).map_or(false, |capture| { capture_stop = capture; true })
+    };
+    #[cfg(target_arch = "wasm32")]
+    if capture_stop { return; }
     if learned {
         #[cfg(not(target_arch = "wasm32"))]
         learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 5);

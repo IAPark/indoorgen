@@ -619,6 +619,21 @@ function shotOff() {
   $('bakebtn').textContent = 'Render view';
 }
 function forgetHouse() { shotOff(); if (rtMod && rtReady) rtMod.forget(); }
+// the learned denoiser, Blender's, on WebGPU (vendor/oidn.js, MIT, oidn-webgpu; weights/, Apache 2.0, from Open Image Denoise). No matter if it won't load: more rays and the plain filter
+let unet = null, unetTried = false;
+async function pageDenoiser() {
+  if (!unetTried) {
+    unetTried = true;
+    try { const { initUNetFromURL } = await import('./vendor/oidn.js'); unet = await initUNetFromURL('./weights/rt_hdr_calb_cnrm.tza', undefined, { hdr: true, aux: true }); }
+    catch (e) { console.warn('no denoiser', e); }
+  }
+  if (!unet) return undefined;
+  return (color, normal, size) => new Promise((res, rej) => {
+    const width = Math.floor(size / 65536), height = size % 65536;
+    const albedo = new Float32Array(width * height * 4).fill(0.5); // (flat: this is light, with no surface colours in it)
+    unet.tileExecute({ color: { data: color, width, height }, albedo: { data: albedo, width, height }, normal: { data: normal, width, height }, done: (d) => res(d.data), error: rej });
+  });
+}
 async function renderView() {
   if (rendering) return;
   if (shotKey) { shotOff(); return; }
@@ -637,7 +652,8 @@ async function renderView() {
     const c = shotCamera(w, h), t0 = performance.now();
     setStatus('rendering...');
     await new Promise((r) => requestAnimationFrame(r));
-    const px = await rtMod.render_view(w, h, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), parseInt($('seed').value, 10) || 0, c.et, c.lens);
+    const dn = await pageDenoiser();
+    const px = await rtMod.render_view(w, h, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), parseInt($('seed').value, 10) || 0, c.et, c.lens, dn);
     shot.width = w; shot.height = h;
     shot.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px), w, h), 0, 0);
     shot.style.display = 'block'; shotKey = c.key;

@@ -1494,10 +1494,42 @@ fn post_submit(r: &mut Renderer, o: &Opts, xp: f32) {
 }
 /// the picture as the page gets it: traced, then exposed by Blender's steps, waiting as a browser must
 #[cfg(target_arch = "wasm32")]
-async fn exposed_web(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaImage {
+async fn exposed_web(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts, dn: Option<&js_sys::Function>) -> image::RgbaImage {
     ensure_rt_async(r, s, o).await;
     r.rt_now = true;
+    if let Some(f) = dn {
+        // the light as traced goes to the page's denoiser, and comes back for a second run to finish with
+        rt::WEB_DN.with(|d| *d.borrow_mut() = rt::WebDn::Capture(None));
+        render_submit(r, s, c, o, 1.0);
+        let got = rt::WEB_DN.with(|d| match std::mem::replace(&mut *d.borrow_mut(), rt::WebDn::Off) { rt::WebDn::Capture(x) => x, _ => None });
+        if let Some((bi, bn, bpr, nbpr)) = got {
+            map_read(&r.gpu.dev, &[bi.slice(..), bn.slice(..)]).await;
+            let (w, h, ss) = (o.res.0 as usize, o.res.1 as usize, o.ss as usize);
+            let (mut col, mut nor, mut alpha) = (vec![0f32; w * h * 4], vec![0f32; w * h * 4], vec![0u8; w * h * 2]);
+            {
+                let (di, dn_) = (bi.slice(..).get_mapped_range().unwrap(), bn.slice(..).get_mapped_range().unwrap());
+                let hf = |d: &[u8], o: usize| half::f16::from_le_bytes([d[o], d[o + 1]]).to_f32();
+                for y in 0..h { for x in 0..w {
+                    let (i, oi, on) = ((y * w + x) * 4, y * bpr as usize + x * 8, (y * ss + ss / 2) * nbpr as usize + (x * ss + ss / 2) * 8);
+                    for k in 0..3 { let v = hf(&di, oi + k * 2); col[i + k] = if v.is_finite() { v } else { 0.0 }; let n = hf(&dn_, on + k * 2); nor[i + k] = if n.is_finite() { n * 0.5 + 0.5 } else { 0.5 }; }
+                    col[i + 3] = 1.0; nor[i + 3] = 1.0;
+                    alpha[(y * w + x) * 2..(y * w + x) * 2 + 2].copy_from_slice(&di[oi + 6..oi + 8]);
+                } }
+            }
+            let call = f.call3(&wasm_bindgen::JsValue::NULL, &js_sys::Float32Array::from(&col[..]), &js_sys::Float32Array::from(&nor[..]), &wasm_bindgen::JsValue::from_f64(((w as u64) << 16 | h as u64) as f64));
+            let out = match call { Ok(p) => wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.ok(), Err(_) => None };
+            if let Some(v) = out {
+                let a = js_sys::Float32Array::new(&v).to_vec();
+                if a.len() == w * h * 4 {
+                    let mut bytes = Vec::with_capacity(w * h * 8);
+                    for i in 0..w * h { for k in 0..3 { bytes.extend_from_slice(&half::f16::from_f32(a[i * 4 + k]).to_le_bytes()); } bytes.extend_from_slice(&alpha[i * 2..i * 2 + 2]); }
+                    rt::WEB_DN.with(|d| *d.borrow_mut() = rt::WebDn::Inject(bytes));
+                }
+            }
+        }
+    }
     render_submit(r, s, c, o, 1.0);
+    rt::WEB_DN.with(|d| *d.borrow_mut() = rt::WebDn::Off);
     let mut img = read_out_web(r, o).await;
     let mut xp = 1.0f32;
     for _ in 0..3 {
