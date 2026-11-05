@@ -1224,6 +1224,8 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }
     let rt_q = if r.rt_now { o.rt } else { None };
+    // (a video's first frame is a fast picture, on the same surfaces)
+    let first_v = rt_q.map_or(false, |q| q.video) && s.rt.as_ref().map_or(false, |sd| sd.hist_st.lock().unwrap().is_none());
     // (the prepass draws with the sun's matrix, as a shadow map would: a traced video has none, and draws from the camera)
     if rt_q.map_or(false, |q| q.video) { gl.sun_vp = gl.viewproj; }
     if rt_q.is_some() {
@@ -1283,7 +1285,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
     // (a video redraws its mirrors' pictures every third frame: from one frame to the next they hardly move, and each costs a small trace)
-    let panes_q = if rt_q.map_or(false, |q| q.video) && rt::this_frame() % 3 != 1 { None } else { rt_q };
+    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && rt::this_frame() % 3 != 1 { None } else { rt_q };
     if let (Some(_), Some(p), Some(sd)) = (panes_q, r.rt.as_ref(), s.rt.as_ref()) {
         // what each mirror in view shows: the scene traced from the camera mirrored in it, what lies behind the glass cut away, only over the mirror's own part of the picture. Each is finished before the main picture needs it
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
@@ -1351,8 +1353,9 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
                 rp.set_pipeline(&r.main_pipe); DRAW_EYE.with(|c| c.set(Some(eye_m)));
                 if let Some(l) = &m_list { bake::draw_list(&mut rp, s, &r.main_pipe, l, false); } else { draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&frm), None, None, None); }
             }
-            let qm = rt::Quality { spp: if rt_q.map_or(false, |q| q.video) { 1 } else { 3 }, bounces: 2, spec_spp: 1, denoise: if rt_q.map_or(false, |q| q.video) { 3 } else { 5 }, ss: 1, video: rt_q.map_or(false, |q| q.video), hist: false };
-            rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, rt::trace_size(o).0, if qm.video { 2 } else { 1 }, qm, vpm, eye_m, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
+            let vid_m = rt_q.map_or(false, |q| q.video) && !first_v;
+            let qm = rt::Quality { spp: if vid_m { 1 } else { 3 }, bounces: 2, spec_spp: 1, denoise: if vid_m { 3 } else { 5 }, ss: 1, video: vid_m, hist: false };
+            rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, if qm.video { (o.res.0 / 2, o.res.1 / 2) } else { o.res }, if qm.video { 2 } else { 1 }, qm, vpm, eye_m, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
             let (ox, oy) = (x0 as u32, y0 as u32);
             me.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { texture: &tg.m_lit, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: &tg.m_acc, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
@@ -1362,7 +1365,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, rt::trace_size(o).0, rt::trace_size(o).1, qu, vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
+        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).1 }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
         // the glass, forward, over the traced picture
         let mk = |v: &'_ wgpu::TextureView| v.clone();
         let (l, n, a, m) = (mk(&tg.lit), mk(&tg.nrm), mk(&tg.alb), mk(&tg.mat));
@@ -1675,7 +1678,7 @@ async fn read_out_web(r: &Renderer, o: &Opts) -> image::RgbaImage {
 fn ensure_rt(r: &mut Renderer, s: &mut Scene, o: &Opts) { pollster::block_on(ensure_rt_async(r, s, o)) }
 async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if o.rt.map_or(false, |q| q.video) && r.zp.is_none() { r.zp = Some(bake::z_pipes(r)); }
-    if r.rt.is_none() { let (tr, ts) = rt::trace_size(o); r.rt = Some(rt::pipes(&r.gpu.dev, tr.0, tr.1, ts)); }
+    if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss)); }
     if s.rt.is_some() { return }
     let t = Instant::now();
     memlog("before probe");
