@@ -534,8 +534,11 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         // (by one sample of the lamps and windows, the same at any roughness: a limit here drew the jumps in a material's roughness across a floor)
         var e_hit = e;
         if (rough > 0.15 && p.misc2.y > 1u) {
-          let eh = lamp(q, ng) + portal(q, ng);
-          e_hit = 0.5 * e + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
+          // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
+          let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
+          var eh = lamp(q, ng) + portal(q, ng);
+          if (on_metal) { eh += gather(q, ng); } // (a real branch: select() runs both sides)
+          e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
         }
         sp += (m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit)) * wt_;
       }
