@@ -984,7 +984,8 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         // (RT_FIXEDXP=1: no auto exposure, to compare with Blender's NO_AUTOEXP=1 level for level)
         for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 3 } {
             let (avg, clip) = stat(&img);
-            if avg > 0.36 && avg < 0.5 && clip < 0.18 { break }
+            // (a hair under Blender's top: its probe is small and denoised, and a picture on the line went either way, which is the difference of a whole step)
+            if avg > 0.36 && avg < 0.495 && clip < 0.18 { break }
             let mut step = ((0.43 / avg.max(1e-3)).log2() * 2.0).clamp(-2.5, 1.5);
             if clip > 0.10 { step = step.min(0.0); }
             if clip > 0.18 { step = step.min(-0.6); }
@@ -1539,11 +1540,18 @@ async fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> 
     let mut groups = vec![];
     let n = s.draws.len().min((cols * rows) as usize);
     for d in &s.draws[..n] {
-        // along the part's thinnest side: its broad face
+        // along the direction its surface mostly faces, the picture filled with it. By the box's thinnest side a house's walls, one mesh as wide as the house, were seen from above: their top edges, two pixels of grout. Every ray then took the wall as black, and reflections and bounced light off it were missing
         let e = d.bmax - d.bmin; let c = (d.bmin + d.bmax) * 0.5;
-        let (axis, up) = if e.z <= e.x && e.z <= e.y { (Vec3::Z, Vec3::Y) } else if e.x <= e.y { (Vec3::X, Vec3::Z) } else { (Vec3::Y, Vec3::Z) };
+        let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
+        let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
+        let vert = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
+        let ix = |k: usize| -> usize { if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as usize } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) as usize } };
+        let mut facing = Vec3::ZERO;
+        for t in 0..d.icount as usize / 3 { let (p0, p1, p2) = (vert(ix(t * 3)), vert(ix(t * 3 + 1)), vert(ix(t * 3 + 2))); facing += (p1 - p0).cross(p2 - p0).abs(); }
+        let (axis, up, hw, hh) = if facing.z >= facing.x && facing.z >= facing.y { (Vec3::Z, Vec3::Y, e.x, e.y) } else if facing.x >= facing.y { (Vec3::X, Vec3::Z, e.y, e.z) } else { (Vec3::Y, Vec3::Z, e.x, e.z) };
         let rad = e.length() * 0.5 + 0.01;
-        let vp = orthographic_rh(-rad, rad, -rad, rad, 0.0, rad * 3.0) * look_at_rh(c + axis * rad * 1.5, c, up);
+        let (hw, hh) = (hw * 0.5 + 0.001, hh * 0.5 + 0.001);
+        let vp = orthographic_rh(-hw, hw, -hh, hh, 0.0, rad * 3.0) * look_at_rh(c + axis * rad * 1.5, c, up);
         let eye = c + axis * rad * 1.5;
         let mut gl: Globals = bytemuck::Zeroable::zeroed();
         gl.viewproj = vp.to_cols_array_2d(); gl.inv_viewproj = vp.inverse().to_cols_array_2d(); gl.sun_vp = s.sun_vp.to_cols_array_2d();
@@ -1597,6 +1605,7 @@ async fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> 
             } }
         }
         let a = if cnt > 0.0 { acc / cnt } else { Vec3::new(m.color[0], m.color[1], m.color[2]) };
+        if std::env::var_os("RT_ALBDBG").is_some() { eprintln!("ALB {} cnt={} a={:.3} {:.3} {:.3} col={:.2} {:.2} {:.2}", m.name, cnt, a.x, a.y, a.z, m.color[0], m.color[1], m.color[2]); }
         out.push(rt::MatD { albedo: [a.x.clamp(0.0, 0.95), a.y.clamp(0.0, 0.95), a.z.clamp(0.0, 0.95), 1.0], emissive: [m.emissive[0], m.emissive[1], m.emissive[2], 0.0] });
     }
     drop(da); drop(dm);
