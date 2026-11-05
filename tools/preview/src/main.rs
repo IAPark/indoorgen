@@ -1173,6 +1173,11 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
 }
 
 fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> image::RgbaImage {
+    render_submit(r, s, cam, o, xp);
+    render_finish(r, cam, s, o)
+}
+/// everything up to the picture in its read-back buffer, sent to the GPU
+fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let aspect = o.res.0 as f32 / o.res.1 as f32;
     // clip range: 0.05-200 m for a house; outdoor scenes (terrain to a few km) push the far plane out and the near plane to 0.1 m
@@ -1321,6 +1326,9 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
             wgpu::TexelCopyBufferInfo { buffer: &tg.dbuf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.dbpr), rows_per_image: Some(tg.h) } }, wgpu::Extent3d { width: tg.w, height: tg.h, depth_or_array_layers: 1 });
     }
     q.submit([enc.finish()]);
+}
+fn render_finish(r: &mut Renderer, cam: &Cam, s: &Scene, o: &Opts) -> image::RgbaImage {
+    let (tg, dev) = (&r.tg, &r.gpu.dev);
     if true {
         let ds = tg.dbuf.slice(..); ds.map_async(wgpu::MapMode::Read, |_| {});
         dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
@@ -1451,6 +1459,18 @@ fn vox_view(r: &mut Renderer, s: &Scene, cam: &Cam, w: u32, h: u32) -> image::Rg
 
 /// the tone-mapping pass alone, at another exposure
 fn post_again(r: &mut Renderer, o: &Opts, xp: f32) -> image::RgbaImage {
+    post_submit(r, o, xp);
+    let (tg, dev) = (&r.tg, &r.gpu.dev);
+    let sl = tg.readback.slice(..);
+    sl.map_async(wgpu::MapMode::Read, |_| {});
+    dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let data = sl.get_mapped_range().unwrap();
+    let mut img = image::RgbaImage::new(o.res.0, o.res.1);
+    for y in 0..o.res.1 as usize { let row = &data[y * tg.bpr as usize..y * tg.bpr as usize + o.res.0 as usize * 4]; img.as_mut()[y * o.res.0 as usize * 4..(y + 1) * o.res.0 as usize * 4].copy_from_slice(row); }
+    drop(data); tg.readback.unmap();
+    img
+}
+fn post_submit(r: &mut Renderer, o: &Opts, xp: f32) {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let mut gl = r.last_gl.unwrap();
     gl.params[1] = 3.0 * xp;
@@ -1471,9 +1491,36 @@ fn post_again(r: &mut Renderer, o: &Opts, xp: f32) -> image::RgbaImage {
     enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &tg.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.bpr), rows_per_image: Some(o.res.1) } }, wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 });
     q.submit([enc.finish()]);
+}
+/// the picture as the page gets it: traced, then exposed by Blender's steps, waiting as a browser must
+#[cfg(target_arch = "wasm32")]
+async fn exposed_web(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaImage {
+    ensure_rt_async(r, s, o).await;
+    r.rt_now = true;
+    render_submit(r, s, c, o, 1.0);
+    let mut img = read_out_web(r, o).await;
+    let mut xp = 1.0f32;
+    for _ in 0..3 {
+        let mut lum: Vec<f32> = img.pixels().map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect();
+        lum.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let core = &lum[lum.len() / 20..lum.len() * 19 / 20];
+        let (avg, clip) = (core.iter().sum::<f32>() / core.len().max(1) as f32, lum.iter().filter(|v| **v > 0.95).count() as f32 / lum.len().max(1) as f32);
+        if avg > 0.36 && avg < 0.5 && clip < 0.18 { break }
+        let mut step = ((0.43 / avg.max(1e-3)).log2() * 2.0).clamp(-2.5, 1.5);
+        if clip > 0.10 { step = step.min(0.0); }
+        if clip > 0.18 { step = step.min(-0.6); }
+        if step == 0.0 { break }
+        xp *= 2f32.powf(step);
+        post_submit(r, o, xp);
+        img = read_out_web(r, o).await;
+    }
+    img
+}
+#[cfg(target_arch = "wasm32")]
+async fn read_out_web(r: &Renderer, o: &Opts) -> image::RgbaImage {
+    let tg = &r.tg;
     let sl = tg.readback.slice(..);
-    sl.map_async(wgpu::MapMode::Read, |_| {});
-    dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    map_read(&r.gpu.dev, std::slice::from_ref(&sl)).await;
     let data = sl.get_mapped_range().unwrap();
     let mut img = image::RgbaImage::new(o.res.0, o.res.1);
     for y in 0..o.res.1 as usize { let row = &data[y * tg.bpr as usize..y * tg.bpr as usize + o.res.0 as usize * 4]; img.as_mut()[y * o.res.0 as usize * 4..(y + 1) * o.res.0 as usize * 4].copy_from_slice(row); }

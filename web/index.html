@@ -12,7 +12,7 @@
 </head>
 <body>
 <canvas id="view"></canvas>
-<canvas id="bakeview" width="960" height="540"></canvas>
+<canvas id="renderview" width="960" height="540"></canvas>
 <button id="menu" aria-label="Show or hide the menu" aria-expanded="true" title="Show / hide menu (M)">&#x2630;</button>
 <div id="panel">
   <h1>Indoorgen</h1>
@@ -34,7 +34,7 @@
     <span id="messv">0.5</span>
   </div>
   <div class="row"><label>Cloth</label><input id="cloth" type="checkbox" checked></div>
-  <div class="row"><label title="Terrain and trees outside the windows. Many more triangles: slower to generate and to bake">Outdoors</label><input id="outdoors" type="checkbox"></div>
+  <div class="row"><label title="Terrain and trees outside the windows. Many more triangles: slower to generate and to render">Outdoors</label><input id="outdoors" type="checkbox"></div>
   <div class="row"><label>Preset</label><select id="quality"><option value="fast" selected>Fast (~25 s)</option><option value="full">Full (~45 s)</option><option value="draft">Draft (~10 s)</option><option value="custom">Custom</option></select></div>
   <details id="cfg">
     <summary>Generation settings</summary>
@@ -47,8 +47,8 @@
   </details>
   <button id="gen" class="primary">Generate</button>
   <div id="status">idle</div>
-  <button id="bakebtn" title="Trace the house's light until it settles, then draw it live at close to Blender's quality">Bake</button>
-  <div id="baknote" hidden>The baked render needs WebGPU, which this browser doesn't offer.</div>
+  <button id="bakebtn" title="Path trace this view, close to Blender's quality">Render view</button>
+  <div id="baknote" hidden>Rendering needs WebGPU, which this browser doesn't offer.</div>
   <hr>
   <div class="row">
     <label>View</label>

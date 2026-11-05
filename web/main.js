@@ -207,7 +207,7 @@ function topDown() {
 }
 
 async function showGlb(buf, name, sc) {
-  if (typeof bakedOff === 'function' && baked) bakedOff();
+  if (typeof forgetHouse === 'function') forgetHouse();
   const gltf = await new Promise((res, rej) => loader.parse(buf.slice(0), '', res, rej));
   disposeContent();
   content = gltf.scene;
@@ -516,7 +516,7 @@ $('cfglink').onclick = async () => {
 // called once the wasm module reported its schema + defaults: restore localStorage / URL state, build the panel
 function cfgInit(schemaJson, defaultsJson) {
   try { SCHEMA = schemaJson ? JSON.parse(schemaJson) : null; DEFAULTS = defaultsJson ? JSON.parse(defaultsJson) : {}; } catch (e) { SCHEMA = null; }
-  // (no terrain or trees unless asked for: they are most of a house's triangles here, and most of its time to bake)
+  // (no terrain or trees unless asked for: they are most of a house's triangles here, and much of its time to generate)
   if (DEFAULTS.program && DEFAULTS.program.outdoor) DEFAULTS.program.outdoor.on = false;
   cfg = clone(DEFAULTS); cfgPreset = 'fast';
   try {
@@ -601,74 +601,52 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// ---------------------------------------------------------------- baked render (WebGPU): path traced light, baked once, then every frame live
-// tools/preview in the browser: tools/web_rt/build.sh
-const bakeCanvas = $('bakeview');
-let baked = null, baking = false, bakeMod = null, bakeReady = false, bakeExposing = false;
-let lastMove = 0, lastCamKey = '', exposedAt = null;
-function bakedCamera() {
+// ---------------------------------------------------------------- render this view (WebGPU): tools/preview's path tracer in the browser (tools/web_rt/build.sh)
+const shot = $('renderview');
+let shotKey = null, rendering = false, rtMod = null, rtReady = false;
+function shotCamera(w, h) {
   // three (y up) to the house's own frame (z up): (x, y, z) -> (x, -z, y)
   const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
   // (a camera looking straight down has no up: a little off it)
   if (Math.abs(f.y) > 0.999) { f.z -= 0.02; f.normalize(); }
   const p = cam.position;
   const et = new Float32Array([p.x, -p.z, p.y, p.x + f.x, -(p.z + f.z), p.y + f.y]);
-  const a = bakeCanvas.width / bakeCanvas.height;
-  const tanX = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * a;
+  const tanX = Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * (w / h);
   return { et, lens: 18 / tanX, key: Array.from(et).map((v) => v.toFixed(3)).join() };
 }
-function bakedFrame() {
-  if (!baked) return false;
-  if (bakeExposing) return true;
-  const c = bakedCamera(), now = performance.now();
-  if (c.key !== lastCamKey) { lastCamKey = c.key; lastMove = now; }
-  baked.draw(c.et, c.lens);
-  // exposure, as a camera's: settled again once it has stopped somewhere else
-  if (exposedAt !== c.key && now - lastMove > 200) {
-    exposedAt = c.key; bakeExposing = true;
-    baked.expose(c.et, c.lens).catch(() => {}).finally(() => { bakeExposing = false; });
-  }
-  return true;
+function shotOff() {
+  shotKey = null; shot.style.display = 'none';
+  $('bakebtn').textContent = 'Render view';
 }
-function bakedOff() {
-  baked = null; exposedAt = null;
-  bakeCanvas.style.display = 'none';
-  $('bakebtn').textContent = 'Bake';
-  $('bakebtn').classList.remove('on');
-}
-async function bakeNow() {
-  if (baking) return;
-  if (baked) { bakedOff(); return; }
+function forgetHouse() { shotOff(); if (rtMod && rtReady) rtMod.forget(); }
+async function renderView() {
+  if (rendering) return;
+  if (shotKey) { shotOff(); return; }
   if (!lastGlb) { setStatus('generate or load a house first'); return; }
   // (a page can offer WebGPU and still get no adapter, in a frame or on a blocked GPU)
   let adapter = null; try { adapter = navigator.gpu && await navigator.gpu.requestAdapter(); } catch (_) {}
-  if (!adapter) { setStatus('The baked render needs WebGPU, which is not available here. Try opening the page in Chrome or Edge on its own.', true); return; }
-  baking = true; $('bakebtn').disabled = true; $('gen').disabled = true;
+  if (!adapter) { setStatus('Rendering needs WebGPU, which is not available here. Try opening the page in Chrome or Edge on its own.', true); return; }
+  rendering = true; $('bakebtn').disabled = true; $('gen').disabled = true;
   try {
-    setStatus('baking: loading renderer...');
-    bakeMod = bakeMod || await import('./pkg-rt/preview.js');
-    if (!bakeReady) { await bakeMod.default(); bakeReady = true; }
-  } catch (e) { setStatus('baked render failed to load: ' + (e.message || e), true); baking = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady; return; }
-  try {
-    // (the window's own pixels, up to about 2 million: at a fixed 540 lines, stretched to a large screen, everything was soft)
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    let bw = innerWidth * dpr, bh = innerHeight * dpr;
-    const lim = Math.min(1, Math.sqrt(2.1e6 / Math.max(1, bw * bh)));
-    bw = Math.round(bw * lim / 2) * 2; bh = Math.round(bh * lim / 2) * 2;
-    bakeCanvas.width = Math.max(320, bw); bakeCanvas.height = Math.max(180, bh);
-    const c = bakedCamera();
-    const t0 = performance.now();
-    const seed = parseInt($('seed').value, 10) || 0;
-    baked = await bakeMod.bake_scene(bakeCanvas, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), seed, +new URLSearchParams(location.search).get('bakebar') || 0, c.et, c.lens, (p) => setStatus(p > 0 ? `baking light: ${Math.round(Math.min(p, 1) * 100)} % settled` : 'baking light: measuring...'));
-    exposedAt = c.key;
-    bakeCanvas.style.display = 'block';
-    $('bakebtn').textContent = 'Baked: back to preview';
-    $('bakebtn').classList.add('on');
-    setStatus(`baked in ${((performance.now() - t0) / 1000).toFixed(1)} s. Move around as usual`); console.log('bake', baked.stats());
-  } catch (e) { setStatus('bake failed: ' + (e.message || e), true); bakedOff(); }
-  baking = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady;
+    setStatus('rendering: loading renderer...');
+    rtMod = rtMod || await import('./pkg-rt/preview.js');
+    if (!rtReady) { await rtMod.default(); rtReady = true; }
+    // (the window's shape, about a million pixels: traced three times over each way, more would not fit many GPUs)
+    const lim = Math.sqrt(1.0e6 / Math.max(1, innerWidth * innerHeight));
+    const w = Math.max(320, Math.round(innerWidth * lim / 2) * 2), h = Math.max(180, Math.round(innerHeight * lim / 2) * 2);
+    const c = shotCamera(w, h), t0 = performance.now();
+    setStatus('rendering...');
+    await new Promise((r) => requestAnimationFrame(r));
+    const px = await rtMod.render_view(w, h, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), parseInt($('seed').value, 10) || 0, c.et, c.lens);
+    shot.width = w; shot.height = h;
+    shot.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px), w, h), 0, 0);
+    shot.style.display = 'block'; shotKey = c.key;
+    $('bakebtn').textContent = 'Back to preview';
+    setStatus(`rendered in ${((performance.now() - t0) / 1000).toFixed(1)} s. Move the camera to go back`);
+  } catch (e) { setStatus('render failed: ' + (e.message || e), true); shotOff(); if (rtMod && rtReady) try { rtMod.forget(); } catch (_) {} }
+  rendering = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady;
 }
-$('bakebtn').onclick = bakeNow;
+$('bakebtn').onclick = renderView;
 if (!navigator.gpu) { $('bakebtn').disabled = true; $('bakebtn').title = 'Needs WebGPU, which this browser does not offer'; $('baknote').hidden = false; }
 
 let last = performance.now();
@@ -676,12 +654,13 @@ renderer.setAnimationLoop(() => {
   const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (mode === 'walk') walkStep(dt); else orbit.update();
-  // (nothing else on the GPU during a bake: drawing the preview's millions of triangles alongside starved it, and the light came out in blotches)
-  if (baking) return;
-  if (!bakedFrame()) renderer.render(scene, cam);
+  // (nothing else on the GPU during a render)
+  if (rendering) return;
+  if (shotKey) { if (shotCamera(shot.width, shot.height).key === shotKey) return; shotOff(); }
+  renderer.render(scene, cam);
 });
 
-window.__ig = { get sidecarJson() { return JSON.stringify(sidecar); }, bakeNow, get baked() { return baked; }, scene, cam, renderer, applyPreset, topDown, setCeiling, setMode, get presets() { return presets; }, generate };
+window.__ig = { get sidecarJson() { return JSON.stringify(sidecar); }, renderView, get rendering() { return rendering; }, scene, cam, renderer, applyPreset, topDown, setCeiling, setMode, get presets() { return presets; }, generate };
 loadFromQuery().catch((e) => setStatus('load failed: ' + e, true));
 if (!new URLSearchParams(location.search).has('glb')) startWorker();
 
