@@ -326,7 +326,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     thru *= 0.5;
     thru_e = sheer * thru;
   }
-  textureStore(out_lamp, px, vec4<f32>(dl_, 1.0));
+  textureStore(out_lamp, px, vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)));
   var e = vec3<f32>(0.0);
   let spp = p.dims.w;
   for (var s = 0u; s < spp; s++) {
@@ -384,6 +384,45 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   textureStore(out_irr, px, vec4<f32>(e, vis));
 }
 
+// GTAO, as games do it: how far the surfaces nearby rise above this point, searched in the depth picture along a few directions. For each side of a direction a share sin^2 of the cosine-weighted hemisphere is closed off. Cheap, and the darkening of corners and contacts stays sharp, where the light's filter smooths it away
+const AO_R = 0.5; // m
+fn gtao(px: vec2<i32>, g: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, d: f32, dims: vec2<f32>, w: i32, h: i32, ss: i32) -> f32 {
+  let wp = max(length(world_of(g + vec2<i32>(ss, 0), d, dims, p.inv_vp) - pos), 1e-4);
+  let rpx = clamp(AO_R / wp, 3.0, 40.0);
+  let rot = fract(52.9829189 * fract(dot(vec2<f32>(px), vec2<f32>(0.06711056, 0.00583715)))) * PI;
+  var occ = 0.0;
+  for (var k = 0; k < 2; k++) {
+    let a = rot + f32(k) * PI / 2.0; let dir = vec2<f32>(cos(a), sin(a));
+    for (var side = 0; side < 2; side++) {
+      let sg = select(1.0, -1.0, side == 1); var top = 0.0;
+      for (var st = 1; st <= 4; st++) {
+        let q = px + vec2<i32>(round(dir * sg * rpx * (f32(st) - 0.5 + 0.5 * fract(rot * 7.3)) / 4.0));
+        if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { break; }
+        let gq = q * ss + vec2<i32>(ss / 2); let dq = textureLoad(g_depth, gq, 0);
+        if (dq >= 1.0) { continue; }
+        let v = world_of(gq, dq, dims, p.inv_vp) - pos; let l2 = dot(v, v);
+        if (l2 < 1e-6) { continue; }
+        let sn = dot(n, v) * inverseSqrt(l2); let fall = max(1.0 - l2 / (AO_R * AO_R), 0.0);
+        top = max(top, max(sn - 0.05, 0.0) * fall);
+      }
+      occ += top * top;
+    }
+  }
+  return clamp(1.0 - occ / 4.0, 0.0, 1.0);
+}
+// the occlusion, over a few pixels of this surface: its noise goes
+fn ao_fine(px: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, dims: vec2<f32>, w: i32, h: i32, ss: i32) -> f32 {
+  var acc = 0.0; var wa = 0.0;
+  for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+    let q = px + vec2<i32>(i, j);
+    if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+    let gq = q * ss + vec2<i32>(ss / 2); let dq = textureLoad(g_depth, gq, 0);
+    if (dq >= 1.0) { continue; }
+    let wq = f32(3 - abs(i)) * f32(3 - abs(j)) * pow(max(dot(n, normalize(textureLoad(g_nrm, gq, 0).xyz + vec3<f32>(1e-5))), 0.0), 16.0) * exp(-abs(dot(n, world_of(gq, dq, dims, p.inv_vp) - pos)) / 0.02);
+    acc += textureLoad(lamp_done, q, 0).a * wq; wa += wq;
+  } }
+  return select(textureLoad(lamp_done, px, 0).a, acc / wa, wa > 1e-5);
+}
 // The lamps' direct light, smoothed along its surface where a shadow's edge passes: a wide soft edge is more than a few rays can resolve, and came out speckled
 fn lamp_smooth(px: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, dims: vec2<f32>, w: i32, h: i32, ss: i32) -> vec3<f32> {
   let c = textureLoad(lamp_done, px, 0).rgb;
@@ -556,7 +595,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     }
     if (rays > 0u) { sp /= f32(rays); }
   }
-  textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), 1.0));
+  textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), ao_fine(px, pos, n, dims, w, h, ss)));
   // (not through the reflections' filter: it smeared the shadow each louvre blade casts on the next. Except where roughness comes from a map: its jumps drew hard shapes across a door and blotches on a floor)
   var gl_ = lamp_glint(pos, n, o, g, rough, w, h, ss, e);
   if (rough > 0.08 && textureLoad(g_mat, g, 0).w >= 2.9 && coat < 0.25 && p.misc2.y > 0u) {

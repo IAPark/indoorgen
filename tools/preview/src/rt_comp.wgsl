@@ -1,5 +1,6 @@
 struct P { inv_vp: mat4x4<f32>, cam: vec4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, dims: vec4<u32>, misc: vec4<u32>, misc2: vec4<u32>, scale: vec4<f32> };
 const PI = 3.14159265;
+const AO_STRENGTH = 0.6; // (the light's rays already see most of it: this restores what its filter smooths away)
 fn world_of(px: vec2<i32>, d: f32, dims: vec2<f32>, inv_vp: mat4x4<f32>) -> vec3<f32> {
   let ndc = vec2<f32>((f32(px.x) + 0.5) / dims.x * 2.0 - 1.0, 1.0 - (f32(px.y) + 0.5) / dims.y * 2.0);
   let w = inv_vp * vec4<f32>(ndc, d, 1.0);
@@ -71,7 +72,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let lw = i32(p.dims.x); let lh = i32(p.dims.y);
   let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
   let b = vec2<i32>(floor(f));
-  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var gl_ = vec3<f32>(0.0); var dl_ = vec3<f32>(0.0); var tw = 0.0;
+  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var gl_ = vec3<f32>(0.0); var dl_ = vec3<f32>(0.0); var tw = 0.0; var ao_ = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
     let gq = q * ss + vec2<i32>(ss / 2);
@@ -82,9 +83,9 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let bw = (1.0 - abs(f.x - f32(b.x + i))) * (1.0 - abs(f.y - f32(b.y + j)));
     let wt = bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02) + 1e-4 * bw;
     let c = textureLoad(c_irr, q, 0);
-    dl_ += textureLoad(c_lamp, q, 0).rgb * wt; gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
+    let lq_ = textureLoad(c_lamp, q, 0); dl_ += lq_.rgb * wt; ao_ += lq_.a * wt; gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
-  e /= max(tw, 1e-5); s /= max(tw, 1e-5); gl_ /= max(tw, 1e-5);
+  e /= max(tw, 1e-5); s /= max(tw, 1e-5); e *= mix(1.0, clamp(ao_ / max(tw, 1e-5), 0.0, 1.0), AO_STRENGTH); gl_ /= max(tw, 1e-5);
   // (a highlight only as wide as a tiny bevel face, brighter than anything a few pixels around it, is no highlight anyone would see: it drew a row of dots around a door's panel. A rail's runs along it, and stays)
   var gl_hi = vec3<f32>(0.0);
   for (var k = 0; k < 8; k++) {
