@@ -822,13 +822,16 @@ pub async fn expose(f: &mut Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Bak
     let stat = |img: &image::RgbaImage| { let mut lum: Vec<f32> = img.pixels().map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect();
         lum.sort_by(|a, b| a.partial_cmp(b).unwrap()); let core = &lum[lum.len() / 20..lum.len() * 19 / 20];
         (core.iter().sum::<f32>() / core.len().max(1) as f32, lum.iter().filter(|v| **v > 0.95).count() as f32 / lum.len().max(1) as f32) };
-    let target = std::env::var("RT_MEAN").ok().and_then(|v| v.parse().ok()).unwrap_or(0.45f32);
-    let (mut lo, mut hi, mut xp) = (0.02f32, 64f32, 1.0f32);
-    for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 7 } {
+    // (Blender's own steps, as in the traced modes)
+    let mut xp = 1.0f32;
+    for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 3 } {
         let (avg, clip) = stat(&img);
-        if (avg - target).abs() < 0.008 && clip < 0.18 { break }
-        if avg > target || clip >= 0.18 { hi = xp } else { lo = xp }
-        xp = (lo * hi).sqrt();
+        if avg > 0.36 && avg < 0.5 && clip < 0.18 { break }
+        let mut step = ((0.43 / avg.max(1e-3)).log2() * 2.0).clamp(-2.5, 1.5);
+        if clip > 0.10 { step = step.min(0.0); }
+        if clip > 0.18 { step = step.min(-0.6); }
+        if step == 0.0 { break }
+        xp *= 2f32.powf(step);
         let mut enc = r.gpu.dev.create_command_encoder(&Default::default());
         post(f, r, pp, bk, &mut enc, xp, 1.0, false, (vp, eye));
         img = read_img(f, r, enc).await;
