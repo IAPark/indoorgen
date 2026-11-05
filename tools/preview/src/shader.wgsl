@@ -1,5 +1,6 @@
 diagnostic(off, derivative_uniformity);
 /*LIB*/
+const BUMP_RT = 0.25;
 struct G {
   viewproj: mat4x4<f32>,
   inv_viewproj: mat4x4<f32>,
@@ -101,7 +102,8 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     // (a limit on the slope, and none past what a pixel can show: a joint's step within a pixel is noise, and drew dashes along the tile)
     let adet = max(abs(det), 1e-9);
     let g0 = grad / adet;
-    if (m.flags.y < 0.5) { let sl = length(g0); n = normalize(n - g0 * min(1.0, 0.35 / max(sl, 1e-6)) * (1.0 - smoothstep(0.2, 0.5, sl))); }
+    // (path traced: much weaker. A slope taken pixel by pixel is noise that Blender's many samples average away: leather came out speckled, and highlights broke up)
+    if (m.flags.y < 0.5) { let g0 = g0 * select(1.0, BUMP_RT, g.params2.w > 0.5); let sl = length(g0); n = normalize(n - g0 * min(1.0, 0.35 / max(sl, 1e-6)) * (1.0 - smoothstep(0.2, 0.5, sl))); }
   }
   /*LIT<*/
   let sun = g.sun_dir.xyz;

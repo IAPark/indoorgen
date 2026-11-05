@@ -84,7 +84,14 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let c = textureLoad(c_irr, q, 0);
     dl_ += textureLoad(c_lamp, q, 0).rgb * wt; gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
-  e /= max(tw, 1e-5); s /= max(tw, 1e-5); gl_ /= max(tw, 1e-5); dl_ /= max(tw, 1e-5);
+  e /= max(tw, 1e-5); s /= max(tw, 1e-5); gl_ /= max(tw, 1e-5);
+  // (a highlight only as wide as a tiny bevel face, brighter than anything a few pixels around it, is no highlight anyone would see: it drew a row of dots around a door's panel. A rail's runs along it, and stays)
+  var gl_hi = vec3<f32>(0.0);
+  for (var k = 0; k < 8; k++) {
+    let o_ = array<vec2<i32>, 8>(vec2<i32>(4, 0), vec2<i32>(-4, 0), vec2<i32>(0, 4), vec2<i32>(0, -4), vec2<i32>(3, 3), vec2<i32>(-3, 3), vec2<i32>(3, -3), vec2<i32>(-3, -3))[k];
+    gl_hi = max(gl_hi, textureLoad(c_glint, clamp(b + o_, vec2<i32>(0), vec2<i32>(lw - 1, lh - 1)), 0).rgb);
+  }
+  gl_ = min(gl_, gl_hi * 1.5); dl_ /= max(tw, 1e-5);
   // the sun at this very point, and the light of a surface no traced pixel landed on
   let fine = textureLoad(c_fine, px, 0);
   var v = fine.a;

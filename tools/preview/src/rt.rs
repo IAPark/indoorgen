@@ -12,7 +12,7 @@ impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
             "fast" => Quality { spp: 2, bounces: 2, spec_spp: 1, denoise: 5, ss: 3 },
-            "full" => Quality { spp: 3, bounces: 3, spec_spp: 3, denoise: 5, ss: 3 },
+            "full" => Quality { spp: 3, bounces: 4, spec_spp: 3, denoise: 5, ss: 3 },
             _ => panic!("--rt fast|full"),
         }
     }
