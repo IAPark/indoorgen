@@ -337,7 +337,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   textureStore(out_lamp, px, vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)));
   var e = vec3<f32>(0.0);
   let spp = p.dims.w;
-  let restir_ = p.cam.w > 1.5;
+  let restir_ = (u32(p.cam.w) & 2u) != 0u;
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
     if (restir_) {
@@ -402,6 +402,88 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   }
   textureStore(out_irr, px, vec4<f32>(e, vis));
 }
+
+// what a glossy surface sends to the eye from one direction, cosine included: F D G / 4 nv. The target ReSTIR's reflections choose by: each pixel's own roughness and normal are in it, so its smudges stay, where a blur averages them away
+fn brdf_nl(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, rough: f32, f0: vec3<f32>) -> vec3<f32> {
+  let nl = dot(n, l); let nv = max(dot(n, v), 1e-3);
+  if (nl <= 0.0) { return vec3<f32>(0.0); }
+  let h_ = normalize(v + l); let nh = max(dot(n, h_), 0.0); let vh = max(dot(v, h_), 0.0);
+  let al = max(rough * rough, 0.001); let a2 = al * al;
+  let dn = nh * nh * (a2 - 1.0) + 1.0; let dd = a2 / (PI * dn * dn);
+  let g1v = 2.0 * nv / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
+  let g1l = 2.0 * nl / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
+  let g2 = g1v * g1l / max(g1v + g1l - g1v * g1l, 1e-3);
+  return (f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vh, 5.0)) * dd * g2 / (4.0 * nv);
+}
+fn rs_add(rs: ptr<function, R>, pos_: vec3<f32>, nrm_: vec3<f32>, l: vec3<f32>, wt: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rd: vec3<f32>, rough: f32, f0: vec3<f32>) {
+  // (the ray came from the GGX lobe, so what it brings over its probability is its weight, before the fit compose divides by)
+  let wi = dot(l * wt * dfg_of(rough, max(dot(n, v), 1e-3), f0), vec3<f32>(0.333));
+  if (wi <= 0.0) { return; }
+  (*rs).wsum += wi;
+  if (rnd() * (*rs).wsum < wi) { (*rs).pos = pos_; (*rs).nrm = nrm_; (*rs).rad = l; (*rs).lp = dot(l * brdf_nl(n, v, rd, rough, f0), vec3<f32>(0.333)); }
+}
+fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
+  let rc = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+  let a04 = min(rc.x * rc.x, pow(2.0, -9.28 * nv)) * rc.x + rc.y;
+  let ab = vec2<f32>(-1.04, 1.04) * a04 + rc.zw;
+  return max(f0 * ab.x + vec3<f32>(ab.y), vec3<f32>(0.005));
+}
+@compute @workgroup_size(8, 8) fn restir_spec(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
+  let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let cur_ = textureLoad(irr_done, px, 0); // (the reflections so far: what is no reservoir's, in rgb, and the roughness)
+  let off = u32(w * h);
+  let r0 = resv[off + u32(px.y * w + px.x)];
+  if (r0.m <= 0.0 || cur_.a <= 0.15) { textureStore(out_spec, px, cur_); return; }
+  let g = px * ss + vec2<i32>(ss / 2); let dims = vec2<f32>(f32(w * ss), f32(h * ss));
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { textureStore(out_spec, px, cur_); return; }
+  let pos = world_of(g, d, dims, p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  let vv = normalize(p.cam.xyz - pos); let rough = cur_.a;
+  let al_ = textureLoad(g_alb, g, 0); let f0 = mix(vec3<f32>(0.04), al_.rgb, textureLoad(g_mat, g, 0).x);
+  seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 2654435761u) ^ 0x51ed270bu;
+  let o = start_at(pos, n);
+  var sel = r0; var wt = r0.wsum; var mt = r0.m;
+  for (var k = 0u; k < RS_K; k++) {
+    let a = rnd() * 2.0 * PI; let rr = sqrt(rnd()) * RS_SPEC_RADIUS;
+    let q = px + vec2<i32>(round(vec2<f32>(cos(a), sin(a)) * rr));
+    if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+    let gq = q * ss + vec2<i32>(ss / 2); let dq = textureLoad(g_depth, gq, 0);
+    if (dq >= 1.0) { continue; }
+    let nq_ = textureLoad(g_nrm, gq, 0).xyz; if (dot(nq_, nq_) < 0.25) { continue; }
+    let nq = normalize(nq_);
+    let pq = world_of(gq, dq, dims, p.inv_vp);
+    if (dot(n, nq) < 0.9 || abs(dot(n, pq - pos)) > 0.03) { continue; }
+    let rq = resv[off + u32(q.y * w + q.x)];
+    if (rq.m <= 0.0) { continue; }
+    if (rq.wsum <= 0.0 || rq.lp <= 0.0) { mt += rq.m; continue; }
+    let vr = rq.pos - pos; let vq = rq.pos - pq; let lr2 = dot(vr, vr); let lq2 = dot(vq, vq);
+    let lr = vr * inverseSqrt(max(lr2, 1e-8));
+    let pr = dot(rq.rad * brdf_nl(n, vv, lr, rough, f0), vec3<f32>(0.333));
+    if (pr <= 0.0) { mt += rq.m; continue; }
+    var jac = 1.0;
+    if (dot(rq.nrm, rq.nrm) > 0.25) {
+      let sr = abs(dot(rq.nrm, lr)); let sq = abs(dot(rq.nrm, vq)) * inverseSqrt(max(lq2, 1e-8));
+      jac = (sr / max(sq, 1e-3)) * (lq2 / max(lr2, 1e-6));
+      if (jac > 10.0 || jac < 0.1) { continue; }
+    }
+    let wn = pr / rq.lp * rq.wsum * jac;
+    wt += wn; mt += rq.m;
+    if (rnd() * wt < wn) { sel = rq; }
+  }
+  var ind = vec3<f32>(0.0);
+  if (sel.lp > 0.0 && wt > 0.0) {
+    let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8));
+    let fn_ = sel.rad * brdf_nl(n, vv, l, rough, f0); let ps = dot(fn_, vec3<f32>(0.333));
+    if (ps > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = fn_ / ps * (wt / max(mt, 1.0)) / dfg_of(rough, max(dot(n, vv), 1e-3), f0); }
+  }
+  textureStore(out_spec, px, vec4<f32>(min(cur_.rgb + ind, vec3<f32>(20.0)), rough));
+}
+const RS_SPEC_RADIUS = 10.0;
 
 // ReSTIR GI's spatial step: a few neighbours on the same surface offer the bounce they kept, weighed by what it would give here. One shadow ray for the winner
 const RS_K = 5u; const RS_RADIUS = 24.0;
@@ -581,7 +663,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   // what a glossy surface reflects
   let a = textureLoad(g_alb, g, 0);
   let rough = a.a;
-  var sp = vec3<f32>(0.0);
+  var sp = vec3<f32>(0.0); var rs_s = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
   let coat = textureLoad(g_nrm, g, 0).a;
   if ((rough < 0.03 || coat < 0.25) && p.misc2.y > 0u) {
     let v = normalize(pos - p.cam.xyz);
@@ -589,6 +671,9 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
     let is_mirror = rough < 0.001;
     let rays = select(p.misc2.y, 0u, is_mirror);
+    let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
+    rs_s.m = f32(rays);
+    let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
     var nsp = n;
     for (var k = 0; k < 4; k++) {
@@ -643,6 +728,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         var l = sky_at(rd);
         // (the sun only in a truly sharp reflection: on anything rough its highlight is already counted, and a ray that happened on it was a firefly)
         if (rough < 0.03 && dot(rd, p.sun_dir.xyz) > cos(p.scale.w)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w)))); }
+        if (use_rs) { rs_add(&rs_s, o + rd * 1000.0, vec3<f32>(0.0), l, wt_, n, -v, rd, rough, f0_rs); continue; }
         sp += l * wt_;
       } else {
         let t = tris[hh.i]; let m = mats[t.mat];
@@ -661,7 +747,9 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
           if (on_metal) { eh += gather(q, ng); } // (a real branch: select() runs both sides)
           e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
         }
-        sp += (m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit)) * wt_;
+        let lh_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
+        if (use_rs) { rs_add(&rs_s, q, ng, lh_, wt_, n, -v, rd, rough, f0_rs); continue; }
+        sp += lh_ * wt_;
       }
     }
     if (rays > 0u) { sp /= f32(rays); }
@@ -678,5 +766,6 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0);
   }
   textureStore(out_glint, px, vec4<f32>(gl_, 0.0));
+  if ((u32(p.cam.w) & 4u) != 0u) { resv[u32(w * h) + u32(px.y * w + px.x)] = rs_s; }
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }
