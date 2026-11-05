@@ -551,7 +551,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
     }
     // (new to the picture: a final gather. A few rays from here, each ending in a cell where it lands, so no one cell can show as a patch)
-    spp = 4u;
+    spp = 3u;
   }
   var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;

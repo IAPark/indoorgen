@@ -991,11 +991,21 @@ fn targets_at(dev: &wgpu::Device, o: &Opts, ss: u32) -> Targets {
 }
 
 /// a render, exposed again to suit if too bright or too dark for its lights, as a camera would
+static VIDEO_XP: std::sync::Mutex<Option<f32>> = std::sync::Mutex::new(None);
 fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaImage {
     if o.rt.is_some() && r.rt_now {
         // Blender's rule (render_rust.py auto_exposure): a mean of 0.36-0.5 over the middle 90 percent, with a guard on near-clipped pixels. Only the last pass runs again
         ensure_rt(r, s, o);
         let t = Instant::now();
+        // (a video keeps the exposure its first frame chose, as a camera locked for a shot: measuring each frame would cost a second pass, and pump)
+        if o.rt.map_or(false, |q| q.video) {
+            if let Some(x) = *VIDEO_XP.lock().unwrap() {
+                let img = render(r, s, c, o, x);
+                r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
+                if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
+                return img;
+            }
+        }
         let mut img = render(r, s, c, o, 1.0);
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
         if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
@@ -1036,6 +1046,7 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         // (RT_XP=x: this exposure, to try a picture at the level Blender landed on)
         if let Some(x) = std::env::var("RT_XP").ok().and_then(|v| v.parse().ok()) { xp = x; img = post_again(r, o, xp); }
         if o.verbose { eprintln!("  exposure x{xp:.2}, {:.3}s", t.elapsed().as_secs_f32()); }
+        if o.rt.map_or(false, |q| q.video) { *VIDEO_XP.lock().unwrap() = Some(xp); }
         return img;
     }
     let img = render(r, s, c, o, 1.0);
