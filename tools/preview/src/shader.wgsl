@@ -86,6 +86,14 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   /*SURF*/
   // (path traced, a material with no graph: its own roughness and metal, or a steel fridge came out as white paint)
   if (!pbr && g.params2.w > 0.5) { surf_rough = m.p[47].x; surf_metal = m.p[47].y; }
+  // (the unevenness render_rust.py gives every surface: roughness and colour drift slowly over it. Blotches on a metal door, and highlights that break up)
+  if (g.params2.w > 0.5 && m.p[46].w > 0.0) {
+    let mr_ = ig_noise(v.wpos, m.p[46].w * 0.08, 3.0, 0.5, 2.0, 0.0, 0.0);
+    surf_rough = clamp(surf_rough * (1.0 - m.p[46].z + 2.0 * m.p[46].z * mr_), 0.0, 1.0);
+    let mc_ = ig_noise(v.wpos, 6.0, 4.0, 0.5, 2.0, 0.0, 0.0);
+    let cf = 1.0 - m.p[46].y + 1.5 * m.p[46].y * mc_;
+    surf_color *= cf; albedo = vec4<f32>(albedo.rgb * select(cf, 1.0, pbr), albedo.a);
+  }
   // (floors, as render_rust.py makes them: satin at most, a little less saturated, hardly any coat. As mirrors they caught a lamp in a blaze of glare)
   if (m.emissive.w > 1.5 && g.params2.w > 0.5) {
     surf_rough = max(surf_rough, 0.42); surf_coat = min(surf_coat, 0.1);

@@ -27,6 +27,21 @@ struct Globals {
 }
 /// The index of refraction of a part's glass (0: none given).
 fn sn_ior(side: &serde_json::Value, sn: Option<&serde_json::Value>) -> f64 { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["ior"].as_f64()).unwrap_or(0.0) }
+/// Surface unevenness by family, from `_MICRO` in tools/render/render_rust.py: (noise scale, roughness variation, colour variation). One flat value over a whole door reads as CG
+fn micro_family(name: &str) -> Option<(f32, f32, f32)> {
+    let n = name.to_lowercase();
+    if ["glass", "mirror", "lamp", "bulb", "emiss", "people", "skin", "hair", "eye", "sky", "water", "window", "photo_art", "screen"].iter().any(|x| n.contains(x)) { return None }
+    const F: [(&[&str], f32, f32, f32); 7] = [
+        (&["fabric", "knit", "velvet", "rug", "towel", "cloth", "bedding", "linen", "comforter", "pillow", "curtain", "sheet", "mattress", "duvet", "throw", "blanket", "cushion", "bed_panel", "upholster", "headboard"], 70.0, 0.15, 0.10),
+        (&["leather"], 35.0, 0.20, 0.08),
+        (&["plaster", "wall", "paint", "concrete", "stucco"], 22.0, 0.12, 0.05),
+        (&["wood", "plywood", "parquet", "hardwood"], 120.0, 0.22, 0.06),
+        (&["tile", "ceramic", "marble", "stone", "granite", "brick"], 40.0, 0.15, 0.04),
+        (&["plastic", "rubber"], 60.0, 0.15, 0.04),
+        (&["metal", "steel", "aluminium", "brass", "chrome", "iron", "_leg", "_frame"], 90.0, 0.25, 0.03),
+    ];
+    Some(F.iter().find(|f| f.0.iter().any(|x| n.contains(x))).map_or((50.0, 0.12, 0.05), |f| (f.1, f.2, f.3)))
+}
 /// A flat mirror's pane, by its material.
 fn is_mirror(name: &str) -> bool { name.to_lowercase().contains("mirror") }
 /// Cloth, by the shader names `tools/render/render_rust.py` treats as cloth (the shader's, not the part's: a "sofa_fabric" can be leather): there it gets a soft sheen, which is why dark cushions are never near black.
@@ -345,9 +360,11 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
                 let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], if lname.contains(".floor") { 2.0 } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["transmission"].as_f64()).unwrap_or(0.0) as f32 }], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else if sn.and_then(|x| x["graph"].as_u64()).map_or(false, |i| side["graphs"][i as usize]["out"]["roughness"].is_object()) { -1.0 } else { 0.0 }, if dark_glass { 0.85 } else if opts.rt.is_none() && m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let fam = if shown { None } else { micro_family(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) };
                 if graph.is_none() { u.p[47] = if shown { [0.45, 0.0, 0.0, 0.0] } else { [m.rough, m.metal, 0.0, 0.0] }; }
                 if let Some(e) = graph {
                     for (i, v) in e.params.iter().enumerate() { u.p[i / 4][i % 4] = *v; }
+                    if e.params.len() > 46 * 4 { u.p[46] = [0.0; 4]; }
                     // the object frame the graph's coordinates are in (the sidecar's pose, rows of a 4x4)
                     if let Some(pr) = sn.and_then(|x| x["pose"].as_array()) {
                         let g_ = |r: usize, c: usize| pr[r][c].as_f64().unwrap_or(0.0) as f32;
@@ -355,6 +372,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                         u.obj = pm.inverse().to_cols_array_2d();
                     }
                 }
+                if let (Some((sc, rv, av)), true) = (fam, graph.map_or(true, |e| e.params.len() <= 46 * 4)) { u.p[46][3] = sc; u.p[46][2] = rv; if graph.map_or(true, |e| e.params.len() <= 45 * 4 + 1) { u.p[46][1] = av; } }
                 let ub = gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
                 let tv = tex_views.get(&tex).unwrap_or(white);
                 mat_bgs.push(gpu.dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: mat_bgl, entries: &[
