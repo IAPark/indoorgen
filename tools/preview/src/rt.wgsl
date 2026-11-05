@@ -483,7 +483,12 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     }
     let nspl = length(nsp) / 5.0;
     let spec_w = select(min(sqrt(max((1.0 - nspl) / max(nspl, 0.01), 0.0)), 0.5), 0.0, is_mirror);
-    if (is_mirror) { sp = textureLoad(m_lit, px, 0).rgb; }
+    // (at one sample a pixel that picture has jagged frames and a comb where wall texture beats with the pixels: a tent over the pixel takes them out, as the sub-pixels do for the room)
+    if (is_mirror) {
+      for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) {
+        sp += textureLoad(m_lit, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb * f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
+      } }
+    }
     for (var s = 0u; s < rays; s++) {
       // the rough lobe as it really is (GGX, visible normals, Heitz 2018), each ray weighted against the share the composition step will multiply by. A narrow cone left out most of what a rough surface reflects: dark blades and metal doors
       var rd = r0; var wt_ = vec3<f32>(1.0);

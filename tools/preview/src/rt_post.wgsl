@@ -29,7 +29,8 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   var c = textureLoad(i_irr, px, 0); let sc = textureLoad(i_spec, px, 0);
   // (first round: a traced pixel unlike all around it started inside a wall's corner, and saw the outside)
   var av = vec4<f32>(0.0);
-  if (stp.y == 0u && stp.z == 0u) {
+  let lone_round = stp.z == 0u && (stp.y == 0u || stp.y == 3u);
+  if (lone_round) {
     var hi = 0.0; var cn = 0.0;
     for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) {
       if (i == 0 && j == 0) { continue; }
@@ -40,7 +41,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
     } }
     if (cn > 0.0) {
       av /= cn;
-      if (dot(c.rgb, vec3<f32>(0.333)) > hi * 1.3 + 0.02) { c = vec4<f32>(av.rgb, c.a); }
+      if (stp.y == 0u && dot(c.rgb, vec3<f32>(0.333)) > hi * 1.3 + 0.02) { c = vec4<f32>(av.rgb, c.a); }
     }
   }
   if (d0 >= 1.0) { textureStore(o_irr, px, c); textureStore(o_spec, px, sc); return; }
@@ -49,6 +50,19 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   var kw = array<f32, 3>(0.375, 0.25, 0.0625);
   let stride = i32(stp.x); let it = stp.y;
   var e = vec3<f32>(0.0); var ew = 0.0; var s = vec3<f32>(0.0); var sw = 0.0;
+  // (what is typical: the mean of compressed brightness, which a few bright pixels hardly move)
+  var out_cap = 1e9;
+  if (it == 0u && stp.z == 1u) {
+    var ks = 0.0; var kn = 0.0;
+    for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+      let q = px + vec2<i32>(i, j);
+      if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+      let l = dot(textureLoad(i_spec, q, 0).rgb, vec3<f32>(0.333));
+      ks += l / (1.0 + l); kn += 1.0;
+    } }
+    let km = ks / max(kn, 1.0);
+    out_cap = 3.0 * km / max(1.0 - km, 1e-3) + 0.02;
+  }
   // (the light's own edges fade from the filter as it widens: first it takes the noise out, then the room's low frequencies)
   for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
     let q = px + vec2<i32>(i, j) * stride;
@@ -68,7 +82,10 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
     e += ci.rgb * wg; ew += wg;
     let si = textureLoad(i_spec, q, 0);
     // (reflections on a little relief: its normals differ pixel to pixel while what they reflect does not. A looser test, or a brushed fridge stayed in grains)
-    let ws = kk * pow(max(dot(n0, nq), 0.0), 24.0) * wp; // (but not across a real crease: on near-black louvres the reflection is all there is, and it smeared them flat)
+    // (first round: a pixel far brighter than what is typical around it counts for less. A rare ray to a small sunlit patch would spread into a disc, and every neighbour reads it, so limiting the pixel alone is not enough. Karis's average on every pixel took the light out of all reflections)
+    let l_si = dot(si.rgb, vec3<f32>(0.333));
+    let kar = select(1.0, min(1.0, out_cap / max(l_si, 1e-5)), it == 0u);
+    let ws = kar * kk * pow(max(dot(n0, nq), 0.0), 24.0) * wp; // (but not across a real crease: on near-black louvres the reflection is all there is, and it smeared them flat)
     s += si.rgb * ws; sw += ws;
   } }
   // (one round is either the light's or the reflections': they are traced in turn)
@@ -77,8 +94,9 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   // (a mirror's picture is no noise: only rough reflections are smoothed, more the rougher)
   let spec_rounds = select(0u, select(select(1u, 3u, sc.a > 0.15), 5u, sc.a > 0.3), sc.a > 0.08);
   let sv = select(sc.rgb, s / max(sw, 1e-5), spec_only && sw > 1e-5 && it < spec_rounds);
-  // (a sliver, alone on its surface: nothing to average its few paths with, so one lucky path is a bright dot on an edge. No brighter than what is around it)
-  let lone = stp.y == 0u && stp.z == 0u && ew < 0.35 && dot(av.rgb, av.rgb) > 0.0;
-  textureStore(o_irr, px, vec4<f32>(select(ee, min(ee, av.rgb), lone), 0.0));
+  // (a sliver, alone on its surface: nothing to average its few paths with, so one lucky path is a bright dot on an edge. It takes what is around it)
+  // (nor darker: along a moulding's top face a few paths each drew dashes of both. Again once the neighbours are smooth, for at first their mean is as noisy as the sliver)
+  let lone = lone_round && ew < 0.45 && dot(av.rgb, av.rgb) > 0.0;
+  textureStore(o_irr, px, vec4<f32>(select(ee, av.rgb, lone), 0.0));
   textureStore(o_spec, px, vec4<f32>(sv, sc.a));
 }
