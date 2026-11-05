@@ -346,6 +346,7 @@ fn lamp_vis(o: vec3<f32>, c: vec3<f32>) -> f32 {
     let t = vec3<f32>(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5) * 2.0 * LAMP_R;
     let v = c + t - o; let d = length(v);
     let seen = select(1.0, 0.0, occluded(o, v / d, d - 0.02));
+    if ((u32(p.cam.w) & 32u) != 0u) { return seen; } // (a video: one a frame, its frames average them)
     acc += seen;
     if (k == 0) { first = seen; }
     if (k == 1 && seen == first) { return seen; }
@@ -499,6 +500,16 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     if (u32(px.x & 3) == (h_ & 3u) && u32(px.y & 3) == ((h_ >> 2u) & 3u)) { seed ^= 0x9e3779b9u; _ = gather(o, n); }
     return;
   }
+  // (a video: settled, or an edge the cell can answer, takes no rays for its soft light. Every pixel still traces its nearest lamps as a still does: a hard shadow kept in history wears away, resampled every frame, and these rays have next to no noise)
+  let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
+  var vid_read = false; var vcr = vec4<f32>(0.0); var lamp_keep = false;
+  if (lcv_v) {
+    let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
+    lamp_keep = settled && (((u32(px.x) >> 3u) + (u32(px.y) >> 3u) * 3u + p.misc.y) & select(3u, 7u, (u32(p.cam.w) & 512u) != 0u)) != 0u; // (settled: each 8x8 block of pixels every fourth frame is often enough. Whole blocks, as the GPU runs them: a block with one pixel tracing costs as if all did)
+    vcr = lcv_read(pos, n);
+    vid_read = settled || (vcr.w >= 0.7 && ((u32(p.cam.w) & 64u) == 0u || hist_around(pos, w, h)));
+  }
+  let no_apart = (u32(p.cam.w) & 32u) != 0u && (u32(p.cam.w) & 64u) == 0u;
   // the lamps that matter here, apart from the filtered light, which would wash out their shadows. Each comes in gradually with its share of the light: a fixed number of lamps per pixel let a lamp drop out all at once, and cut its shadow off in a straight line across a wall
   // (close up, with only the lamp's own size as a limit: a ceiling beside a lamp is really that bright, and a floor on the distance left it dull)
   var ltotal = 0.0; var li = 0u;
@@ -511,8 +522,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
     let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     let f_ = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
-    lamp_share[li] = select(f_, 0.0, (u32(p.cam.w) & 32u) != 0u); // (a video: every lamp by the path's one ray, built up over frames. Rays for each lamp at each pixel were most of a frame)
-    if (f_ > 0.0 && (u32(p.cam.w) & 32u) == 0u) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
+    lamp_share[li] = select(f_, 0.0, no_apart);
+    if (f_ > 0.0 && !no_apart && !lamp_keep) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
     li++; }
   // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
   var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
@@ -536,19 +547,15 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     thru *= 0.5;
     thru_e = sheer * thru;
   }
-  textureStore(out_lamp, px, vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)));
+  textureStore(out_lamp, px, select(vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)), vec4<f32>(-1.0, -1.0, -1.0, 1.0), lamp_keep)); // (below 0: history has it, with its occlusion)
   var e = vec3<f32>(0.0);
   // (a video: more paths where a surface has little history, just come into view or on a thin edge. What has been seen for frames needs few)
   var spp = p.dims.w;
   // (a video: the cache's answer, without a ray, where it has one. a 0 tells what follows that this pixel holds all its light. Elsewhere, paths, which fill the cache for next time)
-  let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
   if (lcv_v) {
-    let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
-    let cr = lcv_read(pos, n);
-    // (a mirror's picture has no history, and takes the cache's answer directly)
-    if (settled || (cr.w >= 0.7 && ((u32(p.cam.w) & 64u) == 0u || hist_around(pos, w, h)))) {
+    if (vid_read) {
       if ((u32(p.cam.w) & 2u) != 0u) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); }
-      textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
+      textureStore(out_irr, px, vec4<f32>(vcr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
     }
     // (new to the picture: a final gather. A few rays from here, each ending in a cell where it lands, so no one cell can show as a patch)
     spp = select(3u, 2u, (u32(p.cam.w) & 512u) != 0u); // (2: over budget)
@@ -925,7 +932,17 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (and what is rough enough reads the reflection cache, filled by the first frame: no rays, so no grain. hit_d < 0 tells the history. Only what the cache hasn't seen yet traces, and fills it)
     var turn = false;
     // (over budget, sharper surfaces read it too)
-    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && rough >= select(0.15, 0.04, (u32(p.cam.w) & 512u) != 0u)) {
+    // (not on what is curved or thin, nor on smooth metal: a cell's blur is all you would see, and a faucet or a sink's rim went flat)
+    let m_lo = select(0.35, 0.15, (u32(p.cam.w) & 512u) != 0u); // (faded per pixel: a sharp limit drew the roughness map's contours across a sink)
+    let is_m = textureLoad(g_mat, g, 0).x >= 0.5;
+    var flat_ = true;
+    if (is_m) { for (var k = 0; k < 4; k++) {
+      var o4 = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2));
+      let gq = clamp(g + o4[k] * ss, vec2<i32>(0), vec2<i32>(w * ss - 1, h * ss - 1));
+      let nq = textureLoad(g_nrm, gq, 0).xyz; if (dot(nq, nq) < 0.25 || dot(normalize(nq), n) < 0.985) { flat_ = false; }
+    } }
+    let m_ok = !is_m || rnd() < smoothstep(m_lo, m_lo + 0.2, rough);
+    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= select(0.15, 0.04, (u32(p.cam.w) & 512u) != 0u)) {
       let rc = lcv_read_p(pos, n, lcv_rpart(r0));
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }

@@ -120,14 +120,18 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   return vec3<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, c.w);
 }
 const FROM_FIRST = 200.0;
+const LAMP_BLEND = 0.34;
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
   var cur4 = textureLoad(i_irr, px, 0);
-  let refl = tu.al.w > 0.5;
+  let refl = tu.al.w > 0.5 && tu.al.w < 1.5; let lamp_h = tu.al.w > 1.5; // (2: a video's nearest lamps, traced anew every frame: little to average, and a long history would blur their shadows)
+  let lamp_old = lamp_h && cur4.r < 0.0; if (lamp_old) { cur4 = vec4<f32>(0.0, 0.0, 0.0, cur4.a); } // (not traced this frame)
+  // (a cell has all the lamps: those this pixel shows apart, traced or kept, come off what it answered)
+  if (!refl && !lamp_h && cur4.a < 0.0 && tu.al.x < 1.0) { cur4 = vec4<f32>(max(cur4.rgb - textureLoad(t_lamp, px, 0).rgb, vec3<f32>(0.0)), cur4.a); }
   let cur = cur4.rgb;
   // (a clean value is what the cache answered: no noise in it to average out. A history that began as a few rays is replaced by it, and a count below zero marks a history that is still noise)
-  let clean = select(cur4.a <= 0.0, textureLoad(t_hit, px, 0).a < 0.0, refl);
+  let clean = !lamp_h && select(cur4.a <= 0.0, textureLoad(t_hit, px, 0).a < 0.0, refl);
   let g = px * ss + vec2<i32>(ss / 2);
   let d = textureLoad(d_depth, g, 0);
   if (d >= 1.0) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(0.0)); return; }
@@ -136,7 +140,7 @@ const FROM_FIRST = 200.0;
   let n0 = normalize(textureLoad(d_nrm, g, 0).xyz + vec3<f32>(1e-5));
   let sgn = select(-1.0, 1.0, clean);
   // (the first frame is a clean picture: as good as many frames' worth. It traced its nearest lamps apart, where later frames have them all in this light)
-  if (tu.al.x >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur + select(textureLoad(t_lamp, px, 0).rgb, vec3<f32>(0.0), refl), cur4.a)); textureStore(o_n, px, vec4<f32>(FROM_FIRST, dist, n0.x, n0.y)); return; }
+  if (tu.al.x >= 1.0) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(FROM_FIRST, dist, n0.x, n0.y)); return; }
   // (a mirror's picture is sharp and already right)
   if (refl && cur4.a < 0.03) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(1.0, dist, n0.x, n0.y)); return; }
   let hd = vec2<i32>(i32(tu.al.y), i32(tu.al.z)); let hdf = vec2<f32>(hd);
@@ -145,17 +149,17 @@ const FROM_FIRST = 200.0;
   // (from the same surface only: what the camera has just come round the corner of has no past)
   let expect = length(pos - tu.prev_eye.xyz);
   let f = su.xy * hdf - 0.5; let b = floor(f); let t = f - b;
-  var acc = vec3<f32>(0.0); var sum = 0.0; var nn = 0.0; var nz = 0.0;
+  var acc = vec3<f32>(0.0); var aa = 0.0; var sum = 0.0; var nn = 0.0; var nz = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
     let hn = textureLoad(t_n, q, 0);
     // (and facing the same way: a door's jamb beside the wall it is set in lies at nearly the same distance, and took the wall's light)
-    if (abs(hn.g - expect) > 0.02 + 0.005 * expect || abs(hn.b - n0.x) + abs(hn.a - n0.y) > 0.3) { continue; }
+    if (abs(hn.g - expect) > 0.02 + 0.005 * expect || (!lamp_old && abs(hn.b - n0.x) + abs(hn.a - n0.y) > 0.3)) { continue; } // (lamps not traced this frame have nothing else: a bump map's normals must not turn them away)
     let wq = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1);
-    acc += textureLoad(i_spec, q, 0).rgb * wq; nn += abs(hn.r) * wq; nz += select(0.0, wq, hn.r < 0.0); sum += wq;
+    let hc_ = textureLoad(i_spec, q, 0); acc += hc_.rgb * wq; aa += hc_.a * wq; nn += abs(hn.r) * wq; nz += select(0.0, wq, hn.r < 0.0); sum += wq;
   } }
   if (sum < 0.2) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
-  acc /= sum; nn /= sum; let noisy_hist = nz / sum > 0.5;
+  acc /= sum; aa /= sum; nn /= sum; let noisy_hist = nz / sum > 0.5;
   // (a reflection moves as what it shows does, behind the surface: as far back as the rays went. A rough one is a wide blur, and stays nearer the surface)
   if (refl) {
     let k = 1.0 - smoothstep(0.1, 0.5, cur4.a);
@@ -176,16 +180,18 @@ const FROM_FIRST = 200.0;
   var al = max(1.0 / (nn + 1.0), 0.05);
   if (clean) { al = select(1.0 / (nn + 1.0), 1.0, noisy_hist); }
   // (settled light stays as it is: it holds the first frame's detail, and a cell's answer would only blur it)
-  if (!refl && cur4.a < 0.0 && !noisy_hist) { al = 0.0; }
+  if (!refl && !lamp_h && cur4.a < 0.0 && !noisy_hist) { al = 0.0; }
+  if (lamp_h) { al = select(max(al, LAMP_BLEND), 0.0, lamp_old); }
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer. Not on a clean value)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
   let cap = lh * 8.0 + 0.1;
-  let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean);
-  textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), cur4.a));
+  let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean || lamp_h);
+  textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), select(cur4.a, mix(aa, cur4.a, al), lamp_h)));
   // (the history stays a noise one until clean values or enough frames have replaced it)
   let still_noisy = !clean && nn < 3.0;
   // (a count from the first frame stays above FROM_FIRST / 2: that light is clean. What came later was gathered from few rays, and keeps the filter)
-  textureStore(o_n, px, vec4<f32>(select(1.0, -1.0, still_noisy) * select(min(nn + 1.0, 64.0), nn, nn >= 64.0), dist, n0.x, n0.y));
+  // (and a reflection that has taken a ray's noise in is no longer clean: the filter would pass it by, and a metal sink stayed grainy)
+  textureStore(o_n, px, vec4<f32>(select(1.0, -1.0, still_noisy) * select(min(nn + 1.0, 64.0), nn, nn >= 64.0 && (clean || !refl)), dist, n0.x, n0.y));
 }
 
 // ---- a video's picture over frames: its edges, by the shifted camera. What was there kept only as far as it fits what is around this pixel now, or what moved would trail
