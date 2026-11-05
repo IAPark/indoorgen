@@ -24,6 +24,11 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(10) var c_fine: texture_2d<f32>;
 @group(0) @binding(11) var c_glint: texture_2d<f32>;
 @group(0) @binding(12) var c_lamp: texture_2d<f32>;
+fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
+  // (GGX with Smith height-correlated visibility, integrated numerically and fitted: A is F0's share, B the rest. Karis's fit runs 10-20% low on rough metal, by amounts that change with roughness)
+  let r = clamp(rough, 0.03, 1.0); let n = sqrt(clamp(nv, 0.02, 1.0));
+  return clamp(vec2<f32>(((((((0.0) * r + ((0.0) * n + -1.06238)) * r + (((0.0) * n + -1.13516) * n + 5.09599)) * r + ((((0.0) * n + 1.20494) * n + 2.65569) * n + -8.09432)) * r + (((((0.0) * n + 3.69451) * n + -13.18039) * n + 7.02040) * n + 2.75210)) * r + ((((((0.0) * n + -9.40946) * n + 20.37376) * n + -6.83342) * n + -5.76550) * n + 2.02431)) * r + (((((((0.0) * n + 0.84500) * n + 4.33061) * n + -14.41393) * n + 11.26147) * n + -1.06780) * n + 0.00164), ((((((0.0) * r + ((0.0) * n + 1.14387)) * r + (((0.0) * n + 4.14001) * n + -6.51648)) * r + ((((0.0) * n + -3.96983) * n + -3.79358) * n + 9.03557)) * r + (((((0.0) * n + -0.08939) * n + 9.49092) * n + -6.93370) * n + -2.28677)) * r + ((((((0.0) * n + 7.71315) * n + -19.64934) * n + 9.94136) * n + 3.90567) * n + -2.15063)) * r + (((((((0.0) * n + -0.51982) * n + -4.52137) * n + 13.94099) * n + -11.04725) * n + 1.21913) * n + 0.95358)), vec2<f32>(0.0), vec2<f32>(1.0));
+}
 fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // (below the horizon Blender's sky does not stop: the horizon's colour, gone by 24 degrees down, as measured from it. A warm fill for a low sun)
   var dd = d; var fade = 1.0;
@@ -144,9 +149,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     if (dot(nq, nq) > 0.25) { nbar += nq; } else { nbar += n; }
   }
   let nv = max(max(dot(n, vdir), dot(normalize(nbar), vdir)), 0.001);
-  let r_ = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-  let a004 = min(r_.x * r_.x, pow(2.0, -9.28 * nv)) * r_.x + r_.y;
-  let ab = vec2<f32>(-1.04, 1.04) * a004 + r_.zw;
+  let ab = dfg_ab(rough, nv);
   // (what bounces more than once off a rough surface's relief, Fdez-Aguera's way: one bounce alone keeps half the light at high roughness, and rough metal came out far too dark. Cycles counts it)
   let ess_ = clamp(ab.x + ab.y, 0.0, 1.0); let favg_ = f0 + (vec3<f32>(1.0) - f0) / 21.0;
   let fr = (f0 * ab.x + vec3<f32>(ab.y)) * (vec3<f32>(1.0) + favg_ * (1.0 - ess_) / max(vec3<f32>(1.0) - favg_ * (1.0 - ess_), vec3<f32>(0.01)) / max(ess_, 0.05) * 1.0);

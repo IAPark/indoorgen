@@ -42,6 +42,11 @@ struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
 var<private> g1_pos = vec3<f32>(0.0); var<private> g1_nrm = vec3<f32>(0.0);
 
+fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
+  // (GGX with Smith height-correlated visibility, integrated numerically and fitted: A is F0's share, B the rest. Karis's fit runs 10-20% low on rough metal, by amounts that change with roughness)
+  let r = clamp(rough, 0.03, 1.0); let n = sqrt(clamp(nv, 0.02, 1.0));
+  return clamp(vec2<f32>(((((((0.0) * r + ((0.0) * n + -1.06238)) * r + (((0.0) * n + -1.13516) * n + 5.09599)) * r + ((((0.0) * n + 1.20494) * n + 2.65569) * n + -8.09432)) * r + (((((0.0) * n + 3.69451) * n + -13.18039) * n + 7.02040) * n + 2.75210)) * r + ((((((0.0) * n + -9.40946) * n + 20.37376) * n + -6.83342) * n + -5.76550) * n + 2.02431)) * r + (((((((0.0) * n + 0.84500) * n + 4.33061) * n + -14.41393) * n + 11.26147) * n + -1.06780) * n + 0.00164), ((((((0.0) * r + ((0.0) * n + 1.14387)) * r + (((0.0) * n + 4.14001) * n + -6.51648)) * r + ((((0.0) * n + -3.96983) * n + -3.79358) * n + 9.03557)) * r + (((((0.0) * n + -0.08939) * n + 9.49092) * n + -6.93370) * n + -2.28677)) * r + ((((((0.0) * n + 7.71315) * n + -19.64934) * n + 9.94136) * n + 3.90567) * n + -2.15063)) * r + (((((((0.0) * n + -0.51982) * n + -4.52137) * n + 13.94099) * n + -11.04725) * n + 1.21913) * n + 0.95358)), vec2<f32>(0.0), vec2<f32>(1.0));
+}
 fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // (below the horizon Blender's sky does not stop: the horizon's colour, gone by 24 degrees down, as measured from it. A warm fill for a low sun)
   var dd = d; var fade = 1.0;
@@ -423,9 +428,7 @@ fn rs_add(rs: ptr<function, R>, pos_: vec3<f32>, nrm_: vec3<f32>, l: vec3<f32>, 
   if (rnd() * (*rs).wsum < wi) { (*rs).pos = pos_; (*rs).nrm = nrm_; (*rs).rad = l; (*rs).lp = dot(l * brdf_nl(n, v, rd, rough, f0), vec3<f32>(0.333)); }
 }
 fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
-  let rc = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-  let a04 = min(rc.x * rc.x, pow(2.0, -9.28 * nv)) * rc.x + rc.y;
-  let ab = vec2<f32>(-1.04, 1.04) * a04 + rc.zw;
+  let ab = dfg_ab(rough, nv);
   return max(f0 * ab.x + vec3<f32>(ab.y), vec3<f32>(0.005));
 }
 @compute @workgroup_size(8, 8) fn restir_spec(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -718,9 +721,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         let g1v = 2.0 * nv_ / (nv_ + sqrt(a2 + (1.0 - a2) * nv_ * nv_));
         let g1l = 2.0 * nl / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
         let g2g1 = g1l / max(g1v + g1l - g1v * g1l, 1e-3) ;
-        let rc = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-        let a04 = min(rc.x * rc.x, pow(2.0, -9.28 * nv_)) * rc.x + rc.y;
-        let ab_ = vec2<f32>(-1.04, 1.04) * a04 + rc.zw;
+        let ab_ = dfg_ab(rough, nv_);
         wt_ = fh * g2g1 / max(f0_ * ab_.x + vec3<f32>(ab_.y), vec3<f32>(0.005));
       }
       if (dot(rd, n) <= 0.0) { rd = r0; }
@@ -760,9 +761,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   var gl_ = lamp_glint(pos, n, o, g, rough, w, h, ss, e);
   if (rough > 0.08 && textureLoad(g_mat, g, 0).w >= 2.9 && coat < 0.25 && p.misc2.y > 0u) {
     let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
-    let rg = rough * vec4<f32>(-1.0, -0.0275, -0.572, 0.022) + vec4<f32>(1.0, 0.0425, 1.04, -0.04);
-    let a0g = min(rg.x * rg.x, pow(2.0, -9.28 * nv_g)) * rg.x + rg.y;
-    let abg = vec2<f32>(-1.04, 1.04) * a0g + rg.zw;
+    let abg = dfg_ab(rough, nv_g);
     let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0);
   }
