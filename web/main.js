@@ -619,12 +619,12 @@ function shotOff() {
   $('bakebtn').textContent = 'Render view';
 }
 function forgetHouse() { shotOff(); if (rtMod && rtReady) rtMod.forget(); }
-// the learned denoiser, Blender's, on WebGPU (vendor/oidn.js, MIT, oidn-webgpu; weights/, Apache 2.0, from Open Image Denoise). No matter if it won't load: more rays and the plain filter
+// the learned denoiser, Blender's, on WebGPU (vendor/oidn.js, MIT, oidn-webgpu; weights/, Apache 2.0, from Open Image Denoise, named .wasm because artifact hosting serves no .tza). No matter if it won't load: more rays and the plain filter
 let unet = null, unetTried = false;
 async function pageDenoiser() {
   if (!unetTried) {
     unetTried = true;
-    try { const { initUNetFromURL } = await import('./vendor/oidn.js'); unet = await initUNetFromURL('./weights/rt_hdr_calb_cnrm.tza', undefined, { hdr: true, aux: true }); }
+    try { const { initUNetFromURL } = await import('./vendor/oidn.js'); unet = await initUNetFromURL('./weights/rt_hdr_calb_cnrm.wasm', undefined, { hdr: true, aux: true }); }
     catch (e) { console.warn('no denoiser', e); }
   }
   if (!unet) return undefined;
