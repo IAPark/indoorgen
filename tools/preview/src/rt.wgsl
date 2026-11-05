@@ -558,7 +558,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       textureStore(out_irr, px, vec4<f32>(vcr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
     }
     // (new to the picture: a final gather. A few rays from here, each ending in a cell where it lands, so no one cell can show as a patch)
-    spp = select(3u, 2u, (u32(p.cam.w) & 512u) != 0u); // (2: over budget)
+    spp = select(3u, 1u, (u32(p.cam.w) & 512u) != 0u); // (1: over budget. These rays are most of a slow room's trace, and the frames after it average them)
   }
   var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
@@ -941,7 +941,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       let gq = clamp(g + o4[k] * ss, vec2<i32>(0), vec2<i32>(w * ss - 1, h * ss - 1));
       let nq = textureLoad(g_nrm, gq, 0).xyz; if (dot(nq, nq) < 0.25 || dot(normalize(nq), n) < 0.985) { flat_ = false; }
     } }
-    let m_ok = !is_m || rnd() < smoothstep(m_lo, m_lo + 0.2, rough);
+    let m_ok = !is_m || (u32(p.cam.w) & 64u) == 0u || rnd() < smoothstep(m_lo, m_lo + 0.2, rough); // (no draw unless it will be used: a still's noise stays as it was)
     if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= select(0.15, 0.04, (u32(p.cam.w) & 512u) != 0u)) {
       let rc = lcv_read_p(pos, n, lcv_rpart(r0));
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }

@@ -121,6 +121,7 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
 }
 const FROM_FIRST = 200.0;
 const LAMP_BLEND = 0.34;
+const EASE_AROUND = 0.5;
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
@@ -181,6 +182,19 @@ const LAMP_BLEND = 0.34;
   if (clean) { al = select(1.0 / (nn + 1.0), 1.0, noisy_hist); }
   // (settled light stays as it is: it holds the first frame's detail, and a cell's answer would only blur it)
   if (!refl && !lamp_h && cur4.a < 0.0 && !noisy_hist) { al = 0.0; }
+  // (what a few rays began keeps easing toward what is around it on the same surface, for no rays, or its noise would stay for good. Not toward a cell, which has the lamps averaged in and lights up their shadows)
+  if (!refl && !lamp_h && cur4.a < 0.0 && !noisy_hist && nn < FROM_FIRST * 0.5) {
+    let c0 = clamp(vec2<i32>(b + t + vec2<f32>(0.5)), vec2<i32>(0), hd - vec2<i32>(1));
+    var av = vec3<f32>(0.0); var an = 0.0;
+    for (var k = 0; k < 4; k++) {
+      let o4 = array<vec2<i32>, 4>(vec2<i32>(7, 2), vec2<i32>(-7, -2), vec2<i32>(-2, 7), vec2<i32>(2, -7));
+      let q = clamp(c0 + o4[k], vec2<i32>(0), hd - vec2<i32>(1));
+      let hv = textureLoad(t_n, q, 0);
+      if (abs(hv.g - expect) > 0.02 + 0.005 * expect || abs(hv.b - n0.x) + abs(hv.a - n0.y) > 0.1) { continue; }
+      av += textureLoad(i_spec, q, 0).rgb; an += 1.0;
+    }
+    if (an > 0.0) { acc = mix(acc, av / an, EASE_AROUND); }
+  }
   if (lamp_h) { al = select(max(al, LAMP_BLEND), 0.0, lamp_old); }
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer. Not on a clean value)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
