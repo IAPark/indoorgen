@@ -171,7 +171,7 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   let al = max(1.0 / (nn + 1.0), select(0.05, 0.1, refl));
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
-  let cap = lh * (1.0 + 16.0 / (nn + 1.0)) + 0.01;
+  let cap = lh * 8.0 + 0.1;
   let cur_c = cur * min(1.0, cap / max(lc, 1e-5));
   textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), cur4.a));
   textureStore(o_n, px, vec4<f32>(min(nn + 1.0, 64.0), dist, n0.x, n0.y));

@@ -42,6 +42,17 @@ struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
 @group(0) @binding(22) var hist_n: texture_2d<f32>;
+// (a video's reservoirs, last frame's and this frame's, turn about, and where a point was last frame)
+@group(0) @binding(23) var<uniform> pv: mat4x4<f32>;
+@group(0) @binding(24) var<storage, read> resv_a: array<R>;
+@group(0) @binding(25) var<storage, read_write> resv_b: array<R>;
+fn rs_time() -> bool { return (u32(p.cam.w) & 128u) != 0u; }
+fn rs_prev(pos: vec3<f32>, w: i32, h: i32) -> i32 {
+  let c = pv * vec4<f32>(pos, 1.0); if (c.w <= 0.0) { return -1; }
+  let u = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+  if (any(u < vec2<f32>(0.0)) || any(u >= vec2<f32>(1.0))) { return -1; }
+  let q = vec2<i32>(u * vec2<f32>(f32(w), f32(h))); return q.y * w + q.x;
+}
 @group(0) @binding(19) var<storage, read_write> lc_cells: array<atomic<u32>>;
 @group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
@@ -545,7 +556,7 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
   n = normalize(n);
   let vv = normalize(p.cam.xyz - pos); let rough = cur_.a;
   let al_ = textureLoad(g_alb, g, 0); let f0 = mix(vec3<f32>(0.04), al_.rgb, textureLoad(g_mat, g, 0).x);
-  seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 2654435761u) ^ 0x51ed270bu;
+  seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 2654435761u) ^ 0x51ed270bu ^ select(0u, p.misc.y * 19349663u, (u32(p.cam.w) & 64u) != 0u);
   let o = start_at(pos, n);
   var sel = r0; var wt = r0.wsum; var mt = r0.m;
   for (var k = 0u; k < RS_K; k++) {
@@ -575,6 +586,20 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
     wt += wn; mt += rq.m;
     if (rnd() * wt < wn) { sel = rq; }
   }
+  // (what this pixel kept last frame offers too, at most so many frames' worth: it would otherwise outweigh all that is new. The scene holds still, so the spot it found is still there)
+  if (rs_time()) {
+    let ip = rs_prev(pos, w, h);
+    if (ip >= 0) {
+      let rq = resv_a[off + u32(ip)];
+      if (rq.m > 0.0 && rq.wsum > 0.0 && rq.lp > 0.0) {
+        let lr = normalize(rq.pos - pos); let pr = dot(rq.rad * brdf_nl(n, vv, lr, rough, f0), vec3<f32>(0.333));
+        if (pr > 0.0) { let sc = min(1.0, 20.0 * max(r0.m, 1.0) / rq.m); let wn = pr / rq.lp * rq.wsum * sc; wt += wn; mt += rq.m * sc; if (rnd() * wt < wn) { sel = rq; } }
+      }
+    }
+    var keep_ = sel; keep_.wsum = wt; keep_.m = mt;
+    if (sel.lp > 0.0) { keep_.lp = dot(sel.rad * brdf_nl(n, vv, normalize(sel.pos - pos), rough, f0), vec3<f32>(0.333)); }
+    resv_b[off + u32(px.y * w + px.x)] = keep_;
+  }
   var ind = vec3<f32>(0.0);
   if (sel.lp > 0.0 && wt > 0.0) {
     let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8));
@@ -599,7 +624,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
-  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 19349663u) ^ 0x9e3779b9u;
+  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 19349663u) ^ 0x9e3779b9u ^ select(0u, p.misc.y * 83492791u, (u32(p.cam.w) & 64u) != 0u);
   let o = start_at(pos, n);
   let r0 = resv[u32(px.y * w + px.x)];
   var sel = r0; var wt = r0.wsum; var mt = r0.m;
@@ -629,6 +654,14 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
     wt += wn; mt += rq.m;
     if (rnd() * wt < wn) { sel = rq; }
   }
+  if (rs_time()) {
+    let ip = rs_prev(pos, w, h);
+    if (ip >= 0) {
+      let rq = resv_a[u32(ip)];
+      if (rq.m > 0.0 && rq.wsum > 0.0 && dot(n, rq.pos - pos) > 0.0) { let sc = min(1.0, 20.0 * max(r0.m, 1.0) / rq.m); let wn = rq.wsum * sc; wt += wn; mt += rq.m * sc; if (rnd() * wt < wn) { sel = rq; } }
+    }
+    var keep_ = sel; keep_.wsum = wt; keep_.m = mt; resv_b[u32(px.y * w + px.x)] = keep_;
+  }
   var ind = vec3<f32>(0.0);
   if (sel.lp > 0.0) {
     let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8)); let c = dot(n, l);
@@ -642,7 +675,8 @@ const AO_R = 0.5; // m
 fn gtao(px: vec2<i32>, g: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, d: f32, dims: vec2<f32>, w: i32, h: i32, ss: i32) -> f32 {
   let wp = max(length(world_of(g + vec2<i32>(ss, 0), d, dims, p.inv_vp) - pos), 1e-4);
   let rpx = clamp(AO_R / wp, 3.0, 40.0);
-  let rot = fract(52.9829189 * fract(dot(vec2<f32>(px), vec2<f32>(0.06711056, 0.00583715)))) * PI;
+  // (a video turns it a little each frame, or its pattern never averages out)
+  let rot = fract(52.9829189 * fract(dot(vec2<f32>(px), vec2<f32>(0.06711056, 0.00583715))) + select(0.0, f32(p.misc.y) * 0.61803399, (u32(p.cam.w) & 64u) != 0u)) * PI;
   var occ = 0.0;
   for (var k = 0; k < 2; k++) {
     let a = rot + f32(k) * PI / 2.0; let dir = vec2<f32>(cos(a), sin(a));

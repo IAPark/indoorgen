@@ -1688,7 +1688,7 @@ async fn read_out_web(r: &Renderer, o: &Opts) -> image::RgbaImage {
 fn ensure_rt(r: &mut Renderer, s: &mut Scene, o: &Opts) { pollster::block_on(ensure_rt_async(r, s, o)) }
 async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if o.rt.map_or(false, |q| q.video) && r.zp.is_none() { r.zp = Some(bake::z_pipes(r)); }
-    if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss)); }
+    if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss, o.rt.map_or(false, |q| q.video))); }
     if s.rt.is_some() { return }
     let t = Instant::now();
     memlog("before probe");
