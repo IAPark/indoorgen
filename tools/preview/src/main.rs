@@ -363,7 +363,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                 }
                 k
             } else { tex };
-            let real_glass = glass && sn_ior(&side, side_nodes.get(n.name.as_str()).copied()) > 1.2;
+            // (every pane mirrors the room, by Fresnel: Blender's shade_graph.py takes an IOR of at least 1.3, so door and window glass at 1.01 reflect there too)
+            let real_glass = glass;
             let flags = if cls == "people.hair" || m.mask { 1u32 } else if glass { 2 } else { 0 };
             let sn = side_nodes.get(n.name.as_str());
             let graph = if glass || shown || flags != 0 || m.tex.is_some() { None } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| emitted.get(i as usize)).and_then(|e| e.as_ref()) };
@@ -1280,10 +1281,13 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         q.submit([me.finish()]);
         let mut panes = mirror_panes(s, eye);
         panes.retain(|m| visible(&fr, m.2, m.3));
-        panes.truncate(4);
+        // (by the pixels of each surface really in sight: chosen by being in the frustum, mirrors behind walls in other rooms took the places of a sliding door in plain view)
+        #[cfg(not(target_arch = "wasm32"))]
+        { panes = panes_in_sight(r, s, panes, gl, vp); }
+        panes.truncate(if rt_q.map_or(false, |q| q.spec_spp < 3) { 2 } else { 4 }); // (each picture costs a small trace: fast mode can afford two)
         // (one picture buffer, each writing its whole screen box: a glass pane in front of a mirror overwrote the mirror's picture with its own, a hard rectangle. Mirrors show all of theirs, so they write last)
-        panes.reverse();
-        for &(n, d, lo, hi) in &panes {
+        panes.sort_by_key(|x| is_mirror(&s.glb.mats[s.draws[x.4].mat].name));
+        for &(n, d, lo, hi, _) in &panes {
             // the pane's box on screen (a pane reaching behind the camera: all of it)
             let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;
             for k in 0..8 {
@@ -1383,13 +1387,53 @@ fn render_finish(r: &mut Renderer, cam: &Cam, s: &Scene, o: &Opts) -> image::Rgb
 }
 
 /// The flat mirrors facing this eye: (normal toward the eye, plane offset, box low, box high)
-fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<(Vec3, f32, Vec3, Vec3)> {
+type Pane = (Vec3, f32, Vec3, Vec3, usize);
+/// the panes with pixels in sight, most first: everything else drawn small for depth, then each pane under an occlusion query
+#[cfg(not(target_arch = "wasm32"))]
+fn panes_in_sight(r: &Renderer, s: &Scene, panes: Vec<Pane>, gl: Globals, vp: Mat4) -> Vec<Pane> {
+    if panes.len() <= 1 { return panes; }
+    let (dev, q) = (&r.gpu.dev, &r.gpu.q);
+    let mut g = gl; g.sun_vp = vp.to_cols_array_2d();
+    let ub = dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&g), usage: wgpu::BufferUsages::UNIFORM });
+    let bgl = r.shadow_pipe.get_bind_group_layout(0);
+    let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] });
+    let dt = dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 320, height: 180, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+    let dv = dt.create_view(&Default::default());
+    let n = panes.len() as u32;
+    let qs = dev.create_query_set(&wgpu::QuerySetDescriptor { label: None, ty: wgpu::QueryType::Occlusion, count: n });
+    let rb = |u| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: n as u64 * 8, usage: u, mapped_at_creation: false });
+    let (res, back) = (rb(wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC), rb(wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ));
+    let mut enc = dev.create_command_encoder(&Default::default());
+    {
+        let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: Some(&qs), multiview_mask: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &dv, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+        rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
+        let one = |rp: &mut wgpu::RenderPass<'_>, d: &Draw| {
+            rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
+            let isz = if d.u16 { 2 } else { 4 };
+            rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
+            rp.draw_indexed(0..d.icount, 0, 0..1);
+        };
+        for (i, d) in s.draws.iter().enumerate() { if !d.glass && !panes.iter().any(|p| p.4 == i) { one(&mut rp, d); } }
+        for (k, p) in panes.iter().enumerate() { rp.begin_occlusion_query(k as u32); one(&mut rp, &s.draws[p.4]); rp.end_occlusion_query(); }
+    }
+    enc.resolve_query_set(&qs, 0..n, &res, 0);
+    enc.copy_buffer_to_buffer(&res, 0, &back, 0, n as u64 * 8);
+    q.submit([enc.finish()]);
+    let sl = back.slice(..); sl.map_async(wgpu::MapMode::Read, |_| {}); dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let counts: Vec<u64> = sl.get_mapped_range().unwrap().chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+    let mut seen: Vec<(u64, Pane)> = counts.into_iter().zip(panes).filter(|(c, _)| *c > 0).collect();
+    seen.sort_by(|a, b| b.0.cmp(&a.0));
+    if std::env::var_os("RT_PROF").is_some() { for (c, p) in &seen { eprintln!("  pane {:30} {c} samples", s.glb.nodes[s.draws[p.4].node].name); } }
+    seen.into_iter().map(|x| x.1).collect()
+}
+fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<Pane> {
     let (mut out, mut panes) = (vec![], vec![]);
-    for d in &s.draws {
+    for (di, d) in s.draws.iter().enumerate() {
         // (flat panes of real glass too: they mirror the room a little)
         let mut ext = [d.bmax.x - d.bmin.x, d.bmax.y - d.bmin.y, d.bmax.z - d.bmin.z]; ext.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let flat_pane = d.pane && ext[0] < 0.05 && ext[1] > 0.3;
-        if !flat_pane && (d.glass || !is_mirror(&s.glb.mats[d.mat].name)) { continue; }
+        let pane_big = d.pane && ext[2] > 0.3;
+        if !pane_big && (d.glass || !is_mirror(&s.glb.mats[d.mat].name)) { continue; }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
@@ -1403,6 +1447,11 @@ fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<(Vec3, f32, Vec3, Vec3)> {
         }
         if best < 1e-5 { continue; }
         if nn.dot(eye - v0) < 0.0 { nn = -nn; }
+        // (flat by which way its surface faces, not how thick it is: a sliding door's slab of 5.8 cm, or a pane on a wall out of square, reflected nothing. A bottle faces every way)
+        let flat_pane = pane_big && { let (mut para, mut all) = (0f32, 0f32);
+            for t in 0..d.icount as usize / 3 { let cr = (p(ix(t * 3 + 1)) - p(ix(t * 3))).cross(p(ix(t * 3 + 2)) - p(ix(t * 3))); let ar = cr.length(); all += ar; if ar > 0.0 && (cr / ar).dot(nn).abs() > 0.99 { para += ar; } }
+            para > 0.8 * all };
+        if !flat_pane && (d.glass || !is_mirror(&s.glb.mats[d.mat].name)) { continue; }
         // (a mirror with thickness: the face nearest the eye of those lying this way. Behind it, the picture showed the mirror itself from inside, black)
         let mut off = nn.dot(v0);
         for t in 0..d.icount as usize / 3 {
@@ -1411,10 +1460,11 @@ fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<(Vec3, f32, Vec3, Vec3)> {
             if ar > best * 0.25 && (cr / ar).dot(nn).abs() > 0.99 { off = off.max(nn.dot(a)); }
         }
         if nn.dot(eye) - off < 1e-3 { continue; }
-        if flat_pane { panes.push((nn, off, d.bmin, d.bmax)); } else { out.push((nn, off, d.bmin, d.bmax)); }
+        if flat_pane { panes.push((nn, off, d.bmin, d.bmax, di)); } else { out.push((nn, off, d.bmin, d.bmax, di)); }
     }
-    // (the largest panes after the mirrors: each one costs a small picture)
-    panes.sort_by(|a, b| ((b.3 - b.2).length()).partial_cmp(&(a.3 - a.2).length()).unwrap());
+    // (the panes that look largest after the mirrors: each one costs a small picture)
+    let seen = |x: &Pane| { let e = x.3 - x.2; let c = (x.2 + x.3) * 0.5; e.length_squared() / (c - eye).length_squared().max(0.25) };
+    panes.sort_by(|a, b| seen(b).partial_cmp(&seen(a)).unwrap());
     out.extend(panes);
     out
 }

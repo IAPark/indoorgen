@@ -660,7 +660,7 @@ fn z_pass<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, pp: &'a Pipes, list: 
 fn mirrors(f: &Frame, r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, gl: &Globals, vp: Mat4, eye: Vec3, fr: &[Vec4; 6]) {
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let (rw, rh) = (f.res.0 as f32, f.res.1 as f32);
-    for (n, d, lo, hi) in mirror_panes(s, eye) {
+    for (n, d, lo, hi, _) in mirror_panes(s, eye) {
         if !visible(fr, lo, hi) { continue }
         let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;
         for k in 0..8 {

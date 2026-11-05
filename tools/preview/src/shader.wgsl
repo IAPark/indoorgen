@@ -173,7 +173,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
       let mt = textureLoad(mirror_tex, vec2<i32>(v.clip.xy / g.params2.y), 0);
       // (a pane almost edge-on is a sliver thinner than a pixel: at full Fresnel it was opaque in dots along the rail. Faded out there, and never a solid wall of reflection)
       let nv_ = abs(dot(n, vdir));
-      if (mt.a > 0.0 && ff) { out.color = vec4<f32>(mt.rgb, min(0.04 + 0.96 * pow(1.0 - nv_, 5.0), 0.5) * smoothstep(0.02, 0.15, nv_)); }
+      if (mt.a > 0.0 && ff) { out.color = vec4<f32>(mt.rgb, min(0.02 + 0.98 * pow(1.0 - nv_, 5.0), 0.5) * smoothstep(0.02, 0.15, nv_)); }
     }
   }
   return out;
