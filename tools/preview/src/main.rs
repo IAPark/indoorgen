@@ -984,8 +984,8 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         // (RT_FIXEDXP=1: no auto exposure, to compare with Blender's NO_AUTOEXP=1 level for level)
         for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 3 } {
             let (avg, clip) = stat(&img);
-            // (a hair under Blender's top: its probe is small and denoised, and a picture on the line went either way, which is the difference of a whole step)
-            if avg > 0.36 && avg < 0.495 && clip < 0.18 { break }
+            if o.verbose { eprintln!("  probe mean {avg:.3} clip {clip:.2} at x{xp:.2}"); }
+            if avg > 0.36 && avg < 0.5 && clip < 0.18 { break }
             let mut step = ((0.43 / avg.max(1e-3)).log2() * 2.0).clamp(-2.5, 1.5);
             if clip > 0.10 { step = step.min(0.0); }
             if clip > 0.18 { step = step.min(-0.6); }

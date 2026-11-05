@@ -1023,4 +1023,5 @@ if os.environ.get("ENGINE") == "EEVEE":  # fast material-accurate preview (no pa
         sc.eevee.taa_render_samples = int(os.environ.get("EEVEE_SAMPLES", "32"))
         sc.eevee.use_shadows = True; sc.eevee.use_raytracing = True
     except Exception as e: print("EEVEE settings", repr(e))
+if os.environ.get("PRE_RENDER_PY"): exec(open(os.environ["PRE_RENDER_PY"]).read())  # (a diagnostic: passes, one material changed)
 t = time.time(); bpy.ops.render.render(write_still=True); print("render time", time.time() - t)

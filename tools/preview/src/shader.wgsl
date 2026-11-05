@@ -198,7 +198,7 @@ fn world_at(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
 }
 fn hash(p: vec2<f32>) -> f32 { return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453); }
 
-// AgX with its Medium High Contrast look, as Blender computes it: a table Blender itself wrote (agx_lut.bin). Back to linear here, for the filter and srgb() that follow
+// AgX with no look, as the indoor pictures have it (Medium High Contrast is for outdoor views only: taken for all, it crushed darks and blue): a table Blender itself wrote (agx_lut.bin). Back to linear here, for the filter and srgb() that follow
 fn agx(c: vec3<f32>) -> vec3<f32> {
   let v = clamp((log2(max(c, vec3<f32>(1e-10))) + 12.47393) / 16.5, vec3<f32>(0.0), vec3<f32>(1.0));
   let d = textureSampleLevel(agx_lut, agx_smp, (v * 32.0 + 0.5) / 33.0, 0.0).rgb;

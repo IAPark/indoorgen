@@ -253,7 +253,8 @@ fn direct(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var o = o0; var n = n0; var tp = vec3<f32>(1.0); var e = vec3<f32>(0.0);
   let bounces = p.misc.x;
-  for (var b = 0u; b <= bounces; b++) {
+  // (the first of these is the first bounce: Blender's limit of 4 is 4 of them. One more ran every room's light a tenth high)
+  for (var b = 0u; b < bounces; b++) {
     let d = cosine(n);
     let h = closest(o, d, 1000.0);
     if (h.i < 0) { if (!through_window(o, d)) { e += tp * sky_at(d); } break; }
@@ -266,7 +267,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     tp *= m.albedo.rgb;
     // (the last hit stands in for the bounces left out, up to the four Blender follows: each about as lit as this one, and dimmer by its colour. Stopped short, a sunlit room with few lamps lost a tenth of its light)
     var more = 1.0;
-    if (b == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
+    if (b + 1u == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
     e += tp * direct(q, ng) * more;
     o = q; n = ng;
   }
