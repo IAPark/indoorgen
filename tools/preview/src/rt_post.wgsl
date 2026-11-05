@@ -168,7 +168,8 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
     }
   }
   // (the longer a surface has been seen the less each frame counts, down to a floor: new ones clean up at once)
-  let al = max(1.0 / (nn + 1.0), select(0.05, 0.1, refl));
+  // (a noisy sample would stay in the picture at the floor. What the cache answered has no noise, and the first frame's detail stays as long as it can)
+  let al = max(1.0 / (nn + 1.0), select(select(0.05, 0.0, cur4.a <= 0.0), 0.05, refl));
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
   let cap = lh * 8.0 + 0.1;

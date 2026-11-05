@@ -96,6 +96,37 @@ fn lc_live(sl: u32) -> vec4<f32> {
   let n = atomicLoad(&lc_acc[sl][3]); if (n == 0u) { return vec4<f32>(0.0); }
   return vec4<f32>(f32(atomicLoad(&lc_acc[sl][0])), f32(atomicLoad(&lc_acc[sl][1])), f32(atomicLoad(&lc_acc[sl][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
 }
+// ---- a video's light from the cache: what reaches a surface the camera sees, by place and side, apart from the cells paths read. Filled from the first frame's clean picture, so most of a later frame reads it and traces nothing
+const LCV_FINE = 0.1; const LCV_COARSE = 0.4; const LCV_PART = 16384u; const LCV_TRUST = 16.0;
+fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) {
+  for (var k = 0; k < 2; k++) {
+    let sl = lc_find_k(lc_key_s(q, n, LCV_PART, select(LCV_FINE, LCV_COARSE, k == 1)));
+    if (sl <= LC_MASK) { lc_add(sl, l); }
+  }
+}
+// the four cells round the point, on its surface, each as far as it has filled
+fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32) -> vec4<f32> {
+  let an = abs(n); var ax = 2u; if (an.x >= an.y && an.x >= an.z) { ax = 0u; } else if (an.y >= an.z) { ax = 1u; }
+  let au = (ax + 1u) % 3u; let av = (ax + 2u) % 3u;
+  let fu = q[au] / size - 0.5; let fv = q[av] / size - 0.5;
+  let bu = floor(fu); let bv = floor(fv); let tu_ = fu - bu; let tv_ = fv - bv;
+  var acc = vec3<f32>(0.0); var sum = 0.0;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+    var c = q; c[au] = (bu + f32(i) + 0.5) * size; c[av] = (bv + f32(j) + 0.5) * size;
+    let w = select(1.0 - tu_, tu_, i == 1) * select(1.0 - tv_, tv_, j == 1);
+    let sl = lc_look_k(lc_key_s(c, n, LCV_PART, size));
+    if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / LCV_TRUST, 1.0); acc += lc_out[sl].xyz * tr; sum += tr; }
+  } }
+  return vec4<f32>(acc, sum);
+}
+// rgb: the light, a: how much of it the cells could answer for
+fn lcv_read(q: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
+  let a = lcv_at(q, n, LCV_FINE);
+  if (a.w >= 0.999) { return vec4<f32>(a.xyz, 1.0); }
+  let c = lcv_at(q, n, LCV_COARSE);
+  if (c.w > 0.0) { return vec4<f32>(a.xyz + c.xyz / c.w * (1.0 - a.w), min(a.w + c.w, 1.0)); }
+  return vec4<f32>(a.xyz, a.w);
+}
 // a path's light into a cell
 fn lc_add(sl: u32, l: vec3<f32>) {
   if (lc_out[sl].w >= LC_MAX) { return; }
@@ -449,13 +480,24 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var e = vec3<f32>(0.0);
   // (a video: more paths where a surface has little history, just come into view or on a thin edge. What has been seen for frames needs few)
   var spp = p.dims.w;
-  if ((u32(p.cam.w) & 64u) != 0u) { let hc = textureLoad(hist_n, px, 0).r; if (hc < 8.0) { spp = 4u; } }
+  // (a video: the cache's answer, without a ray, where it has one. a 0 tells what follows that this pixel holds all its light. Elsewhere, paths, which fill the cache for next time)
+  let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
+  if (lcv_v) {
+    let cr = lcv_read(pos, n);
+    if (cr.w >= 0.7) {
+      if ((u32(p.cam.w) & 2u) != 0u) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); }
+      textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, 0.0)); return;
+    }
+    spp = 4u;
+  }
+  var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
     if (restir_) {
-      e += lamp_rest(o, n, true) + portal(o, n);
+      let lp_ = lamp_rest(o, n, true) + portal(o, n); e += lp_; dep_ += lp_;
       let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
+      dep_ += lc;
       let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
       rs.wsum += wi;
       if (rnd() * rs.wsum < wi) { rs.pos = g1_pos; rs.nrm = g1_nrm; rs.rad = lc; rs.lp = lm; }
@@ -465,6 +507,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
+  if (lcv_v) { lcv_add(pos, n, dep_ / f32(spp)); }
   if (restir_) { resv[u32(px.y * w + px.x)] = rs; textureStore(out_irr, px, vec4<f32>(e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return; }
   e = e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e;
   textureStore(out_irr, px, vec4<f32>(e, 0.0));
@@ -914,4 +957,17 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   textureStore(out_glint, px, vec4<f32>(gl_, hit_d / hit_n)); // (a: how far the rays went, for a video's history)
   if ((u32(p.cam.w) & 4u) != 0u) { resv[u32(w * h) + u32(px.y * w + px.x)] = rs_s; }
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
+}
+
+// a video's first frame, clean: its light goes into the cells later frames read
+@compute @workgroup_size(8, 8) fn lc_seed(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y); let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let g = px * ss + vec2<i32>(ss / 2);
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { return; }
+  let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  lcv_add(pos, normalize(n), textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb);
 }
