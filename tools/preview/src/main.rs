@@ -1253,6 +1253,8 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         let mut panes = mirror_panes(s, eye);
         panes.retain(|m| visible(&fr, m.2, m.3));
         panes.truncate(4);
+        // (one picture buffer, each writing its whole screen box: a glass pane in front of a mirror overwrote the mirror's picture with its own, a hard rectangle. Mirrors show all of theirs, so they write last)
+        panes.reverse();
         for &(n, d, lo, hi) in &panes {
             // the pane's box on screen (a pane reaching behind the camera: all of it)
             let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;

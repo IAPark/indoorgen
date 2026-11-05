@@ -343,7 +343,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     if capture_stop { return; }
     if learned {
         #[cfg(not(target_arch = "wasm32"))]
-        learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, if qu.spec_spp > 1 { 4 } else { 5 });
+        learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 4);
     } else {
         for i in 0..if std::env::var_os("RT_NOFILTER").is_some() && ss > 1 { 0 } else { qu.denoise as usize } { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
     }
