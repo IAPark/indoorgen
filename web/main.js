@@ -604,6 +604,13 @@ resize();
 // ---------------------------------------------------------------- render this view (WebGPU): tools/preview's path tracer in the browser (tools/web_rt/build.sh)
 const shot = $('renderview');
 let shotKey = null, rendering = false, rtMod = null, rtReady = false;
+const TIERS = [{ px: 1.0e6, ss: 3 }, { px: 5.0e5, ss: 2 }, { px: 2.5e5, ss: 2 }];
+function store(k, v) { try { if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (_) {} }
+function stored(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }
+let renderTier = +(stored('ig_tier') || 0) || (/Mobi|iPhone|iPad|Android/.test(navigator.userAgent) || (navigator.deviceMemory && navigator.deviceMemory <= 4) ? 1 : 0);
+// (still marked as rendering on arrival: the last attempt took the tab down. Say so, and next time ask for less)
+const crashedAt = stored('ig_rendering');
+if (crashedAt !== null) { store('ig_rendering', null); renderTier = Math.min(+crashedAt + 1, TIERS.length - 1); store('ig_tier', String(renderTier)); }
 function shotCamera(w, h) {
   // three (y up) to the house's own frame (z up): (x, y, z) -> (x, -z, y)
   const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
@@ -646,23 +653,27 @@ async function renderView() {
     setStatus('rendering: loading renderer...');
     rtMod = rtMod || await import('./pkg-rt/preview.js');
     if (!rtReady) { await rtMod.default(); rtReady = true; }
-    // (the window's shape, about a million pixels: traced three times over each way, more would not fit many GPUs)
-    const lim = Math.sqrt(1.0e6 / Math.max(1, innerWidth * innerHeight));
+    // (the window's shape. A tab that runs out of memory is reloaded by the browser, so the size is chosen by what the device can hold, and goes down if that happens)
+    const tier = TIERS[Math.min(renderTier, TIERS.length - 1)];
+    store('ig_rendering', String(renderTier));
+    const lim = Math.sqrt(tier.px / Math.max(1, innerWidth * innerHeight));
     const w = Math.max(320, Math.round(innerWidth * lim / 2) * 2), h = Math.max(180, Math.round(innerHeight * lim / 2) * 2);
     const c = shotCamera(w, h), t0 = performance.now();
     setStatus('rendering...');
     await new Promise((r) => requestAnimationFrame(r));
     const dn = await pageDenoiser();
-    const px = await rtMod.render_view(w, h, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), parseInt($('seed').value, 10) || 0, c.et, c.lens, dn);
+    const px = await rtMod.render_view(w, h, tier.ss, new Uint8Array(lastGlb), JSON.stringify(sidecar || {}), parseInt($('seed').value, 10) || 0, c.et, c.lens, dn);
+    store('ig_rendering', null);
     shot.width = w; shot.height = h;
     shot.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px), w, h), 0, 0);
     shot.style.display = 'block'; shotKey = c.key;
     $('bakebtn').textContent = 'Back to preview';
     setStatus(`rendered in ${((performance.now() - t0) / 1000).toFixed(1)} s. Move the camera to go back`);
-  } catch (e) { setStatus('render failed: ' + (e.message || e), true); shotOff(); if (rtMod && rtReady) try { rtMod.forget(); } catch (_) {} }
+  } catch (e) { store('ig_rendering', null); setStatus('render failed: ' + (e.message || e), true); shotOff(); if (rtMod && rtReady) try { rtMod.forget(); } catch (_) {} }
   rendering = false; $('bakebtn').disabled = false; $('gen').disabled = !workerReady;
 }
 $('bakebtn').onclick = renderView;
+if (crashedAt !== null) setTimeout(() => setStatus('The last render ran out of memory and the browser reloaded the page. Generate again and it will render at a lower resolution.', true), 1500);
 if (!navigator.gpu) { $('bakebtn').disabled = true; $('bakebtn').title = 'Needs WebGPU, which this browser does not offer'; $('baknote').hidden = false; }
 
 let last = performance.now();
