@@ -34,6 +34,7 @@ fn dec_n(v: u32) -> vec3<f32> {
   if (n.z < 0.0) { n = vec3<f32>((1.0 - abs(n.y)) * select(-1.0, 1.0, n.x >= 0.0), (1.0 - abs(n.x)) * select(-1.0, 1.0, n.y >= 0.0), n.z); }
   return normalize(n);
 }
+const BK_FEED = 0.9;
 fn level_of(q: vec3<f32>) -> u32 {
   let d = max(max(b.lo.xyz - q, q - b.hi.xyz), vec3<f32>(0.0));
   let m = max(d.x, max(d.y, d.z));
@@ -84,13 +85,15 @@ fn cell_at(q: vec3<f32>, n: vec3<f32>, id: u32) -> i32 {
   seed = i * 73856093u + 19349663u;
   let pt = pts[i]; let n = dec_n(pt.nrm); let o = pt.pos + n * 0.002;
   // (inside a solid; or lying against something, as a floor under a rug: never seen, and dark)
-  var back = 0u; var near = 0u;
+  var back = 0u; var near = 0u; var open_ = 0u;
   for (var s = 0u; s < 6u; s++) {
     let d = cosine(n);
     let h = closest(o, d, 1000.0);
     if (h.i >= 0) { let t = tris[h.i]; if (dot(cross(t.e1.xyz, t.e2.xyz), d) > 0.0) { back += 1u; } if (h.t < 0.03) { near += 1u; } }
+    else if (!through_window(o, d)) { open_ += 1u; }
   }
-  flags[i] = select(1u, 0u, back >= 4u || near >= 5u);
+  // (2: under the open sky. A moulding reaches a little above the ceiling, and points up there, lit from a sunny ceiling top, gave a cell seen from the room a glowing strip. A cell with room-side points uses only those)
+  flags[i] = select(select(1u, 2u, open_ >= 3u), 0u, back >= 4u || near >= 5u);
 }
 @compute @workgroup_size(64) fn bk_round(@builtin(global_invocation_id) id: vec3<u32>) {
   var bk_miss = 0u;
@@ -125,8 +128,9 @@ fn cell_at(q: vec3<f32>, n: vec3<f32>, id: u32) -> i32 {
     // (a point no cell holds counts as dark. Reusing this cell's own light fed it back into itself, each round adding to the last, and walls and door leaves beside a sunlit part glowed)
     if (s < 0) { bk_miss += 1u; continue; }
     let cv = cur[table[s].e];
-    isky += m.albedo.rgb * (cv.sky.rgb + cv.i_sky.rgb); ilmp += m.albedo.rgb * (cv.lamp.rgb + cv.i_lamp.rgb);
-    isun += m.albedo.rgb * (cv.sun.rgb + cv.i_sun.rgb);
+    // (Blender stops at four diffuse bounces, by default. This feeds back without end, so what comes from further bounces is held back: in a white room it mounted up well past Blender's)
+    isky += m.albedo.rgb * (cv.sky.rgb + BK_FEED * cv.i_sky.rgb); ilmp += m.albedo.rgb * (cv.lamp.rgb + BK_FEED * cv.i_lamp.rgb);
+    isun += m.albedo.rgb * (cv.sun.rgb + BK_FEED * cv.i_sun.rgb);
   }
   let w = 1.0 / f32(ns); let al = b.fl.x;
   // (the last rounds count most: the first ones saw a cache still dark)

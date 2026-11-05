@@ -468,9 +468,10 @@ pub async fn bake(r: &Renderer, s: &Scene, pp: &Pipes, stop: Stop, verbose: bool
         let mut dropped: Vec<(u32, u32)> = vec![];
         for (i, &k) in keys.iter().enumerate() {
             let c = &pts[i * K_PTS..(i + 1) * K_PTS]; let f = &fl[i * K_PTS..(i + 1) * K_PTS];
-            let Some(first) = (0..K_PTS).find(|&j| f[j] != 0) else { dropped.push(k); continue };
+            let want = if f.iter().any(|v| *v == 1) { 1 } else { 2 };
+            let Some(first) = (0..K_PTS).find(|&j| f[j] == want) else { dropped.push(k); continue };
             k2.push(k);
-            for j in 0..K_PTS { p2.push(if f[j] != 0 { c[j] } else { c[first] }); }
+            for j in 0..K_PTS { p2.push(if f[j] == want { c[j] } else { c[first] }); }
         }
         if verbose { eprintln!("  bake: {} of {} cells outside solids, {:.2}s", k2.len(), keys.len(), t0.elapsed().as_secs_f32()); }
         keys = k2; pts = p2;
