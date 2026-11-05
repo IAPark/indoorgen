@@ -225,7 +225,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let tex = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let dep = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let out = |b| E { binding: b, visibility: c, ty: T::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: FMT, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
-    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16), tex(17), E { binding: 18, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 19, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 20, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 21, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
+    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[tex(22), uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16), tex(17), E { binding: 18, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 19, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 20, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 21, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
     let denoise_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(1), dep(2), tex(3), tex(4), tex(5), out(6), out(7), tex(13)] });
     let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10), tex(11), tex(12)] });
     let pipe = |bgl: &wgpu::BindGroupLayout, src: &str, ep: &str| {
@@ -357,14 +357,14 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     };
     lap(enc, "before trace");
     // the G-buffer's light first, then, with its clean result to shade by, the reflections. The trace writes one of the pairs and reads the other
+    // (a video's history: last frame's images are read and this frame's written, turn about)
+    let hist_prev = if qu.hist { *sd.hist_st.lock().unwrap() } else { None };
     let bg_u = std::cell::Cell::new(&p.ubuf);
     let trace_bg = |irr_out: &wgpu::TextureView, spec_out: &wgpu::TextureView, irr_in: &wgpu::TextureView, lamp_out: &wgpu::TextureView, lamp_in: &wgpu::TextureView| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.trace_bgl, entries: &[
-        B { binding: 18, resource: p.resv.as_entire_binding() }, B { binding: 19, resource: sd.lc_cells.as_entire_binding() }, B { binding: 20, resource: sd.lc_acc.as_entire_binding() }, B { binding: 21, resource: sd.lc_out.as_entire_binding() }, B { binding: 0, resource: bg_u.get().as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
+        B { binding: 22, resource: R::TextureView(&p.hn[0][hist_prev.map_or(0, |x| x.2)]) }, B { binding: 18, resource: p.resv.as_entire_binding() }, B { binding: 19, resource: sd.lc_cells.as_entire_binding() }, B { binding: 20, resource: sd.lc_acc.as_entire_binding() }, B { binding: 21, resource: sd.lc_out.as_entire_binding() }, B { binding: 0, resource: bg_u.get().as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
         B { binding: 3, resource: sd.mats.as_entire_binding() }, B { binding: 4, resource: sd.lights.as_entire_binding() }, B { binding: 5, resource: sd.sky.as_entire_binding() },
         B { binding: 6, resource: R::TextureView(gb.depth) }, B { binding: 7, resource: R::TextureView(gb.nrm) }, B { binding: 8, resource: R::TextureView(gb.alb) },
         B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }, B { binding: 13, resource: R::TextureView(gb.mirror_lit) }, B { binding: 14, resource: R::TextureView(&p.glint) }, B { binding: 15, resource: R::TextureView(lamp_out) }, B { binding: 16, resource: R::TextureView(lamp_in) }, B { binding: 17, resource: R::TextureView(gb.mat) }] });
-    // (a video's history: last frame's images are read and this frame's written, turn about)
-    let hist_prev = if qu.hist { *sd.hist_st.lock().unwrap() } else { None };
     let hist_i = hist_prev.map_or(0, |x| 1 - x.2);
     let accum = |enc: &mut wgpu::CommandEncoder, kind: usize, cur_v: &wgpu::TextureView, show: bool| {
         let mut tu = [0f32; 24]; let (pv, pe, first, pr) = hist_prev.map_or((vp, eye, 1.0, res), |x| (x.0, x.1, 0.0, x.3));
@@ -437,7 +437,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     };
     #[cfg(target_arch = "wasm32")]
     if capture_stop { return; }
-    if qu.hist && qu.video { accum(enc, 0, &p.irr[cur], true); lap(enc, "temporal"); }
+    if qu.hist && qu.video && std::env::var_os("VID_NOIRRH").is_none() { accum(enc, 0, &p.irr[cur], true); lap(enc, "temporal"); }
     if learned {
         #[cfg(not(target_arch = "wasm32"))]
         learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 4);
@@ -454,7 +454,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         enc.copy_texture_to_texture(p.spec[1 - cur].texture().as_image_copy(), p.spec[cur].texture().as_image_copy(), wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 });
         lap(enc, "restir_spec");
     }
-    if qu.hist && qu.video { accum(enc, 1, &p.spec[cur], true); lap(enc, "temporal spec"); }
+    if qu.hist && qu.video && std::env::var_os("VID_NOSPECH").is_none() { accum(enc, 1, &p.spec[cur], true); lap(enc, "temporal spec"); }
     // (rounds on rough reflections, in the step's w: three keep a metal's smudges; with one ray a pixel that leaves blotches, so five)
     let mut spec_base = if qu.spec_spp > 1 { 6 } else { 12 };
     if use_rs_spec { if let Some(b) = std::env::var("RT_RS_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()) { spec_base = match b { 0 => 18, 1 => 24, 3 => 6, _ => 12 }; } }

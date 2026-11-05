@@ -41,6 +41,7 @@ struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp: f32 };
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
+@group(0) @binding(22) var hist_n: texture_2d<f32>;
 @group(0) @binding(19) var<storage, read_write> lc_cells: array<atomic<u32>>;
 @group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
@@ -435,7 +436,9 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   }
   textureStore(out_lamp, px, vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)));
   var e = vec3<f32>(0.0);
-  let spp = p.dims.w;
+  // (a video: more paths where a surface has little history, just come into view or on a thin edge. What has been seen for frames needs few)
+  var spp = p.dims.w;
+  if ((u32(p.cam.w) & 64u) != 0u) { let hc = textureLoad(hist_n, px, 0).r; if (hc < 8.0) { spp = 4u; } }
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {

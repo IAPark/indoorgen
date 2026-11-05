@@ -1220,7 +1220,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     let proj = match cam.ortho { Some(w) => orthographic_rh(-w / 2.0, w / 2.0, -w / aspect / 2.0, w / aspect / 2.0, zn, zf),
         None => perspective_rh(2.0 * ((cam.fov_x / 2.0).tan() / aspect).atan(), aspect, zn, zf) };
     let view = cam.view.inverse(); let vp0 = proj * view;
-    let vp = if vid_later { let (jx, jy) = rt::jitter(o.res); Mat4::from_translation(Vec3::new(jx, jy, 0.0)) * vp0 } else { vp0 }; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
+    let vp = if vid_later && std::env::var_os("VID_NOJIT").is_none() { let (jx, jy) = rt::jitter(o.res); Mat4::from_translation(Vec3::new(jx, jy, 0.0)) * vp0 } else { vp0 }; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
     let (sun_az, sun_el, sun_i, ambient) = s.lit.map_or((o.sun.0, o.sun.1, o.sun_i, o.ambient), |l| (l.0, l.1, l.2, l.3));
     let (az, el) = (sun_az.to_radians(), sun_el.to_radians());
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
@@ -1384,7 +1384,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
-        if qu.video { rt::taa(dev, &mut enc, p, sd, &tg.lit, &tg.depth, vp0, eye, o.res); }
+        if qu.video && std::env::var_os("VID_NOTAA").is_none() { rt::taa(dev, &mut enc, p, sd, &tg.lit, &tg.depth, vp0, eye, o.res); }
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&r.agx) }, wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&r.agx_smp) },
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
