@@ -97,8 +97,12 @@ fn lc_live(sl: u32) -> vec4<f32> {
   return vec4<f32>(f32(atomicLoad(&lc_acc[sl][0])), f32(atomicLoad(&lc_acc[sl][1])), f32(atomicLoad(&lc_acc[sl][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
 }
 // ---- a video's light from the cache: what reaches a surface the camera sees, by place and side, apart from the cells paths read. Filled from the first frame's clean picture, so most of a later frame reads it and traces nothing
-const LCV_FINE = 0.1; const LCV_COARSE = 0.4; const LCV_PART = 16384u; const LCV_TRUST = 16.0;
+const LCV_FINE = 0.1; const LCV_COARSE = 0.4; const LCV_PART = 16384u; const LCV_TRUST_FINE = 48.0; const LCV_TRUST_COARSE = 320.0;
 fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) { lcv_add_p(q, n, l, LCV_PART); }
+fn lcv_add_coarse(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) {
+  let sl = lc_find_k(lc_key_s(q, n, LCV_PART, LCV_COARSE));
+  if (sl <= LC_MASK) { lc_add(sl, l); }
+}
 fn lcv_add_p(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>, part: u32) {
   for (var k = 0; k < 2; k++) {
     let sl = lc_find_k(lc_key_s(q, n, part, select(LCV_FINE, LCV_COARSE, k == 1)));
@@ -116,7 +120,7 @@ fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32, part: u32) -> vec4<f32> {
     var c = q; c[au] = (bu + f32(i) + 0.5) * size; c[av] = (bv + f32(j) + 0.5) * size;
     let w = select(1.0 - tu_, tu_, i == 1) * select(1.0 - tv_, tv_, j == 1);
     let sl = lc_look_k(lc_key_s(c, n, part, size));
-    if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / LCV_TRUST, 1.0); acc += lc_out[sl].xyz * tr; sum += tr; }
+    if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / select(LCV_TRUST_COARSE, LCV_TRUST_FINE, size < 0.2), 1.0); acc += lc_out[sl].xyz * tr; sum += tr; }
   } }
   return vec4<f32>(acc, sum);
 }
@@ -719,7 +723,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
     let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8)); let c = dot(n, l);
     if (c > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = sel.rad / sel.lp * (wt / max(mt, 1.0)) / PI; }
   }
-  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * dir_.a, 0.0));
+  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * dir_.a, dir_.a)); // (a keeps saying whether this pixel traced: 0 is the cache's clean answer, which the history and the filter treat differently)
 }
 
 // GTAO, as games do it: how far the surfaces nearby rise above this point, searched in the depth picture along a few directions. For each side of a direction a share sin^2 of the cosine-weighted hemisphere is closed off. Cheap, and the darkening of corners and contacts stays sharp, where the light's filter smooths it away
@@ -1009,4 +1013,33 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
   lcv_add_p(pos, n, c.rgb, lcv_rpart(reflect(normalize(pos - p.cam.xyz), n)));
+}
+
+// ---- a video fills the cache's coarse cells ahead of the camera: samples of the surfaces round it, so a pan or a turn finds them lit. A cell already full is skipped at once, so this costs less as the cache fills
+fn fill_at(dir: vec3<f32>) {
+  let h = closest(p.cam.xyz, dir, 1000.0);
+  if (h.i < 0) { return; }
+  let t = tris[h.i];
+  var ng = normalize(cross(t.e1.xyz, t.e2.xyz));
+  if (dot(ng, dir) > 0.0) { ng = -ng; }
+  let q = p.cam.xyz + dir * h.t + ng * 0.002;
+  if (lcv_at(q, ng, LCV_COARSE, LCV_PART).w >= 0.999) { return; }
+  let o = q + ng * 0.001;
+  let l = lamp_rest(o, ng, true) + portal(o, ng) + gather(o, ng);
+  lcv_add_coarse(q, ng, l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5)));
+}
+const FILL_REACH = 2.6; // (how far past the picture's edge, in the picture's own half-widths)
+// every frame: just outside the picture, where a turn is heading
+@compute @workgroup_size(8, 8) fn lc_fill_view(@builtin(global_invocation_id) id: vec3<u32>) {
+  seed = (id.x * 73856093u) ^ (id.y * 19349663u) ^ (p.misc.y * 83492791u); seed = seed * 747796405u + 2891336453u;
+  var ndc = vec2<f32>(0.0);
+  for (var k = 0; k < 3; k++) { ndc = vec2<f32>(rnd() * 2.0 - 1.0, rnd() * 2.0 - 1.0) * FILL_REACH; if (max(abs(ndc.x), abs(ndc.y)) > 1.0) { break; } }
+  let w4 = p.inv_vp * vec4<f32>(ndc, 0.9999, 1.0);
+  fill_at(normalize(w4.xyz / w4.w - p.cam.xyz));
+}
+// the first frame: all round, as far as the room goes
+@compute @workgroup_size(8, 8) fn lc_fill_room(@builtin(global_invocation_id) id: vec3<u32>) {
+  seed = (id.x * 73856093u) ^ (id.y * 19349663u) ^ 0x68e31da4u; seed = seed * 747796405u + 2891336453u;
+  let z = rnd() * 2.0 - 1.0; let a = rnd() * 2.0 * PI; let r = sqrt(max(1.0 - z * z, 0.0));
+  fill_at(vec3<f32>(r * cos(a), r * sin(a), z));
 }
