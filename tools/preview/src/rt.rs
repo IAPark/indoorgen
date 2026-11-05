@@ -205,7 +205,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let trace_fine = pipe(&trace_bgl, include_str!("rt.wgsl"), "trace_fine");
     let (trace, denoise, compose) = (pipe(&trace_bgl, include_str!("rt.wgsl"), "trace"), pipe(&denoise_bgl, include_str!("rt_post.wgsl"), "denoise"), pipe(&compose_bgl, include_str!("rt_comp.wgsl"), "compose"));
     let ubuf = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<Params>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-    let step_ubufs = (0..18).map(|i: u32| dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&[1u32 << (i % 6), i % 6, (i / 6).min(1), if i >= 12 { 5u32 } else { 3 }]), usage: wgpu::BufferUsages::UNIFORM })).collect();
+    let step_ubufs = (0..24).map(|i: u32| dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&[1u32 << (i % 6), i % 6, (i / 6).min(1), if i >= 18 { 0u32 } else if i >= 12 { 5 } else { 3 }]), usage: wgpu::BufferUsages::UNIFORM })).collect();
     let mk_at = |w: u32, h: u32| dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: FMT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST, view_formats: &[] }).create_view(&Default::default());
     let mk = || mk_at(w, h);
@@ -361,7 +361,9 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     { let tg = trace_bg(&p.irr[1 - cur], &p.spec[cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
     lap(enc, "trace_spec");
     // (rounds on rough reflections, in the step's w: three keep a metal's smudges; with one ray a pixel that leaves blotches, so five)
-    let spec_base = if qu.spec_spp > 1 { 6 } else { 12 };
+    let mut spec_base = if qu.spec_spp > 1 { 6 } else { 12 };
+    #[cfg(not(target_arch = "wasm32"))]
+    if learned && std::env::var_os("RT_SPECDN").is_some() { learned_filter(dev, q, enc, p.spec[cur].texture(), gb.nrm.texture(), res, ss, 4); spec_base = 18; }
     for i in 0..5usize { filter(enc, cur, 1 - cur, spec_base + i); cur = 1 - cur; }
     lap(enc, "spec filter");
     { let tg = trace_bg(&p.fine, &p.spec[1 - cur], &p.irr[cur], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_fine); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1); }
