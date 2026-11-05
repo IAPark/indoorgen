@@ -19,6 +19,8 @@ tot = [0, 0]
 for v in views:
     s = v.split('_')[0]
     p = f'{out}/{v}_{mode.split(":")[0]}.png'
+    # (an old picture must not pass for this run's when a render fails)
+    if os.path.exists(p): os.remove(p)
     t = time.time()
     # (--rt bake[:SECONDS]: the baked mode. RT_CMP_PRE: a command to run the previewer under, as a lock for timing)
     args = ['--bake', 'still' + mode[4:]] if mode.startswith('bake') else ['--rt', mode]

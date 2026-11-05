@@ -89,7 +89,7 @@ pub fn measure(r: &mut Renderer, s: &mut Scene, o: &Opts, cams: &[Cam]) {
     let n = 24;
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     // a depth-only pipeline on the same layout
-    let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader(SRC).replace("/*LIB*/", "").replace("/*SURF*/", "").into()) });
+    let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader(SRC).replace("/*LIB*/", ig_shade::wgsl::LIB).replace("/*SURF*/", "").into()) });
     let pl = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&r.g_bgl)], immediate_size: 0 });
     let vl = vbuf_layouts();
     let zpipe = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl),
@@ -377,7 +377,7 @@ fn make_pipes(r: &Renderer) -> Pipes {
     let taa = mk("bk_taa", &[(0, Uni), (15, Tex), (16, Out16), (17, Filt), (18, Smp)]);
     let fin = mk("bk_final", &[(0, Uni), (15, Tex), (19, Out8)]);
     // the prepass
-    let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader(SRC).replace("/*LIB*/", "").replace("/*SURF*/", "").into()) });
+    let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader(SRC).replace("/*LIB*/", ig_shade::wgsl::LIB).replace("/*SURF*/", "").into()) });
     let vl = vbuf_layouts();
     let ds = wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Less), stencil: Default::default(), bias: Default::default() };
     let pz = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&r.g_bgl)], immediate_size: 0 });
