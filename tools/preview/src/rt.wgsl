@@ -37,6 +37,10 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(17) var g_mat: texture_2d<f32>;
 struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 @group(0) @binding(11) var<storage, read> wins: array<W>;
+// ReSTIR GI, within one frame: each pixel keeps one of its first bounces, chosen by how much light it brought (Ouyang et al. 2021)
+struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp: f32 };
+@group(0) @binding(18) var<storage, read_write> resv: array<R>;
+var<private> g1_pos = vec3<f32>(0.0); var<private> g1_nrm = vec3<f32>(0.0);
 
 fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // (below the horizon Blender's sky does not stop: the horizon's colour, gone by 24 degrees down, as measured from it. A warm fill for a low sun)
@@ -258,12 +262,14 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   for (var b = 0u; b < bounces; b++) {
     let d = cosine(n);
     let h = closest(o, d, 1000.0);
+    if (b == 0u) { g1_pos = o + d * 1000.0; g1_nrm = vec3<f32>(0.0); }
     if (h.i < 0) { if (!through_window(o, d)) { e += tp * sky_at(d); } break; }
     let t = tris[h.i];
     let m = mats[t.mat];
     var ng = normalize(cross(t.e1.xyz, t.e2.xyz));
     if (dot(ng, d) > 0.0) { ng = -ng; }
     let q = o + d * h.t + ng * 0.002;
+    if (b == 0u) { g1_pos = q; g1_nrm = ng; }
     e += tp * m.emissive.rgb;
     tp *= m.albedo.rgb;
     // (the last hit stands in for the bounces left out, up to the four Blender follows: each about as lit as this one, and dimmer by its colour. Stopped short, a sunlit room with few lamps lost a tenth of its light)
@@ -331,11 +337,22 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   textureStore(out_lamp, px, vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)));
   var e = vec3<f32>(0.0);
   let spp = p.dims.w;
+  let restir_ = p.cam.w > 1.5;
+  var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
+    if (restir_) {
+      e += lamp_rest(o, n, true) + portal(o, n);
+      let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
+      let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
+      rs.wsum += wi;
+      if (rnd() * rs.wsum < wi) { rs.pos = g1_pos; rs.nrm = g1_nrm; rs.rad = lc; rs.lp = lm; }
+      continue;
+    }
     let es = lamp_rest(o, n, true) + portal(o, n) + gather(o, n);
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
+  if (restir_) { resv[u32(px.y * w + px.x)] = rs; textureStore(out_irr, px, vec4<f32>(e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return; }
   e = e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e;
   textureStore(out_irr, px, vec4<f32>(e, 0.0));
 }
@@ -384,6 +401,58 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     e /= f32(spp);
   }
   textureStore(out_irr, px, vec4<f32>(e, vis));
+}
+
+// ReSTIR GI's spatial step: a few neighbours on the same surface offer the bounce they kept, weighed by what it would give here. One shadow ray for the winner
+const RS_K = 5u; const RS_RADIUS = 24.0;
+@compute @workgroup_size(8, 8) fn restir(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
+  let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let dir_ = textureLoad(irr_done, px, 0);
+  let g = px * ss + vec2<i32>(ss / 2); let dims = vec2<f32>(f32(w * ss), f32(h * ss));
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(dir_.rgb, 0.0)); return; }
+  let pos = world_of(g, d, dims, p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 19349663u) ^ 0x9e3779b9u;
+  let o = start_at(pos, n);
+  let r0 = resv[u32(px.y * w + px.x)];
+  var sel = r0; var wt = r0.wsum; var mt = r0.m;
+  for (var k = 0u; k < RS_K; k++) {
+    let a = rnd() * 2.0 * PI; let rr = sqrt(rnd()) * RS_RADIUS;
+    let q = px + vec2<i32>(round(vec2<f32>(cos(a), sin(a)) * rr));
+    if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+    let gq = q * ss + vec2<i32>(ss / 2); let dq = textureLoad(g_depth, gq, 0);
+    if (dq >= 1.0) { continue; }
+    let nq_ = textureLoad(g_nrm, gq, 0).xyz; if (dot(nq_, nq_) < 0.25) { continue; }
+    let nq = normalize(nq_);
+    let pq = world_of(gq, dq, dims, p.inv_vp);
+    if (dot(n, nq) < 0.9 || abs(dot(n, pq - pos)) > 0.03) { continue; }
+    let rq = resv[u32(q.y * w + q.x)];
+    if (rq.wsum <= 0.0) { mt += rq.m; continue; }
+    let vr = rq.pos - pos; let vq = rq.pos - pq; let lr2 = dot(vr, vr); let lq2 = dot(vq, vq);
+    let cr = dot(n, vr) * inverseSqrt(max(lr2, 1e-8)); let cq = dot(nq, vq) * inverseSqrt(max(lq2, 1e-8));
+    if (cr <= 0.0 || cq <= 0.001) { continue; }
+    // (from one point to the other, the same spot lies at another angle and distance. A sample of sky is a direction: the same either way)
+    var jac = 1.0;
+    if (dot(rq.nrm, rq.nrm) > 0.25) {
+      let sr = abs(dot(rq.nrm, vr)) * inverseSqrt(max(lr2, 1e-8)); let sq = abs(dot(rq.nrm, vq)) * inverseSqrt(max(lq2, 1e-8));
+      jac = (sr / max(sq, 1e-3)) * (lq2 / max(lr2, 1e-6));
+      if (jac > 10.0 || jac < 0.1) { continue; }
+    }
+    let wn = cr / cq * rq.wsum * jac;
+    wt += wn; mt += rq.m;
+    if (rnd() * wt < wn) { sel = rq; }
+  }
+  var ind = vec3<f32>(0.0);
+  if (sel.lp > 0.0) {
+    let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8)); let c = dot(n, l);
+    if (c > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = sel.rad / sel.lp * (wt / max(mt, 1.0)) / PI; }
+  }
+  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * dir_.a, 0.0));
 }
 
 // GTAO, as games do it: how far the surfaces nearby rise above this point, searched in the depth picture along a few directions. For each side of a direction a share sin^2 of the cosine-weighted hemisphere is closed off. Cheap, and the darkening of corners and contacts stays sharp, where the light's filter smooths it away
