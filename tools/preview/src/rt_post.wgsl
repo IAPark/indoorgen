@@ -103,7 +103,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   // (nor darker: along a moulding's top face a few paths each drew dashes of both. Again once the neighbours are smooth, for at first their mean is as noisy as the sliver)
   let lone = lone_round && ew < 0.45 && dot(av.rgb, av.rgb) > 0.0;
   // (a video: what has been seen for frames is clean already, and keeps its detail. The filter is for what is new)
-  let keep = select(0.0, select(0.0, 1.0, textureLoad(d_cnt, px, 0).r > 0.5), (u32(p.cam.w) & 64u) != 0u); // (what is clean is left as it is: only noise needs the filter)
+  let keep = select(0.0, select(0.0, 1.0, textureLoad(d_cnt, px, 0).r > 100.0), (u32(p.cam.w) & 64u) != 0u); // (what is clean is left as it is: only noise needs the filter)
   textureStore(o_irr, px, vec4<f32>(mix(select(ee, av.rgb, lone), c.rgb, select(keep, 0.0, spec_only)), 0.0));
   textureStore(o_spec, px, vec4<f32>(mix(sv, sc.rgb, select(0.0, keep, spec_only)), sc.a));
 }
@@ -119,6 +119,7 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   let c = tu.prev_vp * vec4<f32>(q, 1.0);
   return vec3<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, c.w);
 }
+const FROM_FIRST = 200.0;
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
@@ -135,7 +136,7 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   let n0 = normalize(textureLoad(d_nrm, g, 0).xyz + vec3<f32>(1e-5));
   let sgn = select(-1.0, 1.0, clean);
   // (the first frame is a clean picture: as good as many frames' worth. It traced its nearest lamps apart, where later frames have them all in this light)
-  if (tu.al.x >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur + select(textureLoad(t_lamp, px, 0).rgb, vec3<f32>(0.0), refl), cur4.a)); textureStore(o_n, px, vec4<f32>(16.0, dist, n0.x, n0.y)); return; }
+  if (tu.al.x >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur + select(textureLoad(t_lamp, px, 0).rgb, vec3<f32>(0.0), refl), cur4.a)); textureStore(o_n, px, vec4<f32>(FROM_FIRST, dist, n0.x, n0.y)); return; }
   // (a mirror's picture is sharp and already right)
   if (refl && cur4.a < 0.03) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(1.0, dist, n0.x, n0.y)); return; }
   let hd = vec2<i32>(i32(tu.al.y), i32(tu.al.z)); let hdf = vec2<f32>(hd);
@@ -174,14 +175,17 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   // (the longer a surface has been seen the less each frame counts, down to a floor: new ones clean up at once. A clean value takes over from a noisy history at once)
   var al = max(1.0 / (nn + 1.0), 0.05);
   if (clean) { al = select(1.0 / (nn + 1.0), 1.0, noisy_hist); }
+  // (settled light stays as it is: it holds the first frame's detail, and a cell's answer would only blur it)
+  if (!refl && cur4.a < 0.0 && !noisy_hist) { al = 0.0; }
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer. Not on a clean value)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
   let cap = lh * 8.0 + 0.1;
   let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean);
   textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), cur4.a));
   // (the history stays a noise one until clean values or enough frames have replaced it)
-  let still_noisy = !clean && (noisy_hist || nn < 4.0);
-  textureStore(o_n, px, vec4<f32>(select(1.0, -1.0, still_noisy) * min(nn + 1.0, 64.0), dist, n0.x, n0.y));
+  let still_noisy = !clean && nn < 3.0;
+  // (a count from the first frame stays above FROM_FIRST / 2: that light is clean. What came later was gathered from few rays, and keeps the filter)
+  textureStore(o_n, px, vec4<f32>(select(1.0, -1.0, still_noisy) * select(min(nn + 1.0, 64.0), nn, nn >= 64.0), dist, n0.x, n0.y));
 }
 
 // ---- a video's picture over frames: its edges, by the shifted camera. What was there kept only as far as it fits what is around this pixel now, or what moved would trail

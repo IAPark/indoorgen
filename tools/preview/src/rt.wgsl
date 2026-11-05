@@ -43,12 +43,20 @@ struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
 @group(0) @binding(22) var hist_n: texture_2d<f32>;
 // (a video's reservoirs, last frame's and this frame's, turn about, and where a point was last frame)
-@group(0) @binding(23) var<uniform> pv: mat4x4<f32>;
+struct PV { vp: mat4x4<f32>, eye: vec4<f32> };
+@group(0) @binding(23) var<uniform> pv: PV;
 @group(0) @binding(24) var<storage, read> resv_a: array<R>;
 @group(0) @binding(25) var<storage, read_write> resv_b: array<R>;
+// (has this surface a settled light from earlier frames? Then it needs nothing new: the scene holds still)
+fn hist_settled(pos: vec3<f32>, n: vec3<f32>, w: i32, h: i32) -> bool {
+  let ip = rs_prev(pos, w, h); if (ip < 0) { return false; }
+  let hn = textureLoad(hist_n, vec2<i32>(ip % w, ip / w), 0);
+  let ex = length(pos - pv.eye.xyz);
+  return hn.r >= 3.0 && abs(hn.g - ex) <= 0.02 + 0.005 * ex && abs(hn.b - n.x) + abs(hn.a - n.y) <= 0.3;
+}
 fn rs_time() -> bool { return (u32(p.cam.w) & 128u) != 0u; }
 fn rs_prev(pos: vec3<f32>, w: i32, h: i32) -> i32 {
-  let c = pv * vec4<f32>(pos, 1.0); if (c.w <= 0.0) { return -1; }
+  let c = pv.vp * vec4<f32>(pos, 1.0); if (c.w <= 0.0) { return -1; }
   let u = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
   if (any(u < vec2<f32>(0.0)) || any(u >= vec2<f32>(1.0))) { return -1; }
   let q = vec2<i32>(u * vec2<f32>(f32(w), f32(h))); return q.y * w + q.x;
@@ -494,12 +502,15 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   // (a video: the cache's answer, without a ray, where it has one. a 0 tells what follows that this pixel holds all its light. Elsewhere, paths, which fill the cache for next time)
   let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
   if (lcv_v) {
+    let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
     let cr = lcv_read(pos, n);
-    if (cr.w >= 0.7) {
+    // (a mirror's picture has no history, and takes the cache's answer directly)
+    if (settled || ((u32(p.cam.w) & 64u) == 0u && cr.w >= 0.7)) {
       if ((u32(p.cam.w) & 2u) != 0u) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); }
-      textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, 0.0)); return;
+      textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
     }
-    spp = 2u;
+    // (new to the picture: a final gather. A few rays from here, each ending in a cell where it lands, so no one cell can show as a patch)
+    spp = 4u;
   }
   var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
@@ -723,7 +734,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
     let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8)); let c = dot(n, l);
     if (c > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = sel.rad / sel.lp * (wt / max(mt, 1.0)) / PI; }
   }
-  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * dir_.a, dir_.a)); // (a keeps saying whether this pixel traced: 0 is the cache's clean answer, which the history and the filter treat differently)
+  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * max(dir_.a, 0.0), dir_.a)); // (a keeps saying whether this pixel traced: 0 is the cache's clean answer, which the history and the filter treat differently)
 }
 
 // GTAO, as games do it: how far the surfaces nearby rise above this point, searched in the depth picture along a few directions. For each side of a direction a share sin^2 of the cosine-weighted hemisphere is closed off. Cheap, and the darkening of corners and contacts stays sharp, where the light's filter smooths it away
@@ -1025,8 +1036,13 @@ fn fill_at(dir: vec3<f32>) {
   let q = p.cam.xyz + dir * h.t + ng * 0.002;
   if (lcv_at(q, ng, LCV_COARSE, LCV_PART).w >= 0.999) { return; }
   let o = q + ng * 0.001;
-  let l = lamp_rest(o, ng, true) + portal(o, ng) + gather(o, ng);
-  lcv_add_coarse(q, ng, l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5)));
+  // (a cell stands for this hit and 3 more bounces, and gather goes 4 from here: the same total as Blender's 4, in a room of one colour)
+  let r_ = dot(mats[t.mat].albedo.rgb, vec3<f32>(0.333)); let s_ = 1.0 + r_ + r_ * r_;
+  let l = lamp_rest(o, ng, true) + portal(o, ng) + gather(o, ng) * s_ / (s_ + r_ * r_ * r_);
+  let lc = l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5));
+  lcv_add_coarse(q, ng, lc);
+  let sl = lc_find(lc_jit(q, ng), ng, t.mat);
+  if (sl <= LC_MASK) { lc_add(sl, lc + p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(o, ng) / PI); }
 }
 const FILL_REACH = 2.6; // (how far past the picture's edge, in the picture's own half-widths)
 // every frame: just outside the picture, where a turn is heading
