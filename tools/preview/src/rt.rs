@@ -11,7 +11,7 @@ pub struct Quality { pub spp: u32, pub bounces: u32, pub spec_spp: u32, pub deno
 impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
-            "fast" => Quality { spp: 2, bounces: 2, spec_spp: 1, denoise: 5, ss: 3 },
+            "fast" => Quality { spp: 1, bounces: 2, spec_spp: 1, denoise: 5, ss: 3 },
             "full" => Quality { spp: 3, bounces: 4, spec_spp: 3, denoise: 5, ss: 3 },
             _ => panic!("--rt fast|full"),
         }
@@ -225,7 +225,7 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: &[([Vec3; 3], u32)], mats: &[Mat
     let tris: Vec<Tri> = bvh.primitive_indices.iter().map(|&i| {
         let (t, m) = &tris_in[i as usize];
         let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
-        Tri { v0: t[0].into(), mat: *m, e1: e1.extend(0.0).into(), e2: e2.extend(0.0).into() }
+        Tri { v0: t[0].into(), mat: *m, e1: e1.extend(mats[*m as usize].albedo[3]).into(), e2: e2.extend(0.0).into() } // (e1's w: 0 for a fitting, which shadow rays pass)
     }).collect();
     if verbose { eprintln!("  rt bvh: {} tris, {} nodes, {:.2}s", tris.len(), nodes.len(), t0.elapsed().as_secs_f32()); }
     let sp = sky_params(seed);

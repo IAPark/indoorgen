@@ -126,8 +126,9 @@ fn occluded(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
     let n = nodes[cur];
     if (n.b > 0u) {
       for (var k = 0u; k < n.b; k++) {
-        let t = tri_t(tris[n.a + k], o, d);
-        if (t > 0.0005 && t < tmax) { return true; }
+        let tr_ = tris[n.a + k]; let t = tri_t(tr_, o, d);
+        // (a fitting doesn't stop a shadow ray: e1's w is 0)
+        if (t > 0.0005 && t < tmax && tr_.e1.w > 0.5) { return true; }
       }
     } else {
       let l = n.a; let r = n.a + 1u;

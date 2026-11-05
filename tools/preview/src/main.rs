@@ -1566,14 +1566,17 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss)); }
     if s.rt.is_some() { return }
     let t = Instant::now();
-    let mats = probe_albedos(r, s, o).await;
+    let mut mats = probe_albedos(r, s, o).await;
     if o.verbose { eprintln!("  albedo probe {:.2}s", t.elapsed().as_secs_f32()); }
     // what light passes: glass, and the fittings around the lamps (a lamp shut in its own housing lit nothing)
-    let passes = |d: &Draw| { let n = &s.glb.mats[d.mat].name; d.glass || n.starts_with("ceiling_") || n.starts_with("pendant_") || n.starts_with("lamp") };
+    // (Blender's own rule, in render_rust.py: by the part, not by its material. A table lamp's shade and stand cast shadows there, and here the light went through them)
+    let passes = |d: &Draw| { let nm = &s.glb.nodes[d.node].name; let n = &s.glb.mats[d.mat].name; d.glass || ["CeilingLightFactory", "_light_", "LampFactory", "_lamp", "pendant_"].iter().any(|k| nm.contains(k)) || n == "rs_shader_bulb" || n == "rs_shader_lampshade" };
     let (lo, hi) = (s.bmin - Vec3::splat(30.0), s.bmax + Vec3::splat(30.0));
     let mut tris: Vec<([Vec3; 3], u32)> = vec![];
     for (i, d) in s.draws.iter().enumerate() {
-        if passes(d) { continue }
+        // (fittings let shadow rays through, as `visible_shadow = False` in Blender, but bounced light and reflections still land on them: a lampshade darkens the wall behind it, and a rim reflects the lit ceiling. A bake's rays know no difference: there they are left out)
+        if d.glass || (passes(d) && o.bake.is_some()) { continue }
+        if passes(d) { mats[i].albedo[3] = 0.0; }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
