@@ -42,6 +42,9 @@ struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
 @group(0) @binding(22) var hist_n: texture_2d<f32>;
+// (what each coarse cell has seen by direction: for 8 parts of its hemisphere, the brightness brought back and how many paths brought it. Rays aim where the light is)
+@group(0) @binding(26) var<storage, read_write> lc_guide: array<array<atomic<u32>, 16>>;
+var<private> g_use = false; var<private> g_dir = vec3<f32>(0.0); var<private> g_wt = 1.0;
 // (a video's reservoirs, last frame's and this frame's, turn about, and where a point was last frame)
 struct PV { vp: mat4x4<f32>, eye: vec4<f32> };
 @group(0) @binding(23) var<uniform> pv: PV;
@@ -107,6 +110,32 @@ fn lc_live(sl: u32) -> vec4<f32> {
 // ---- a video's light from the cache: what reaches a surface the camera sees, by place and side, apart from the cells paths read. Filled from the first frame's clean picture, so most of a later frame reads it and traces nothing
 const LCV_FINE = 0.1; const LCV_COARSE = 0.4; const LCV_PART = 16384u; const LCV_TRUST_FINE = 48.0; const LCV_TRUST_COARSE = 320.0;
 fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) { lcv_add_p(q, n, l, LCV_PART); }
+// a first direction by the cell's bins: a cosine-weighted direction is a point in a square, and the square has 4 x 2 parts. wt: over the odds, so the total stays the same. Returns the part
+const GUIDE_MIN = 32u;
+fn guide_pick(sl: u32, n: vec3<f32>) -> u32 {
+  g_use = false; g_wt = 1.0;
+  if (sl > LC_MASK || (u32(p.cam.w) & 256u) != 0u) { return 8u; }
+  var m = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var tot = 0.0; var cnt = 0u;
+  for (var i = 0u; i < 8u; i++) { let c = atomicLoad(&lc_guide[sl][8u + i]); cnt += c; if (c > 0u) { m[i] = f32(atomicLoad(&lc_guide[sl][i])) / (f32(c) * LC_FIX); tot += m[i]; } }
+  if (cnt < GUIDE_MIN || tot <= 0.0) { return 8u; }
+  // (half by what was seen, half evenly: a direction that has shown little may still hold something)
+  var r = rnd(); var pick = 7u; var pr = 0.0;
+  for (var i = 0u; i < 8u; i++) { pr = 0.5 / 8.0 + 0.5 * m[i] / tot; if (r < pr) { pick = i; break; } r -= pr; }
+  pr = 0.5 / 8.0 + 0.5 * m[pick] / tot;
+  let u1 = (f32(pick & 1u) + rnd()) * 0.5; let u2 = (f32(pick >> 1u) + rnd()) * 0.25;
+  let b_ = basis(n); let ra = sqrt(u1); let ph = 2.0 * PI * u2;
+  g_dir = b_[0] * (ra * cos(ph)) + b_[1] * (ra * sin(ph)) + n * sqrt(max(1.0 - u1, 0.0));
+  g_wt = 1.0 / (8.0 * pr); g_use = true;
+  return pick;
+}
+// which part an unguided direction fell in, and what it brought back
+fn guide_add(sl: u32, n: vec3<f32>, d: vec3<f32>, l: vec3<f32>) {
+  if (sl > LC_MASK || (u32(p.cam.w) & 256u) != 0u) { return; }
+  let b_ = basis(n); let z = dot(d, n); let u1 = clamp(1.0 - z * z, 0.0, 0.9999);
+  var a = atan2(dot(d, b_[1]), dot(d, b_[0])) / (2.0 * PI); if (a < 0.0) { a += 1.0; }
+  let i = min(u32(u1 * 2.0), 1u) + min(u32(a * 4.0), 3u) * 2u;
+  atomicAdd(&lc_guide[sl][i], u32(min(dot(l, vec3<f32>(0.333)), 64.0) * LC_FIX)); atomicAdd(&lc_guide[sl][8u + i], 1u);
+}
 fn lcv_add_coarse(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) {
   let sl = lc_find_k(lc_key_s(q, n, LCV_PART, LCV_COARSE));
   if (sl <= LC_MASK) { lc_add(sl, l); }
@@ -389,7 +418,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var lc_read = false; var lc_last = vec3<f32>(0.0); var lc_r = 0.0;
   // (the first of these is the first bounce: Blender's limit of 4 is 4 of them. One more ran every room's light a tenth high)
   for (var b = 0u; b < bounces; b++) {
-    let d = cosine(n);
+    var d = cosine(n);
+    if (b == 0u && g_use) { d = g_dir; tp *= g_wt; }
     let h = closest(o, d, 1000.0);
     if (b == 0u) { g1_pos = o + d * 1000.0; g1_nrm = vec3<f32>(0.0); }
     if (h.i < 0) { if (!through_window(o, d)) { e += tp * sky_at(d); } break; }
@@ -518,7 +548,10 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   for (var s = 0u; s < spp; s++) {
     if (restir_) {
       let lp_ = lamp_rest(o, n, true) + portal(o, n); e += lp_; dep_ += lp_;
+      if (lcv_v) { _ = guide_pick(lc_look_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n); }
+      let w_used = g_wt;
       let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
+      if (lcv_v) { guide_add(lc_find_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n, normalize(g1_pos - o), lc / w_used); g_use = false; }
       dep_ += lc;
       let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
       rs.wsum += wi;
@@ -1038,7 +1071,11 @@ fn fill_at(dir: vec3<f32>) {
   let o = q + ng * 0.001;
   // (a cell stands for this hit and 3 more bounces, and gather goes 4 from here: the same total as Blender's 4, in a room of one colour)
   let r_ = dot(mats[t.mat].albedo.rgb, vec3<f32>(0.333)); let s_ = 1.0 + r_ + r_ * r_;
-  let l = lamp_rest(o, ng, true) + portal(o, ng) + gather(o, ng) * s_ / (s_ + r_ * r_ * r_);
+  let cg = lc_find_k(lc_key_s(q, ng, LCV_PART, LCV_COARSE));
+  _ = guide_pick(cg, ng); let w_used = g_wt;
+  let lg = gather(o, ng); g_use = false;
+  guide_add(cg, ng, normalize(g1_pos - o), lg / w_used);
+  let l = lamp_rest(o, ng, true) + portal(o, ng) + lg * s_ / (s_ + r_ * r_ * r_);
   let lc = l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5));
   lcv_add_coarse(q, ng, lc);
   let sl = lc_find(lc_jit(q, ng), ng, t.mat);
