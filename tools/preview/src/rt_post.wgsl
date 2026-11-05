@@ -18,6 +18,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(4) var i_irr: texture_2d<f32>;
 @group(0) @binding(5) var i_spec: texture_2d<f32>;
 @group(0) @binding(6) var o_irr: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(13) var d_cnt: texture_2d<f32>;
 @group(0) @binding(7) var o_spec: texture_storage_2d<rgba16float, write>;
 @compute @workgroup_size(8, 8) fn denoise(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
@@ -101,39 +102,72 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   // (a sliver, alone on its surface: nothing to average its few paths with, so one lucky path is a bright dot on an edge. It takes what is around it)
   // (nor darker: along a moulding's top face a few paths each drew dashes of both. Again once the neighbours are smooth, for at first their mean is as noisy as the sliver)
   let lone = lone_round && ew < 0.45 && dot(av.rgb, av.rgb) > 0.0;
-  textureStore(o_irr, px, vec4<f32>(select(ee, av.rgb, lone), 0.0));
-  textureStore(o_spec, px, vec4<f32>(sv, sc.a));
+  // (a video: what has been seen for frames is clean already, and keeps its detail. The filter is for what is new)
+  let keep = select(0.0, clamp((textureLoad(d_cnt, px, 0).r - 2.0) / 14.0, 0.0, 1.0), (u32(p.cam.w) & 64u) != 0u);
+  textureStore(o_irr, px, vec4<f32>(mix(select(ee, av.rgb, lone), c.rgb, select(keep, 0.0, spec_only)), 0.0));
+  textureStore(o_spec, px, vec4<f32>(mix(sv, sc.rgb, select(0.0, keep, spec_only)), sc.a));
 }
 
-// ---- a video's light, built up over its frames
-struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32> };
+// ---- a video's light and reflections, built up over its frames: before the filter, which then has less to do the longer a surface has been seen
+struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32> }; // al: 1 on the first frame; the history's size; 1 for reflections
 @group(0) @binding(8) var<uniform> tu: TU;
 @group(0) @binding(9) var t_lamp: texture_2d<f32>;
+@group(0) @binding(10) var t_n: texture_2d<f32>;
+@group(0) @binding(11) var o_n: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(12) var t_hit: texture_2d<f32>;
+fn prev_uv(q: vec3<f32>) -> vec3<f32> {
+  let c = tu.prev_vp * vec4<f32>(q, 1.0);
+  return vec3<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, c.w);
+}
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
-  let cur = textureLoad(i_irr, px, 0).rgb;
+  let cur4 = textureLoad(i_irr, px, 0); let cur = cur4.rgb;
+  let refl = tu.al.w > 0.5;
   let g = px * ss + vec2<i32>(ss / 2);
   let d = textureLoad(d_depth, g, 0);
-  if (d >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur, 0.0)); return; }
+  if (d >= 1.0) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(0.0)); return; }
   let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
   let dist = length(pos - p.cam.xyz);
-  // (the first frame traced its nearest lamps apart: later frames have them all in this light)
-  if (tu.al.x >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur + textureLoad(t_lamp, px, 0).rgb, dist)); return; }
-  let c = tu.prev_vp * vec4<f32>(pos, 1.0);
-  let uv = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
-  if (c.w <= 0.0 || any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) { textureStore(o_irr, px, vec4<f32>(cur, dist)); return; }
+  // (the first frame is a clean picture: as good as many frames' worth. It traced its nearest lamps apart, where later frames have them all in this light)
+  if (tu.al.x >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur + select(textureLoad(t_lamp, px, 0).rgb, vec3<f32>(0.0), refl), cur4.a)); textureStore(o_n, px, vec4<f32>(16.0, dist, 0.0, 0.0)); return; }
+  // (a mirror's picture is sharp and already right)
+  if (refl && cur4.a < 0.03) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(1.0, dist, 0.0, 0.0)); return; }
+  let hd = vec2<i32>(i32(tu.al.y), i32(tu.al.z)); let hdf = vec2<f32>(hd);
+  let su = prev_uv(pos);
+  if (su.z <= 0.0 || any(su.xy < vec2<f32>(0.0)) || any(su.xy >= vec2<f32>(1.0))) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(1.0, dist, 0.0, 0.0)); return; }
   // (from the same surface only: what the camera has just come round the corner of has no past)
-  let hd = vec2<i32>(i32(tu.al.y), i32(tu.al.z)); let f = uv * vec2<f32>(hd) - 0.5; let b = floor(f); let t = f - b;
   let expect = length(pos - tu.prev_eye.xyz);
-  var acc = vec3<f32>(0.0); var sum = 0.0;
+  let f = su.xy * hdf - 0.5; let b = floor(f); let t = f - b;
+  var acc = vec3<f32>(0.0); var sum = 0.0; var nn = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
-    let hq = textureLoad(i_spec, q, 0);
-    if (abs(hq.a - expect) > 0.03 + 0.02 * expect) { continue; }
+    let hn = textureLoad(t_n, q, 0);
+    if (abs(hn.g - expect) > 0.03 + 0.02 * expect) { continue; }
     let wq = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1);
-    acc += hq.rgb * wq; sum += wq;
+    acc += textureLoad(i_spec, q, 0).rgb * wq; nn += hn.r * wq; sum += wq;
   } }
-  if (sum < 0.2) { textureStore(o_irr, px, vec4<f32>(cur, dist)); return; }
-  textureStore(o_irr, px, vec4<f32>(mix(acc / sum, cur, tu.al.x), dist));
+  if (sum < 0.2) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(1.0, dist, 0.0, 0.0)); return; }
+  acc /= sum; nn /= sum;
+  // (a reflection moves as what it shows does, behind the surface: as far back as the rays went. A rough one is a wide blur, and stays nearer the surface)
+  if (refl) {
+    let k = 1.0 - smoothstep(0.1, 0.5, cur4.a);
+    let vu = prev_uv(pos + normalize(pos - p.cam.xyz) * textureLoad(t_hit, px, 0).a * k);
+    if (vu.z > 0.0 && all(vu.xy >= vec2<f32>(0.0)) && all(vu.xy < vec2<f32>(1.0))) {
+      let f2 = vu.xy * hdf - 0.5; let b2 = floor(f2); let t2 = f2 - b2; var a2 = vec3<f32>(0.0);
+      for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+        let q = clamp(vec2<i32>(b2) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
+        a2 += textureLoad(i_spec, q, 0).rgb * select(1.0 - t2.x, t2.x, i == 1) * select(1.0 - t2.y, t2.y, j == 1);
+      } }
+      acc = a2;
+    }
+  }
+  // (the longer a surface has been seen the less each frame counts, down to a floor: new ones clean up at once)
+  let al = max(1.0 / (nn + 1.0), select(0.05, 0.1, refl));
+  // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer)
+  let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
+  let cap = lh * (1.0 + 16.0 / (nn + 1.0)) + 0.01;
+  let cur_c = cur * min(1.0, cap / max(lc, 1e-5));
+  textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), cur4.a));
+  textureStore(o_n, px, vec4<f32>(min(nn + 1.0, 64.0), dist, 0.0, 0.0));
 }

@@ -760,6 +760,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   // what a glossy surface reflects
   let a = textureLoad(g_alb, g, 0);
   let rough = a.a;
+  var hit_d = 0.0; var hit_n = 1.0;
   var sp = vec3<f32>(0.0); var rs_s = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
   let coat = textureLoad(g_nrm, g, 0).a;
   if (p.misc2.y > 0u) {
@@ -770,7 +771,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (metal shows nothing but its reflections: full mode gives it one more ray)
     let rays = select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
-    rs_s.m = f32(rays);
+    rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
     var nsp = n;
@@ -820,6 +821,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       }
       if (dot(rd, n) <= 0.0) { rd = r0; }
       let hh = closest(o, rd, 1000.0);
+      hit_d += select(min(hh.t, 30.0), 30.0, hh.i < 0);
       if (hh.i < 0) {
         var l = sky_at(rd);
         // (the sun only in a truly sharp reflection: on anything rough its highlight is already counted, and a ray that happened on it was a firefly)
@@ -872,7 +874,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0);
   }
-  textureStore(out_glint, px, vec4<f32>(gl_, 0.0));
+  textureStore(out_glint, px, vec4<f32>(gl_, hit_d / hit_n)); // (a: how far the rays went, for a video's history)
   if ((u32(p.cam.w) & 4u) != 0u) { resv[u32(w * h) + u32(px.y * w + px.x)] = rs_s; }
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
 }
