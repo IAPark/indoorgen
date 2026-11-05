@@ -1,5 +1,5 @@
 #!/bin/zsh
-# the baked renderer for a page: web/pkg-rt/preview.{js,wasm}
+# the traced renderer for a page: web/pkg-rt/preview.{js,wasm}
 set -e
 D=${0:A:h}/../preview; R=${0:A:h}/../..
 cd $D; ~/.cargo/bin/cargo build --release --target wasm32-unknown-unknown

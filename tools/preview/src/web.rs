@@ -1,4 +1,4 @@
-//! The traced renderer in a page, by WebGPU: tools/web_rt/build.sh makes the module. The page hands over a house (glb and sidecar), waits for the bake, then asks for a frame per camera.
+//! The traced renderer in a page, by WebGPU: tools/web_rt/build.sh makes the module. The page hands over a house (glb and sidecar), waits for the scene to load, then asks for a frame per camera.
 use super::*;
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -215,7 +215,7 @@ pub struct SceneData { pub taa_st: std::sync::Mutex<Option<(Mat4, Vec3, usize)>>
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32, video: bool) -> Pipes {
+pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     // (no bounds checks in the traversal: every index comes from the BVH built here, and they were much of the cost of a ray)
     let module = |src: &str| unsafe { dev.create_shader_module_trusted(wgpu::ShaderModuleDescriptor { label: Some("rt"), source: wgpu::ShaderSource::Wgsl(src.into()) }, wgpu::ShaderRuntimeChecks::unchecked()) };
     use wgpu::{BindGroupLayoutEntry as E, BindingType as T, ShaderStages as S};
@@ -289,7 +289,7 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let ld2 = if ld.is_empty() { vec![LightD { pos: [0.0; 4], col: [0.0; 4] }] } else { ld.clone() };
     let w0 = [Win { c: [0.0; 4], u: [0.0; 4], v: [0.0; 4], n: [0.0; 4] }];
     // (RT_NO_LC=1: none. The light cache's table starts empty: paths make the cells)
-    let lc_n = if std::env::var_os("RT_NO_LC").is_none() && !crate::bake::TABLE.load(std::sync::atomic::Ordering::Relaxed) { LC_SLOTS as u32 } else { 0 };
+    let lc_n = if std::env::var_os("RT_NO_LC").is_none() { LC_SLOTS as u32 } else { 0 };
     let lc_size = if lc_n > 0 { LC_SLOTS as u64 * 16 } else { 16 };
     let lc_mk = |u| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: lc_size, usage: u, mapped_at_creation: false });
     let lc_rw = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
