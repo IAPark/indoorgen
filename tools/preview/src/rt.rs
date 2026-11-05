@@ -37,7 +37,7 @@ pub fn taa(dev: &wgpu::Device, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &S
     let mut st = sd.taa_st.lock().unwrap();
     let i = st.map_or(0, |x| 1 - x.2);
     let (pv, pe, first) = st.map_or((vp0, eye, 1.0f32), |x| (x.0, x.1, 0.0));
-    let mut tu = [0f32; 24]; tu[..16].copy_from_slice(&pv.to_cols_array()); tu[16..19].copy_from_slice(&pe.to_array()); tu[20] = first; tu[21] = res.0 as f32; tu[22] = res.1 as f32;
+    let mut tu = [0f32; 24]; tu[..16].copy_from_slice(&pv.to_cols_array()); tu[16..19].copy_from_slice(&pe.to_array()); tu[20] = first; tu[21] = res.0 as f32; tu[22] = res.1 as f32; tu[23] = std::env::var("VID_TAA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.25); tu[19] = std::env::var("VID_SHARP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.25);
     let ub = wgpu::util::DeviceExt::create_buffer_init(dev, &wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&tu), usage: wgpu::BufferUsages::UNIFORM });
     let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.taa_bgl, entries: &[B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 8, resource: ub.as_entire_binding() }, B { binding: 2, resource: R::TextureView(depth) }, B { binding: 4, resource: R::TextureView(lit) }, B { binding: 5, resource: R::TextureView(&p.taa_h[1 - i]) }, B { binding: 6, resource: R::TextureView(&p.taa_h[i]) }] });
     { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.taa); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups(res.0.div_ceil(8), res.1.div_ceil(8), 1); }

@@ -922,16 +922,13 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
     let is_mirror = rough < 0.001;
     // (metal shows nothing but its reflections: full mode gives it one more ray)
-    // (a video: paint and plaster reflect the room as a wide blur, which is the light the cache already gave. Rays are for what shows them)
-    let room_only = (u32(p.cam.w) & 64u) != 0u && textureLoad(g_mat, g, 0).x < 0.5 && rough > 0.35 && coat < 0.25;
-    if (room_only) { sp = e; }
     // (and what is rough enough reads the reflection cache, filled by the first frame: no rays, so no grain. hit_d < 0 tells the history. Only what the cache hasn't seen yet traces, and fills it)
     var turn = false;
-    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && !room_only && rough >= 0.15) {
+    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && rough >= 0.15) {
       let rc = lcv_read_p(pos, n, lcv_rpart(r0));
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }
-    let rays = select(select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, room_only), 0u, turn);
+    let rays = select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
     rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);

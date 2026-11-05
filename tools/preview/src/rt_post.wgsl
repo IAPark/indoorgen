@@ -236,6 +236,9 @@ fn taa_d(y: vec3<f32>) -> vec3<f32> {
   // (what has just come into view has no past)
   let dh = textureLoad(i_spec, clamp(vec2<i32>(u.xy * vec2<f32>(f32(w), f32(h))), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a;
   let expect = length(pos - tu.prev_eye.xyz);
-  let al = select(0.1, 0.5, abs(dh - expect) > 0.05 * expect + 0.03);
-  textureStore(o_irr, px, vec4<f32>(taa_d(mix(hy, taa_c(cur), al)), dist));
+  let al = select(tu.al.w, 0.5, abs(dh - expect) > 0.05 * expect + 0.03);
+  // (each frame's history is read off its pixels and softens a little: the new frame comes in a touch sharper, to make up for it)
+  var nb = vec3<f32>(0.0); for (var k = 0; k < 4; k++) { var o4 = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1)); nb += taa_c(textureLoad(i_irr, clamp(px + o4[k], vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb); }
+  let cy = taa_c(cur); let cs = cy + (cy - nb * 0.25) * tu.prev_eye.w;
+  textureStore(o_irr, px, vec4<f32>(taa_d(mix(hy, vec3<f32>(max(cs.x, 0.0), cs.y, cs.z), al)), dist));
 }
