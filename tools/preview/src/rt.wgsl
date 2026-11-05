@@ -408,8 +408,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
     let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     let f_ = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
-    lamp_share[li] = f_;
-    if (f_ > 0.0) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
+    lamp_share[li] = select(f_, 0.0, (u32(p.cam.w) & 32u) != 0u); // (a video: every lamp by the path's one ray, built up over frames. Rays for each lamp at each pixel were most of a frame)
+    if (f_ > 0.0 && (u32(p.cam.w) & 32u) == 0u) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
     li++; }
   // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
   var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
@@ -784,7 +784,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (at one sample a pixel that picture has jagged frames and a comb where wall texture beats with the pixels: a tent over the pixel takes them out, as the sub-pixels do for the room)
     if (is_mirror) {
       for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) {
-        sp += textureLoad(m_lit, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb * f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
+        sp += textureLoad(m_lit, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)) * vec2<i32>(textureDimensions(m_lit)) / vec2<i32>(w, h), 0).rgb * f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
       } }
     }
     for (var s = 0u; s < rays; s++) {

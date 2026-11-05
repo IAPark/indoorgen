@@ -104,3 +104,34 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   textureStore(o_irr, px, vec4<f32>(select(ee, av.rgb, lone), 0.0));
   textureStore(o_spec, px, vec4<f32>(sv, sc.a));
 }
+
+// ---- a video's light, built up over its frames
+struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32> };
+@group(0) @binding(8) var<uniform> tu: TU;
+@compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
+  let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let cur = textureLoad(i_irr, px, 0).rgb;
+  let g = px * ss + vec2<i32>(ss / 2);
+  let d = textureLoad(d_depth, g, 0);
+  if (d >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur, 0.0)); return; }
+  let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
+  let dist = length(pos - p.cam.xyz);
+  if (tu.al.x >= 1.0) { textureStore(o_irr, px, vec4<f32>(cur, dist)); return; }
+  let c = tu.prev_vp * vec4<f32>(pos, 1.0);
+  let uv = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+  if (c.w <= 0.0 || any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) { textureStore(o_irr, px, vec4<f32>(cur, dist)); return; }
+  // (from the same surface only: what the camera has just come round the corner of has no past)
+  let f = uv * vec2<f32>(f32(w), f32(h)) - 0.5; let b = floor(f); let t = f - b;
+  let expect = length(pos - tu.prev_eye.xyz);
+  var acc = vec3<f32>(0.0); var sum = 0.0;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+    let q = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1));
+    let hq = textureLoad(i_spec, q, 0);
+    if (abs(hq.a - expect) > 0.03 + 0.02 * expect) { continue; }
+    let wq = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1);
+    acc += hq.rgb * wq; sum += wq;
+  } }
+  if (sum < 0.2) { textureStore(o_irr, px, vec4<f32>(cur, dist)); return; }
+  textureStore(o_irr, px, vec4<f32>(mix(acc / sum, cur, tu.al.x), dist));
+}

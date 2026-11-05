@@ -7,6 +7,8 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static ON: AtomicBool = AtomicBool::new(false);
+/// a real bake, with its own light table: the light cache stays off
+pub static TABLE: AtomicBool = AtomicBool::new(false);
 pub fn on() -> bool { ON.load(Ordering::Relaxed) }
 /// the surface shader as this mode draws it: light is done elsewhere, so fs_main only fills the G-buffer. And a fragment shader for the depth prepass of what its texture cuts out
 pub fn shader(src: &str) -> String {
@@ -44,7 +46,9 @@ pub fn globals(s: &Scene, cam: &Cam, o: &Opts, aspect: f32, jitter: (f32, f32)) 
     (gl, vp, eye)
 }
 /// the opaque draws in a frustum, without draw_all's per-draw lookups
-pub fn draw_fast<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: &'a wgpu::RenderPipeline, list: &[u32]) -> u64 {
+pub fn draw_fast<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: &'a wgpu::RenderPipeline, list: &[u32]) -> u64 { draw_list(rp, s, base, list, true) }
+/// ids: pass each draw's number for the bake's cells. Traced pictures read that channel as material flags, and pass none
+pub fn draw_list<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: &'a wgpu::RenderPipeline, list: &[u32], ids: bool) -> u64 {
     let mut bound = None; let mut tris = 0u64;
     for &i in list {
         let d = &s.draws[i as usize];
@@ -55,7 +59,7 @@ pub fn draw_fast<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: &'a wgpu
         rp.set_bind_group(1, &s.mat_bgs[d.mat_bg], &[]);
         let isz = if d.u16 { 2 } else { 4 };
         rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
-        rp.draw_indexed(0..d.icount, 0, i..i + 1);
+        if ids { rp.draw_indexed(0..d.icount, 0, i..i + 1); } else { rp.draw_indexed(0..d.icount, 0, 0..1); }
         tris += d.icount as u64 / 3;
     }
     tris
@@ -376,6 +380,12 @@ fn make_pipes(r: &Renderer) -> Pipes {
     let tone = mk("bk_tone", &[(0, Uni), (15, Tex), (16, Out16), (17, Lut3), (18, Smp)]);
     let taa = mk("bk_taa", &[(0, Uni), (15, Tex), (16, Out16), (17, Filt), (18, Smp)]);
     let fin = mk("bk_final", &[(0, Uni), (15, Tex), (19, Out8)]);
+    let (z, zmask) = z_pipes(r);
+    Pipes { g0_bgl, validate, round, filter, lamps, mix, spec, specf, compose, tone, taa, fin, z, zmask }
+}
+/// the depth prepass: everything once, the surface shader then only for what shows
+pub fn z_pipes(r: &Renderer) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let dev = &r.gpu.dev;
     // the prepass
     let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader(SRC).replace("/*LIB*/", ig_shade::wgsl::LIB).replace("/*SURF*/", "").into()) });
     let vl = vbuf_layouts();
@@ -389,7 +399,7 @@ fn make_pipes(r: &Renderer) -> Pipes {
         vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_z"), compilation_options: Default::default(), buffers: &vl.iter().cloned().map(Some).collect::<Vec<_>>() },
         primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() }, depth_stencil: Some(ds), multisample: Default::default(),
         fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some("fs_z"), compilation_options: Default::default(), targets: &[] }), multiview_mask: None, cache: None });
-    Pipes { g0_bgl, validate, round, filter, lamps, mix, spec, specf, compose, tone, taa, fin, z, zmask }
+    (z, zmask)
 }
 fn tex(dev: &wgpu::Device, w: u32, h: u32, f: wgpu::TextureFormat, u: wgpu::TextureUsages) -> (wgpu::Texture, wgpu::TextureView) {
     let t = dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: f, usage: u, view_formats: &[] });
@@ -636,8 +646,9 @@ fn make_frame(r: &Renderer, s: &Scene, pp: &Pipes, bk: &Baked, res: (u32, u32), 
     Frame { gb, mirror, m_lit, m_tmp, ub_gm, ub_pm, ub_bm, g_bgm, g0m, b_cm, b_sm, b_fm, lit, disp, hist, specs, out, black, rb, bpr, res, ub_g, ub_p, ub_b, ub_b2, g_bg: g_bg_, g0, b_spec, b_f, b_compose, b_tone, b_taa, b_fin, order, doors: by.into_values().collect(), hidden: vec![false; s.draws.len()], cur: 0, n: 0, prev_vp: Mat4::IDENTITY, prev_eye: Vec3::ZERO, show }
 }
 fn halton(mut i: u32, b: u32) -> f32 { let (mut f, mut r) = (1.0, 0.0); while i > 0 { f /= b as f32; r += f * (i % b) as f32; i /= b; } r }
-fn z_pass<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, pp: &'a Pipes, list: &[u32]) {
-    rp.set_pipeline(&pp.z);
+fn z_pass<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, pp: &'a Pipes, list: &[u32]) { z_draw(rp, s, &pp.z, &pp.zmask, list); }
+pub fn z_draw<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, z: &'a wgpu::RenderPipeline, zmask: &'a wgpu::RenderPipeline, list: &[u32]) {
+    rp.set_pipeline(z);
     for &i in list.iter().filter(|&&i| !s.draws[i as usize].mask) { let d = &s.draws[i as usize];
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
         let isz = if d.u16 { 2 } else { 4 };
@@ -646,7 +657,7 @@ fn z_pass<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, pp: &'a Pipes, list: 
     }
     let mut set = false;
     for &i in list.iter().filter(|&&i| s.draws[i as usize].mask) { let d = &s.draws[i as usize];
-        if !set { rp.set_pipeline(&pp.zmask); set = true; }
+        if !set { rp.set_pipeline(zmask); set = true; }
         rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
         match d.nrm { Some(n) => rp.set_vertex_buffer(1, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 12)), None => rp.set_vertex_buffer(1, s.zeros.slice(0..d.vcount as u64 * 12)) }
         match d.uv { Some(n) => rp.set_vertex_buffer(2, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 8)), None => rp.set_vertex_buffer(2, s.zeros.slice(0..d.vcount as u64 * 8)) }
