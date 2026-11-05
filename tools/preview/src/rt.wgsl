@@ -713,9 +713,9 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   // the lamps that show most here, each with its shadow ray and its own Fresnel, at this very angle: the averaged share used for a whole room's light is far too little at a glancing one. Any roughness: on a rough dark surface this broad highlight is most of what it shows
   let mt_ = textureLoad(g_mat, g, 0).x; let alb_ = textureLoad(g_alb, g, 0).rgb; let coat_ = textureLoad(g_nrm, g, 0).a;
   let f0_ = mix(vec3<f32>(0.04), alb_, mt_);
-  var cs = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
-  var ls = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
-  var ms = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var ds = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var i = 0u;
+  var cs = array<vec3<f32>, 7>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+  var ls = array<vec3<f32>, 7>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+  var ms = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var ds = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var i = 0u;
   loop { if (i >= p.misc.z) { break; }
     let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), LAMP_R * LAMP_R); let dl = sqrt(r2); let l = v / dl; // (the lamp's own size as the limit: 20 cm dulled a highlight on anything nearer, inside a shade, a ceiling round a fitting)
     let ndl = dot(ns, l);
@@ -731,15 +731,20 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       let c = lights[i].col.xyz * PI / r2 * p.scale.x * ndl * min(dv, 200.0) * fh;
       let m_ = dot(c, vec3<f32>(0.333));
       // kept in order, the brightest first
-      var k = 3;
-      if (m_ > ms[3]) {
+      var k = 6;
+      if (m_ > ms[6]) {
         loop { if (k == 0 || m_ <= ms[k - 1]) { break; } ms[k] = ms[k - 1]; cs[k] = cs[k - 1]; ls[k] = ls[k - 1]; ds[k] = ds[k - 1]; k--; }
         ms[k] = m_; cs[k] = c; ls[k] = l; ds[k] = dl;
       }
     }
     i++; }
+  // (the brightest lamps, each faded out as it nears the first one left out: a hard cut at the Kth made a lamp's whole highlight start and stop along a ragged line wherever two lamps changed places. The fade is continuous, so nothing changes at a swap)
   var out = vec3<f32>(0.0);
-  for (var k = 0; k < 4; k++) { if (ds[k] > 0.0 && ms[k] > 0.002 && !occluded(o, ls[k], ds[k] - 0.02)) { out += cs[k]; } }
+  for (var k = 0; k < 6; k++) {
+    if (ds[k] <= 0.0 || ms[k] <= 0.002) { continue; }
+    let wk = clamp(2.0 * (1.0 - ms[6] / ms[k]), 0.0, 1.0);
+    if (wk > 0.0 && !occluded(o, ls[k], ds[k] - 0.02)) { out += cs[k] * wk; }
+  }
   return min(out, vec3<f32>(50.0));
 }
 @compute @workgroup_size(8, 8) fn trace_spec(@builtin(global_invocation_id) id: vec3<u32>) {
