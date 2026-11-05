@@ -11,7 +11,7 @@ pub struct Quality { pub spp: u32, pub bounces: u32, pub spec_spp: u32, pub deno
 impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
-            "fast" => Quality { spp: 1, bounces: 2, spec_spp: 1, denoise: 5, ss: 3 },
+            "fast" => Quality { spp: 1, bounces: 2, spec_spp: 1, denoise: 5, ss: 2 },
             "full" => Quality { spp: 3, bounces: 4, spec_spp: 3, denoise: 5, ss: 3 },
             _ => panic!("--rt fast|full"),
         }
@@ -213,25 +213,34 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
 }
 
 /// triangles with their draw's index
-pub fn build_scene(dev: &wgpu::Device, tris_in: &[([Vec3; 3], u32)], mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, verbose: bool) -> SceneData {
+pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, verbose: bool) -> SceneData {
     use obvhs::triangle::Triangle;
     let t0 = web_time::Instant::now();
     let tris_o: Vec<Triangle> = tris_in.iter().map(|(t, _)| Triangle { v0: t[0].into(), v1: t[1].into(), v2: t[2].into() }).collect();
     let mut core = std::time::Duration::ZERO;
     let mut params = if std::env::var_os("RT_BVH_FAST").is_some() { obvhs::BvhBuildParams::fast_build() } else { obvhs::BvhBuildParams::medium_build() };
     params.max_prims_per_leaf = 4;
+    crate::memlog("bvh start");
     let bvh = obvhs::bvh2::builder::build_bvh2_from_tris(&tris_o, params, &mut core);
+    crate::memlog("bvh built");
     let nodes: Vec<Node> = bvh.nodes.iter().map(|n| Node { lo: n.aabb.min.into(), a: n.first_index, hi: n.aabb.max.into(), b: n.prim_count }).collect();
+    drop(tris_o); // (the build's copies go as soon as they can: the peak is here, and a page's heap never shrinks)
     let tris: Vec<Tri> = bvh.primitive_indices.iter().map(|&i| {
         let (t, m) = &tris_in[i as usize];
         let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
         Tri { v0: t[0].into(), mat: *m, e1: e1.extend(mats[*m as usize].albedo[3]).into(), e2: e2.extend(0.0).into() } // (e1's w: 0 for a fitting, which shadow rays pass)
     }).collect();
-    if verbose { eprintln!("  rt bvh: {} tris, {} nodes, {:.2}s", tris.len(), nodes.len(), t0.elapsed().as_secs_f32()); }
+    let (nprims, nnodes) = (tris.len(), nodes.len());
+    drop(bvh); drop(tris_in);
+    if verbose { eprintln!("  rt bvh: {nprims} tris, {nnodes} nodes, {:.2}s", t0.elapsed().as_secs_f32()); }
     let sp = sky_params(seed);
     let (w, h) = (128u32, 64u32);
+    crate::memlog("tris made");
     let (table, sun, sun_e) = sky_table(&sp, w as usize, h as usize);
     if verbose { eprintln!("  sky {sp:?} sun {sun:?} e {sun_e:?}, {:.2}s total", t0.elapsed().as_secs_f32()); }
+    crate::memlog("sky made");
+    #[cfg(not(target_arch = "wasm32"))]
+    { extern "C" { fn mi_collect(force: bool); } unsafe { mi_collect(true); } }
     let buf = |b: &[u8]| dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: b, usage: wgpu::BufferUsages::STORAGE });
     let ld: Vec<LightD> = lights.iter().take(64).map(|(p, c)| LightD { pos: p.extend(1.0).into(), col: c.extend(1.0).into() }).collect();
     let ld2 = if ld.is_empty() { vec![LightD { pos: [0.0; 4], col: [0.0; 4] }] } else { ld.clone() };

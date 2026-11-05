@@ -271,6 +271,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     if (b + 1u == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
     e += tp * direct(q, ng) * more;
     o = q; n = ng;
+    // (Russian roulette: a path that has lost most of its light mostly ends here, and the ones that go on count for those that didn't. The same light on average, for fewer rays)
+    if (b >= 1u) { let q_ = clamp(max(tp.x, max(tp.y, tp.z)) * 1.5, 0.15, 1.0); if (rnd() > q_) { break; } tp /= q_; }
   }
   return e;
 }

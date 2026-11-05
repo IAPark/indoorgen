@@ -8,6 +8,10 @@ mod rt;
 mod vox;
 #[cfg(target_arch = "wasm32")]
 mod web;
+// (what is freed goes back to the system: the platform's allocator kept half a gigabyte of the BVH build's scratch on a large house)
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use glam::{Mat4, Vec3, Vec4, Vec2};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -27,6 +31,19 @@ struct Globals {
     sun_dir: [f32; 4], sun_col: [f32; 4], sky: [f32; 4], ground: [f32; 4], cam_pos: [f32; 4], cam_fwd: [f32; 4],
     params: [f32; 4], clip2: [f32; 4], clip: [f32; 4], params2: [f32; 4], lpos: [[f32; 4]; 32], lcol: [[f32; 4]; 32],
 }
+/// RT_PROF: this process's memory as macOS counts it, GPU memory included
+#[cfg(target_os = "macos")]
+pub fn memlog(tag: &str) {
+    if std::env::var_os("RT_PROF").is_none() { return }
+    extern "C" { fn proc_pid_rusage(pid: i32, flavor: i32, buf: *mut u8) -> i32; }
+    let mut b = [0u8; 512];
+    if unsafe { proc_pid_rusage(std::process::id() as i32, 4, b.as_mut_ptr()) } == 0 {
+        let u = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap()) as f64 / 1e6;
+        eprintln!("  mem {tag:18} now {:6.0} MB  peak {:6.0} MB", u(72), u(16 + 8 * 26));
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn memlog(_: &str) {}
 /// The index of refraction of a part's glass (0: none given).
 fn sn_ior(side: &serde_json::Value, sn: Option<&serde_json::Value>) -> f64 { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["ior"].as_f64()).unwrap_or(0.0) }
 /// Surface unevenness by family, from `_MICRO` in tools/render/render_rust.py: (noise scale, roughness variation, colour variation). One flat value over a whole door reads as CG
@@ -422,7 +439,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     let c = (sh_lo + sh_hi) * 0.5; let r = ((sh_hi - sh_lo) * 0.5).length();
     let sv = look_at_rh(c + sdir * r * 2.0, c, Vec3::Z);
     let sp = orthographic_rh(-r, r, -r, r, 0.0, r * 4.0);
-    let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: SHADOW, height: SHADOW, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
+    let shs = if opts.rt.is_some() && opts.bake.is_none() { 4 } else { SHADOW }; // (traced pictures don't use it, and it is tens of MB)
+    let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: shs, height: shs, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] });
     if opts.verbose { eprintln!("  scene on GPU {:.2}s ({} draws, {} lights, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), draws.len(), lights.len(), bmin, bmax); }
     Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, pipes, flat: false, lights, bmin, bmax, side, glb,
@@ -979,6 +997,7 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         let mut img = render(r, s, c, o, 1.0);
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
         if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
+        memlog("after first frame");
         // (RT_RAWDUMP=prefix: the linear picture and its albedo and normals, to try a denoiser on)
         if let Ok(pre) = std::env::var("RT_RAWDUMP") {
             let (dev, q) = (&r.gpu.dev, &r.gpu.q);
@@ -1128,11 +1147,18 @@ fn cut_plane(eye: Option<Vec3>, lo: &Vec3, hi: &Vec3) -> (f32, f32, f32, f32) {
     let (sx, sy) = (if e.x < c.x { 1.0 } else { -1.0 }, if e.y < c.y { 1.0 } else { -1.0 });
     (sx, if sx > 0.0 { lo.x } else { -hi.x }, sy, if sy > 0.0 { lo.y } else { -hi.y })
 }
+thread_local! { static DRAW_EYE: std::cell::Cell<Option<Vec3>> = std::cell::Cell::new(None); }
 fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wgpu::RenderPipeline>, glass: bool, shadow: bool, fr: Option<&[Vec4; 6]>, eye: Option<Vec3>, cut: Option<(Vec3, f32)>, only: Option<&(Vec3, Vec3, String, [[f32; 4]; 2])>) {
     let mut bound = None;
     // (the house's rooms, to tell what belongs to another one)
     let rooms: Vec<String> = if only.is_some() { s.glb.nodes.iter().filter(|n| n.name.ends_with(".floor")).map(|n| n.name.replace('/', "_").trim_end_matches(".floor").to_string()).collect() } else { vec![] };
-    for d in &s.draws {
+    // (nearest first: what lies behind then fails the depth test before its material runs, and materials are most of the cost of this pass)
+    let mut order: Vec<usize> = (0..s.draws.len()).collect();
+    if let (false, false, Some(e)) = (glass, shadow, DRAW_EYE.with(|c| c.get())) {
+        let dist: Vec<f32> = s.draws.iter().map(|d| (e.clamp(d.bmin, d.bmax) - e).length_squared()).collect();
+        order.sort_by(|&a, &b| dist[a].partial_cmp(&dist[b]).unwrap());
+    }
+    for d in order.iter().map(|&i| &s.draws[i]) {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
         if leaf_in_the_way(s, d, eye, cut) { continue; }
         // (PREVIEW_HIDE=a,b: parts not drawn, to see which one a fault is in)
@@ -1178,6 +1204,7 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
 }
 /// everything up to the picture in its read-back buffer, sent to the GPU
 fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) {
+    DRAW_EYE.with(|c| c.set(None));
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let aspect = o.res.0 as f32 / o.res.1 as f32;
     // clip range: 0.05-200 m for a house; outdoor scenes (terrain to a few km) push the far plane out and the near plane to 0.1 m
@@ -1210,7 +1237,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     q.write_buffer(&r.ubuf, 0, bytemuck::bytes_of(&gl));
     let sh_bg = |l: &wgpu::BindGroupLayout| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: l, entries: &[wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() }] });
     let mut enc = dev.create_command_encoder(&Default::default());
-    if !s.shadow_done {
+    if !s.shadow_done && rt_q.is_none() {
         // sun_vp is camera independent: render the shadow map once per scene (needs its own uniform since ubuf holds the camera)
         let sl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
@@ -1239,6 +1266,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.mat, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
+        DRAW_EYE.with(|c| c.set(Some(eye)));
         rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
         if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
@@ -1286,7 +1314,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
                 rp.set_scissor_rect(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32);
                 rp.set_bind_group(0, &bg, &[]);
                 let frm = frustum(vpm);
-                rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&frm), None, None, None);
+                rp.set_pipeline(&r.main_pipe); DRAW_EYE.with(|c| c.set(Some(eye_m))); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&frm), None, None, None);
             }
             let qm = rt::Quality { spp: 3, bounces: 2, spec_spp: 1, denoise: 5, ss: 1 };
             rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, o.res, 1, qm, vpm, eye_m, 1, [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
@@ -1323,7 +1351,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     }
     enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &tg.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.bpr), rows_per_image: Some(o.res.1) } }, wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 });
-    if true {
+    if rt_q.is_none() {
         enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.depth_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::DepthOnly },
             wgpu::TexelCopyBufferInfo { buffer: &tg.dbuf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.dbpr), rows_per_image: Some(tg.h) } }, wgpu::Extent3d { width: tg.w, height: tg.h, depth_or_array_layers: 1 });
     }
@@ -1331,7 +1359,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
 }
 fn render_finish(r: &mut Renderer, cam: &Cam, s: &Scene, o: &Opts) -> image::RgbaImage {
     let (tg, dev) = (&r.tg, &r.gpu.dev);
-    if true {
+    if !r.rt_now || o.rt.is_none() {
         let ds = tg.dbuf.slice(..); ds.map_async(wgpu::MapMode::Read, |_| {});
         dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let data = ds.get_mapped_range().unwrap();
@@ -1568,7 +1596,9 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss)); }
     if s.rt.is_some() { return }
     let t = Instant::now();
+    memlog("before probe");
     let mut mats = probe_albedos(r, s, o).await;
+    memlog("after probe");
     if o.verbose { eprintln!("  albedo probe {:.2}s", t.elapsed().as_secs_f32()); }
     // what light passes: glass, and the fittings around the lamps (a lamp shut in its own housing lit nothing)
     // (Blender's own rule, in render_rust.py: by the part, not by its material. A table lamp's shade and stand cast shadows there, and here the light went through them)
@@ -1608,7 +1638,9 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
         wins.push(rt::Win { c: c.extend(4.0 * u.length() * v.length()).into(), u: u.extend(0.0).into(), v: v.extend(0.0).into(), n: n.extend(0.0).into() });
     }
     if o.verbose { eprintln!("  {} windows", wins.len()); }
-    s.rt = Some(rt::build_scene(&r.gpu.dev, &tris, &mats, &lights, &wins, o.seed, o.verbose));
+    memlog("before bvh");
+    s.rt = Some(rt::build_scene(&r.gpu.dev, tris, &mats, &lights, &wins, o.seed, o.verbose));
+    memlog("after bvh");
     if o.verbose { eprintln!("  rt scene ready {:.2}s", t.elapsed().as_secs_f32()); }
 }
 
