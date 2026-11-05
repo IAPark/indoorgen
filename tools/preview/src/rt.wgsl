@@ -670,7 +670,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     let r0 = reflect(v, n);
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
     let is_mirror = rough < 0.001;
-    let rays = select(p.misc2.y, 0u, is_mirror);
+    // (metal shows nothing but its reflections: full mode gives it one more ray)
+    let rays = select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
     rs_s.m = f32(rays);
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
