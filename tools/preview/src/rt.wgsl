@@ -488,7 +488,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       if ((u32(p.cam.w) & 2u) != 0u) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); }
       textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, 0.0)); return;
     }
-    spp = 4u;
+    spp = 2u;
   }
   var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
@@ -849,7 +849,13 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
     let is_mirror = rough < 0.001;
     // (metal shows nothing but its reflections: full mode gives it one more ray)
-    let rays = select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror);
+    // (a video: paint and plaster reflect the room as a wide blur, which is the light the cache already gave. Rays are for what shows them)
+    let room_only = (u32(p.cam.w) & 64u) != 0u && textureLoad(g_mat, g, 0).x < 0.5 && rough > 0.35 && coat < 0.25;
+    if (room_only) { sp = e; }
+    // (and what has a settled history traces every other frame: history carries the one between, with no pattern in the picture. Half the pixels by turns left a fridge in grain. hit_d < 0 tells the history)
+    let turn = (u32(p.cam.w) & 64u) != 0u && !is_mirror && !room_only && (p.misc.y & 1u) == 1u && textureLoad(hist_n, px, 0).r >= 8.0;
+    if (turn) { hit_d = -1.0; }
+    let rays = select(select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, room_only), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
     rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);

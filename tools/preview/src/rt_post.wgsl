@@ -122,8 +122,20 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
-  let cur4 = textureLoad(i_irr, px, 0); let cur = cur4.rgb;
+  var cur4 = textureLoad(i_irr, px, 0);
   let refl = tu.al.w > 0.5;
+  // (a pixel whose turn it wasn't: its neighbours', who traced this frame, on the same material)
+  if (refl && textureLoad(t_hit, px, 0).a < 0.0) {
+    var nb = vec3<f32>(0.0); var nw = 0.0;
+    for (var k = 0; k < 4; k++) {
+      var o4 = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1));
+      let q = px + o4[k]; if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+      let t4 = textureLoad(i_irr, q, 0);
+      if (abs(t4.a - cur4.a) < 0.05 && textureLoad(t_hit, q, 0).a >= 0.0) { nb += t4.rgb; nw += 1.0; }
+    }
+    if (nw > 0.0) { cur4 = vec4<f32>(nb / nw, cur4.a); }
+  }
+  let cur = cur4.rgb;
   let g = px * ss + vec2<i32>(ss / 2);
   let d = textureLoad(d_depth, g, 0);
   if (d >= 1.0) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(0.0)); return; }
@@ -154,7 +166,7 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   // (a reflection moves as what it shows does, behind the surface: as far back as the rays went. A rough one is a wide blur, and stays nearer the surface)
   if (refl) {
     let k = 1.0 - smoothstep(0.1, 0.5, cur4.a);
-    let vu = prev_uv(pos + normalize(pos - p.cam.xyz) * textureLoad(t_hit, px, 0).a * k);
+    let vu = prev_uv(pos + normalize(pos - p.cam.xyz) * max(textureLoad(t_hit, px, 0).a, 0.0) * k);
     if (vu.z > 0.0 && all(vu.xy >= vec2<f32>(0.0)) && all(vu.xy < vec2<f32>(1.0))) {
       let f2 = vu.xy * hdf - 0.5; let b2 = floor(f2); let t2 = f2 - b2; var a2 = vec3<f32>(0.0); var w2_ = 0.0;
       // (only where that lands on this same surface: a white door frame's history bled onto the wall beside it, in a halo)
@@ -169,13 +181,14 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   }
   // (the longer a surface has been seen the less each frame counts, down to a floor: new ones clean up at once)
   // (a noisy sample would stay in the picture at the floor. What the cache answered has no noise, and the first frame's detail stays as long as it can)
-  let al = max(1.0 / (nn + 1.0), select(select(0.05, 0.0, cur4.a <= 0.0), 0.05, refl));
+  let idle = refl && textureLoad(t_hit, px, 0).a < 0.0;
+  let al = select(max(1.0 / (nn + 1.0), select(select(0.05, 0.0, cur4.a <= 0.0), 0.05, refl)), 0.0, idle);
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
   let cap = lh * 8.0 + 0.1;
   let cur_c = cur * min(1.0, cap / max(lc, 1e-5));
   textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), cur4.a));
-  textureStore(o_n, px, vec4<f32>(min(nn + 1.0, 64.0), dist, n0.x, n0.y));
+  textureStore(o_n, px, vec4<f32>(select(min(nn + 1.0, 64.0), nn, idle), dist, n0.x, n0.y));
 }
 
 // ---- a video's picture over frames: its edges, by the shifted camera. What was there kept only as far as it fits what is around this pixel now, or what moved would trail
