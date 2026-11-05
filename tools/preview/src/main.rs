@@ -962,14 +962,15 @@ fn vbuf_layouts() -> [wgpu::VertexBufferLayout<'static>; 3] {
      wgpu::VertexBufferLayout { array_stride: 12, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![1 => Float32x3] },
      wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![2 => Float32x2] }]
 }
-fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets {
-    let (w, h) = (o.res.0 * o.ss, o.res.1 * o.ss);
+fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets { targets_at(dev, o, o.ss) }
+fn targets_at(dev: &wgpu::Device, o: &Opts, ss: u32) -> Targets {
+    let (w, h) = (o.res.0 * ss, o.res.1 * ss);
     let mk = |fmt, usage| dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: fmt, usage, view_formats: &[] });
     let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
     let hdr = mk(wgpu::TextureFormat::Rgba16Float, rt).create_view(&Default::default());
     let alb = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::COPY_SRC).create_view(&Default::default());
     let mat = mk(wgpu::TextureFormat::Rgba16Float, rt).create_view(&Default::default());
-    let lit = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC).create_view(&Default::default());
+    let lit = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST).create_view(&Default::default());
     let nrm = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::COPY_SRC).create_view(&Default::default());
     let depth_tex = mk(wgpu::TextureFormat::Depth32Float, rt | wgpu::TextureUsages::COPY_SRC);
     let depth = depth_tex.create_view(&Default::default());
@@ -1206,6 +1207,11 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
 /// everything up to the picture in its read-back buffer, sent to the GPU
 fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) {
     DRAW_EYE.with(|c| c.set(None));
+    // (a video: the first frame is a fast picture on finer surfaces; after it the frames build their edges up by a camera that shifts a little each time)
+    let vid_later = r.rt_now && o.rt.map_or(false, |q| q.video) && s.rt.as_ref().map_or(false, |sd| sd.hist_st.lock().unwrap().is_some());
+    let new_tg = vid_later && r.tg.w != o.res.0; // (new surfaces hold no mirror pictures yet)
+    if new_tg { r.tg = targets_at(&r.gpu.dev, o, 1); }
+    let ss_now = if vid_later { 1 } else { o.ss };
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let aspect = o.res.0 as f32 / o.res.1 as f32;
     // clip range: 0.05-200 m for a house; outdoor scenes (terrain to a few km) push the far plane out and the near plane to 0.1 m
@@ -1213,14 +1219,15 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     let zn = cam.near.unwrap_or(zn);
     let proj = match cam.ortho { Some(w) => orthographic_rh(-w / 2.0, w / 2.0, -w / aspect / 2.0, w / aspect / 2.0, zn, zf),
         None => perspective_rh(2.0 * ((cam.fov_x / 2.0).tan() / aspect).atan(), aspect, zn, zf) };
-    let view = cam.view.inverse(); let vp = proj * view; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
+    let view = cam.view.inverse(); let vp0 = proj * view;
+    let vp = if vid_later { let (jx, jy) = rt::jitter(o.res); Mat4::from_translation(Vec3::new(jx, jy, 0.0)) * vp0 } else { vp0 }; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
     let (sun_az, sun_el, sun_i, ambient) = s.lit.map_or((o.sun.0, o.sun.1, o.sun_i, o.ambient), |l| (l.0, l.1, l.2, l.3));
     let (az, el) = (sun_az.to_radians(), sun_el.to_radians());
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
         sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.72 * ambient, 0.75 * ambient, 0.8 * ambient, 0.0], ground: [0.58 * ambient, 0.55 * ambient, 0.5 * ambient, 0.0],
-        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, 0.0],
+        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, ss_now as f32, 1.0, 0.0],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }
     let rt_q = if r.rt_now { o.rt } else { None };
@@ -1285,7 +1292,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
     // (a video redraws its mirrors' pictures every third frame: from one frame to the next they hardly move, and each costs a small trace)
-    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && rt::this_frame() % 3 != 1 { None } else { rt_q };
+    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && !new_tg && rt::this_frame() % 3 != 1 { None } else { rt_q };
     if let (Some(_), Some(p), Some(sd)) = (panes_q, r.rt.as_ref(), s.rt.as_ref()) {
         // what each mirror in view shows: the scene traced from the camera mirrored in it, what lies behind the glass cut away, only over the mirror's own part of the picture. Each is finished before the main picture needs it
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
@@ -1365,7 +1372,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).1 }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
+        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); if q2.video { 2 } else { o.ss } }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
         // the glass, forward, over the traced picture
         let mk = |v: &'_ wgpu::TextureView| v.clone();
         let (l, n, a, m) = (mk(&tg.lit), mk(&tg.nrm), mk(&tg.alb), mk(&tg.mat));
@@ -1375,6 +1382,9 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
         rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+    }
+    if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
+        if qu.video { rt::taa(dev, &mut enc, p, sd, &tg.lit, &tg.depth, vp0, eye, o.res); }
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&r.agx) }, wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&r.agx_smp) },
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },

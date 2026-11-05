@@ -171,3 +171,55 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), cur4.a));
   textureStore(o_n, px, vec4<f32>(min(nn + 1.0, 64.0), dist, 0.0, 0.0));
 }
+
+// ---- a video's picture over frames: its edges, by the shifted camera. What was there kept only as far as it fits what is around this pixel now, or what moved would trail
+fn taa_c(c: vec3<f32>) -> vec3<f32> { // (compressed, in luma and chroma: a bright window's edge would otherwise win every pixel it touches)
+  let l = c / (1.0 + dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)));
+  return vec3<f32>(dot(l, vec3<f32>(0.25, 0.5, 0.25)), dot(l, vec3<f32>(0.5, 0.0, -0.5)), dot(l, vec3<f32>(-0.25, 0.5, -0.25)));
+}
+fn taa_d(y: vec3<f32>) -> vec3<f32> {
+  let c = vec3<f32>(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z);
+  return c / max(1.0 - dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-3);
+}
+@compute @workgroup_size(8, 8) fn taa(@builtin(global_invocation_id) id: vec3<u32>) {
+  let w = i32(tu.al.y); let h = i32(tu.al.z); let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let sc = i32(textureDimensions(i_irr).x) / w;
+  let dims = vec2<f32>(f32(w * sc), f32(h * sc));
+  let g = px * sc + vec2<i32>(sc / 2);
+  let d = textureLoad(d_depth, g, 0);
+  let pos = select(world_of(g, d, dims, p.inv_vp), p.cam.xyz + normalize(world_of(g, 0.9999, dims, p.inv_vp) - p.cam.xyz) * 1000.0, d >= 1.0);
+  let dist = length(pos - p.cam.xyz);
+  if (tu.al.x >= 1.0) {
+    var a = vec3<f32>(0.0);
+    for (var j = 0; j < sc; j++) { for (var i = 0; i < sc; i++) { a += textureLoad(i_irr, px * sc + vec2<i32>(i, j), 0).rgb; } }
+    textureStore(o_irr, px, vec4<f32>(a / f32(sc * sc), dist)); return;
+  }
+  let cur = textureLoad(i_irr, px, 0).rgb;
+  let u = prev_uv(pos);
+  if (u.z <= 0.0 || any(u.xy < vec2<f32>(0.0)) || any(u.xy >= vec2<f32>(1.0))) { textureStore(o_irr, px, vec4<f32>(cur, dist)); return; }
+  var m1 = vec3<f32>(0.0); var m2 = vec3<f32>(0.0);
+  for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) {
+    let t = taa_c(textureLoad(i_irr, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb);
+    m1 += t; m2 += t * t;
+  } }
+  m1 /= 9.0; m2 /= 9.0;
+  let sg = sqrt(max(m2 - m1 * m1, vec3<f32>(0.0))) * 1.25;
+  // (a sharper reading of the history than four pixels' average, which would blur a little more every frame)
+  let f = u.xy * vec2<f32>(f32(w), f32(h)) - 0.5; let b = floor(f); let t = f - b;
+  let w0 = t * (-0.5 + t * (1.0 - 0.5 * t)); let w1 = 1.0 + t * t * (-2.5 + 1.5 * t); let w2 = t * (0.5 + t * (2.0 - 1.5 * t)); let w3 = t * t * (-0.5 + 0.5 * t);
+  var hc = vec3<f32>(0.0); var hw = 0.0;
+  for (var j = 0; j < 4; j++) { for (var i = 0; i < 4; i++) {
+    let q = clamp(vec2<i32>(b) + vec2<i32>(i - 1, j - 1), vec2<i32>(0), vec2<i32>(w - 1, h - 1));
+    var wa = array<f32, 4>(w0.x, w1.x, w2.x, w3.x); var wb = array<f32, 4>(w0.y, w1.y, w2.y, w3.y);
+    let wx = wa[i]; let wy = wb[j];
+    hc += textureLoad(i_spec, q, 0).rgb * wx * wy; hw += wx * wy;
+  } }
+  hc = max(hc / max(hw, 1e-3), vec3<f32>(0.0));
+  let hy = clamp(taa_c(hc), m1 - sg, m1 + sg);
+  // (what has just come into view has no past)
+  let dh = textureLoad(i_spec, clamp(vec2<i32>(u.xy * vec2<f32>(f32(w), f32(h))), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a;
+  let expect = length(pos - tu.prev_eye.xyz);
+  let al = select(0.1, 0.5, abs(dh - expect) > 0.05 * expect + 0.03);
+  textureStore(o_irr, px, vec4<f32>(taa_d(mix(hy, taa_c(cur), al)), dist));
+}
