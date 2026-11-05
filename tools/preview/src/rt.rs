@@ -47,9 +47,6 @@ pub fn taa(dev: &wgpu::Device, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &S
 }
 static FRAME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 /// a video's frames each take fresh rays, or their noise never averages out; a still's are the same each time
-/// a video's budget: 80 frames in 10 s. Over it, what comes into view gathers with fewer rays until the frames catch up
-static LEAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-pub fn frame_took(secs: f32) { use std::sync::atomic::Ordering::Relaxed; if secs > 0.105 { LEAN.store(true, Relaxed); } else if secs < 0.085 { LEAN.store(false, Relaxed); } }
 pub fn this_frame() -> u32 { FRAME.load(std::sync::atomic::Ordering::Relaxed) }
 pub fn next_frame(video: bool) -> u32 { if video { FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) } else { 1 } }
 
@@ -344,7 +341,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     let use_restir = (ss > 1 || qu.video) && (qu.spp == 1 || std::env::var_os("RT_RESTIR").is_some()) && std::env::var_os("RT_NO_RESTIR").is_none();
     let use_lc = (ss > 1 || qu.video) && sd.lc_n > 0;
     let use_rs_spec = (ss > 1 || qu.video) && std::env::var_os("RT_NO_RESTIR_SPEC").is_none();
-    let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0 + if use_restir { 2.0 } else { 0.0 } + if use_rs_spec { 4.0 } else { 0.0 } + if use_lc { 8.0 } else { 0.0 } + if qu.video { 32.0 } else { 0.0 } + if qu.video && qu.hist { 64.0 } else { 0.0 } + if qu.video && qu.hist && LEAN.load(std::sync::atomic::Ordering::Relaxed) { 512.0 } else { 0.0 } + if std::env::var_os("VID_NOGUIDE").is_some() { 256.0 } else { 0.0 }).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
+    let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0 + if use_restir { 2.0 } else { 0.0 } + if use_rs_spec { 4.0 } else { 0.0 } + if use_lc { 8.0 } else { 0.0 } + if qu.video { 32.0 } else { 0.0 } + if qu.video && qu.hist { 64.0 } else { 0.0 } + if std::env::var_os("VID_NOGUIDE").is_some() { 256.0 } else { 0.0 }).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
         dims: [res.0, res.1, ss, qu.spp], misc: [qu.bounces, frame, sd.nlights, sd.sky_wh.0], misc2: [sd.sky_wh.1, qu.spec_spp, sd.nwins, match std::env::var("RT_SHOW").as_deref() { Ok("albedo") => 2, Ok("sun") => 5, Ok("normal") => 6, Ok("flags") => 7, Ok("noglint") => 8, Ok("sheer") => 9, Ok("light") => 3, Ok("spec") => 4, _ => cutaway as u32 }], scale: [scales[0], sd.skyp.strength * scales[1], scales[2], sd.skyp.sun_size * 0.5] };
     q.write_buffer(&p.ubuf, 0, bytemuck::bytes_of(&pr));
     use wgpu::{BindGroupEntry as B, BindingResource as R};
@@ -400,7 +397,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     // what this trace's paths left in the cache, for the reflections next and later frames
     if use_lc {
         let tg = trace_bg(&p.irr[1], &p.spec[1], &p.irr[0], &p.lamp[1], &p.lamp[0]);
-        if qu.video && qu.hist && hist_prev.is_some() && !LEAN.load(std::sync::atomic::Ordering::Relaxed) && std::env::var_os("VID_NOFILL").is_none() { // (over budget: what is there will do)
+        if qu.video && qu.hist && hist_prev.is_some() && std::env::var_os("VID_NOFILL").is_none() { // (over budget: what is there will do)
             let n = std::env::var("VID_FILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(16384);
             let g = ((n as f32).sqrt() as u32).div_ceil(8);
             { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_fill); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(g, g, 1); }

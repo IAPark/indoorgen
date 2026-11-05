@@ -1002,7 +1002,6 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
             if let Some(x) = *VIDEO_XP.lock().unwrap() {
                 let img = render(r, s, c, o, x);
                 r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
-                rt::frame_took(t.elapsed().as_secs_f32());
                 if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
                 return img;
             }

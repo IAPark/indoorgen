@@ -505,7 +505,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var vid_read = false; var vcr = vec4<f32>(0.0); var lamp_keep = false;
   if (lcv_v) {
     let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
-    lamp_keep = settled && (((u32(px.x) >> 3u) + (u32(px.y) >> 3u) * 3u + p.misc.y) & select(3u, 7u, (u32(p.cam.w) & 512u) != 0u)) != 0u; // (settled: each 8x8 block of pixels every fourth frame is often enough. Whole blocks, as the GPU runs them: a block with one pixel tracing costs as if all did)
+    lamp_keep = settled && (((u32(px.x) >> 3u) + (u32(px.y) >> 3u) * 3u + p.misc.y) & 3u) != 0u; // (settled: each 8x8 block of pixels every fourth frame is often enough. Whole blocks, as the GPU runs them: a block with one pixel tracing costs as if all did)
     vcr = lcv_read(pos, n);
     vid_read = settled || (vcr.w >= 0.7 && ((u32(p.cam.w) & 64u) == 0u || hist_around(pos, w, h)));
   }
@@ -558,7 +558,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       textureStore(out_irr, px, vec4<f32>(vcr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
     }
     // (new to the picture: a final gather. A few rays from here, each ending in a cell where it lands, so no one cell can show as a patch)
-    spp = select(3u, 1u, (u32(p.cam.w) & 512u) != 0u); // (1: over budget. These rays are most of a slow room's trace, and the frames after it average them)
+    spp = 3u;
   }
   var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
@@ -931,9 +931,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (metal shows nothing but its reflections: full mode gives it one more ray)
     // (and what is rough enough reads the reflection cache, filled by the first frame: no rays, so no grain. hit_d < 0 tells the history. Only what the cache hasn't seen yet traces, and fills it)
     var turn = false;
-    // (over budget, sharper surfaces read it too)
     // (not on what is curved or thin, nor on smooth metal: a cell's blur is all you would see, and a faucet or a sink's rim went flat)
-    let m_lo = select(0.35, 0.15, (u32(p.cam.w) & 512u) != 0u); // (faded per pixel: a sharp limit drew the roughness map's contours across a sink)
+    let m_lo = 0.35; // (faded per pixel: a sharp limit drew the roughness map's contours across a sink)
     let is_m = textureLoad(g_mat, g, 0).x >= 0.5;
     var flat_ = true;
     if (is_m) { for (var k = 0; k < 4; k++) {
@@ -942,7 +941,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       let nq = textureLoad(g_nrm, gq, 0).xyz; if (dot(nq, nq) < 0.25 || dot(normalize(nq), n) < 0.985) { flat_ = false; }
     } }
     let m_ok = !is_m || (u32(p.cam.w) & 64u) == 0u || rnd() < smoothstep(m_lo, m_lo + 0.2, rough); // (no draw unless it will be used: a still's noise stays as it was)
-    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= select(0.15, 0.04, (u32(p.cam.w) & 512u) != 0u)) {
+    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= 0.15) {
       let rc = lcv_read_p(pos, n, lcv_rpart(r0));
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }
