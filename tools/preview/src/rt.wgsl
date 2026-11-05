@@ -40,6 +40,39 @@ struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 // ReSTIR GI, within one frame: each pixel keeps one of its first bounces, chosen by how much light it brought (Ouyang et al. 2021)
 struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp: f32 };
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
+// the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves: what a path gathers after its first hit, over what reached that hit, is a sample of this with the right number of bounces
+struct LC { pos: vec3<f32>, key: u32, nrm: vec4<f32> };
+@group(0) @binding(19) var<storage, read> lc_cells: array<LC>;
+@group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
+@group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
+const LC_SIZE = 0.2; const LC_MASK = 1048575u;
+fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
+  let c = vec3<i32>(floor(q / LC_SIZE)); let an = abs(ng);
+  var side = 2u; if (an.x >= an.y && an.x >= an.z) { side = 0u; } else if (an.y >= an.z) { side = 1u; }
+  side = side * 2u + select(0u, 1u, ng[side] < 0.0);
+  var h = u32(c.x) * 73856093u ^ u32(c.y) * 19349663u ^ u32(c.z) * 83492791u ^ part * 2654435761u ^ side * 3266489917u;
+  h ^= h >> 15u; h *= 2246822519u; h ^= h >> 13u;
+  return max(h, 1u);
+}
+// the slot of a cell, or the table's size if there is none
+fn lc_find(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
+  let k = lc_key(q, ng, part);
+  for (var i = 0u; i < 8u; i++) {
+    let sl = (k + i) & LC_MASK; let ck = lc_cells[sl].key;
+    if (ck == k) { return sl; } if (ck == 0u) { break; }
+  }
+  return LC_MASK + 1u;
+}
+// a place near the point, on its surface: read point by point the cells would show as blocks, and the filter takes this noise out
+fn lc_jit(q: vec3<f32>, ng: vec3<f32>) -> vec3<f32> { let b = basis(ng); return q + (b[0] * (rnd() - 0.5) + b[1] * (rnd() - 0.5)) * LC_SIZE; }
+fn lc_on() -> bool { return (u32(p.cam.w) & 8u) != 0u; }
+// what the paths brought so far, as an average: each cell counts as filled from LC_MIN paths
+const LC_MIN = 8.0; const LC_FIX = 1024.0;
+@compute @workgroup_size(64) fn lc_resolve(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = id.x; if (i > LC_MASK) { return; }
+  let n = atomicLoad(&lc_acc[i][3]); if (n == 0u) { return; }
+  lc_out[i] = vec4<f32>(f32(atomicLoad(&lc_acc[i][0])), f32(atomicLoad(&lc_acc[i][1])), f32(atomicLoad(&lc_acc[i][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
+}
 var<private> g1_pos = vec3<f32>(0.0); var<private> g1_nrm = vec3<f32>(0.0);
 
 fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
@@ -263,6 +296,7 @@ fn direct(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var o = o0; var n = n0; var tp = vec3<f32>(1.0); var e = vec3<f32>(0.0);
   let bounces = p.misc.x;
+  var lc_slot = LC_MASK + 1u; var e1_ = vec3<f32>(0.0); var t1_ = vec3<f32>(0.0);
   // (the first of these is the first bounce: Blender's limit of 4 is 4 of them. One more ran every room's light a tenth high)
   for (var b = 0u; b < bounces; b++) {
     let d = cosine(n);
@@ -280,10 +314,20 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (the last hit stands in for the bounces left out, up to the four Blender follows: each about as lit as this one, and dimmer by its colour. Stopped short, a sunlit room with few lamps lost a tenth of its light)
     var more = 1.0;
     if (b + 1u == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
+    // (from the first hit: the cache where it has the light, or the path goes on, and leaves what it finds there)
+    if (lc_on() && b == 0u) {
+      lc_slot = lc_find(lc_jit(q, ng), ng, t.mat); if (lc_slot > LC_MASK) { lc_slot = lc_find(q, ng, t.mat); }
+      if (lc_slot <= LC_MASK && lc_out[lc_slot].w >= LC_MIN) { e += tp * (direct(q, ng) + lc_out[lc_slot].xyz); return e; }
+    }
     e += tp * direct(q, ng) * more;
     o = q; n = ng;
+    if (b == 0u) { e1_ = e; t1_ = tp; }
     // (Russian roulette: a path that has lost most of its light mostly ends here, and the ones that go on count for those that didn't. The same light on average, for fewer rays)
     if (b >= 1u) { let q_ = clamp(max(tp.x, max(tp.y, tp.z)) * 1.5, 0.15, 1.0); if (rnd() > q_) { break; } tp /= q_; }
+  }
+  if (lc_slot <= LC_MASK && max(t1_.x, max(t1_.y, t1_.z)) > 0.001) {
+    let c = clamp((e - e1_) / max(t1_, vec3<f32>(0.001)), vec3<f32>(0.0), vec3<f32>(64.0)) * LC_FIX;
+    atomicAdd(&lc_acc[lc_slot][0], u32(c.x)); atomicAdd(&lc_acc[lc_slot][1], u32(c.y)); atomicAdd(&lc_acc[lc_slot][2], u32(c.z)); atomicAdd(&lc_acc[lc_slot][3], 1u);
   }
   return e;
 }
@@ -746,7 +790,10 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
           // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
           let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
           var eh = lamp(q, ng) + portal(q, ng);
-          if (on_metal) { eh += gather(q, ng); } // (a real branch: select() runs both sides)
+          if (on_metal) {
+            var sl = LC_MASK + 1u; if (lc_on()) { sl = lc_find(lc_jit(q, ng), ng, t.mat); if (sl > LC_MASK) { sl = lc_find(q, ng, t.mat); } }
+            if (sl <= LC_MASK && lc_out[sl].w >= LC_MIN) { eh += lc_out[sl].xyz; } else { eh += gather(q, ng); } // (a real branch: select() runs both sides)
+          }
           e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
         }
         let lh_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
