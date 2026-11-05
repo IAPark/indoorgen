@@ -374,7 +374,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                         u.obj = pm.inverse().to_cols_array_2d();
                     }
                 }
-                if let (Some((sc, rv, av)), true) = (fam, graph.map_or(true, |e| e.params.len() <= 46 * 4)) { u.p[46][3] = sc; u.p[46][2] = rv; if graph.map_or(true, |e| e.params.len() <= 45 * 4 + 1) { u.p[46][1] = av; } }
+                if let (Some((sc, rv, av)), true) = (fam, graph.map_or(true, |e| e.params.len() <= 46 * 4)) { u.p[46][3] = sc; u.p[46][2] = rv; if sc == 22.0 { u.p[46][0] = 0.75; } // (paint and plaster are matte, as render_rust.py makes them)
+                    if graph.map_or(true, |e| e.params.len() <= 45 * 4 + 1) { u.p[46][1] = av; } }
                 let ub = gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
                 let tv = tex_views.get(&tex).unwrap_or(white);
                 mat_bgs.push(gpu.dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: mat_bgl, entries: &[

@@ -272,6 +272,7 @@ fn learned_filter(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEn
 }
 
 pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, gb: &Gb, res: (u32, u32), ss: u32, qu: Quality, vp: Mat4, eye: Vec3, frame: u32, scales: [f32; 3], cutaway: bool) {
+    let mut qu = qu; if ss > 1 { if let Some(n) = std::env::var("RT_SPP").ok().and_then(|v| v.parse().ok()) { qu.spp = n; } }
     let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
         dims: [res.0, res.1, ss, qu.spp], misc: [qu.bounces, frame, sd.nlights, sd.sky_wh.0], misc2: [sd.sky_wh.1, qu.spec_spp, sd.nwins, match std::env::var("RT_SHOW").as_deref() { Ok("albedo") => 2, Ok("sun") => 5, Ok("normal") => 6, Ok("flags") => 7, Ok("noglint") => 8, Ok("sheer") => 9, Ok("light") => 3, Ok("spec") => 4, _ => cutaway as u32 }], scale: [scales[0], sd.skyp.strength * scales[1], scales[2], sd.skyp.sun_size * 0.5] };
     q.write_buffer(&p.ubuf, 0, bytemuck::bytes_of(&pr));
@@ -304,14 +305,14 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     let mut cur = 0usize;
     // the light's filter: the learned one where there is one (not for a mirror's small picture), or the a-trous rounds
     #[cfg(not(target_arch = "wasm32"))]
-    let learned = ss > 1 && qu.denoise > 0 && crate::oidn::available();
+    let learned = ss > 1 && qu.denoise > 0 && crate::oidn::available() && std::env::var_os("RT_NOFILTER").is_none();
     #[cfg(target_arch = "wasm32")]
     let learned = false;
     if learned {
         #[cfg(not(target_arch = "wasm32"))]
         learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 5);
     } else {
-        for i in 0..qu.denoise as usize { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
+        for i in 0..if std::env::var_os("RT_NOFILTER").is_some() && ss > 1 { 0 } else { qu.denoise as usize } { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
     }
     lap(enc, "denoise");
     { let tg = trace_bg(&p.irr[1 - cur], &p.spec[cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }

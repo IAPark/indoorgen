@@ -87,6 +87,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   // (path traced, a material with no graph: its own roughness and metal, or a steel fridge came out as white paint)
   if (!pbr && g.params2.w > 0.5) { surf_rough = m.p[47].x; surf_metal = m.p[47].y; }
   // (the unevenness render_rust.py gives every surface: roughness and colour drift slowly over it. Blotches on a metal door, and highlights that break up)
+  if (g.params2.w > 0.5 && m.p[46].x > 0.0) { surf_rough = max(surf_rough, m.p[46].x); surf_coat = 0.0; }
   if (g.params2.w > 0.5 && m.p[46].w > 0.0) {
     let mr_ = ig_noise(v.wpos, m.p[46].w * 0.08, 3.0, 0.5, 2.0, 0.0, 0.0);
     surf_rough = clamp(surf_rough * (1.0 - m.p[46].z + 2.0 * m.p[46].z * mr_), 0.0, 1.0);
