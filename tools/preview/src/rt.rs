@@ -211,7 +211,7 @@ pub struct Pipes { pub lc_seed_spec: wgpu::ComputePipeline, pub lc_seed: wgpu::C
 
 #[repr(C)] #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Win { pub c: [f32; 4], pub u: [f32; 4], pub v: [f32; 4], pub n: [f32; 4] }
-pub struct SceneData { pub taa_st: std::sync::Mutex<Option<(Mat4, Vec3, usize)>>, pub hist_st: std::sync::Mutex<Option<(Mat4, Vec3, usize, (u32, u32))>>, pub lc_eye: std::sync::Mutex<Vec3>, pub lc_cells: wgpu::Buffer, pub lc_acc: wgpu::Buffer, pub lc_out: wgpu::Buffer, pub lc_n: u32, pub wins: wgpu::Buffer, pub nwins: u32, pub nodes: wgpu::Buffer, pub tris: wgpu::Buffer, pub mats: wgpu::Buffer, pub lights: wgpu::Buffer, pub sky: wgpu::Buffer, pub nlights: u32, pub sky_wh: (u32, u32), pub sun: Vec3, pub sun_e: Vec3, pub skyp: SkyParams }
+pub struct SceneData { pub pane_st: std::sync::Mutex<Option<(Vec3, Vec3)>>, pub taa_st: std::sync::Mutex<Option<(Mat4, Vec3, usize)>>, pub hist_st: std::sync::Mutex<Option<(Mat4, Vec3, usize, (u32, u32))>>, pub lc_eye: std::sync::Mutex<Vec3>, pub lc_cells: wgpu::Buffer, pub lc_acc: wgpu::Buffer, pub lc_out: wgpu::Buffer, pub lc_n: u32, pub wins: wgpu::Buffer, pub nwins: u32, pub nodes: wgpu::Buffer, pub tris: wgpu::Buffer, pub mats: wgpu::Buffer, pub lights: wgpu::Buffer, pub sky: wgpu::Buffer, pub nlights: u32, pub sky_wh: (u32, u32), pub sun: Vec3, pub sun_e: Vec3, pub skyp: SkyParams }
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -294,7 +294,7 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let lc_mk = |u| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: lc_size, usage: u, mapped_at_creation: false });
     let lc_rw = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let lc_cells = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: if lc_n > 0 { LC_SLOTS as u64 * 4 } else { 16 }, usage: lc_rw, mapped_at_creation: false });
-    SceneData { taa_st: std::sync::Mutex::new(None), hist_st: std::sync::Mutex::new(None), lc_eye: std::sync::Mutex::new(Vec3::splat(f32::MAX)), lc_cells, lc_acc: lc_mk(lc_rw), lc_out: lc_mk(lc_rw), lc_n, wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
+    SceneData { pane_st: std::sync::Mutex::new(None), taa_st: std::sync::Mutex::new(None), hist_st: std::sync::Mutex::new(None), lc_eye: std::sync::Mutex::new(Vec3::splat(f32::MAX)), lc_cells, lc_acc: lc_mk(lc_rw), lc_out: lc_mk(lc_rw), lc_n, wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
 }
 
 pub struct Gb<'a> { pub mirror_lit: &'a wgpu::TextureView, pub depth: &'a wgpu::TextureView, pub nrm: &'a wgpu::TextureView, pub alb: &'a wgpu::TextureView, pub mat: &'a wgpu::TextureView, pub lit: &'a wgpu::TextureView, pub hdr: &'a wgpu::TextureView }

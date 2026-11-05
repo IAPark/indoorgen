@@ -1292,7 +1292,13 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
     // (a video redraws its mirrors' pictures every third frame: from one frame to the next they hardly move, and each costs a small trace)
-    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && !new_tg && rt::this_frame() % 3 != 1 { None } else { rt_q };
+    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && !new_tg && s.rt.as_ref().map_or(false, |sd| {
+        // (a video redraws its mirrors' pictures when the camera has moved or turned since the last: a held camera needs none, and a stale one at a fast pan left a black wedge at a mirror's edge)
+        let mut st = sd.pane_st.lock().unwrap();
+        let held = st.map_or(false, |(e, f)| (eye - e).length() < 0.005 && f.dot(fwd) > 0.99999);
+        if !held { *st = Some((eye, fwd)); }
+        held
+    }) { None } else { rt_q };
     if let (Some(_), Some(p), Some(sd)) = (panes_q, r.rt.as_ref(), s.rt.as_ref()) {
         // what each mirror in view shows: the scene traced from the camera mirrored in it, what lies behind the glass cut away, only over the mirror's own part of the picture. Each is finished before the main picture needs it
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
