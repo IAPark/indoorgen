@@ -46,8 +46,9 @@ struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
 const LC_SIZE = 0.2; const LC_MASK = 262143u;
 const LC_MAX = 4096.0; // (paths a cell takes: then it has settled, and the light of a house doesn't change)
-fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
-  let c = vec3<i32>(floor(q / LC_SIZE)); let an = abs(ng);
+fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 { return lc_key_s(q, ng, part, LC_SIZE); }
+fn lc_key_s(q: vec3<f32>, ng: vec3<f32>, part: u32, size: f32) -> u32 {
+  let c = vec3<i32>(floor(q / size)); let an = abs(ng);
   var side = 2u; if (an.x >= an.y && an.x >= an.z) { side = 0u; } else if (an.y >= an.z) { side = 1u; }
   side = side * 2u + select(0u, 1u, ng[side] < 0.0);
   var h = u32(c.x) * 73856093u ^ u32(c.y) * 19349663u ^ u32(c.z) * 83492791u ^ part * 2654435761u ^ side * 3266489917u;
@@ -55,8 +56,8 @@ fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
   return max(h, 1u);
 }
 // the slot of a cell, or the table's size if it has none. Paths make the cells they land in: only what rays reach takes a slot
-fn lc_find(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
-  let k = lc_key(q, ng, part);
+fn lc_find(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 { return lc_find_k(lc_key(q, ng, part)); }
+fn lc_find_k(k: u32) -> u32 {
   for (var i = 0u; i < 8u; i++) {
     let sl = (k + i) & LC_MASK;
     loop {
@@ -69,13 +70,19 @@ fn lc_find(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
   return LC_MASK + 1u;
 }
 // the same, for a read that wouldn't fill the cell
-fn lc_look(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
-  let k = lc_key(q, ng, part);
+fn lc_look(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 { return lc_look_k(lc_key(q, ng, part)); }
+fn lc_look_k(k: u32) -> u32 {
   for (var i = 0u; i < 8u; i++) {
     let sl = (k + i) & LC_MASK; let ck = atomicLoad(&lc_cells[sl]);
     if (ck == k) { return sl; } if (ck == 0u) { break; }
   }
   return LC_MASK + 1u;
+}
+// what a cell has so far, while paths are still adding to it
+fn lc_live(sl: u32) -> vec4<f32> {
+  if (sl > LC_MASK) { return vec4<f32>(0.0); }
+  let n = atomicLoad(&lc_acc[sl][3]); if (n == 0u) { return vec4<f32>(0.0); }
+  return vec4<f32>(f32(atomicLoad(&lc_acc[sl][0])), f32(atomicLoad(&lc_acc[sl][1])), f32(atomicLoad(&lc_acc[sl][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
 }
 // a path's light into a cell
 fn lc_add(sl: u32, l: vec3<f32>) {
@@ -339,9 +346,10 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       let sl = lc_find(lc_jit(q, ng), ng, t.mat);
       lc_sl[b] = sl;
       // (the cache from the first hit that is further than a cell: nearer, in a corner or under a shelf, a cell's average would wash out the shadow. Where it has the light, and but for one path in 32, which goes on and adds to it)
-      if (!lc_read && h.t >= LC_SIZE && b <= 1u && sl <= LC_MASK && lc_out[sl].w >= LC_MIN && (lc_out[sl].w >= LC_MAX || rnd() > 0.03125)) {
+      let lv_ = lc_live(sl);
+      if (!lc_read && h.t >= LC_SIZE && b <= 1u && sl <= LC_MASK && lv_.w >= LC_MIN && (lv_.w >= LC_MAX || rnd() > 0.03125)) {
         // (a read one bounce on passes its light back to the hit before, so light builds up over frames with no limit on bounces. A cell stands for this hit and 3 more: from a hit that follows another, 2 more would be right, the same total as Blender's 4 in a room of one colour)
-        var v_ = lc_out[sl].xyz;
+        var v_ = lv_.xyz;
         if (b == 1u) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); let s_ = 1.0 + r_ + r_ * r_; v_ *= s_ / (s_ + r_ * r_ * r_); }
         e += tp * v_; lc_sl[b] = LC_MASK + 1u; lc_read = true; break;
       }
