@@ -427,7 +427,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   var ls = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
   var ms = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var ds = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var i = 0u;
   loop { if (i >= p.misc.z) { break; }
-    let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), 0.04); let dl = sqrt(r2); let l = v / dl;
+    let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), LAMP_R * LAMP_R); let dl = sqrt(r2); let l = v / dl; // (the lamp's own size as the limit: 20 cm dulled a highlight on anything nearer, inside a shade, a ceiling round a fitting)
     let ndl = dot(ns, l);
     if (ndl > 0.0) {
       // a lamp is a small sphere: it widens the highlight, and spreads the same light (Karis)
