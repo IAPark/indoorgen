@@ -98,14 +98,15 @@ fn lc_live(sl: u32) -> vec4<f32> {
 }
 // ---- a video's light from the cache: what reaches a surface the camera sees, by place and side, apart from the cells paths read. Filled from the first frame's clean picture, so most of a later frame reads it and traces nothing
 const LCV_FINE = 0.1; const LCV_COARSE = 0.4; const LCV_PART = 16384u; const LCV_TRUST = 16.0;
-fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) {
+fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) { lcv_add_p(q, n, l, LCV_PART); }
+fn lcv_add_p(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>, part: u32) {
   for (var k = 0; k < 2; k++) {
-    let sl = lc_find_k(lc_key_s(q, n, LCV_PART, select(LCV_FINE, LCV_COARSE, k == 1)));
+    let sl = lc_find_k(lc_key_s(q, n, part, select(LCV_FINE, LCV_COARSE, k == 1)));
     if (sl <= LC_MASK) { lc_add(sl, l); }
   }
 }
 // the four cells round the point, on its surface, each as far as it has filled
-fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32) -> vec4<f32> {
+fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32, part: u32) -> vec4<f32> {
   let an = abs(n); var ax = 2u; if (an.x >= an.y && an.x >= an.z) { ax = 0u; } else if (an.y >= an.z) { ax = 1u; }
   let au = (ax + 1u) % 3u; let av = (ax + 2u) % 3u;
   let fu = q[au] / size - 0.5; let fv = q[av] / size - 0.5;
@@ -114,16 +115,22 @@ fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32) -> vec4<f32> {
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     var c = q; c[au] = (bu + f32(i) + 0.5) * size; c[av] = (bv + f32(j) + 0.5) * size;
     let w = select(1.0 - tu_, tu_, i == 1) * select(1.0 - tv_, tv_, j == 1);
-    let sl = lc_look_k(lc_key_s(c, n, LCV_PART, size));
+    let sl = lc_look_k(lc_key_s(c, n, part, size));
     if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / LCV_TRUST, 1.0); acc += lc_out[sl].xyz * tr; sum += tr; }
   } }
   return vec4<f32>(acc, sum);
 }
 // rgb: the light, a: how much of it the cells could answer for
-fn lcv_read(q: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
-  let a = lcv_at(q, n, LCV_FINE);
+fn lcv_read(q: vec3<f32>, n: vec3<f32>) -> vec4<f32> { return lcv_read_p(q, n, LCV_PART); }
+// the reflection cache: what a surface reflects depends on where it looks, so cells go by that direction too, coarsely: the light it shows changes slowly on anything rough
+fn lcv_rpart(r: vec3<f32>) -> u32 {
+  let b = vec3<u32>(round((r * 0.5 + vec3<f32>(0.5)) * 4.0));
+  return LCV_PART + 1u + b.x + b.y * 5u + b.z * 25u;
+}
+fn lcv_read_p(q: vec3<f32>, n: vec3<f32>, part: u32) -> vec4<f32> {
+  let a = lcv_at(q, n, LCV_FINE, part);
   if (a.w >= 0.999) { return vec4<f32>(a.xyz, 1.0); }
-  let c = lcv_at(q, n, LCV_COARSE);
+  let c = lcv_at(q, n, LCV_COARSE, part);
   if (c.w > 0.0) { return vec4<f32>(a.xyz + c.xyz / c.w * (1.0 - a.w), min(a.w + c.w, 1.0)); }
   return vec4<f32>(a.xyz, a.w);
 }
@@ -649,6 +656,8 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
     let fn_ = sel.rad * brdf_nl(n, vv, l, rough, f0); let ps = dot(fn_, vec3<f32>(0.333));
     if (ps > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = fn_ / ps * (wt / max(mt, 1.0)) / dfg_of(rough, max(dot(n, vv), 1e-3), f0); }
   }
+  // (a video: what was traced here fills the reflection cache)
+  if ((u32(p.cam.w) & 64u) != 0u) { lcv_add_p(pos, n, min(cur_.rgb + ind, vec3<f32>(20.0)), lcv_rpart(reflect(-vv, n))); }
   textureStore(out_spec, px, vec4<f32>(min(cur_.rgb + ind, vec3<f32>(20.0)), rough));
 }
 const RS_SPEC_RADIUS = 10.0;
@@ -852,9 +861,12 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (a video: paint and plaster reflect the room as a wide blur, which is the light the cache already gave. Rays are for what shows them)
     let room_only = (u32(p.cam.w) & 64u) != 0u && textureLoad(g_mat, g, 0).x < 0.5 && rough > 0.35 && coat < 0.25;
     if (room_only) { sp = e; }
-    // (and what has a settled history traces every other frame: history carries the one between, with no pattern in the picture. Half the pixels by turns left a fridge in grain. hit_d < 0 tells the history)
-    let turn = (u32(p.cam.w) & 64u) != 0u && !is_mirror && !room_only && (p.misc.y & 1u) == 1u && textureLoad(hist_n, px, 0).r >= 8.0;
-    if (turn) { hit_d = -1.0; }
+    // (and what is rough enough reads the reflection cache, filled by the first frame: no rays, so no grain. hit_d < 0 tells the history. Only what the cache hasn't seen yet traces, and fills it)
+    var turn = false;
+    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && !room_only && rough >= 0.15) {
+      let rc = lcv_read_p(pos, n, lcv_rpart(r0));
+      if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
+    }
     let rays = select(select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, room_only), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
     rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
@@ -958,7 +970,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
     let abg = dfg_ab(rough, nv_g);
     let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
-    sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0);
+    if (hit_d >= 0.0) { sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); } gl_ = vec3<f32>(0.0); // (the cache has it already)
   }
   textureStore(out_glint, px, vec4<f32>(gl_, hit_d / hit_n)); // (a: how far the rays went, for a video's history)
   if ((u32(p.cam.w) & 4u) != 0u) { resv[u32(w * h) + u32(px.y * w + px.x)] = rs_s; }
@@ -976,4 +988,20 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   lcv_add(pos, normalize(n), textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb);
+}
+
+// and its clean reflections go into the reflection cache
+@compute @workgroup_size(8, 8) fn lc_seed_spec(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y); let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let c = textureLoad(irr_done, px, 0);
+  if (c.a < 0.15) { return; }
+  let g = px * ss + vec2<i32>(ss / 2);
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { return; }
+  let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  lcv_add_p(pos, n, c.rgb, lcv_rpart(reflect(normalize(pos - p.cam.xyz), n)));
 }

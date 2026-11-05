@@ -124,17 +124,6 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   if (px.x >= w || px.y >= h) { return; }
   var cur4 = textureLoad(i_irr, px, 0);
   let refl = tu.al.w > 0.5;
-  // (a pixel whose turn it wasn't: its neighbours', who traced this frame, on the same material)
-  if (refl && textureLoad(t_hit, px, 0).a < 0.0) {
-    var nb = vec3<f32>(0.0); var nw = 0.0;
-    for (var k = 0; k < 4; k++) {
-      var o4 = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1));
-      let q = px + o4[k]; if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
-      let t4 = textureLoad(i_irr, q, 0);
-      if (abs(t4.a - cur4.a) < 0.05 && textureLoad(t_hit, q, 0).a >= 0.0) { nb += t4.rgb; nw += 1.0; }
-    }
-    if (nw > 0.0) { cur4 = vec4<f32>(nb / nw, cur4.a); }
-  }
   let cur = cur4.rgb;
   let g = px * ss + vec2<i32>(ss / 2);
   let d = textureLoad(d_depth, g, 0);
