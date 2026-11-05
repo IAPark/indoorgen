@@ -976,21 +976,24 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         let mut img = render(r, s, c, o, 1.0);
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
         if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
-        // (Blender's probes end in a band around 0.45 of the picture's mean: here only the last pass runs again, so it goes straight there, in steps of exposure)
+        // (the same steps from the same start, not straight to a fixed mean: Blender stops anywhere in its band, and where it stops is most of the picture's brightness. Aiming for the middle read a real match as a 15-level difference)
         let stat = |img: &image::RgbaImage| { let mut lum: Vec<f32> = img.pixels().map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect();
             lum.sort_by(|a, b| a.partial_cmp(b).unwrap()); let core = &lum[lum.len() / 20..lum.len() * 19 / 20];
             (core.iter().sum::<f32>() / core.len().max(1) as f32, lum.iter().filter(|v| **v > 0.95).count() as f32 / lum.len().max(1) as f32) };
-        let target = std::env::var("RT_MEAN").ok().and_then(|v| v.parse().ok()).unwrap_or(0.45f32);
-        let (mut lo, mut hi) = (0.02f32, 64f32);
         let mut xp = 1.0f32;
         // (RT_FIXEDXP=1: no auto exposure, to compare with Blender's NO_AUTOEXP=1 level for level)
-        for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 7 } {
+        for _ in 0..if std::env::var_os("RT_FIXEDXP").is_some() { 0 } else { 3 } {
             let (avg, clip) = stat(&img);
-            if (avg - target).abs() < 0.008 && clip < 0.18 { break }
-            if avg > target || clip >= 0.18 { hi = xp } else { lo = xp }
-            xp = (lo * hi).sqrt();
+            if avg > 0.36 && avg < 0.5 && clip < 0.18 { break }
+            let mut step = ((0.43 / avg.max(1e-3)).log2() * 2.0).clamp(-2.5, 1.5);
+            if clip > 0.10 { step = step.min(0.0); }
+            if clip > 0.18 { step = step.min(-0.6); }
+            if step == 0.0 { break }
+            xp *= 2f32.powf(step);
             img = post_again(r, o, xp);
         }
+        // (RT_XP=x: this exposure, to try a picture at the level Blender landed on)
+        if let Some(x) = std::env::var("RT_XP").ok().and_then(|v| v.parse().ok()) { xp = x; img = post_again(r, o, xp); }
         if o.verbose { eprintln!("  exposure x{xp:.2}, {:.3}s", t.elapsed().as_secs_f32()); }
         return img;
     }
