@@ -11,7 +11,7 @@ pub struct Quality { pub spp: u32, pub bounces: u32, pub spec_spp: u32, pub deno
 impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
-            "fast" => Quality { spp: 1, bounces: 2, spec_spp: 1, denoise: 5, ss: 2 },
+            "fast" => Quality { spp: 2, bounces: 2, spec_spp: 1, denoise: 5, ss: 2 },
             "full" => Quality { spp: 3, bounces: 4, spec_spp: 3, denoise: 5, ss: 3 },
             _ => panic!("--rt fast|full"),
         }
