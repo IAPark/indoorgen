@@ -12,7 +12,7 @@ impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
             "fast" => Quality { spp: 2, bounces: 2, spec_spp: 1, denoise: 5, ss: 2 },
-            "full" => Quality { spp: 3, bounces: 4, spec_spp: 3, denoise: 5, ss: 3 },
+            "full" => Quality { spp: 2, bounces: 4, spec_spp: 3, denoise: 5, ss: 3 },
             _ => panic!("--rt fast|full"),
         }
     }
@@ -218,7 +218,8 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let t0 = web_time::Instant::now();
     let tris_o: Vec<Triangle> = tris_in.iter().map(|(t, _)| Triangle { v0: t[0].into(), v1: t[1].into(), v2: t[2].into() }).collect();
     let mut core = std::time::Duration::ZERO;
-    let mut params = if std::env::var_os("RT_BVH_FAST").is_some() { obvhs::BvhBuildParams::fast_build() } else { obvhs::BvhBuildParams::medium_build() };
+    // (the fast build: rays cost the same on these houses, measured on 16 views, and it takes 40% less time)
+    let mut params = if std::env::var_os("RT_BVH_MEDIUM").is_some() { obvhs::BvhBuildParams::medium_build() } else { obvhs::BvhBuildParams::fast_build() };
     params.max_prims_per_leaf = 4;
     crate::memlog("bvh start");
     let bvh = obvhs::bvh2::builder::build_bvh2_from_tris(&tris_o, params, &mut core);
