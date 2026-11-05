@@ -49,7 +49,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   let p0 = world_of(g, d0, dims, p.inv_vp);
   var kw = array<f32, 3>(0.375, 0.25, 0.0625);
   let stride = i32(stp.x); let it = stp.y;
-  var e = vec3<f32>(0.0); var ew = 0.0; var s = vec3<f32>(0.0); var sw = 0.0;
+  var e = vec3<f32>(0.0); var ew = 0.0; var s = vec3<f32>(0.0); var sw = 0.0; var el = vec3<f32>(0.0); var ewl = 0.0;
   // (what is typical: the mean of compressed brightness, which a few bright pixels hardly move)
   var out_cap = 1e9;
   if (it == 0u && stp.z == 1u) {
@@ -80,6 +80,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
     let wg = kk * wn * wp;
     // (no test on brightness: in a room lit through a window most paths find nothing, and such a test keeps exactly the noise it should take out. No clamp either: what it cut was the sun's bounce)
     e += ci.rgb * wg; ew += wg;
+    let wg_l = kk * pow(max(dot(n0, nq), 0.0), 4.0) * wp; el += ci.rgb * wg_l; ewl += wg_l;
     let si = textureLoad(i_spec, q, 0);
     // (reflections on a little relief: its normals differ pixel to pixel while what they reflect does not. A looser test, or a brushed fridge stayed in grains)
     // (first round: a pixel far brighter than what is typical around it counts for less. A rare ray to a small sunlit patch would spread into a disc, and every neighbour reads it, so limiting the pixel alone is not enough. Karis's average on every pixel took the light out of all reflections)
@@ -90,7 +91,9 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   } }
   // (one round is either the light's or the reflections': they are traced in turn)
   let spec_only = stp.z == 1u;
-  let ee = select(select(c.rgb, e / max(ew, 1e-5), ew > 1e-5), c.rgb, spec_only);
+  // (a curved moulding: each pixel's normal has few others to share with, and its few paths stayed as blotches. There the normals may differ more)
+  let few = stp.y >= 1u && ew < 0.6 && ewl > 1e-5;
+  let ee = select(select(select(c.rgb, e / max(ew, 1e-5), ew > 1e-5), el / max(ewl, 1e-5), few), c.rgb, spec_only);
   // (a mirror's picture is no noise: only rough reflections are smoothed, more the rougher)
   let spec_rounds = select(0u, select(select(1u, 3u, sc.a > 0.15), 5u, sc.a > 0.3), sc.a > 0.08);
   let sv = select(sc.rgb, s / max(sw, 1e-5), spec_only && sw > 1e-5 && it < spec_rounds);
