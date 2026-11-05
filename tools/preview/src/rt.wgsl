@@ -40,12 +40,12 @@ struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 // ReSTIR GI, within one frame: each pixel keeps one of its first bounces, chosen by how much light it brought (Ouyang et al. 2021)
 struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp: f32 };
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
-// the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves: what a path gathers after its first hit, over what reached that hit, is a sample of this with the right number of bounces
-struct LC { pos: vec3<f32>, key: u32, nrm: vec4<f32> };
-@group(0) @binding(19) var<storage, read> lc_cells: array<LC>;
+// the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
+@group(0) @binding(19) var<storage, read> lc_cells: array<u32>;
 @group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
-const LC_SIZE = 0.2; const LC_MASK = 1048575u;
+const LC_SIZE = 0.2; const LC_MASK = 262143u;
+const LC_MAX = 4096.0; // (paths a cell takes: then it has settled, and the light of a house doesn't change)
 fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
   let c = vec3<i32>(floor(q / LC_SIZE)); let an = abs(ng);
   var side = 2u; if (an.x >= an.y && an.x >= an.z) { side = 0u; } else if (an.y >= an.z) { side = 1u; }
@@ -58,7 +58,7 @@ fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
 fn lc_find(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
   let k = lc_key(q, ng, part);
   for (var i = 0u; i < 8u; i++) {
-    let sl = (k + i) & LC_MASK; let ck = lc_cells[sl].key;
+    let sl = (k + i) & LC_MASK; let ck = lc_cells[sl];
     if (ck == k) { return sl; } if (ck == 0u) { break; }
   }
   return LC_MASK + 1u;
@@ -296,7 +296,8 @@ fn direct(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var o = o0; var n = n0; var tp = vec3<f32>(1.0); var e = vec3<f32>(0.0);
   let bounces = p.misc.x;
-  var lc_slot = LC_MASK + 1u; var e1_ = vec3<f32>(0.0); var t1_ = vec3<f32>(0.0);
+  var lc_sl = array<u32, 2>(LC_MASK + 1u, LC_MASK + 1u); var lc_e = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0)); var lc_t = lc_e;
+  var lc_read = false; var lc_last = vec3<f32>(0.0); var lc_r = 0.0;
   // (the first of these is the first bounce: Blender's limit of 4 is 4 of them. One more ran every room's light a tenth high)
   for (var b = 0u; b < bounces; b++) {
     let d = cosine(n);
@@ -314,20 +315,34 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (the last hit stands in for the bounces left out, up to the four Blender follows: each about as lit as this one, and dimmer by its colour. Stopped short, a sunlit room with few lamps lost a tenth of its light)
     var more = 1.0;
     if (b + 1u == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
-    // (from the first hit: the cache where it has the light, or the path goes on, and leaves what it finds there)
-    if (lc_on() && b == 0u) {
-      lc_slot = lc_find(lc_jit(q, ng), ng, t.mat); if (lc_slot > LC_MASK) { lc_slot = lc_find(q, ng, t.mat); }
-      if (lc_slot <= LC_MASK && lc_out[lc_slot].w >= LC_MIN) { e += tp * (direct(q, ng) + lc_out[lc_slot].xyz); return e; }
+    if (lc_on() && b + 1u < bounces && b < 2u) {
+      var sl = lc_find(lc_jit(q, ng), ng, t.mat); if (sl > LC_MASK) { sl = lc_find(q, ng, t.mat); }
+      lc_sl[b] = sl;
+      // (the cache from the first hit that is further than a cell: nearer, in a corner or under a shelf, a cell's average would wash out the shadow. Where it has the light, and but for one path in 32, which goes on and adds to it)
+      if (!lc_read && h.t >= LC_SIZE && b <= 1u && sl <= LC_MASK && lc_out[sl].w >= LC_MIN && (lc_out[sl].w >= LC_MAX || rnd() > 0.03125)) {
+        e += tp * lc_out[sl].xyz; lc_read = true; break;
+      }
     }
-    e += tp * direct(q, ng) * more;
+    // (a cell holds all the light reaching its surface, the direct included: whoever reads it needs no shadow rays. Never read from the camera's own hit, so no shadow seen directly is averaged)
+    if (b < 2u) { lc_e[b] = e; lc_t[b] = tp; }
+    let direct_here = direct(q, ng);
+    e += tp * direct_here * more;
     o = q; n = ng;
-    if (b == 0u) { e1_ = e; t1_ = tp; }
+    if (b + 1u == bounces) { lc_last = tp * direct_here; lc_r = dot(m.albedo.rgb, vec3<f32>(0.333)); }
     // (Russian roulette: a path that has lost most of its light mostly ends here, and the ones that go on count for those that didn't. The same light on average, for fewer rays)
     if (b >= 1u) { let q_ = clamp(max(tp.x, max(tp.y, tp.z)) * 1.5, 0.15, 1.0); if (rnd() > q_) { break; } tp /= q_; }
   }
-  if (lc_slot <= LC_MASK && max(t1_.x, max(t1_.y, t1_.z)) > 0.001) {
-    let c = clamp((e - e1_) / max(t1_, vec3<f32>(0.001)), vec3<f32>(0.0), vec3<f32>(64.0)) * LC_FIX;
-    atomicAdd(&lc_acc[lc_slot][0], u32(c.x)); atomicAdd(&lc_acc[lc_slot][1], u32(c.y)); atomicAdd(&lc_acc[lc_slot][2], u32(c.z)); atomicAdd(&lc_acc[lc_slot][3], 1u);
+  if (lc_on() && !lc_read) {
+    var est = vec3<f32>(0.0); var rk = 1.0;
+    for (var k = 0u; k < 2u; k++) {
+      // (hit k has k bounces fewer than the first: the next terms of the series)
+      if (k > 0u) { rk *= lc_r; est += lc_last * rk; }
+      let sl = lc_sl[k]; if (sl > LC_MASK) { continue; }
+      if (lc_out[sl].w >= LC_MAX) { continue; }
+      let tk = lc_t[k]; if (max(tk.x, max(tk.y, tk.z)) <= 0.001) { continue; }
+      let c = clamp((e + est - lc_e[k]) / max(tk, vec3<f32>(0.001)), vec3<f32>(0.0), vec3<f32>(64.0)) * LC_FIX;
+      atomicAdd(&lc_acc[sl][0], u32(c.x)); atomicAdd(&lc_acc[sl][1], u32(c.y)); atomicAdd(&lc_acc[sl][2], u32(c.z)); atomicAdd(&lc_acc[sl][3], 1u);
+    }
   }
   return e;
 }
@@ -784,19 +799,28 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
         // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
         // (by one sample of the lamps and windows, the same at any roughness: a limit here drew the jumps in a material's roughness across a floor)
-        var e_hit = e;
-        // (metal in any mode: with one ray too it shows nothing but this, and without the path a fridge washed out and lost its smudges)
-        if (rough > 0.15 && (p.misc2.y > 1u || textureLoad(g_mat, g, 0).x >= 0.5)) {
-          // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
-          let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
-          var eh = lamp(q, ng) + portal(q, ng);
-          if (on_metal) {
-            var sl = LC_MASK + 1u; if (lc_on()) { sl = lc_find(lc_jit(q, ng), ng, t.mat); if (sl > LC_MASK) { sl = lc_find(q, ng, t.mat); } }
-            if (sl <= LC_MASK && lc_out[sl].w >= LC_MIN) { eh += lc_out[sl].xyz; } else { eh += gather(q, ng); } // (a real branch: select() runs both sides)
+        // (the cache where the reflection's spread at the hit is wider than a cell, by SHaRC's estimate of the cone: a sharper one would show the cell. It holds the sun and lamps too, so no shadow rays. A real branch below: select() runs both sides)
+        let a2_ = rough * rough * rough * rough; let spread = 2.0 * hh.t * sqrt(0.5 * a2_ / max(1.0 - a2_, 1e-3));
+        var sl = LC_MASK + 1u;
+        if (lc_on() && rough > 0.15 && hh.t >= LC_SIZE && spread >= LC_SIZE) { sl = lc_find(lc_jit(q, ng), ng, t.mat); if (sl > LC_MASK) { sl = lc_find(q, ng, t.mat); } }
+        var lh_ = vec3<f32>(0.0);
+        if (sl <= LC_MASK && lc_out[sl].w >= LC_MIN) {
+          lh_ = m.emissive.rgb + m.albedo.rgb * lc_out[sl].xyz;
+        } else {
+          // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
+          // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
+          // (by one sample of the lamps and windows, the same at any roughness: a limit here drew the jumps in a material's roughness across a floor)
+          var e_hit = e;
+          // (metal in any mode: with one ray too it shows nothing but this, and without the path a fridge washed out and lost its smudges)
+          if (rough > 0.15 && (p.misc2.y > 1u || textureLoad(g_mat, g, 0).x >= 0.5)) {
+            // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
+            let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
+            var eh = lamp(q, ng) + portal(q, ng);
+            if (on_metal) { eh += gather(q, ng); }
+            e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
           }
-          e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
+          lh_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
         }
-        let lh_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
         if (use_rs) { rs_add(&rs_s, q, ng, lh_, wt_, n, -v, rd, rough, f0_rs); continue; }
         sp += lh_ * wt_;
       }

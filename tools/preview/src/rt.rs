@@ -217,6 +217,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
 }
 
 /// triangles with their draw's index
+const LC_SLOTS: usize = 1 << 18; // must match LC_MASK in rt.wgsl
 /// must match lc_key in rt.wgsl
 fn lc_key(q: Vec3, ng: Vec3, part: u32) -> u32 {
     let c = (q / 0.2).floor(); let an = ng.abs();
@@ -261,10 +262,10 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let ld2 = if ld.is_empty() { vec![LightD { pos: [0.0; 4], col: [0.0; 4] }] } else { ld.clone() };
     let w0 = [Win { c: [0.0; 4], u: [0.0; 4], v: [0.0; 4], n: [0.0; 4] }];
     // (RT_NO_LC=1: none. The light cache's cells, from every triangle: its middle, and more points on a large one, each side)
-    let mut lc_cells_v: Vec<[f32; 8]> = vec![];
+    let mut lc_cells_v: Vec<u32> = vec![];
     if std::env::var_os("RT_NO_LC").is_none() && !crate::bake::ON.load(std::sync::atomic::Ordering::Relaxed) {
-        lc_cells_v = vec![[0.0; 8]; 1 << 20];
-        let (mask, mut count) = ((1u32 << 20) - 1, 0u32);
+        lc_cells_v = vec![0; LC_SLOTS];
+        let (mask, mut count) = (LC_SLOTS as u32 - 1, 0u32);
         for t in tris.iter() {
             let (v0, e1, e2) = (Vec3::from(t.v0), Vec3::new(t.e1[0], t.e1[1], t.e1[2]), Vec3::new(t.e2[0], t.e2[1], t.e2[2]));
             let cr = e1.cross(e2); let ar = cr.length(); if ar < 1e-9 { continue; } let nn = cr / ar;
@@ -273,17 +274,16 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
                 let (mut u, mut v) = ((a as f32 + 0.5) / g as f32, (b as f32 + 0.5) / g as f32); if u + v > 1.0 { u = 1.0 - u; v = 1.0 - v; }
                 let q0 = v0 + e1 * u + e2 * v;
                 for sg in [1.0f32, -1.0] {
-                    let n = nn * sg; let q = q0 + n * 0.002;
-                    let key = lc_key(q, n, t.mat);
-                    for i in 0..8u32 { let sl = (key.wrapping_add(i) & mask) as usize; let ck = lc_cells_v[sl][3].to_bits();
-                        if ck == key { break; } if ck == 0 { lc_cells_v[sl] = [q.x, q.y, q.z, f32::from_bits(key), n.x, n.y, n.z, 0.0]; count += 1; break; } }
+                    let n = nn * sg; let key = lc_key(q0 + n * 0.002, n, t.mat);
+                    for i in 0..8u32 { let sl = (key.wrapping_add(i) & mask) as usize; let ck = lc_cells_v[sl];
+                        if ck == key { break; } if ck == 0 { lc_cells_v[sl] = key; count += 1; break; } }
                 }
             } }
         }
-        if verbose { eprintln!("  light cache: {count} cells"); }
+        if verbose { eprintln!("  light cache: {count} cells of {LC_SLOTS} slots"); }
     }
     let lc_n = lc_cells_v.len() as u32;
-    let lc_size = if lc_n > 0 { 1u64 << 24 } else { 16 };
+    let lc_size = if lc_n > 0 { LC_SLOTS as u64 * 16 } else { 16 };
     let lc_mk = |u| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: lc_size, usage: u, mapped_at_creation: false });
     let lc_rw = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let lc_cells = if lc_n > 0 { buf(bytemuck::cast_slice(&lc_cells_v)) } else { buf(&[0u8; 32]) };
@@ -367,7 +367,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     // what this trace's paths left in the cache, for the reflections next and later frames
     if use_lc {
         let tg = trace_bg(&p.irr[1], &p.spec[1], &p.irr[0], &p.lamp[1], &p.lamp[0]);
-        let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_resolve); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(1048576 / 64, 1, 1); drop(c);
+        let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_resolve); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(LC_SLOTS as u32 / 64, 1, 1); drop(c);
         lap(enc, "lc resolve");
     }
     let mut cur = 0usize;
