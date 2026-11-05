@@ -41,6 +41,18 @@ struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp: f32 };
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
+@group(0) @binding(22) var hist_n: texture_2d<f32>;
+// (a video's reservoirs, last frame's and this frame's, turn about, and where a point was last frame)
+@group(0) @binding(23) var<uniform> pv: mat4x4<f32>;
+@group(0) @binding(24) var<storage, read> resv_a: array<R>;
+@group(0) @binding(25) var<storage, read_write> resv_b: array<R>;
+fn rs_time() -> bool { return (u32(p.cam.w) & 128u) != 0u; }
+fn rs_prev(pos: vec3<f32>, w: i32, h: i32) -> i32 {
+  let c = pv * vec4<f32>(pos, 1.0); if (c.w <= 0.0) { return -1; }
+  let u = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+  if (any(u < vec2<f32>(0.0)) || any(u >= vec2<f32>(1.0))) { return -1; }
+  let q = vec2<i32>(u * vec2<f32>(f32(w), f32(h))); return q.y * w + q.x;
+}
 @group(0) @binding(19) var<storage, read_write> lc_cells: array<atomic<u32>>;
 @group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
@@ -83,6 +95,44 @@ fn lc_live(sl: u32) -> vec4<f32> {
   if (sl > LC_MASK) { return vec4<f32>(0.0); }
   let n = atomicLoad(&lc_acc[sl][3]); if (n == 0u) { return vec4<f32>(0.0); }
   return vec4<f32>(f32(atomicLoad(&lc_acc[sl][0])), f32(atomicLoad(&lc_acc[sl][1])), f32(atomicLoad(&lc_acc[sl][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
+}
+// ---- a video's light from the cache: what reaches a surface the camera sees, by place and side, apart from the cells paths read. Filled from the first frame's clean picture, so most of a later frame reads it and traces nothing
+const LCV_FINE = 0.1; const LCV_COARSE = 0.4; const LCV_PART = 16384u; const LCV_TRUST = 16.0;
+fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) { lcv_add_p(q, n, l, LCV_PART); }
+fn lcv_add_p(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>, part: u32) {
+  for (var k = 0; k < 2; k++) {
+    let sl = lc_find_k(lc_key_s(q, n, part, select(LCV_FINE, LCV_COARSE, k == 1)));
+    if (sl <= LC_MASK) { lc_add(sl, l); }
+  }
+}
+// the four cells round the point, on its surface, each as far as it has filled
+fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32, part: u32) -> vec4<f32> {
+  let an = abs(n); var ax = 2u; if (an.x >= an.y && an.x >= an.z) { ax = 0u; } else if (an.y >= an.z) { ax = 1u; }
+  let au = (ax + 1u) % 3u; let av = (ax + 2u) % 3u;
+  let fu = q[au] / size - 0.5; let fv = q[av] / size - 0.5;
+  let bu = floor(fu); let bv = floor(fv); let tu_ = fu - bu; let tv_ = fv - bv;
+  var acc = vec3<f32>(0.0); var sum = 0.0;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+    var c = q; c[au] = (bu + f32(i) + 0.5) * size; c[av] = (bv + f32(j) + 0.5) * size;
+    let w = select(1.0 - tu_, tu_, i == 1) * select(1.0 - tv_, tv_, j == 1);
+    let sl = lc_look_k(lc_key_s(c, n, part, size));
+    if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / LCV_TRUST, 1.0); acc += lc_out[sl].xyz * tr; sum += tr; }
+  } }
+  return vec4<f32>(acc, sum);
+}
+// rgb: the light, a: how much of it the cells could answer for
+fn lcv_read(q: vec3<f32>, n: vec3<f32>) -> vec4<f32> { return lcv_read_p(q, n, LCV_PART); }
+// the reflection cache: what a surface reflects depends on where it looks, so cells go by that direction too, coarsely: the light it shows changes slowly on anything rough
+fn lcv_rpart(r: vec3<f32>) -> u32 {
+  let b = vec3<u32>(round((r * 0.5 + vec3<f32>(0.5)) * 4.0));
+  return LCV_PART + 1u + b.x + b.y * 5u + b.z * 25u;
+}
+fn lcv_read_p(q: vec3<f32>, n: vec3<f32>, part: u32) -> vec4<f32> {
+  let a = lcv_at(q, n, LCV_FINE, part);
+  if (a.w >= 0.999) { return vec4<f32>(a.xyz, 1.0); }
+  let c = lcv_at(q, n, LCV_COARSE, part);
+  if (c.w > 0.0) { return vec4<f32>(a.xyz + c.xyz / c.w * (1.0 - a.w), min(a.w + c.w, 1.0)); }
+  return vec4<f32>(a.xyz, a.w);
 }
 // a path's light into a cell
 fn lc_add(sl: u32, l: vec3<f32>) {
@@ -408,8 +458,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
     let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     let f_ = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
-    lamp_share[li] = f_;
-    if (f_ > 0.0) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
+    lamp_share[li] = select(f_, 0.0, (u32(p.cam.w) & 32u) != 0u); // (a video: every lamp by the path's one ray, built up over frames. Rays for each lamp at each pixel were most of a frame)
+    if (f_ > 0.0 && (u32(p.cam.w) & 32u) == 0u) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
     li++; }
   // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
   var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
@@ -435,13 +485,26 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   }
   textureStore(out_lamp, px, vec4<f32>(dl_, gtao(px, g, pos, n, d, dims, w, h, ss)));
   var e = vec3<f32>(0.0);
-  let spp = p.dims.w;
+  // (a video: more paths where a surface has little history, just come into view or on a thin edge. What has been seen for frames needs few)
+  var spp = p.dims.w;
+  // (a video: the cache's answer, without a ray, where it has one. a 0 tells what follows that this pixel holds all its light. Elsewhere, paths, which fill the cache for next time)
+  let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
+  if (lcv_v) {
+    let cr = lcv_read(pos, n);
+    if (cr.w >= 0.7) {
+      if ((u32(p.cam.w) & 2u) != 0u) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); }
+      textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, 0.0)); return;
+    }
+    spp = 2u;
+  }
+  var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
     if (restir_) {
-      e += lamp_rest(o, n, true) + portal(o, n);
+      let lp_ = lamp_rest(o, n, true) + portal(o, n); e += lp_; dep_ += lp_;
       let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
+      dep_ += lc;
       let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
       rs.wsum += wi;
       if (rnd() * rs.wsum < wi) { rs.pos = g1_pos; rs.nrm = g1_nrm; rs.rad = lc; rs.lp = lm; }
@@ -451,6 +514,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
+  if (lcv_v) { lcv_add(pos, n, dep_ / f32(spp)); }
   if (restir_) { resv[u32(px.y * w + px.x)] = rs; textureStore(out_irr, px, vec4<f32>(e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return; }
   e = e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e;
   textureStore(out_irr, px, vec4<f32>(e, 0.0));
@@ -542,7 +606,7 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
   n = normalize(n);
   let vv = normalize(p.cam.xyz - pos); let rough = cur_.a;
   let al_ = textureLoad(g_alb, g, 0); let f0 = mix(vec3<f32>(0.04), al_.rgb, textureLoad(g_mat, g, 0).x);
-  seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 2654435761u) ^ 0x51ed270bu;
+  seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 2654435761u) ^ 0x51ed270bu ^ select(0u, p.misc.y * 19349663u, (u32(p.cam.w) & 64u) != 0u);
   let o = start_at(pos, n);
   var sel = r0; var wt = r0.wsum; var mt = r0.m;
   for (var k = 0u; k < RS_K; k++) {
@@ -572,12 +636,28 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
     wt += wn; mt += rq.m;
     if (rnd() * wt < wn) { sel = rq; }
   }
+  // (what this pixel kept last frame offers too, at most so many frames' worth: it would otherwise outweigh all that is new. The scene holds still, so the spot it found is still there)
+  if (rs_time()) {
+    let ip = rs_prev(pos, w, h);
+    if (ip >= 0) {
+      let rq = resv_a[off + u32(ip)];
+      if (rq.m > 0.0 && rq.wsum > 0.0 && rq.lp > 0.0) {
+        let lr = normalize(rq.pos - pos); let pr = dot(rq.rad * brdf_nl(n, vv, lr, rough, f0), vec3<f32>(0.333));
+        if (pr > 0.0) { let sc = min(1.0, 20.0 * max(r0.m, 1.0) / rq.m); let wn = pr / rq.lp * rq.wsum * sc; wt += wn; mt += rq.m * sc; if (rnd() * wt < wn) { sel = rq; } }
+      }
+    }
+    var keep_ = sel; keep_.wsum = wt; keep_.m = mt;
+    if (sel.lp > 0.0) { keep_.lp = dot(sel.rad * brdf_nl(n, vv, normalize(sel.pos - pos), rough, f0), vec3<f32>(0.333)); }
+    resv_b[off + u32(px.y * w + px.x)] = keep_;
+  }
   var ind = vec3<f32>(0.0);
   if (sel.lp > 0.0 && wt > 0.0) {
     let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8));
     let fn_ = sel.rad * brdf_nl(n, vv, l, rough, f0); let ps = dot(fn_, vec3<f32>(0.333));
     if (ps > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = fn_ / ps * (wt / max(mt, 1.0)) / dfg_of(rough, max(dot(n, vv), 1e-3), f0); }
   }
+  // (a video: what was traced here fills the reflection cache)
+  if ((u32(p.cam.w) & 64u) != 0u) { lcv_add_p(pos, n, min(cur_.rgb + ind, vec3<f32>(20.0)), lcv_rpart(reflect(-vv, n))); }
   textureStore(out_spec, px, vec4<f32>(min(cur_.rgb + ind, vec3<f32>(20.0)), rough));
 }
 const RS_SPEC_RADIUS = 10.0;
@@ -596,7 +676,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
-  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 19349663u) ^ 0x9e3779b9u;
+  seed = (u32(px.x) * 2654435761u) ^ (u32(px.y) * 19349663u) ^ 0x9e3779b9u ^ select(0u, p.misc.y * 83492791u, (u32(p.cam.w) & 64u) != 0u);
   let o = start_at(pos, n);
   let r0 = resv[u32(px.y * w + px.x)];
   var sel = r0; var wt = r0.wsum; var mt = r0.m;
@@ -626,6 +706,14 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
     wt += wn; mt += rq.m;
     if (rnd() * wt < wn) { sel = rq; }
   }
+  if (rs_time()) {
+    let ip = rs_prev(pos, w, h);
+    if (ip >= 0) {
+      let rq = resv_a[u32(ip)];
+      if (rq.m > 0.0 && rq.wsum > 0.0 && dot(n, rq.pos - pos) > 0.0) { let sc = min(1.0, 20.0 * max(r0.m, 1.0) / rq.m); let wn = rq.wsum * sc; wt += wn; mt += rq.m * sc; if (rnd() * wt < wn) { sel = rq; } }
+    }
+    var keep_ = sel; keep_.wsum = wt; keep_.m = mt; resv_b[u32(px.y * w + px.x)] = keep_;
+  }
   var ind = vec3<f32>(0.0);
   if (sel.lp > 0.0) {
     let v = sel.pos - pos; let l2 = dot(v, v); let l = v * inverseSqrt(max(l2, 1e-8)); let c = dot(n, l);
@@ -639,7 +727,8 @@ const AO_R = 0.5; // m
 fn gtao(px: vec2<i32>, g: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, d: f32, dims: vec2<f32>, w: i32, h: i32, ss: i32) -> f32 {
   let wp = max(length(world_of(g + vec2<i32>(ss, 0), d, dims, p.inv_vp) - pos), 1e-4);
   let rpx = clamp(AO_R / wp, 3.0, 40.0);
-  let rot = fract(52.9829189 * fract(dot(vec2<f32>(px), vec2<f32>(0.06711056, 0.00583715)))) * PI;
+  // (a video turns it a little each frame, or its pattern never averages out)
+  let rot = fract(52.9829189 * fract(dot(vec2<f32>(px), vec2<f32>(0.06711056, 0.00583715))) + select(0.0, f32(p.misc.y) * 0.61803399, (u32(p.cam.w) & 64u) != 0u)) * PI;
   var occ = 0.0;
   for (var k = 0; k < 2; k++) {
     let a = rot + f32(k) * PI / 2.0; let dir = vec2<f32>(cos(a), sin(a));
@@ -765,6 +854,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   // what a glossy surface reflects
   let a = textureLoad(g_alb, g, 0);
   let rough = a.a;
+  var hit_d = 0.0; var hit_n = 1.0;
   var sp = vec3<f32>(0.0); var rs_s = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
   let coat = textureLoad(g_nrm, g, 0).a;
   if (p.misc2.y > 0u) {
@@ -773,9 +863,18 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (a flat mirror, alb's a 0: what it shows was traced already, as a picture from the camera mirrored in it, with textures and its own light)
     let is_mirror = rough < 0.001;
     // (metal shows nothing but its reflections: full mode gives it one more ray)
-    let rays = select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror);
+    // (a video: paint and plaster reflect the room as a wide blur, which is the light the cache already gave. Rays are for what shows them)
+    let room_only = (u32(p.cam.w) & 64u) != 0u && textureLoad(g_mat, g, 0).x < 0.5 && rough > 0.35 && coat < 0.25;
+    if (room_only) { sp = e; }
+    // (and what is rough enough reads the reflection cache, filled by the first frame: no rays, so no grain. hit_d < 0 tells the history. Only what the cache hasn't seen yet traces, and fills it)
+    var turn = false;
+    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && !room_only && rough >= 0.15) {
+      let rc = lcv_read_p(pos, n, lcv_rpart(r0));
+      if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
+    }
+    let rays = select(select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, room_only), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
-    rs_s.m = f32(rays);
+    rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
     var nsp = n;
@@ -789,7 +888,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     // (at one sample a pixel that picture has jagged frames and a comb where wall texture beats with the pixels: a tent over the pixel takes them out, as the sub-pixels do for the room)
     if (is_mirror) {
       for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) {
-        sp += textureLoad(m_lit, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb * f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
+        sp += textureLoad(m_lit, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)) * vec2<i32>(textureDimensions(m_lit)) / vec2<i32>(w, h), 0).rgb * f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
       } }
     }
     for (var s = 0u; s < rays; s++) {
@@ -825,6 +924,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       }
       if (dot(rd, n) <= 0.0) { rd = r0; }
       let hh = closest(o, rd, 1000.0);
+      hit_d += select(min(hh.t, 30.0), 30.0, hh.i < 0);
       if (hh.i < 0) {
         var l = sky_at(rd);
         // (the sun only in a truly sharp reflection: on anything rough its highlight is already counted, and a ray that happened on it was a firefly)
@@ -875,9 +975,38 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
     let abg = dfg_ab(rough, nv_g);
     let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
-    sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0);
+    if (hit_d >= 0.0) { sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); } gl_ = vec3<f32>(0.0); // (the cache has it already)
   }
-  textureStore(out_glint, px, vec4<f32>(gl_, 0.0));
+  textureStore(out_glint, px, vec4<f32>(gl_, hit_d / hit_n)); // (a: how far the rays went, for a video's history)
   if ((u32(p.cam.w) & 4u) != 0u) { resv[u32(w * h) + u32(px.y * w + px.x)] = rs_s; }
   textureStore(out_spec, px, vec4<f32>(min(sp, vec3<f32>(20.0)), rough));
+}
+
+// a video's first frame, clean: its light goes into the cells later frames read
+@compute @workgroup_size(8, 8) fn lc_seed(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y); let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let g = px * ss + vec2<i32>(ss / 2);
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { return; }
+  let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  lcv_add(pos, normalize(n), textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb);
+}
+
+// and its clean reflections go into the reflection cache
+@compute @workgroup_size(8, 8) fn lc_seed_spec(@builtin(global_invocation_id) id: vec3<u32>) {
+  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y); let px = vec2<i32>(id.xy);
+  if (px.x >= w || px.y >= h) { return; }
+  let c = textureLoad(irr_done, px, 0);
+  if (c.a < 0.15) { return; }
+  let g = px * ss + vec2<i32>(ss / 2);
+  let d = textureLoad(g_depth, g, 0);
+  if (d >= 1.0) { return; }
+  let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
+  var n = textureLoad(g_nrm, g, 0).xyz;
+  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
+  n = normalize(n);
+  lcv_add_p(pos, n, c.rgb, lcv_rpart(reflect(normalize(pos - p.cam.xyz), n)));
 }

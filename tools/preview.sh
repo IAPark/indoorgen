@@ -3,7 +3,7 @@
 # options: --cams N (auto cameras, 2 per room), --cam cam.json (render_rust.py format), --view cam0|NAME (sidecar camera),
 #   --at ex,ey,ez,tx,ty,tz[,lens], --person I, --top, --sheet (contact sheet of all cameras/scenes), --res WxH, --sun az,el,
 #   --rt fast|full (path traced to look like Blender: about 0.4-0.8 s and 0.8-1.8 s a frame at 960x540 once loaded; --seed N: Blender's sky for that --seed),
-#   --bake still|video[:SECONDS] (up to 30 s of baking, then about 50-85 fps with the look of --rt full, video by ffmpeg to -o X.mp4: see the head of src/bake.rs),
+#   --rt video (frames of a moving camera: give --cam once per frame, -o DIR gets one png per frame. The first frame is a fast picture, the rest build on it from the light cache and history, about 40-70 ms each at 960x540 once loaded. Encode with ffmpeg -framerate 30 -pattern_type glob -i 'DIR/*.png' -c:v libx264 -pix_fmt yuv420p out.mp4),
 #   --exposure E, --ao A, --no-ceiling, -v (timings). Output: OUT.png = one image (sheet if several), OUT_DIR = one png per camera.
 # Positional shorthand: preview.sh X.glb OUT.png   (3 auto cameras -> sheet)
 D=${0:A:h}/preview; B=$D/target/release/preview

@@ -1,9 +1,9 @@
 //! preview: headless real-time (wgpu/Metal) previewer for infinigen-rs glb scenes.
 //! Flat/textured base colors, sun + shadow map, point lights, SSAO, ACES tonemap. Many cameras per process.
-mod bake;
 mod glb;
 #[cfg(not(target_arch = "wasm32"))]
 mod oidn;
+mod prepass;
 mod rt;
 mod vox;
 #[cfg(target_arch = "wasm32")]
@@ -76,9 +76,9 @@ struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 
 #[derive(Clone)]
 struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String, [[f32; 4]; 2])>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the room's floor in view, walls considered */ cover: f32, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
 
-struct Opts {
+pub struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
-    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>, depth: bool, sidecar_lighting: bool, rt: Option<rt::Quality>, seed: u64, bake: Option<String>,
+    sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>, depth: bool, sidecar_lighting: bool, rt: Option<rt::Quality>, seed: u64,
 }
 #[derive(Clone)]
 enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String) }
@@ -86,7 +86,7 @@ enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(Strin
 fn parse_args() -> Opts {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
-        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None, depth: false, rt: None, seed: 0, bake: None, sidecar_lighting: false };
+        sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None, depth: false, rt: None, seed: 0, sidecar_lighting: false };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
     while i < a.len() {
@@ -113,9 +113,9 @@ fn parse_args() -> Opts {
             "--sidecar-lighting" => o.sidecar_lighting = true,
             "--cloth" => o.cloth = Some(PathBuf::from(val())),
             "--depth" => o.depth = true, // also write <scene>_<cam>.depth.npy (float32 z-depth in metres along the optical axis, 0 = no surface) next to the pngs (OUT_DIR mode)
-            "--rt" => { let q = rt::Quality::parse(&val()); o.ss = q.ss; o.rt = Some(q); }
+            "--rt" => { let q = rt::Quality::parse(&val()); o.ss = q.ss; o.rt = Some(q); if q.video { prepass::ON.store(true, std::sync::atomic::Ordering::Relaxed); } }
             "--seed" => o.seed = val().parse().unwrap(),
-            "--bake" => { o.bake = Some(val()); bake::ON.store(true, std::sync::atomic::Ordering::Relaxed); o.rt = Some(rt::Quality::parse("full")); o.ss = 1; }
+            "--bake" => { eprintln!("--bake is gone: use --rt video (see tools/preview.sh)"); std::process::exit(2); }
             "-v" => o.verbose = true,
             _ => o.inputs.push(PathBuf::from(k)),
         }
@@ -370,7 +370,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let graph = if glass || shown || flags != 0 || m.tex.is_some() { None } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| emitted.get(i as usize)).and_then(|e| e.as_ref()) };
             let pipe = graph.map(|e| *pipe_of.entry(e.code.clone()).or_insert_with(|| {
                 // (path traced: Blender's bump filter draws a 2 mm joint about a pixel wide, whatever the distance: here it would all but vanish)
-                let src = bake::shader(SRC).replace("/*LIB*/", &ig_shade::wgsl::LIB.replace("clamp(mortar / w, 0.0, 1.0)", "clamp(mortar * select(1.0, 3.5, g.params2.w > 0.5) / w, 0.0, 1.0)")).replace("/*SURF*/", &format!("pbr = true;\n  let obj = (m.obj * vec4<f32>(v.wpos, 1.0)).xyz;\n{}", e.code));
+                let src = prepass::shader(SRC).replace("/*LIB*/", &ig_shade::wgsl::LIB.replace("clamp(mortar / w, 0.0, 1.0)", "clamp(mortar * select(1.0, 3.5, g.params2.w > 0.5) / w, 0.0, 1.0)")).replace("/*SURF*/", &format!("pbr = true;\n  let obj = (m.obj * vec4<f32>(v.wpos, 1.0)).xyz;\n{}", e.code));
                 let sm = gpu.dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(src.into()) });
                 pipes.push(make_main_pipe(&gpu.dev, &sm, g_bgl, mat_bgl, false));
                 pipes.len() - 1
@@ -440,7 +440,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     let c = (sh_lo + sh_hi) * 0.5; let r = ((sh_hi - sh_lo) * 0.5).length();
     let sv = look_at_rh(c + sdir * r * 2.0, c, Vec3::Z);
     let sp = orthographic_rh(-r, r, -r, r, 0.0, r * 4.0);
-    let shs = if opts.rt.is_some() && opts.bake.is_none() { 4 } else { SHADOW }; // (traced pictures don't use it, and it is tens of MB)
+    let shs = if opts.rt.is_some() { 4 } else { SHADOW }; // (traced pictures don't use it, and it is tens of MB)
     let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: shs, height: shs, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] });
     if opts.verbose { eprintln!("  scene on GPU {:.2}s ({} draws, {} lights, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), draws.len(), lights.len(), bmin, bmax); }
@@ -952,7 +952,7 @@ fn resolve_cams(s: &Scene, o: &Opts) -> Vec<Cam> {
 
 // ---------------- renderer ----------------
 struct Targets { m: [wgpu::TextureView; 4], m_depth: wgpu::TextureView, m_lit: wgpu::Texture, m_acc: wgpu::Texture, m_lit_v: wgpu::TextureView, m_acc_v: wgpu::TextureView, alb: wgpu::TextureView, mat: wgpu::TextureView, lit: wgpu::TextureView, hdr: wgpu::TextureView, nrm: wgpu::TextureView, depth: wgpu::TextureView, depth_tex: wgpu::Texture, dbuf: wgpu::Buffer, dbpr: u32, out: wgpu::Texture, readback: wgpu::Buffer, w: u32, h: u32, bpr: u32 }
-struct Renderer { agx: wgpu::TextureView, agx_smp: wgpu::Sampler, rt: Option<rt::Pipes>, last_gl: Option<Globals>, rt_now: bool,
+struct Renderer { zp: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>, agx: wgpu::TextureView, agx_smp: wgpu::Sampler, rt: Option<rt::Pipes>, last_gl: Option<Globals>, rt_now: bool,
     gpu: Gpu, ubuf: wgpu::Buffer, g_bgl: wgpu::BindGroupLayout, mat_bgl: wgpu::BindGroupLayout, post_bgl: wgpu::BindGroupLayout,
     shadow_pipe: wgpu::RenderPipeline, main_pipe: wgpu::RenderPipeline, glass_pipe: wgpu::RenderPipeline, post_pipe: wgpu::RenderPipeline,
     cmp_smp: wgpu::Sampler, white: wgpu::TextureView, smp: wgpu::Sampler, tg: Targets, last_depth: Option<Vec<f32>>,
@@ -962,14 +962,15 @@ fn vbuf_layouts() -> [wgpu::VertexBufferLayout<'static>; 3] {
      wgpu::VertexBufferLayout { array_stride: 12, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![1 => Float32x3] },
      wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![2 => Float32x2] }]
 }
-fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets {
-    let (w, h) = (o.res.0 * o.ss, o.res.1 * o.ss);
+fn make_targets(dev: &wgpu::Device, o: &Opts) -> Targets { targets_at(dev, o, o.ss) }
+fn targets_at(dev: &wgpu::Device, o: &Opts, ss: u32) -> Targets {
+    let (w, h) = (o.res.0 * ss, o.res.1 * ss);
     let mk = |fmt, usage| dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: fmt, usage, view_formats: &[] });
     let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
     let hdr = mk(wgpu::TextureFormat::Rgba16Float, rt).create_view(&Default::default());
     let alb = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::COPY_SRC).create_view(&Default::default());
     let mat = mk(wgpu::TextureFormat::Rgba16Float, rt).create_view(&Default::default());
-    let lit = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC).create_view(&Default::default());
+    let lit = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST).create_view(&Default::default());
     let nrm = mk(wgpu::TextureFormat::Rgba16Float, rt | wgpu::TextureUsages::COPY_SRC).create_view(&Default::default());
     let depth_tex = mk(wgpu::TextureFormat::Depth32Float, rt | wgpu::TextureUsages::COPY_SRC);
     let depth = depth_tex.create_view(&Default::default());
@@ -1059,7 +1060,7 @@ fn make_main_pipe(dev: &wgpu::Device, sm: &wgpu::ShaderModule, g_bgl: &wgpu::Bin
     dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&layout),
         vertex: wgpu::VertexState { module: sm, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &vl.iter().cloned().map(Some).collect::<Vec<_>>() },
         primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
-        depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: Some(!glass && !bake::on()), depth_compare: Some(if bake::on() { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less }), stencil: Default::default(), bias: Default::default() }),
+        depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: Some(!glass && !prepass::on()), depth_compare: Some(if prepass::on() { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less }), stencil: Default::default(), bias: Default::default() }),
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState { module: sm, entry_point: Some("fs_main"), compilation_options: Default::default(), targets: &tgt }), multiview_mask: None, cache: None })
 }
@@ -1085,7 +1086,7 @@ async fn init_with(inst: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, o
         wgpu::BindGroupLayoutEntry { binding: 4, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
         wgpu::BindGroupLayoutEntry { binding: 5, visibility: f, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None }]);
     let pl = |l: &[&wgpu::BindGroupLayout]| dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &l.iter().map(|x| Some(*x)).collect::<Vec<_>>(), immediate_size: 0 });
-    let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(bake::shader(SRC).replace("/*LIB*/", ig_shade::wgsl::LIB).into()) });
+    let sm = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(prepass::shader(SRC).replace("/*LIB*/", ig_shade::wgsl::LIB).into()) });
     let vl = vbuf_layouts();
     let prim = wgpu::PrimitiveState { cull_mode: None, ..Default::default() };
     let ds = |write: bool, bias: bool| wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: Some(write), depth_compare: Some(wgpu::CompareFunction::Less), stencil: Default::default(),
@@ -1116,7 +1117,7 @@ async fn init_with(inst: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, o
     let lut: Vec<u16> = raw.chunks_exact(6).flat_map(|c| { let f = |i: usize| half(u16::from_le_bytes([c[i], c[i + 1]]) as f32 / 65535.0); [f(0), f(2), f(4), half(1.0)] }).collect();
     let agx = dev.create_texture_with_data(&q, &wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 33, height: 33, depth_or_array_layers: 33 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D3, format: wgpu::TextureFormat::Rgba16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] }, wgpu::wgt::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&lut)).create_view(&Default::default());
     let agx_smp = dev.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
-    Renderer { agx, agx_smp, rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
+    Renderer { zp: None, agx, agx_smp, rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
 }
 
 fn frustum(vp: Mat4) -> [Vec4; 6] {
@@ -1206,6 +1207,11 @@ fn render(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) -> imag
 /// everything up to the picture in its read-back buffer, sent to the GPU
 fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) {
     DRAW_EYE.with(|c| c.set(None));
+    // (a video: the first frame is a fast picture on finer surfaces; after it the frames build their edges up by a camera that shifts a little each time)
+    let vid_later = r.rt_now && o.rt.map_or(false, |q| q.video) && s.rt.as_ref().map_or(false, |sd| sd.hist_st.lock().unwrap().is_some());
+    let new_tg = vid_later && r.tg.w != o.res.0; // (new surfaces hold no mirror pictures yet)
+    if new_tg { r.tg = targets_at(&r.gpu.dev, o, 1); }
+    let ss_now = if vid_later { 1 } else { o.ss };
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let aspect = o.res.0 as f32 / o.res.1 as f32;
     // clip range: 0.05-200 m for a house; outdoor scenes (terrain to a few km) push the far plane out and the near plane to 0.1 m
@@ -1213,17 +1219,22 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     let zn = cam.near.unwrap_or(zn);
     let proj = match cam.ortho { Some(w) => orthographic_rh(-w / 2.0, w / 2.0, -w / aspect / 2.0, w / aspect / 2.0, zn, zf),
         None => perspective_rh(2.0 * ((cam.fov_x / 2.0).tan() / aspect).atan(), aspect, zn, zf) };
-    let view = cam.view.inverse(); let vp = proj * view; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
+    let view = cam.view.inverse(); let vp0 = proj * view;
+    let vp = if vid_later && std::env::var_os("VID_NOJIT").is_none() { let (jx, jy) = rt::jitter(o.res); Mat4::from_translation(Vec3::new(jx, jy, 0.0)) * vp0 } else { vp0 }; let eye = cam.view.w_axis.truncate(); let fwd = -cam.view.z_axis.truncate().normalize();
     let (sun_az, sun_el, sun_i, ambient) = s.lit.map_or((o.sun.0, o.sun.1, o.sun_i, o.ambient), |l| (l.0, l.1, l.2, l.3));
     let (az, el) = (sun_az.to_radians(), sun_el.to_radians());
     let sdir = Vec3::new(el.cos() * az.cos(), el.cos() * az.sin(), el.sin());
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
         sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.72 * ambient, 0.75 * ambient, 0.8 * ambient, 0.0], ground: [0.58 * ambient, 0.55 * ambient, 0.5 * ambient, 0.0],
-        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, 0.0],
+        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, ss_now as f32, 1.0, 0.0],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }
     let rt_q = if r.rt_now { o.rt } else { None };
+    // (a video's first frame is a fast picture, on the same surfaces)
+    let first_v = rt_q.map_or(false, |q| q.video) && s.rt.as_ref().map_or(false, |sd| sd.hist_st.lock().unwrap().is_none());
+    // (the prepass draws with the sun's matrix, as a shadow map would: a traced video has none, and draws from the camera)
+    if rt_q.map_or(false, |q| q.video) { gl.sun_vp = gl.viewproj; }
     if rt_q.is_some() {
         // (path traced: no ambient occlusion or fill to fake, and AgX with its look)
         gl.params[2] = 0.0; gl.params2[2] = 0.0; gl.params2[3] = 1.0;
@@ -1260,18 +1271,29 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     let eye_leaf = if rt_q.is_some() && cam.near.is_none() && cam.only.is_none() { None } else { Some(eye) };
     {
         let sky = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
+        // (a video: depth first, so the surface shader runs only for what shows, and in order of material)
+        let quick: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&fr, d.bmin, d.bmax) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
+        if let (Some(l), Some(zp)) = (&quick, &r.zp) {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None, color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+            rp.set_bind_group(0, &g_bg, &[]);
+            prepass::z_draw(&mut rp, s, &zp.0, &zp.1, l);
+        }
+        let sky = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
         let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &tg.hdr, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } }),
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.nrm, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } }),
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.alb, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } }),
                                  Some(wgpu::RenderPassColorAttachment { view: &tg.mat, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(sky), store: wgpu::StoreOp::Store } })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: if quick.is_some() { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(1.0) }, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
         DRAW_EYE.with(|c| c.set(Some(eye)));
-        rp.set_pipeline(&r.main_pipe); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+        rp.set_pipeline(&r.main_pipe); if let Some(l) = &quick { prepass::draw_list(&mut rp, s, &r.main_pipe, l); } else { draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
         if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
-    if let (Some(_), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
+    // (a video redraws its mirrors' pictures every third frame: from one frame to the next they hardly move, and each costs a small trace)
+    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && !new_tg && rt::this_frame() % 3 != 1 { None } else { rt_q };
+    if let (Some(_), Some(p), Some(sd)) = (panes_q, r.rt.as_ref(), s.rt.as_ref()) {
         // what each mirror in view shows: the scene traced from the camera mirrored in it, what lies behind the glass cut away, only over the mirror's own part of the picture. Each is finished before the main picture needs it
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
         let black = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
@@ -1303,25 +1325,44 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
             let refl = Mat4::from_cols((Vec3::X - 2.0 * n.x * n).extend(0.0), (Vec3::Y - 2.0 * n.y * n).extend(0.0), (Vec3::Z - 2.0 * n.z * n).extend(0.0), (2.0 * d * n).extend(1.0));
             let vpm = vp * refl;
             let eye_m = refl.transform_point3(eye);
-            let mut gm = gl; gm.viewproj = vpm.to_cols_array_2d(); gm.inv_viewproj = vpm.inverse().to_cols_array_2d(); gm.cam_pos = eye_m.extend(1.0).into(); gm.clip = [n.x, n.y, n.z, d + 0.002]; gm.clip2 = [0.0; 4];
+            let mut gm = gl; gm.viewproj = vpm.to_cols_array_2d(); gm.inv_viewproj = vpm.inverse().to_cols_array_2d(); gm.cam_pos = eye_m.extend(1.0).into(); gm.clip = [n.x, n.y, n.z, d + 0.002]; gm.clip2 = [0.0; 4]; if rt_q.map_or(false, |q| q.video) { gm.sun_vp = gm.viewproj; }
             let ub = dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&gm), usage: wgpu::BufferUsages::UNIFORM });
             let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.g_bgl, entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&s.shadow_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }, wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&r.tg.m_acc_v) }] });
             let mut me = dev.create_command_encoder(&Default::default());
+            let m_list: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let frm = frustum(vpm); let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&frm, d.bmin, d.bmax) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
+            if let (Some(l), Some(zp)) = (&m_list, &r.zp) {
+                // (what lies behind the mirror is cut in the fragment shader: the prepass runs one for all)
+                let mut rp = me.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None, color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.m_depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+                rp.set_scissor_rect(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32);
+                rp.set_bind_group(0, &bg, &[]); rp.set_pipeline(&zp.1);
+                for &i in l { let d = &s.draws[i as usize];
+                    rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
+                    match d.nrm { Some(n) => rp.set_vertex_buffer(1, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 12)), None => rp.set_vertex_buffer(1, s.zeros.slice(0..d.vcount as u64 * 12)) }
+                    match d.uv { Some(n) => rp.set_vertex_buffer(2, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 8)), None => rp.set_vertex_buffer(2, s.zeros.slice(0..d.vcount as u64 * 8)) }
+                    rp.set_bind_group(1, &s.mat_bgs[d.mat_bg], &[]);
+                    let isz = if d.u16 { 2 } else { 4 };
+                    rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
+                    rp.draw_indexed(0..d.icount, 0, 0..1);
+                }
+            }
             {
                 let att = |v| Some(wgpu::RenderPassColorAttachment { view: v, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(black), store: wgpu::StoreOp::Store } });
                 let mut rp = me.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                     color_attachments: &[att(&tg.m[0]), att(&tg.m[1]), att(&tg.m[2]), att(&tg.m[3])],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.m_depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.m_depth, depth_ops: Some(wgpu::Operations { load: if m_list.is_some() { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(1.0) }, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
                 rp.set_scissor_rect(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32);
                 rp.set_bind_group(0, &bg, &[]);
                 let frm = frustum(vpm);
-                rp.set_pipeline(&r.main_pipe); DRAW_EYE.with(|c| c.set(Some(eye_m))); draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&frm), None, None, None);
+                rp.set_pipeline(&r.main_pipe); DRAW_EYE.with(|c| c.set(Some(eye_m)));
+                if let Some(l) = &m_list { prepass::draw_list(&mut rp, s, &r.main_pipe, l); } else { draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&frm), None, None, None); }
             }
-            let qm = rt::Quality { spp: 3, bounces: 2, spec_spp: 1, denoise: 5, ss: 1 };
-            rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, o.res, 1, qm, vpm, eye_m, 1, [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
+            let vid_m = rt_q.map_or(false, |q| q.video) && !first_v;
+            let qm = rt::Quality { spp: if vid_m { 1 } else { 3 }, bounces: 2, spec_spp: 1, denoise: if vid_m { 3 } else { 5 }, ss: 1, video: vid_m, hist: false };
+            rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, if qm.video { (o.res.0 / 2, o.res.1 / 2) } else { o.res }, if qm.video { 2 } else { 1 }, qm, vpm, eye_m, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
             let (ox, oy) = (x0 as u32, y0 as u32);
             me.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { texture: &tg.m_lit, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: &tg.m_acc, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
@@ -1331,7 +1372,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, o.res, o.ss, qu, vp, eye, 1, [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
+        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); if q2.video { 1 } else { o.ss } }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
         // the glass, forward, over the traced picture
         let mk = |v: &'_ wgpu::TextureView| v.clone();
         let (l, n, a, m) = (mk(&tg.lit), mk(&tg.nrm), mk(&tg.alb), mk(&tg.mat));
@@ -1341,6 +1382,9 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
         rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
+    }
+    if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
+        if qu.video && std::env::var_os("VID_NOTAA").is_none() { rt::taa(dev, &mut enc, p, sd, &tg.lit, &tg.depth, vp0, eye, o.res); }
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&r.agx) }, wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&r.agx_smp) },
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },
@@ -1643,6 +1687,7 @@ async fn read_out_web(r: &Renderer, o: &Opts) -> image::RgbaImage {
 /// the traced scene: built once, on the first render
 fn ensure_rt(r: &mut Renderer, s: &mut Scene, o: &Opts) { pollster::block_on(ensure_rt_async(r, s, o)) }
 async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
+    if o.rt.map_or(false, |q| q.video) && r.zp.is_none() { r.zp = Some(prepass::z_pipes(r)); }
     if r.rt.is_none() { r.rt = Some(rt::pipes(&r.gpu.dev, o.res.0, o.res.1, o.ss)); }
     if s.rt.is_some() { return }
     let t = Instant::now();
@@ -1657,7 +1702,7 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     let mut tris: Vec<([Vec3; 3], u32)> = vec![];
     for (i, d) in s.draws.iter().enumerate() {
         // (fittings let shadow rays through, as `visible_shadow = False` in Blender, but bounced light and reflections still land on them: a lampshade darkens the wall behind it, and a rim reflects the lit ceiling. A bake's rays know no difference: there they are left out)
-        if d.glass || (passes(d) && o.bake.is_some()) { continue }
+        if d.glass { continue }
         if passes(d) { mats[i].albedo[3] = 0.0; }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
@@ -1833,7 +1878,6 @@ fn main() {
         let mut s = load_scene(&r.gpu, path, &r.mat_bgl, &r.g_bgl, &r.white, &r.smp, &o);
         let cams = resolve_cams(&s, &o);
         if o.verbose { eprintln!("scene {} ready {:.2}s, {} cams", s.name, t.elapsed().as_secs_f32(), cams.len()); }
-        if o.bake.is_some() { bake::run(&mut r, &mut s, &o, &cams); continue; }
         let mut best_detail: HashMap<String, f32> = HashMap::new();
         // views are chosen on plain colours (their score counts edges, and texture is all edges: poor views scored well, and their alternates went untried), then drawn with materials
         let has_graphs = !s.pipes.is_empty();
@@ -1904,7 +1948,6 @@ fn main() {
         }
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
     }
-    if o.bake.is_some() { return; }
     if frames.is_empty() { eprintln!("no frames"); std::process::exit(2); }
     let is_png = o.out.extension().map_or(false, |e| e == "png");
     if o.sheet || (is_png && frames.len() > 1) {

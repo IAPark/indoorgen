@@ -22,10 +22,10 @@ for v in views:
     # (an old picture must not pass for this run's when a render fails)
     if os.path.exists(p): os.remove(p)
     t = time.time()
-    # (--rt bake[:SECONDS]: the baked mode. RT_CMP_PRE: a command to run the previewer under, as a lock for timing)
-    args = ['--bake', 'still' + mode[4:]] if mode.startswith('bake') else ['--rt', mode]
+    # (RT_CMP_PRE: a command to run the previewer under, as a lock for timing)
+    args = ['--rt', mode]
     r = subprocess.run(os.environ.get('RT_CMP_PRE', '').split() + [preview, f'{ref}/h{s}.glb', '--cam', f'{ref}/{v}.cam.json', '--res', '960x540', *args, *(['--seed', s] if os.environ.get('RT_SEED_HOUSE') else []), '-v', '-o', p], env=env, capture_output=True, text=True)
-    traced = [l for l in r.stderr.splitlines() if 'exposure x' in l or 'baked in' in l]
+    traced = [l for l in r.stderr.splitlines() if 'exposure x' in l]
     if not os.path.exists(p): print(v, 'failed', r.stderr[-400:]); continue
     a, b = Image.open(f'{ref}/{v}.png').convert('RGB').resize((960, 540)), Image.open(p).convert('RGB')
     blur = lambda im: im.filter(ImageFilter.GaussianBlur(12))
