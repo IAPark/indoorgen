@@ -542,7 +542,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
         // (by one sample of the lamps and windows, the same at any roughness: a limit here drew the jumps in a material's roughness across a floor)
         var e_hit = e;
-        if (rough > 0.15 && p.misc2.y > 1u) {
+        // (metal in any mode: with one ray too it shows nothing but this, and without the path a fridge washed out and lost its smudges)
+        if (rough > 0.15 && (p.misc2.y > 1u || textureLoad(g_mat, g, 0).x >= 0.5)) {
           // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
           let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
           var eh = lamp(q, ng) + portal(q, ng);
