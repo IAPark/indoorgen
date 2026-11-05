@@ -1349,7 +1349,10 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&s.shadow_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&r.cmp_smp) }, wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&r.tg.m_acc_v) }] });
             let mut me = dev.create_command_encoder(&Default::default());
-            let m_list: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let frm = frustum(vpm); let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&frm, d.bmin, d.bmax) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
+            // (culled by the mirror's own box on screen, not the whole mirrored view: what falls outside the box is cut anyway, and drawing it cost each mirror as much as the main view)
+            let crop = { let (rw, rh) = (o.res.0 as f32, o.res.1 as f32); let (ax, bx) = (x0 / rw * 2.0 - 1.0, x1 / rw * 2.0 - 1.0); let (ay, by) = (1.0 - y1 / rh * 2.0, 1.0 - y0 / rh * 2.0);
+                let (sx, sy) = (((bx - ax) * 0.5).max(1e-3), ((by - ay) * 0.5).max(1e-3)); Mat4::from_cols(Vec4::new(1.0 / sx, 0.0, 0.0, 0.0), Vec4::new(0.0, 1.0 / sy, 0.0, 0.0), Vec4::Z, Vec4::new(-(ax + bx) * 0.5 / sx, -(ay + by) * 0.5 / sy, 0.0, 1.0)) };
+            let m_list: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let frm = frustum(crop * vpm); let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&frm, d.bmin, d.bmax) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
             if let (Some(l), Some(zp)) = (&m_list, &r.zp) {
                 // (what lies behind the mirror is cut in the fragment shader: the prepass runs one for all)
                 let mut rp = me.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None, color_attachments: &[],
