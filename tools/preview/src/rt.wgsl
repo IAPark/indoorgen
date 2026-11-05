@@ -41,7 +41,7 @@ struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
 struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp: f32 };
 @group(0) @binding(18) var<storage, read_write> resv: array<R>;
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
-@group(0) @binding(19) var<storage, read> lc_cells: array<u32>;
+@group(0) @binding(19) var<storage, read_write> lc_cells: array<atomic<u32>>;
 @group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;
 const LC_SIZE = 0.2; const LC_MASK = 262143u;
@@ -54,14 +54,34 @@ fn lc_key(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
   h ^= h >> 15u; h *= 2246822519u; h ^= h >> 13u;
   return max(h, 1u);
 }
-// the slot of a cell, or the table's size if there is none
+// the slot of a cell, or the table's size if it has none. Paths make the cells they land in: only what rays reach takes a slot
 fn lc_find(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
   let k = lc_key(q, ng, part);
   for (var i = 0u; i < 8u; i++) {
-    let sl = (k + i) & LC_MASK; let ck = lc_cells[sl];
+    let sl = (k + i) & LC_MASK;
+    loop {
+      let ck = atomicLoad(&lc_cells[sl]);
+      if (ck == k) { return sl; } if (ck != 0u) { break; }
+      let r = atomicCompareExchangeWeak(&lc_cells[sl], 0u, k);
+      if (r.exchanged || r.old_value == k) { return sl; } if (r.old_value != 0u) { break; }
+    }
+  }
+  return LC_MASK + 1u;
+}
+// the same, for a read that wouldn't fill the cell
+fn lc_look(q: vec3<f32>, ng: vec3<f32>, part: u32) -> u32 {
+  let k = lc_key(q, ng, part);
+  for (var i = 0u; i < 8u; i++) {
+    let sl = (k + i) & LC_MASK; let ck = atomicLoad(&lc_cells[sl]);
     if (ck == k) { return sl; } if (ck == 0u) { break; }
   }
   return LC_MASK + 1u;
+}
+// a path's light into a cell
+fn lc_add(sl: u32, l: vec3<f32>) {
+  if (lc_out[sl].w >= LC_MAX) { return; }
+  let c = clamp(l, vec3<f32>(0.0), vec3<f32>(64.0)) * LC_FIX;
+  atomicAdd(&lc_acc[sl][0], u32(c.x)); atomicAdd(&lc_acc[sl][1], u32(c.y)); atomicAdd(&lc_acc[sl][2], u32(c.z)); atomicAdd(&lc_acc[sl][3], 1u);
 }
 // a place near the point, on its surface: read point by point the cells would show as blocks, and the filter takes this noise out
 fn lc_jit(q: vec3<f32>, ng: vec3<f32>) -> vec3<f32> { let b = basis(ng); return q + (b[0] * (rnd() - 0.5) + b[1] * (rnd() - 0.5)) * LC_SIZE; }
@@ -316,7 +336,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     var more = 1.0;
     if (b + 1u == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
     if (lc_on() && b + 1u < bounces && b < 2u) {
-      var sl = lc_find(lc_jit(q, ng), ng, t.mat); if (sl > LC_MASK) { sl = lc_find(q, ng, t.mat); }
+      let sl = lc_find(lc_jit(q, ng), ng, t.mat);
       lc_sl[b] = sl;
       // (the cache from the first hit that is further than a cell: nearer, in a corner or under a shelf, a cell's average would wash out the shadow. Where it has the light, and but for one path in 32, which goes on and adds to it)
       if (!lc_read && h.t >= LC_SIZE && b <= 1u && sl <= LC_MASK && lc_out[sl].w >= LC_MIN && (lc_out[sl].w >= LC_MAX || rnd() > 0.03125)) {
@@ -341,10 +361,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       // (hit k has k bounces fewer than the first: the next terms of the series)
       if (k > 0u) { rk *= lc_r; est += lc_last * rk; }
       let sl = lc_sl[k]; if (sl > LC_MASK) { continue; }
-      if (lc_out[sl].w >= LC_MAX) { continue; }
       let tk = lc_t[k]; if (max(tk.x, max(tk.y, tk.z)) <= 0.001) { continue; }
-      let c = clamp((e + est - lc_e[k]) / max(tk, vec3<f32>(0.001)), vec3<f32>(0.0), vec3<f32>(64.0)) * LC_FIX;
-      atomicAdd(&lc_acc[sl][0], u32(c.x)); atomicAdd(&lc_acc[sl][1], u32(c.y)); atomicAdd(&lc_acc[sl][2], u32(c.z)); atomicAdd(&lc_acc[sl][3], 1u);
+      lc_add(sl, (e + est - lc_e[k]) / max(tk, vec3<f32>(0.001)));
     }
   }
   return e;
@@ -811,7 +829,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         // (the cache where the reflection's spread at the hit is wider than a cell, by SHaRC's estimate of the cone: a sharper one would show the cell. It holds the sun and lamps too, so no shadow rays. A real branch below: select() runs both sides)
         let a2_ = rough * rough * rough * rough; let spread = 2.0 * hh.t * sqrt(0.5 * a2_ / max(1.0 - a2_, 1e-3));
         var sl = LC_MASK + 1u;
-        if (lc_on() && rough > 0.15 && hh.t >= LC_SIZE && spread >= LC_SIZE) { sl = lc_find(lc_jit(q, ng), ng, t.mat); if (sl > LC_MASK) { sl = lc_find(q, ng, t.mat); } }
+        let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
+        if (lc_on() && rough > 0.15 && hh.t >= LC_SIZE && spread >= LC_SIZE) { let jq = lc_jit(q, ng); if (on_metal) { sl = lc_find(jq, ng, t.mat); } else { sl = lc_look(jq, ng, t.mat); } }
         var lh_ = vec3<f32>(0.0);
         if (sl <= LC_MASK && lc_out[sl].w >= LC_MIN) {
           lh_ = m.emissive.rgb + m.albedo.rgb * lc_out[sl].xyz;
@@ -823,9 +842,9 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
           // (metal in any mode: with one ray too it shows nothing but this, and without the path a fridge washed out and lost its smudges)
           if (rough > 0.15 && (p.misc2.y > 1u || textureLoad(g_mat, g, 0).x >= 0.5)) {
             // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
-            let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
             var eh = lamp(q, ng) + portal(q, ng);
-            if (on_metal) { eh += gather(q, ng); }
+            // (what it finds here fills the cell, or a surface only reflections reach would never have one)
+            if (on_metal) { eh += gather(q, ng); if (sl <= LC_MASK) { lc_add(sl, p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + eh); } }
             e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
           }
           lh_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);

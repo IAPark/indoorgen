@@ -179,7 +179,7 @@ pub struct Pipes { pub ubuf_pre: wgpu::Buffer, pub lc_resolve: wgpu::ComputePipe
 
 #[repr(C)] #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Win { pub c: [f32; 4], pub u: [f32; 4], pub v: [f32; 4], pub n: [f32; 4] }
-pub struct SceneData { pub lc_filled: std::sync::atomic::AtomicBool, pub lc_cells: wgpu::Buffer, pub lc_acc: wgpu::Buffer, pub lc_out: wgpu::Buffer, pub lc_n: u32, pub wins: wgpu::Buffer, pub nwins: u32, pub nodes: wgpu::Buffer, pub tris: wgpu::Buffer, pub mats: wgpu::Buffer, pub lights: wgpu::Buffer, pub sky: wgpu::Buffer, pub nlights: u32, pub sky_wh: (u32, u32), pub sun: Vec3, pub sun_e: Vec3, pub skyp: SkyParams }
+pub struct SceneData { pub lc_eye: std::sync::Mutex<Vec3>, pub lc_cells: wgpu::Buffer, pub lc_acc: wgpu::Buffer, pub lc_out: wgpu::Buffer, pub lc_n: u32, pub wins: wgpu::Buffer, pub nwins: u32, pub nodes: wgpu::Buffer, pub tris: wgpu::Buffer, pub mats: wgpu::Buffer, pub lights: wgpu::Buffer, pub sky: wgpu::Buffer, pub nlights: u32, pub sky_wh: (u32, u32), pub sun: Vec3, pub sun_e: Vec3, pub skyp: SkyParams }
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -193,7 +193,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let tex = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let dep = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let out = |b| E { binding: b, visibility: c, ty: T::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: FMT, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
-    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16), tex(17), E { binding: 18, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, sto(19), E { binding: 20, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 21, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
+    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16), tex(17), E { binding: 18, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 19, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 20, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 21, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
     let denoise_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(1), dep(2), tex(3), tex(4), tex(5), out(6), out(7)] });
     let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10), tex(11), tex(12)] });
     let pipe = |bgl: &wgpu::BindGroupLayout, src: &str, ep: &str| {
@@ -219,16 +219,6 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
 
 /// triangles with their draw's index
 const LC_SLOTS: usize = 1 << 18; // must match LC_MASK in rt.wgsl
-/// must match lc_key in rt.wgsl
-fn lc_key(q: Vec3, ng: Vec3, part: u32) -> u32 {
-    let c = (q / 0.2).floor(); let an = ng.abs();
-    let s0 = if an.x >= an.y && an.x >= an.z { 0usize } else if an.y >= an.z { 1 } else { 2 };
-    let side = s0 as u32 * 2 + if ng[s0] < 0.0 { 1 } else { 0 };
-    let m = |v: f32, k: u32| (v as i32 as u32).wrapping_mul(k);
-    let mut h = m(c.x, 73856093) ^ m(c.y, 19349663) ^ m(c.z, 83492791) ^ part.wrapping_mul(2654435761) ^ side.wrapping_mul(3266489917);
-    h ^= h >> 15; h = h.wrapping_mul(2246822519); h ^= h >> 13;
-    h.max(1)
-}
 pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, verbose: bool) -> SceneData {
     use obvhs::triangle::Triangle;
     let t0 = web_time::Instant::now();
@@ -262,34 +252,13 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let ld: Vec<LightD> = lights.iter().take(64).map(|(p, c)| LightD { pos: p.extend(1.0).into(), col: c.extend(1.0).into() }).collect();
     let ld2 = if ld.is_empty() { vec![LightD { pos: [0.0; 4], col: [0.0; 4] }] } else { ld.clone() };
     let w0 = [Win { c: [0.0; 4], u: [0.0; 4], v: [0.0; 4], n: [0.0; 4] }];
-    // (RT_NO_LC=1: none. The light cache's cells, from every triangle: its middle, and more points on a large one, each side)
-    let mut lc_cells_v: Vec<u32> = vec![];
-    if std::env::var_os("RT_NO_LC").is_none() && !crate::bake::ON.load(std::sync::atomic::Ordering::Relaxed) {
-        lc_cells_v = vec![0; LC_SLOTS];
-        let (mask, mut count) = (LC_SLOTS as u32 - 1, 0u32);
-        for t in tris.iter() {
-            let (v0, e1, e2) = (Vec3::from(t.v0), Vec3::new(t.e1[0], t.e1[1], t.e1[2]), Vec3::new(t.e2[0], t.e2[1], t.e2[2]));
-            let cr = e1.cross(e2); let ar = cr.length(); if ar < 1e-9 { continue; } let nn = cr / ar;
-            let k = ((ar * 0.5 / (0.2 * 0.2) * 2.0).ceil() as u32).clamp(1, 4096); let g = (k as f32).sqrt().ceil() as u32;
-            for a in 0..g { for b in 0..g {
-                let (mut u, mut v) = ((a as f32 + 0.5) / g as f32, (b as f32 + 0.5) / g as f32); if u + v > 1.0 { u = 1.0 - u; v = 1.0 - v; }
-                let q0 = v0 + e1 * u + e2 * v;
-                for sg in [1.0f32, -1.0] {
-                    let n = nn * sg; let key = lc_key(q0 + n * 0.002, n, t.mat);
-                    for i in 0..8u32 { let sl = (key.wrapping_add(i) & mask) as usize; let ck = lc_cells_v[sl];
-                        if ck == key { break; } if ck == 0 { lc_cells_v[sl] = key; count += 1; break; } }
-                }
-            } }
-        }
-        if verbose { eprintln!("  light cache: {count} cells of {LC_SLOTS} slots"); }
-    }
-    let lc_n = lc_cells_v.len() as u32;
+    // (RT_NO_LC=1: none. The light cache's table starts empty: paths make the cells)
+    let lc_n = if std::env::var_os("RT_NO_LC").is_none() && !crate::bake::ON.load(std::sync::atomic::Ordering::Relaxed) { LC_SLOTS as u32 } else { 0 };
     let lc_size = if lc_n > 0 { LC_SLOTS as u64 * 16 } else { 16 };
     let lc_mk = |u| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: lc_size, usage: u, mapped_at_creation: false });
     let lc_rw = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let lc_cells = if lc_n > 0 { buf(bytemuck::cast_slice(&lc_cells_v)) } else { buf(&[0u8; 32]) };
-    drop(lc_cells_v);
-    SceneData { lc_filled: std::sync::atomic::AtomicBool::new(false), lc_cells, lc_acc: lc_mk(lc_rw), lc_out: lc_mk(lc_rw), lc_n, wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
+    let lc_cells = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: if lc_n > 0 { LC_SLOTS as u64 * 4 } else { 16 }, usage: lc_rw, mapped_at_creation: false });
+    SceneData { lc_eye: std::sync::Mutex::new(Vec3::splat(f32::MAX)), lc_cells, lc_acc: lc_mk(lc_rw), lc_out: lc_mk(lc_rw), lc_n, wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
 }
 
 pub struct Gb<'a> { pub mirror_lit: &'a wgpu::TextureView, pub depth: &'a wgpu::TextureView, pub nrm: &'a wgpu::TextureView, pub alb: &'a wgpu::TextureView, pub mat: &'a wgpu::TextureView, pub lit: &'a wgpu::TextureView, pub hdr: &'a wgpu::TextureView }
@@ -364,8 +333,9 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
             B { binding: 4, resource: R::TextureView(&p.irr[a]) }, B { binding: 5, resource: R::TextureView(&p.spec[a]) }, B { binding: 6, resource: R::TextureView(&p.irr[b]) }, B { binding: 7, resource: R::TextureView(&p.spec[b]) }] });
         let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.denoise); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups(wx, wy, 1);
     };
-    // (the rays of a pass all run at once and can't see each other's light: a sparse pass first, so the full trace of the first frame reads the cache too)
-    if use_lc && !sd.lc_filled.swap(true, std::sync::atomic::Ordering::Relaxed) && std::env::var_os("RT_NO_LC_FILL").is_none() {
+    // (the rays of a pass all run at once and can't see each other's light: a sparse pass first, so the full trace of a new view's first frame reads the cache too)
+    let new_view = use_lc && { let mut le = sd.lc_eye.lock().unwrap(); let n = *le != eye; *le = eye; n };
+    if new_view && std::env::var_os("RT_NO_LC_FILL").is_none() {
         let mut pre = pr; pre.cam[3] += 16.0; q.write_buffer(&p.ubuf_pre, 0, bytemuck::bytes_of(&pre));
         bg_u.set(&p.ubuf_pre);
         let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1], &p.lamp[0], &p.lamp[1]);
