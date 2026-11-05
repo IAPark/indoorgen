@@ -207,7 +207,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let ubuf = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<Params>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
     let step_ubufs = (0..12).map(|i: u32| dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&[1u32 << (i % 6), i % 6, (i / 6), 0]), usage: wgpu::BufferUsages::UNIFORM })).collect();
     let mk_at = |w: u32, h: u32| dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: FMT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING, view_formats: &[] }).create_view(&Default::default());
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST, view_formats: &[] }).create_view(&Default::default());
     let mk = || mk_at(w, h);
     Pipes { lamp: [mk(), mk()], glint: mk(), fine: mk_at(w * ss, h * ss), trace_fine, trace, trace_spec, denoise, compose, trace_bgl, denoise_bgl, compose_bgl, ubuf, step_ubufs, irr: [mk(), mk()], spec: [mk(), mk()] }
 }
@@ -241,6 +241,36 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: &[([Vec3; 3], u32)], mats: &[Mat
 
 pub struct Gb<'a> { pub mirror_lit: &'a wgpu::TextureView, pub depth: &'a wgpu::TextureView, pub nrm: &'a wgpu::TextureView, pub alb: &'a wgpu::TextureView, pub mat: &'a wgpu::TextureView, pub lit: &'a wgpu::TextureView, pub hdr: &'a wgpu::TextureView }
 
+/// the light as traced, through Open Image Denoise and back: everything so far has to finish first
+#[cfg(not(target_arch = "wasm32"))]
+fn learned_filter(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, irr: &wgpu::Texture, nrm: &wgpu::Texture, res: (u32, u32), ss: u32, quality: i32) {
+    let (w, h) = (res.0 as usize, res.1 as usize); let (nw, nh) = (res.0 * ss, res.1 * ss);
+    let bpr = (res.0 * 8 + 255) / 256 * 256; let nbpr = (nw * 8 + 255) / 256 * 256;
+    let mk = |sz: u64| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: sz, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let (bi, bn) = (mk((bpr * res.1) as u64), mk((nbpr * nh) as u64));
+    let copy = |e: &mut wgpu::CommandEncoder, t: &wgpu::Texture, b: &wgpu::Buffer, r: u32, ww: u32, hh: u32| e.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo { buffer: b, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(r), rows_per_image: Some(hh) } }, wgpu::Extent3d { width: ww, height: hh, depth_or_array_layers: 1 });
+    copy(enc, irr, &bi, bpr, res.0, res.1); copy(enc, nrm, &bn, nbpr, nw, nh);
+    let done = std::mem::replace(enc, dev.create_command_encoder(&Default::default())); q.submit([done.finish()]);
+    bi.slice(..).map_async(wgpu::MapMode::Read, |_| {}); bn.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let half = |d: &[u8], o: usize| half::f16::from_le_bytes([d[o], d[o + 1]]).to_f32();
+    let (di, dn) = (bi.slice(..).get_mapped_range().unwrap(), bn.slice(..).get_mapped_range().unwrap());
+    let (mut col, mut nor) = (vec![0f32; w * h * 3], vec![0f32; w * h * 3]);
+    let mut alpha = vec![0u8; w * h * 2];
+    for y in 0..h { for x in 0..w {
+        let o = y * bpr as usize + x * 8; let on = (y * ss as usize + ss as usize / 2) * nbpr as usize + (x * ss as usize + ss as usize / 2) * 8;
+        for c in 0..3 { let v = half(&di, o + c * 2); col[(y * w + x) * 3 + c] = if v.is_finite() { v } else { 0.0 }; let n = half(&dn, on + c * 2); nor[(y * w + x) * 3 + c] = if n.is_finite() { n } else { 0.0 }; }
+        alpha[(y * w + x) * 2..(y * w + x) * 2 + 2].copy_from_slice(&di[o + 6..o + 8]);
+    } }
+    drop(di); drop(dn);
+    let Some(out) = crate::oidn::denoise(&col, &nor, w, h, std::env::var("RT_OIDN_Q").ok().and_then(|v| v.parse().ok()).unwrap_or(quality)) else { return };
+    let mut bytes = Vec::with_capacity(w * h * 8);
+    for i in 0..w * h { for c in 0..3 { bytes.extend_from_slice(&half::f16::from_f32(out[i * 3 + c]).to_le_bytes()); } bytes.extend_from_slice(&alpha[i * 2..i * 2 + 2]); }
+    q.write_texture(wgpu::TexelCopyTextureInfo { texture: irr, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, &bytes,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(res.0 * 8), rows_per_image: Some(res.1) }, wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 });
+}
+
 pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, gb: &Gb, res: (u32, u32), ss: u32, qu: Quality, vp: Mat4, eye: Vec3, frame: u32, scales: [f32; 3], cutaway: bool) {
     let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
         dims: [res.0, res.1, ss, qu.spp], misc: [qu.bounces, frame, sd.nlights, sd.sky_wh.0], misc2: [sd.sky_wh.1, qu.spec_spp, sd.nwins, match std::env::var("RT_SHOW").as_deref() { Ok("albedo") => 2, Ok("sun") => 5, Ok("normal") => 6, Ok("flags") => 7, Ok("noglint") => 8, Ok("sheer") => 9, Ok("light") => 3, Ok("spec") => 4, _ => cutaway as u32 }], scale: [scales[0], sd.skyp.strength * scales[1], scales[2], sd.skyp.sun_size * 0.5] };
@@ -272,7 +302,17 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     { let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1], &p.lamp[0], &p.lamp[1]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
     lap(enc, "trace");
     let mut cur = 0usize;
-    for i in 0..qu.denoise as usize { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
+    // the light's filter: the learned one where there is one (not for a mirror's small picture), or the a-trous rounds
+    #[cfg(not(target_arch = "wasm32"))]
+    let learned = ss > 1 && qu.denoise > 0 && crate::oidn::available();
+    #[cfg(target_arch = "wasm32")]
+    let learned = false;
+    if learned {
+        #[cfg(not(target_arch = "wasm32"))]
+        learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 5);
+    } else {
+        for i in 0..qu.denoise as usize { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
+    }
     lap(enc, "denoise");
     { let tg = trace_bg(&p.irr[1 - cur], &p.spec[cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.trace_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
     lap(enc, "trace_spec");
