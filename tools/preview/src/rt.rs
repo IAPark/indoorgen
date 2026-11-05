@@ -13,7 +13,7 @@ impl Quality {
         match s {
             "fast" => Quality { spp: 1, bounces: 2, spec_spp: 2, denoise: 5, ss: 2, video: false, hist: false },
             // (frames of a moving camera, at 62 ms each: no learned filter, no finer pixels, and the cache reaches further)
-            "video" => Quality { spp: 1, bounces: 4, spec_spp: 1, denoise: 3, ss: 2, video: true, hist: true },
+            "video" => Quality { spp: 1, bounces: 4, spec_spp: 1, denoise: 5, ss: 2, video: true, hist: true },
             "full" => Quality { spp: 2, bounces: 4, spec_spp: 3, denoise: 5, ss: 3, video: false, hist: false },
             _ => panic!("--rt fast|full"),
         }
@@ -452,7 +452,11 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         #[cfg(not(target_arch = "wasm32"))]
         learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 4);
     } else {
-        for i in 0..if std::env::var_os("RT_NOFILTER").is_some() && ss > 1 { 0 } else { qu.denoise as usize } { filter(enc, cur, 1 - cur, i); cur = 1 - cur; }
+        for i in 0..if std::env::var_os("RT_NOFILTER").is_some() && ss > 1 { 0 } else { qu.denoise as usize } {
+            filter(enc, cur, 1 - cur, i); cur = 1 - cur;
+            // (a video keeps the first round as its history, as SVGF does: what few rays began is cleaned as it is kept, and its noise does not stay on a wall. Light from the first frame the filter leaves as it is)
+            if i == 0 && qu.video && qu.hist && hist_prev.is_some() && std::env::var_os("VID_NOKEEPF").is_none() { enc.copy_texture_to_texture(p.irr[cur].texture().as_image_copy(), p.hist[0][hist_i].texture().as_image_copy(), wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 }); }
+        }
     }
     lap(enc, "denoise");
     if qu.hist && !qu.video { accum(enc, 2, &p.lamp[0], false); accum(enc, 0, &p.irr[cur], false); lap(enc, "keep light"); }
