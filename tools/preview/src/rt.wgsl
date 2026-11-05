@@ -320,7 +320,10 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       lc_sl[b] = sl;
       // (the cache from the first hit that is further than a cell: nearer, in a corner or under a shelf, a cell's average would wash out the shadow. Where it has the light, and but for one path in 32, which goes on and adds to it)
       if (!lc_read && h.t >= LC_SIZE && b <= 1u && sl <= LC_MASK && lc_out[sl].w >= LC_MIN && (lc_out[sl].w >= LC_MAX || rnd() > 0.03125)) {
-        e += tp * lc_out[sl].xyz; lc_read = true; break;
+        // (a read one bounce on passes its light back to the hit before, so light builds up over frames with no limit on bounces. A cell stands for this hit and 3 more: from a hit that follows another, 2 more would be right, the same total as Blender's 4 in a room of one colour)
+        var v_ = lc_out[sl].xyz;
+        if (b == 1u) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); let s_ = 1.0 + r_ + r_ * r_; v_ *= s_ / (s_ + r_ * r_ * r_); }
+        e += tp * v_; lc_sl[b] = LC_MASK + 1u; lc_read = true; break;
       }
     }
     // (a cell holds all the light reaching its surface, the direct included: whoever reads it needs no shadow rays. Never read from the camera's own hit, so no shadow seen directly is averaged)
@@ -332,8 +335,8 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (Russian roulette: a path that has lost most of its light mostly ends here, and the ones that go on count for those that didn't. The same light on average, for fewer rays)
     if (b >= 1u) { let q_ = clamp(max(tp.x, max(tp.y, tp.z)) * 1.5, 0.15, 1.0); if (rnd() > q_) { break; } tp /= q_; }
   }
-  if (lc_on() && !lc_read) {
-    var est = vec3<f32>(0.0); var rk = 1.0;
+  if (lc_on()) {
+    var est = vec3<f32>(0.0); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= lc_r; }
     for (var k = 0u; k < 2u; k++) {
       // (hit k has k bounces fewer than the first: the next terms of the series)
       if (k > 0u) { rk *= lc_r; est += lc_last * rk; }
@@ -361,6 +364,12 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   n = normalize(n);
   seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 19349663u) ^ (p.misc.y * 83492791u);
   let o = start_at(pos, n);
+  // (the cache's first fill: one path from one pixel in each 4x4 block, so the full trace after it can already read the cache)
+  if ((u32(p.cam.w) & 16u) != 0u) {
+    var h_ = (u32(px.x >> 2u) * 73856093u) ^ (u32(px.y >> 2u) * 19349663u); h_ ^= h_ >> 13u; h_ *= 83492791u; h_ ^= h_ >> 16u;
+    if (u32(px.x & 3) == (h_ & 3u) && u32(px.y & 3) == ((h_ >> 2u) & 3u)) { seed ^= 0x9e3779b9u; _ = gather(o, n); }
+    return;
+  }
   // the lamps that matter here, apart from the filtered light, which would wash out their shadows. Each comes in gradually with its share of the light: a fixed number of lamps per pixel let a lamp drop out all at once, and cut its shadow off in a straight line across a wall
   // (close up, with only the lamp's own size as a limit: a ceiling beside a lamp is really that bright, and a floor on the distance left it dull)
   var ltotal = 0.0; var li = 0u;
