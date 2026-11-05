@@ -57,6 +57,17 @@ fn hist_settled(pos: vec3<f32>, n: vec3<f32>, w: i32, h: i32) -> bool {
   let ex = length(pos - pv.eye.xyz);
   return hn.r >= 3.0 && abs(hn.g - ex) <= 0.02 + 0.005 * ex && abs(hn.b - n.x) + abs(hn.a - n.y) <= 0.3;
 }
+// (is what is around it settled? Then this is an edge or a fine detail that misses its history by a hair each frame, not a surface coming into view. It is too small for a cell to show as a patch, and tracing it every frame was most of a slow move's cost)
+fn hist_around(pos: vec3<f32>, w: i32, h: i32) -> bool {
+  let ip = rs_prev(pos, w, h); if (ip < 0) { return false; }
+  let c = vec2<i32>(ip % w, ip / w); var nb = 0;
+  for (var k = 0; k < 4; k++) {
+    var o4 = array<vec2<i32>, 4>(vec2<i32>(3, 0), vec2<i32>(-3, 0), vec2<i32>(0, 3), vec2<i32>(0, -3));
+    let q = clamp(c + o4[k], vec2<i32>(0), vec2<i32>(w - 1, h - 1));
+    if (textureLoad(hist_n, q, 0).r >= 3.0) { nb++; }
+  }
+  return nb >= 3;
+}
 fn rs_time() -> bool { return (u32(p.cam.w) & 128u) != 0u; }
 fn rs_prev(pos: vec3<f32>, w: i32, h: i32) -> i32 {
   let c = pv.vp * vec4<f32>(pos, 1.0); if (c.w <= 0.0) { return -1; }
@@ -535,7 +546,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
     let cr = lcv_read(pos, n);
     // (a mirror's picture has no history, and takes the cache's answer directly)
-    if (settled || ((u32(p.cam.w) & 64u) == 0u && cr.w >= 0.7)) {
+    if (settled || (cr.w >= 0.7 && ((u32(p.cam.w) & 64u) == 0u || hist_around(pos, w, h)))) {
       if ((u32(p.cam.w) & 2u) != 0u) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); }
       textureStore(out_irr, px, vec4<f32>(cr.xyz * (1.0 - max(sheer, 0.0)) + thru_e, -1.0)); return;
     }
