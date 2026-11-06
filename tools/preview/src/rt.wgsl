@@ -43,6 +43,15 @@ struct R { pos: vec3<f32>, wsum: f32, nrm: vec3<f32>, m: f32, rad: vec3<f32>, lp
 // the light cache: bounced light arriving at a surface. Not its colour, which whoever reads it has; not the sun, lamps or windows, whose sharp shadows stay traced; one cell per 20 cm, side of a surface and part, so nothing leaks through a wall. Filled by the paths themselves, at every hit but the last: what a path gathers after a hit, over what reached that hit, is a sample of this. From a later hit it has fewer bounces left, so what those would have brought is estimated from the path's last light and the colour there, to keep Blender's count: no cell reads another while filling, or it would run on without end
 @group(0) @binding(22) var hist_n: texture_2d<f32>;
 // (what each coarse cell has seen by direction: for 8 parts of its hemisphere, the brightness brought back and how many paths brought it. Rays aim where the light is)
+// (what the trace found at each traced pixel: x the sun's visibility; y, z, w six of the lamps traced apart, 16 bits each, the lamp's index over its visibility in 255ths. 0xffff: none)
+@group(0) @binding(27) var<storage, read_write> vis_sh: array<vec4<u32>>;
+fn vis_lamp(e: vec4<u32>, li: u32) -> f32 {
+  for (var k = 0u; k < 6u; k++) {
+    let wd = select(select(e.w, e.z, k < 4u), e.y, k < 2u); let hv = (wd >> (16u * (k & 1u))) & 0xffffu;
+    if (hv != 0xffffu && (hv >> 8u) == li) { return f32(hv & 255u) / 255.0; }
+  }
+  return -1.0;
+}
 @group(0) @binding(26) var<storage, read_write> lc_guide: array<array<atomic<u32>, 16>>;
 var<private> g_use = false; var<private> g_dir = vec3<f32>(0.0); var<private> g_wt = 1.0;
 // (a video's reservoirs, last frame's and this frame's, turn about, and where a point was last frame)
@@ -125,7 +134,7 @@ fn lcv_add(q: vec3<f32>, n: vec3<f32>, l: vec3<f32>) { lcv_add_p(q, n, l, LCV_PA
 const GUIDE_MIN = 32u;
 fn guide_pick(sl: u32, n: vec3<f32>) -> u32 {
   g_use = false; g_wt = 1.0;
-  if (sl > LC_MASK || (u32(p.cam.w) & 256u) != 0u) { return 8u; }
+  if (sl > LC_MASK) { return 8u; }
   var m = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var tot = 0.0; var cnt = 0u;
   for (var i = 0u; i < 8u; i++) { let c = atomicLoad(&lc_guide[sl][8u + i]); cnt += c; if (c > 0u) { m[i] = f32(atomicLoad(&lc_guide[sl][i])) / (f32(c) * LC_FIX); tot += m[i]; } }
   if (cnt < GUIDE_MIN || tot <= 0.0) { return 8u; }
@@ -141,7 +150,7 @@ fn guide_pick(sl: u32, n: vec3<f32>) -> u32 {
 }
 // which part an unguided direction fell in, and what it brought back
 fn guide_add(sl: u32, n: vec3<f32>, d: vec3<f32>, l: vec3<f32>) {
-  if (sl > LC_MASK || (u32(p.cam.w) & 256u) != 0u) { return; }
+  if (sl > LC_MASK) { return; }
   let b_ = basis(n); let z = dot(d, n); let u1 = clamp(1.0 - z * z, 0.0, 0.9999);
   var a = atan2(dot(d, b_[1]), dot(d, b_[0])) / (2.0 * PI); if (a < 0.0) { a += 1.0; }
   let i = min(u32(u1 * 2.0), 1u) + min(u32(a * 4.0), 3u) * 2u;
@@ -163,28 +172,150 @@ fn lcv_at(q: vec3<f32>, n: vec3<f32>, size: f32, part: u32) -> vec4<f32> {
   let au = (ax + 1u) % 3u; let av = (ax + 2u) % 3u;
   let fu = q[au] / size - 0.5; let fv = q[av] / size - 0.5;
   let bu = floor(fu); let bv = floor(fv); let tu_ = fu - bu; let tv_ = fv - bv;
-  var acc = vec3<f32>(0.0); var sum = 0.0;
+  var acc = vec3<f32>(0.0); var sum = 0.0; var lo = 1e9; var hi = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     var c = q; c[au] = (bu + f32(i) + 0.5) * size; c[av] = (bv + f32(j) + 0.5) * size;
     let w = select(1.0 - tu_, tu_, i == 1) * select(1.0 - tv_, tv_, j == 1);
     let sl = lc_look_k(lc_key_s(c, n, part, size));
-    if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / select(LCV_TRUST_COARSE, LCV_TRUST_FINE, size < 0.2), 1.0); acc += lc_out[sl].xyz * tr; sum += tr; }
+    if (sl <= LC_MASK && lc_out[sl].w >= 1.0) { let tr = w * min(lc_out[sl].w / select(LCV_TRUST_COARSE, LCV_TRUST_FINE, size < 0.2), 1.0); acc += lc_out[sl].xyz * tr; sum += tr; let lm = dot(lc_out[sl].xyz, vec3<f32>(0.333)); lo = min(lo, lm); hi = max(hi, lm); }
   } }
+  lcv_spread = select(0.0, (hi - lo) / max(hi, 1e-4), hi > 0.0);
   return vec4<f32>(acc, sum);
 }
 // rgb: the light, a: how much of it the cells could answer for
 fn lcv_read(q: vec3<f32>, n: vec3<f32>) -> vec4<f32> { return lcv_read_p(q, n, LCV_PART); }
-// the reflection cache: what a surface reflects depends on where it looks, so cells go by that direction too, coarsely: the light it shows changes slowly on anything rough
-fn lcv_rpart(r: vec3<f32>) -> u32 {
-  let b = vec3<u32>(round((r * 0.5 + vec3<f32>(0.5)) * 4.0));
-  return LCV_PART + 1u + b.x + b.y * 5u + b.z * 25u;
-}
+var<private> lcv_spread = 0.0;
 fn lcv_read_p(q: vec3<f32>, n: vec3<f32>, part: u32) -> vec4<f32> {
   let a = lcv_at(q, n, LCV_FINE, part);
   if (a.w >= 0.999) { return vec4<f32>(a.xyz, 1.0); }
   let c = lcv_at(q, n, LCV_COARSE, part);
-  if (c.w > 0.0) { return vec4<f32>(a.xyz + c.xyz / c.w * (1.0 - a.w), min(a.w + c.w, 1.0)); }
+  if (c.w > 0.0) {
+    // (a coarse cell is 40 cm: where the light changes within it -- its neighbours differ, or the finer cells here disagree with it -- its average is a patch of the wrong light. It answers for less there, and the pixel traces)
+    var u = lcv_spread;
+    if (a.w > 0.05) { let fm = dot(a.xyz / a.w, vec3<f32>(0.333)); let cm = dot(c.xyz / c.w, vec3<f32>(0.333)); u = max(u, abs(fm - cm) / max(max(fm, cm), 1e-4)); }
+    let k = 1.0 - LCV_DOUBT * smoothstep(0.2, 0.5, u);
+    return vec4<f32>(a.xyz + c.xyz / c.w * (1.0 - a.w), min(a.w + c.w * k, 1.0));
+  }
   return vec4<f32>(a.xyz, a.w);
+}
+const LCV_DOUBT = 1.0;
+// ---- the reflection cache: at each 40 cm cell of a rough surface, what arrives from each way over its half-sphere, as a small image of directions (8x8, folded flat octahedrally, as games' radiance probes are) with coarser copies for rougher reads; and at 10 cm, how bright a spot is against its 40 cm cell, which scales what the map says. Not the sun or lamps themselves: their highlights are drawn apart
+@group(0) @binding(28) var<storage, read_write> m_idx: array<atomic<u32>>; // (each table slot's map, plus one: 0 for none; the last entry counts maps given out)
+@group(0) @binding(29) var<storage, read_write> m_acc: array<array<atomic<u32>, 256>>; // (64 directions: r, g, b, samples in 16ths)
+@group(0) @binding(30) var<storage, read_write> m_out: array<array<vec4<f32>, 85>>; // (8x8, 4x4, 2x2, 1x1: the light and its samples)
+const M_LV = 0u; const M_SIZE = 0.4;
+const M_MAPS = 16384u; const M_PART = 16600u; const M_DC = 16601u; const M_TRUST = 24.0;
+// (the light that came from a path's first direction, as a direction map wants it: the sky itself where it left by a window, which the path leaves to the window sample; else what the path brought, without the guide's weight)
+var<private> g1_esc = false;
+fn g1_l(lg: vec3<f32>, w_used: f32, d: vec3<f32>) -> vec3<f32> {
+  if (g1_esc) { return sky_at(d); }
+  return lg / max(w_used, 1e-3);
+}
+fn m_on() -> bool { return lc_on() && (u32(p.cam.w) & 2048u) != 0u; }
+// (the cell's own frame, by the side it is keyed on: the same for whoever writes or reads it)
+fn m_frame(ng: vec3<f32>) -> mat3x3<f32> {
+  let an = abs(ng); var ax = 2u; if (an.x >= an.y && an.x >= an.z) { ax = 0u; } else if (an.y >= an.z) { ax = 1u; }
+  var z = vec3<f32>(0.0); z[ax] = select(1.0, -1.0, ng[ax] < 0.0);
+  var x = vec3<f32>(0.0); x[(ax + 1u) % 3u] = 1.0;
+  return mat3x3<f32>(x, cross(z, x), z);
+}
+// (a direction on the half-sphere to the unit square: folded octahedrally, so each texel covers about as much of it)
+fn m_uv(d: vec3<f32>, fr: mat3x3<f32>) -> vec2<f32> {
+  let l = vec3<f32>(dot(d, fr[0]), dot(d, fr[1]), max(dot(d, fr[2]), 0.0));
+  let s = abs(l.x) + abs(l.y) + l.z; let pp = l.xy / max(s, 1e-6);
+  return clamp(vec2<f32>(pp.x + pp.y, pp.x - pp.y) * 0.5 + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(0.9999));
+}
+fn m_slot(q: vec3<f32>, ng: vec3<f32>) -> u32 { return lc_find_k(lc_key_s(q, ng, M_PART, M_SIZE)); }
+// one sample of the light arriving from d: into the map of q's cell, if it has one (or may take one), and into the cells of brightness, from paths only
+fn m_sample(q: vec3<f32>, ng: vec3<f32>, d: vec3<f32>, l: vec3<f32>, alloc: bool, dc: bool) {
+  let lc = clamp(l, vec3<f32>(0.0), vec3<f32>(64.0));
+  if (dc) { for (var k = 0u; k < 2u; k++) { let sl = lc_find_k(lc_key_s(q, ng, M_DC, select(LCV_FINE, M_SIZE, k == 1u))); if (sl <= LC_MASK) { lc_add(sl, lc); } } }
+  let sl = m_slot(q, ng); if (sl > LC_MASK) { return; }
+  var mi = atomicLoad(&m_idx[sl]);
+  if (mi == 0u && alloc) {
+    let nm = atomicAdd(&m_idx[LC_MASK + 1u], 1u);
+    if (nm < M_MAPS) { let r = atomicCompareExchangeWeak(&m_idx[sl], 0u, nm + 1u); mi = select(r.old_value, nm + 1u, r.exchanged); }
+  }
+  if (mi == 0u) { return; }
+  let m = mi - 1u;
+  if (m_out[m][84].w >= LC_MAX * 16.0) { return; }
+  // (spread over the four nearest directions, as a bilinear read will take it back)
+  let f = m_uv(d, m_frame(ng)) * 8.0 - vec2<f32>(0.5); let b = floor(f); let t = f - b;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+    let c = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(7));
+    let w = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1); let wq = u32(round(w * 16.0)); if (wq == 0u) { continue; }
+    let k = u32(c.y * 8 + c.x) * 4u; let v = lc * (f32(wq) / 16.0) * LC_FIX;
+    atomicAdd(&m_acc[m][k], u32(v.x)); atomicAdd(&m_acc[m][k + 1u], u32(v.y)); atomicAdd(&m_acc[m][k + 2u], u32(v.z)); atomicAdd(&m_acc[m][k + 3u], wq);
+  } }
+}
+fn m_resolve(m: u32) {
+  for (var t = 0u; t < 64u; t++) { let c = atomicLoad(&m_acc[m][t * 4u + 3u]); if (c > 0u) { m_out[m][t] = vec4<f32>(f32(atomicLoad(&m_acc[m][t * 4u])), f32(atomicLoad(&m_acc[m][t * 4u + 1u])), f32(atomicLoad(&m_acc[m][t * 4u + 2u])), 0.0) / (LC_FIX * f32(c) / 16.0) + vec4<f32>(0.0, 0.0, 0.0, f32(c)); } }
+  // (each coarser copy: its four finer texels, by how many samples each had)
+  var src = 0u; var dst = 64u; var r = 4u;
+  for (var lv = 0u; lv < 3u; lv++) {
+    for (var y = 0u; y < r; y++) { for (var x = 0u; x < r; x++) {
+      var a = vec3<f32>(0.0); var c = 0.0;
+      for (var k = 0u; k < 4u; k++) { let s = m_out[m][src + (y * 2u + (k >> 1u)) * r * 2u + x * 2u + (k & 1u)]; a += s.xyz * s.w; c += s.w; }
+      m_out[m][dst + y * r + x] = vec4<f32>(a / max(c, 1e-6), c);
+    } }
+    src = dst; dst += r * r; r = r / 2u;
+  }
+}
+// one level of a map along uv: the four nearest texels by how near, and only those that have samples
+fn m_tap(m: u32, uv: vec2<f32>, lv: u32) -> vec4<f32> {
+  var off = array<u32, 4>(0u, 64u, 80u, 84u); let res = i32(8u >> lv);
+  let f = uv * f32(res) - vec2<f32>(0.5); let b = floor(f); let t = f - b;
+  var a = vec3<f32>(0.0); var wsum = 0.0; var cnt = 0.0;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+    let c = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(res - 1));
+    let s = m_out[m][off[lv] + u32(c.y * res + c.x)];
+    let w = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1) * select(0.0, 1.0, s.w > 0.0);
+    a += s.xyz * w; wsum += w; cnt += s.w * w;
+  } }
+  return vec4<f32>(a / max(wsum, 1e-6), select(0.0, cnt / max(wsum, 1e-6) / 16.0, wsum > 1e-6));
+}
+// what a rough reflection at q shows, seen from v: four directions from its lobe, weighted as a traced ray would be, each read from the 40 cm maps around it, and scaled by how bright this spot is against its cell
+fn m_read(q: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0: vec3<f32>) -> vec4<f32> {
+  let fr = m_frame(n);
+  let an = abs(n); var ax = 2u; if (an.x >= an.y && an.x >= an.z) { ax = 0u; } else if (an.y >= an.z) { ax = 1u; }
+  let au = (ax + 1u) % 3u; let av = (ax + 2u) % 3u; let size = M_SIZE;
+  let fu = q[au] / size - 0.5; let fv = q[av] / size - 0.5; let bu = floor(fu); let bv = floor(fv); let tu_ = fu - bu; let tv_ = fv - bv;
+  var ms = array<u32, 4>(0u, 0u, 0u, 0u); var ws = array<f32, 4>(0.0, 0.0, 0.0, 0.0); var sum = 0.0;
+  for (var k = 0u; k < 4u; k++) {
+    let i = f32(k & 1u); let j = f32(k >> 1u);
+    var c = q; c[au] = (bu + i + 0.5) * size; c[av] = (bv + j + 0.5) * size;
+    let sl = lc_look_k(lc_key_s(c, n, M_PART, size)); if (sl > LC_MASK) { continue; }
+    let mi = atomicLoad(&m_idx[sl]); if (mi == 0u) { continue; }
+    let w = select(1.0 - tu_, tu_, (k & 1u) == 1u) * select(1.0 - tv_, tv_, (k >> 1u) == 1u) * min(m_out[mi - 1u][84].w / 16.0 / M_TRUST, 1.0);
+    ms[k] = mi; ws[k] = w; sum += w;
+  }
+  if (sum <= 0.0) { return vec4<f32>(0.0); }
+  var acc = vec3<f32>(0.0); let r0 = rnd(); let r1 = rnd();
+  for (var s = 0u; s < 4u; s++) {
+    let gs = ggx_dir(v, n, rough * rough, rough, f0, (f32(s & 1u) + r0) * 0.5, (f32(s >> 1u) + r1) * 0.5);
+    if (gs.skip) { continue; }
+    let uv = m_uv(gs.d, fr); var l = vec3<f32>(0.0); var lw = 0.0;
+    for (var k = 0u; k < 4u; k++) { if (ws[k] <= 0.0) { continue; } let t = m_tap(ms[k] - 1u, uv, M_LV); if (t.w > 0.0) { l += t.xyz * ws[k]; lw += ws[k]; } }
+    if (lw > 0.0) { acc += l / lw * gs.w; }
+  }
+  // (the spot against its cell: darker under a cabinet, nearer a wall. Only where both have filled)
+  let fd = lcv_at(q, n, LCV_FINE, M_DC); let cd = lcv_at(q, n, M_SIZE, M_DC);
+  var kr = 1.0;
+  if (fd.w > 0.5 && cd.w > 0.5) { kr = clamp(dot(fd.xyz / fd.w, vec3<f32>(0.333)) / max(dot(cd.xyz / cd.w, vec3<f32>(0.333)), 1e-4), 0.25, 4.0); }
+  return vec4<f32>(acc * 0.25 * kr, min(sum, 1.0));
+}
+// ---- the light leaving a surface a ray landed on, the same for every ray that lands: what its cell holds, where it may be read (sl: its cell, or none where a cell's average would show); otherwise one sample of the sun, lamps and windows, and for the rest a path from there or e_near, a stand-in the caller has at hand
+// (cheap: the sun alone by its ray, and e_near for all the rest -- a sharp reflection's many hits, where the full choice of lights cost a second a video in a tiled bathroom)
+fn shade_hit(q: vec3<f32>, ng: vec3<f32>, mi: u32, sl: u32, path: bool, cheap: bool, e_near: vec3<f32>) -> vec3<f32> {
+  let m = mats[mi];
+  if (sl <= LC_MASK && lc_out[sl].w >= LC_MIN) { return m.emissive.rgb + m.albedo.rgb * lc_out[sl].xyz; }
+  if (cheap) { return m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_near); }
+  var eh = direct_one(q, ng, true, false);
+  // (a cap on a stray bright sample, with room left for the sun's own light)
+  let cap_ = 8.0 + 2.0 * max(max(p.sun_col.r, p.sun_col.g), p.sun_col.b) * max(dot(ng, p.sun_dir.xyz), 0.0) / PI;
+  // (what a path finds here fills the cell, or a surface only reflections reach would never have one)
+  if (path) { eh += gather(q, ng); if (sl <= LC_MASK) { lc_add(sl, eh); } }
+  return m.emissive.rgb + m.albedo.rgb * (select(e_near, vec3<f32>(0.0), path) + eh * min(1.0, cap_ / max(max(max(eh.x, eh.y), eh.z), 1e-5)));
 }
 // a path's light into a cell
 fn lc_add(sl: u32, l: vec3<f32>) {
@@ -199,6 +330,7 @@ fn lc_on() -> bool { return (u32(p.cam.w) & 8u) != 0u; }
 const LC_MIN = 8.0; const LC_FIX = 1024.0;
 @compute @workgroup_size(64) fn lc_resolve(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x; if (i > LC_MASK) { return; }
+  let mi = atomicLoad(&m_idx[i]); if (mi > 0u) { m_resolve(mi - 1u); }
   let n = atomicLoad(&lc_acc[i][3]); if (n == 0u) { return; }
   lc_out[i] = vec4<f32>(f32(atomicLoad(&lc_acc[i][0])), f32(atomicLoad(&lc_acc[i][1])), f32(atomicLoad(&lc_acc[i][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
 }
@@ -419,11 +551,33 @@ fn through_window(o: vec3<f32>, d: vec3<f32>) -> bool {
   return false;
 }
 // light arriving at a surface directly
-fn direct(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-  return p.sun_col.rgb * max(dot(n, p.sun_dir.xyz), 0.0) * sun_vis(o, n) / PI + lamp(o, n) + portal(o, n);
+// the sun, the lamps and the windows as one list: one of them, chosen by what it would give here unshadowed, and one shadow ray for it. Three rays a hit before, one for each
+// (each kind that gives anything keeps a tenth of the choices at least: what a lamp would give unshadowed says little about a window's sky behind it)
+fn direct_one(o: vec3<f32>, n: vec3<f32>, sun_on: bool, rest: bool) -> vec3<f32> {
+  let ndl = max(dot(n, p.sun_dir.xyz), 0.0);
+  let es = select(0.0, dot(p.sun_col.rgb, vec3<f32>(0.333)) * ndl / PI, sun_on);
+  var el = 0.0; var i = 0u;
+  loop { if (i >= p.misc.z) { break; }
+    let v = lights[i].pos.xyz - o; let r2 = max(dot(v, v), 0.04); let l = v * inverseSqrt(r2);
+    el += select(1.0, 1.0 - lamp_share[min(i, 63u)], rest) * dot(lights[i].col.xyz, vec3<f32>(0.333)) * max(dot(n, l), 0.0) / r2;
+    i++; }
+  el *= p.scale.x;
+  var ew = 0.0; i = 0u;
+  loop { if (i >= p.misc2.z) { break; }
+    let w = wins[i]; let v = w.c.xyz - o; let r2 = max(dot(v, v), 0.05); let l = v * inverseSqrt(r2);
+    ew += dot(sky_at(l), vec3<f32>(0.333)) * w.c.w * max(dot(n, l), 0.03) * max(abs(dot(l, w.n.xyz)), 0.1) / (r2 * PI);
+    i++; }
+  let tot = es + el + ew; if (tot <= 0.0) { return vec3<f32>(0.0); }
+  var ps = select(0.0, max(es / tot, 0.1), es > 0.0); var pl = select(0.0, max(el / tot, 0.1), el > 0.0); var pw = select(0.0, max(ew / tot, 0.1), ew > 0.0);
+  let pt = ps + pl + pw; ps /= pt; pl /= pt; pw /= pt;
+  let u = rnd();
+  if (u < ps) { return p.sun_col.rgb * ndl * sun_vis(o, n) / (PI * ps); }
+  if (u < ps + pl) { return lamp_rest(o, n, rest) / pl; }
+  return portal(o, n) / max(pw, 1e-6);
 }
 // light gathered from the hemisphere over n, by paths (lit units: E / pi)
 fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
+  g1_esc = false;
   var o = o0; var n = n0; var tp = vec3<f32>(1.0); var e = vec3<f32>(0.0);
   let bounces = p.misc.x;
   var lc_sl = array<u32, 2>(LC_MASK + 1u, LC_MASK + 1u); var lc_e = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0)); var lc_t = lc_e;
@@ -434,7 +588,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     if (b == 0u && g_use) { d = g_dir; tp *= g_wt; }
     let h = closest(o, d, 1000.0);
     if (b == 0u) { g1_pos = o + d * 1000.0; g1_nrm = vec3<f32>(0.0); }
-    if (h.i < 0) { if (!through_window(o, d)) { e += tp * sky_at(d); } break; }
+    if (h.i < 0) { if (!through_window(o, d)) { e += tp * sky_at(d); } if (b == 0u) { g1_esc = true; } break; }
     let t = tris[h.i];
     let m = mats[t.mat];
     var ng = normalize(cross(t.e1.xyz, t.e2.xyz));
@@ -460,7 +614,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     }
     // (a cell holds all the light reaching its surface, the direct included: whoever reads it needs no shadow rays. Never read from the camera's own hit, so no shadow seen directly is averaged)
     if (b < 2u) { lc_e[b] = e; lc_t[b] = tp; }
-    let direct_here = direct(q, ng);
+    let direct_here = direct_one(q, ng, true, false);
     e += tp * direct_here * more;
     o = q; n = ng;
     if (b + 1u == bounces) { lc_last = tp * direct_here; lc_r = dot(m.albedo.rgb, vec3<f32>(0.333)); }
@@ -487,13 +641,14 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
-  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); return; }
+  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); } return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
   n = normalize(n);
   seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 19349663u) ^ (p.misc.y * 83492791u);
   let o = start_at(pos, n);
+  let m_want = textureLoad(g_alb, g, 0).a >= 0.15; // (rough enough for a reflection to read the direction maps: this surface's cell takes one)
   // (the cache's first fill: one path from one pixel in each 4x4 block, so the full trace after it can already read the cache)
   if ((u32(p.cam.w) & 16u) != 0u) {
     var h_ = (u32(px.x >> 2u) * 73856093u) ^ (u32(px.y >> 2u) * 19349663u); h_ ^= h_ >> 13u; h_ *= 83492791u; h_ ^= h_ >> 16u;
@@ -518,13 +673,25 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     ltotal += dot(lights[li].col.xyz, vec3<f32>(0.333)) * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     li++; }
   var dl_ = vec3<f32>(0.0); li = 0u;
+  var ent = array<u32, 6>(0xffffu, 0xffffu, 0xffffu, 0xffffu, 0xffffu, 0xffffu); var ne = 0u;
   loop { if (li >= min(p.misc.z, 64u)) { break; }
     let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
     let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     let f_ = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
     lamp_share[li] = select(f_, 0.0, no_apart);
-    if (f_ > 0.0 && !no_apart && !lamp_keep) { dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lamp_vis(o, lights[li].pos.xyz); }
+    if (f_ > 0.0 && !no_apart && !lamp_keep) {
+      let lv = lamp_vis(o, lights[li].pos.xyz);
+      dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lv;
+      if (ne < 6u) { ent[ne] = (li << 8u) | u32(round(lv * 255.0)); ne++; } // (for its highlight: the same shadow)
+    }
     li++; }
+  // the sun, with the lamps at this traced pixel: two rays, and more only where they differ, on a shadow's soft edge. Compose spreads it over the finer pixels by surface, as it does the lamps
+  var sv = 0.0;
+  if (dot(n, p.sun_dir.xyz) > 0.0) {
+    sv = sun_vis(o, n); let v2 = sun_vis(o, n);
+    if (v2 != sv) { var acc = sv + v2; for (var k = 0; k < 6; k++) { acc += sun_vis(o, n); } sv = acc / 8.0; }
+  }
+  vis_sh[u32(px.y * w + px.x)] = vec4<u32>(bitcast<u32>(sv), ent[0] | (ent[1] << 16u), ent[2] | (ent[3] << 16u), ent[4] | (ent[5] << 16u));
   // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
   var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
   let sheer = (textureLoad(g_mat, g, 0).w - 1.0) % 2.0;
@@ -541,7 +708,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
         var ng = normalize(cross(t_.e1.xyz, t_.e2.xyz));
         if (dot(ng, rd) > 0.0) { ng = -ng; }
         let q = pos + vd * 0.012 + rd * hh.t + ng * 0.002;
-        thru += m_.emissive.rgb + m_.albedo.rgb * direct(q, ng);
+        thru += shade_hit(q, ng, t_.mat, select(LC_MASK + 1u, lc_look(q, ng, t_.mat), lc_on() && hh.t >= LC_SIZE), false, false, vec3<f32>(0.0));
       }
     }
     thru *= 0.5;
@@ -562,7 +729,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     // (a quarter of the gather, in its own dense pass: here only the light that comes straight from lamps and windows. A pass that skipped pixels within its blocks would cost as much as tracing them all)
     if ((u32(p.cam.w) & 1024u) != 0u) {
       // (one sample of them: the frames before it settles average them, as they do its gather)
-      let ed = lamp_rest(o, n, true) + portal(o, n);
+      let ed = direct_one(o, n, false, true);
       resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
       textureStore(out_irr, px, vec4<f32>(ed * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return;
     }
@@ -572,18 +739,19 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
     if (restir_) {
-      let lp_ = lamp_rest(o, n, true) + portal(o, n); e += lp_; dep_ += lp_;
+      let lp_ = direct_one(o, n, false, true); e += lp_; dep_ += lp_;
       if (lcv_v) { _ = guide_pick(lc_look_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n); }
       let w_used = g_wt;
       let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
       if (lcv_v) { guide_add(lc_find_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n, normalize(g1_pos - o), lc / w_used); g_use = false; }
       dep_ += lc;
+      if (m_on()) { m_sample(pos, n, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), m_want, true); }
       let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
       rs.wsum += wi;
       if (rnd() * rs.wsum < wi) { rs.pos = g1_pos; rs.nrm = g1_nrm; rs.rad = lc; rs.lp = lm; }
       continue;
     }
-    let es = lamp_rest(o, n, true) + portal(o, n) + gather(o, n);
+    let es = direct_one(o, n, false, true) + gather(o, n);
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
     e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
   }
@@ -614,7 +782,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   n = normalize(n);
   seed = (u32(px.x) * 73856093u) ^ (u32(px.y) * 19349663u) ^ (p.misc.y * 83492791u) ^ 0x5bd1e995u;
   let o = start_at(pos, n);
-  let spp = 3u;
+  let spp = 3u; let m_want = textureLoad(g_alb, g, 0).a >= 0.15;
   var dep_ = vec3<f32>(0.0);
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
@@ -622,7 +790,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     let w_used = g_wt;
     let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
     guide_add(lc_find_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n, normalize(g1_pos - o), lc / w_used); g_use = false;
-    dep_ += lc;
+    dep_ += lc; if (m_on()) { m_sample(pos, n, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), m_want, true); }
     let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
     rs.wsum += wi;
     if (rnd() * rs.wsum < wi) { rs.pos = g1_pos; rs.nrm = g1_nrm; rs.rad = lc; rs.lp = lm; }
@@ -648,16 +816,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   seed = u32(px.x) + u32(px.y) * 4099u + p.misc.y * 65521u;
   seed = seed * 747796405u + 2891336453u; seed = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u; seed = (seed >> 22u) ^ seed;
   let o = start_at(pos, n);
-  // (two rays; only where they differ, on a shadow's soft edge, more)
-  var vis = sun_vis(o, n);
-  if (dot(n, p.sun_dir.xyz) > 0.0) {
-    let v2 = sun_vis(o, n);
-    if (v2 != vis) {
-      var acc = vis + v2;
-      for (var k = 0; k < 6; k++) { acc += sun_vis(o, n); }
-      vis = acc / 8.0;
-    }
-  }
+  var vis = 0.0;
   let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
   let b = vec2<i32>(floor(f));
   var tw = 0.0;
@@ -666,10 +825,16 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   } }
   var e = vec3<f32>(-1.0, 0.0, 0.0);
   if (tw < 0.02) {
+    // (the sun here too, since no traced pixel has it: two rays; only where they differ, on a shadow's soft edge, more)
+    vis = sun_vis(o, n);
+    if (dot(n, p.sun_dir.xyz) > 0.0) {
+      let v2 = sun_vis(o, n);
+      if (v2 != vis) { var acc = vis + v2; for (var k = 0; k < 6; k++) { acc += sun_vis(o, n); } vis = acc / 8.0; }
+    }
     e = vec3<f32>(0.0);
     let spp = p.dims.w;
     for (var s = 0u; s < spp; s++) {
-      let es = lamp(o, n) + portal(o, n) + gather(o, n);
+      let es = direct_one(o, n, false, false) + gather(o, n);
       e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
     }
     e /= f32(spp);
@@ -768,7 +933,6 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
     if (ps > 0.0 && !occluded(o, l, sqrt(l2) - 0.02)) { ind = fn_ / ps * (wt / max(mt, 1.0)) / dfg_of(rough, max(dot(n, vv), 1e-3), f0); }
   }
   // (a video: what was traced here fills the reflection cache)
-  if ((u32(p.cam.w) & 64u) != 0u) { lcv_add_p(pos, n, min(cur_.rgb + ind, vec3<f32>(20.0)), lcv_rpart(reflect(-vv, n))); }
   textureStore(out_spec, px, vec4<f32>(min(cur_.rgb + ind, vec3<f32>(20.0)), rough));
 }
 const RS_SPEC_RADIUS = 10.0;
@@ -907,7 +1071,7 @@ fn lamp_smooth(px: vec2<i32>, pos: vec3<f32>, n: vec3<f32>, dims: vec2<f32>, w: 
   return select(c, acc / wa, wa > 1e-4);
 }
 // The lamps' own highlights on a glossy surface, before Fresnel: reflections of the room carry no lamps, since a lamp is a point and no ray finds it
-fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f32, w: i32, h: i32, ss: i32, e: vec3<f32>) -> vec3<f32> {
+fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f32, w: i32, h: i32, ss: i32, e: vec3<f32>, sh: vec4<u32>) -> vec3<f32> {
   if (rough < 0.001 || p.misc2.w == 8u) { return vec3<f32>(0.0); }
   // relief finer than a pixel widens the highlight (Toksvig)
   var nb = n;
@@ -925,7 +1089,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let f0_ = mix(vec3<f32>(0.04), alb_, mt_);
   var cs = array<vec3<f32>, 7>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
   var ls = array<vec3<f32>, 7>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
-  var ms = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var ds = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var i = 0u;
+  var ms = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var ds = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0); var is_ = array<u32, 7>(0u, 0u, 0u, 0u, 0u, 0u, 0u); var i = 0u;
   loop { if (i >= p.misc.z) { break; }
     let v = lights[i].pos.xyz - pos; let r2 = max(dot(v, v), LAMP_R * LAMP_R); let dl = sqrt(r2); let l = v / dl; // (the lamp's own size as the limit: 20 cm dulled a highlight on anything nearer, inside a shade, a ceiling round a fitting)
     let ndl = dot(ns, l);
@@ -943,8 +1107,8 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
       // kept in order, the brightest first
       var k = 6;
       if (m_ > ms[6]) {
-        loop { if (k == 0 || m_ <= ms[k - 1]) { break; } ms[k] = ms[k - 1]; cs[k] = cs[k - 1]; ls[k] = ls[k - 1]; ds[k] = ds[k - 1]; k--; }
-        ms[k] = m_; cs[k] = c; ls[k] = l; ds[k] = dl;
+        loop { if (k == 0 || m_ <= ms[k - 1]) { break; } ms[k] = ms[k - 1]; cs[k] = cs[k - 1]; ls[k] = ls[k - 1]; ds[k] = ds[k - 1]; is_[k] = is_[k - 1]; k--; }
+        ms[k] = m_; cs[k] = c; ls[k] = l; ds[k] = dl; is_[k] = i;
       }
     }
     i++; }
@@ -953,9 +1117,41 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   for (var k = 0; k < 6; k++) {
     if (ds[k] <= 0.0 || ms[k] <= 0.002) { continue; }
     let wk = clamp(2.0 * (1.0 - ms[6] / ms[k]), 0.0, 1.0);
-    if (wk > 0.0 && !occluded(o, ls[k], ds[k] - 0.02)) { out += cs[k] * wk; }
+    if (wk <= 0.0) { continue; }
+    // (the shadow the trace found for this lamp's light, where it traced it: one shadow for both, and no second ray)
+    let sv_ = vis_lamp(sh, is_[k]);
+    if (sv_ >= 0.0) { out += cs[k] * wk * sv_; } else if (!occluded(o, ls[k], ds[k] - 0.02)) { out += cs[k] * wk; }
   }
   return min(out, vec3<f32>(50.0));
+}
+// ---- one direction from a rough surface's lobe, the same for a ray and for a read of the direction maps: GGX by its visible normals (Heitz 2018), weighted against the share compose multiplies by (F G2/G1 over the lobe's DFG). A narrow cone left out most of what a rough surface reflects: dark blades and metal doors
+struct GS { d: vec3<f32>, w: vec3<f32>, skip: bool };
+fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_: f32, u2: f32) -> GS {
+  let r0 = reflect(v, n);
+  if (al_ <= 0.001) { return GS(select(r0, r0, dot(r0, n) > 0.0), vec3<f32>(1.0), false); }
+  let vl = -v; let bs_ = basis(n);
+  let ve = vec3<f32>(dot(vl, bs_[0]), dot(vl, bs_[1]), dot(vl, bs_[2]));
+  let vh = normalize(vec3<f32>(al_ * ve.x, al_ * ve.y, ve.z));
+  let lsq = vh.x * vh.x + vh.y * vh.y;
+  let t1_ = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(-vh.y, vh.x, 0.0) * inverseSqrt(max(lsq, 1e-9)), lsq > 1e-9);
+  let t2_ = cross(vh, t1_);
+  let r_ = sqrt(u_); let ph = 2.0 * PI * u2;
+  let t1s = r_ * cos(ph); let sv = 0.5 * (1.0 + vh.z);
+  let t2s = (1.0 - sv) * sqrt(max(1.0 - t1s * t1s, 0.0)) + sv * r_ * sin(ph);
+  let nh = t1s * t1_ + t2s * t2_ + sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * vh;
+  let ne = normalize(vec3<f32>(al_ * nh.x, al_ * nh.y, max(0.0, nh.z)));
+  let h_w = bs_ * ne;
+  let rd = reflect(v, h_w);
+  let nl = dot(rd, n);
+  if (nl <= 0.0) { return GS(r0, vec3<f32>(0.0), true); }
+  let vdh = max(dot(vl, h_w), 0.0); let nv_ = max(dot(n, vl), 1e-3);
+  let fh = f0_ + (vec3<f32>(1.0) - f0_) * pow(1.0 - vdh, 5.0);
+  let a2 = al_ * al_;
+  let g1v = 2.0 * nv_ / (nv_ + sqrt(a2 + (1.0 - a2) * nv_ * nv_));
+  let g1l = 2.0 * nl / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
+  let g2g1 = g1l / max(g1v + g1l - g1v * g1l, 1e-3);
+  let ab_ = dfg_ab(rough, nv_);
+  return GS(rd, fh * g2g1 / max(f0_ * ab_.x + vec3<f32>(ab_.y), vec3<f32>(0.005)), false);
 }
 @compute @workgroup_size(8, 8) fn trace_spec(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
@@ -997,11 +1193,12 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
     } }
     let m_ok = !is_m || (u32(p.cam.w) & 64u) == 0u || rnd() < smoothstep(m_lo, m_lo + 0.2, rough); // (no draw unless it will be used: a still's noise stays as it was)
     if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= 0.15) {
-      let rc = lcv_read_p(pos, n, lcv_rpart(r0));
+      let rc = m_read(pos, n, v, rough, mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x));
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }
     let rays = select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
+    let m_feed = m_on() && rough >= 0.15 && !is_mirror; // (what the rays find here fills its cell's map: the cache fills where reflections look)
     rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
@@ -1019,44 +1216,20 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         sp += textureLoad(m_lit, clamp(px + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(w - 1, h - 1)) * vec2<i32>(textureDimensions(m_lit)) / vec2<i32>(w, h), 0).rgb * f32((2 - abs(i)) * (2 - abs(j))) / 16.0;
       } }
     }
+    let al_ = min(rough * rough + spec_w, 1.0);
     for (var s = 0u; s < rays; s++) {
       // the rough lobe as it really is (GGX, visible normals, Heitz 2018), each ray weighted against the share the composition step will multiply by. A narrow cone left out most of what a rough surface reflects: dark blades and metal doors
-      var rd = r0; var wt_ = vec3<f32>(1.0);
-      let al_ = min(rough * rough + spec_w, 1.0);
-      if (al_ > 0.001) {
-        let vl = -v; let bs_ = basis(n);
-        let ve = vec3<f32>(dot(vl, bs_[0]), dot(vl, bs_[1]), dot(vl, bs_[2]));
-        let vh = normalize(vec3<f32>(al_ * ve.x, al_ * ve.y, ve.z));
-        let lsq = vh.x * vh.x + vh.y * vh.y;
-        let t1_ = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(-vh.y, vh.x, 0.0) * inverseSqrt(max(lsq, 1e-9)), lsq > 1e-9);
-        let t2_ = cross(vh, t1_);
-        let u_ = rnd(); let r_ = sqrt(u_); let ph = 2.0 * PI * rnd();
-        let t1s = r_ * cos(ph); let sv = 0.5 * (1.0 + vh.z);
-        let t2s = (1.0 - sv) * sqrt(max(1.0 - t1s * t1s, 0.0)) + sv * r_ * sin(ph);
-        let nh = t1s * t1_ + t2s * t2_ + sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * vh;
-        let ne = normalize(vec3<f32>(al_ * nh.x, al_ * nh.y, max(0.0, nh.z)));
-        let h_w = bs_ * ne;
-        rd = reflect(v, h_w);
-        let nl = dot(rd, n);
-        if (nl <= 0.0) { continue; }
-        // F * G2 / G1, over what compose multiplies by
-        let vdh = max(dot(vl, h_w), 0.0); let nv_ = max(dot(n, vl), 1e-3);
-        let f0_ = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
-        let fh = f0_ + (vec3<f32>(1.0) - f0_) * pow(1.0 - vdh, 5.0);
-        let a2 = al_ * al_;
-        let g1v = 2.0 * nv_ / (nv_ + sqrt(a2 + (1.0 - a2) * nv_ * nv_));
-        let g1l = 2.0 * nl / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
-        let g2g1 = g1l / max(g1v + g1l - g1v * g1l, 1e-3) ;
-        let ab_ = dfg_ab(rough, nv_);
-        wt_ = fh * g2g1 / max(f0_ * ab_.x + vec3<f32>(ab_.y), vec3<f32>(0.005));
-      }
-      if (dot(rd, n) <= 0.0) { rd = r0; }
+      let u1_ = rnd(); let u2_ = rnd();
+      let gs_ = ggx_dir(v, n, al_, rough, f0_rs, u1_, u2_);
+      if (gs_.skip) { continue; }
+      let rd = gs_.d; let wt_ = gs_.w;
       let hh = closest(o, rd, 1000.0);
       hit_d += select(min(hh.t, 30.0), 30.0, hh.i < 0);
       if (hh.i < 0) {
         var l = sky_at(rd);
         // (the sun only in a truly sharp reflection: on anything rough its highlight is already counted, and a ray that happened on it was a firefly)
         if (rough < 0.03 && dot(rd, p.sun_dir.xyz) > cos(p.scale.w)) { l += p.sun_col.rgb * (1.0 / (2.0 * PI * (1.0 - cos(p.scale.w)))); }
+        if (m_feed) { m_sample(pos, n, rd, l, true, false); }
         if (use_rs) { rs_add(&rs_s, o + rd * 1000.0, vec3<f32>(0.0), l, wt_, n, -v, rd, rough, f0_rs); continue; }
         sp += l * wt_;
       } else {
@@ -1072,24 +1245,10 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
         var sl = LC_MASK + 1u;
         let on_metal = textureLoad(g_mat, g, 0).x >= 0.5;
         if (lc_on() && rough > 0.15 && hh.t >= LC_SIZE && spread >= LC_SIZE) { let jq = lc_jit(q, ng); if (on_metal) { sl = lc_find(jq, ng, t.mat); } else { sl = lc_look(jq, ng, t.mat); } }
-        var lh_ = vec3<f32>(0.0);
-        if (sl <= LC_MASK && lc_out[sl].w >= LC_MIN) {
-          lh_ = m.emissive.rgb + m.albedo.rgb * lc_out[sl].xyz;
-        } else {
-          // (the light it sees there, without the noise of more random choices: the sun, and the clean light of this pixel's own surroundings for the rest)
-          // (a rough reflection, which the filter smooths: the light where the ray landed, by one path. In a shaded door frame this pixel's own light made what it reflects far too dark)
-          // (by one sample of the lamps and windows, the same at any roughness: a limit here drew the jumps in a material's roughness across a floor)
-          var e_hit = e;
-          // (metal in any mode: with one ray too it shows nothing but this, and without the path a fridge washed out and lost its smudges)
-          if (rough > 0.15 && (p.misc2.y > 1u || textureLoad(g_mat, g, 0).x >= 0.5)) {
-            // (on metal, a real path from where it landed: all it shows is what it reflects, and this pixel's own light says nothing about a sunny wall across the room. A dark door reflected darkness. Too dear for the rest)
-            var eh = lamp(q, ng) + portal(q, ng);
-            // (what it finds here fills the cell, or a surface only reflections reach would never have one)
-            if (on_metal) { eh += gather(q, ng); if (sl <= LC_MASK) { lc_add(sl, p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + eh); } }
-            e_hit = select(0.5 * e, vec3<f32>(0.0), on_metal) + eh * min(1.0, 8.0 / max(max(max(eh.x, eh.y), eh.z), 1e-5));
-          }
-          lh_ = m.emissive.rgb + m.albedo.rgb * (p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(q, ng) / PI + e_hit);
-        }
+        // (metal, rough: a real path from where it landed, as all it shows is what it reflects. Rough: one sample of the lights, and half this pixel's own light for the bounce. Sharp, or one ray a pixel: the sun, and this pixel's own light for the rest)
+        let full_ = rough > 0.15 && (p.misc2.y > 1u || on_metal);
+        let lh_ = shade_hit(q, ng, t.mat, sl, on_metal && rough > 0.15, !full_, select(e, 0.5 * e, full_));
+        if (m_feed) { m_sample(pos, n, rd, lh_, true, false); }
         if (use_rs) { rs_add(&rs_s, q, ng, lh_, wt_, n, -v, rd, rough, f0_rs); continue; }
         sp += lh_ * wt_;
       }
@@ -1098,7 +1257,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   }
   textureStore(out_lamp, px, vec4<f32>(lamp_smooth(px, pos, n, dims, w, h, ss), ao_fine(px, pos, n, dims, w, h, ss)));
   // (not through the reflections' filter: it smeared the shadow each louvre blade casts on the next. Except where roughness comes from a map: its jumps drew hard shapes across a door and blotches on a floor)
-  var gl_ = lamp_glint(pos, n, o, g, rough, w, h, ss, e);
+  var gl_ = lamp_glint(pos, n, o, g, rough, w, h, ss, e, vis_sh[u32(px.y * w + px.x)]);
   if (rough > 0.08 && textureLoad(g_mat, g, 0).w >= 2.9 && coat < 0.25 && p.misc2.y > 0u) {
     let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
     let abg = dfg_ab(rough, nv_g);
@@ -1123,21 +1282,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   lcv_add(pos, normalize(n), textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb);
 }
 
-// and its clean reflections go into the reflection cache
-@compute @workgroup_size(8, 8) fn lc_seed_spec(@builtin(global_invocation_id) id: vec3<u32>) {
-  let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y); let px = vec2<i32>(id.xy);
-  if (px.x >= w || px.y >= h) { return; }
-  let c = textureLoad(irr_done, px, 0);
-  if (c.a < 0.15) { return; }
-  let g = px * ss + vec2<i32>(ss / 2);
-  let d = textureLoad(g_depth, g, 0);
-  if (d >= 1.0) { return; }
-  let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
-  var n = textureLoad(g_nrm, g, 0).xyz;
-  if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
-  n = normalize(n);
-  lcv_add_p(pos, n, c.rgb, lcv_rpart(reflect(normalize(pos - p.cam.xyz), n)));
-}
+
 
 // ---- a video fills the cache's coarse cells ahead of the camera: samples of the surfaces round it, so a pan or a turn finds them lit. A cell already full is skipped at once, so this costs less as the cache fills
 fn fill_at(dir: vec3<f32>) {
@@ -1155,7 +1300,9 @@ fn fill_at(dir: vec3<f32>) {
   _ = guide_pick(cg, ng); let w_used = g_wt;
   let lg = gather(o, ng); g_use = false;
   guide_add(cg, ng, normalize(g1_pos - o), lg / w_used);
-  let l = lamp_rest(o, ng, true) + portal(o, ng) + lg * s_ / (s_ + r_ * r_ * r_);
+  let dl1 = direct_one(o, ng, false, true);
+  if (m_on()) { m_sample(q, ng, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), false, true); }
+  let l = dl1 + lg * s_ / (s_ + r_ * r_ * r_);
   let lc = l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5));
   lcv_add_coarse(q, ng, lc);
   let sl = lc_find(lc_jit(q, ng), ng, t.mat);

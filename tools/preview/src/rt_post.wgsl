@@ -20,6 +20,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(6) var o_irr: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(13) var d_cnt: texture_2d<f32>;
 @group(0) @binding(7) var o_spec: texture_storage_2d<rgba16float, write>;
+const DN_A = 0.5;
 @compute @workgroup_size(8, 8) fn denoise(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
   let px = vec2<i32>(id.xy);
@@ -103,7 +104,10 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
   // (nor darker: along a moulding's top face a few paths each drew dashes of both. Again once the neighbours are smooth, for at first their mean is as noisy as the sliver)
   let lone = lone_round && ew < 0.45 && dot(av.rgb, av.rgb) > 0.0;
   // (a video: what has been seen for frames is clean already, and keeps its detail. The filter is for what is new)
-  let keep = select(0.0, select(0.0, 1.0, textureLoad(d_cnt, px, 0).r > 100.0), (u32(p.cam.w) & 64u) != 0u); // (what is clean is left as it is: only noise needs the filter)
+  // (and by how many frames it has: the filter's rounds widen it, and each frame a pixel has seen takes out as much noise as a wider round. A pixel seen for many frames keeps its detail, a new one is smoothed as before, as NRD's ReBLUR does)
+  let cnt_ = textureLoad(d_cnt, px, 0).r;
+  let rounds_ = 5.0 - DN_A * log2(max(abs(cnt_), 1.0));
+  let keep = select(0.0, select(select(0.0, 1.0, f32(it) >= rounds_), 1.0, cnt_ > 100.0), (u32(p.cam.w) & 64u) != 0u); // (what is clean is left as it is: only noise needs the filter)
   textureStore(o_irr, px, vec4<f32>(mix(select(ee, av.rgb, lone), c.rgb, select(keep, 0.0, spec_only)), 0.0));
   textureStore(o_spec, px, vec4<f32>(mix(sv, sc.rgb, select(0.0, keep, spec_only)), sc.a));
 }
@@ -217,6 +221,7 @@ fn taa_d(y: vec3<f32>) -> vec3<f32> {
   let c = vec3<f32>(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z);
   return c / max(1.0 - dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-3);
 }
+@group(0) @binding(14) var t_alb: texture_2d<f32>;
 @compute @workgroup_size(8, 8) fn taa(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(tu.al.y); let h = i32(tu.al.z); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
@@ -259,6 +264,9 @@ fn taa_d(y: vec3<f32>) -> vec3<f32> {
   let al = select(tu.al.w, 0.5, abs(dh - expect) > 0.05 * expect + 0.03);
   // (each frame's history is read off its pixels and softens a little: the new frame comes in a touch sharper, to make up for it)
   var nb = vec3<f32>(0.0); for (var k = 0; k < 4; k++) { var o4 = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1)); nb += taa_c(textureLoad(i_irr, clamp(px + o4[k], vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).rgb); }
-  let cy = taa_c(cur); let cs = cy + (cy - nb * 0.25) * tu.prev_eye.w;
+  // (sharpened only where the surface's own colour has an edge: grout, a pattern, a book's spine. On a plain wall what the sharpening would find is the light's noise, and it came back as mottling)
+  var ad = 0.0; let a0 = dot(textureLoad(t_alb, g, 0).rgb, vec3<f32>(0.333));
+  for (var k = 0; k < 4; k++) { var o4 = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1)); ad = max(ad, abs(dot(textureLoad(t_alb, clamp(g + o4[k] * sc, vec2<i32>(0), vec2<i32>(w * sc - 1, h * sc - 1)), 0).rgb, vec3<f32>(0.333)) - a0) / max(a0, 0.05)); }
+  let cy = taa_c(cur); let cs = cy + (cy - nb * 0.25) * tu.prev_eye.w * smoothstep(0.03, 0.12, ad);
   textureStore(o_irr, px, vec4<f32>(taa_d(mix(hy, vec3<f32>(max(cs.x, 0.0), cs.y, cs.z), al)), dist));
 }

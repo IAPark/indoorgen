@@ -32,14 +32,14 @@ fn halton(mut i: u32, b: u32) -> f32 { let (mut f, mut r) = (1.0, 0.0); while i 
 /// this frame's sub-pixel shift, in clip space
 pub fn jitter(res: (u32, u32)) -> (f32, f32) { let k = this_frame() % 16 + 1; (0.25 * (halton(k, 2) - 0.5) * 2.0 / res.0 as f32, 0.25 * (halton(k, 3) - 0.5) * 2.0 / res.1 as f32) /* (a quarter: edge flicker goes with the shift, and a full pixel's doubled it) */ }
 /// a video's picture built up over frames, at the end: edges, by the shifted camera
-pub fn taa(dev: &wgpu::Device, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, lit: &wgpu::TextureView, depth: &wgpu::TextureView, vp0: Mat4, eye: Vec3, res: (u32, u32)) {
+pub fn taa(dev: &wgpu::Device, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, lit: &wgpu::TextureView, depth: &wgpu::TextureView, alb: &wgpu::TextureView, vp0: Mat4, eye: Vec3, res: (u32, u32)) {
     use wgpu::BindGroupEntry as B; use wgpu::BindingResource as R;
     let mut st = sd.taa_st.lock().unwrap();
     let i = st.map_or(0, |x| 1 - x.2);
     let (pv, pe, first) = st.map_or((vp0, eye, 1.0f32), |x| (x.0, x.1, 0.0));
-    let mut tu = [0f32; 24]; tu[..16].copy_from_slice(&pv.to_cols_array()); tu[16..19].copy_from_slice(&pe.to_array()); tu[20] = first; tu[21] = res.0 as f32; tu[22] = res.1 as f32; tu[23] = std::env::var("VID_TAA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.25); tu[19] = std::env::var("VID_SHARP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.25);
+    let mut tu = [0f32; 24]; tu[..16].copy_from_slice(&pv.to_cols_array()); tu[16..19].copy_from_slice(&pe.to_array()); tu[20] = first; tu[21] = res.0 as f32; tu[22] = res.1 as f32; tu[23] = 0.25; tu[19] = std::env::var("VID_SHARP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.4);
     let ub = wgpu::util::DeviceExt::create_buffer_init(dev, &wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&tu), usage: wgpu::BufferUsages::UNIFORM });
-    let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.taa_bgl, entries: &[B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 8, resource: ub.as_entire_binding() }, B { binding: 2, resource: R::TextureView(depth) }, B { binding: 4, resource: R::TextureView(lit) }, B { binding: 5, resource: R::TextureView(&p.taa_h[1 - i]) }, B { binding: 6, resource: R::TextureView(&p.taa_h[i]) }] });
+    let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.taa_bgl, entries: &[B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 8, resource: ub.as_entire_binding() }, B { binding: 2, resource: R::TextureView(depth) }, B { binding: 14, resource: R::TextureView(alb) }, B { binding: 4, resource: R::TextureView(lit) }, B { binding: 5, resource: R::TextureView(&p.taa_h[1 - i]) }, B { binding: 6, resource: R::TextureView(&p.taa_h[i]) }] });
     { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.taa); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups(res.0.div_ceil(8), res.1.div_ceil(8), 1); }
     // (the first frame shows itself: finer surfaces, so its history is them averaged)
     if first < 1.0 { enc.copy_texture_to_texture(p.taa_h[i].texture().as_image_copy(), lit.texture().as_image_copy(), wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 }); }
@@ -201,7 +201,7 @@ pub fn sun_dir(p: &SkyParams) -> Vec3 {
     Vec3::new(e.cos() * r.sin(), e.cos() * r.cos(), e.sin())
 }
 
-pub struct Pipes { pub lc_room: wgpu::ComputePipeline, pub lc_fill: wgpu::ComputePipeline, pub lc_seed_spec: wgpu::ComputePipeline, pub lc_seed: wgpu::ComputePipeline, pub resv_t: [wgpu::Buffer; 2], pub taa: wgpu::ComputePipeline, pub taa_bgl: wgpu::BindGroupLayout, pub taa_h: [wgpu::TextureView; 2], pub temporal: wgpu::ComputePipeline, pub tmp_bgl: wgpu::BindGroupLayout, pub hist: [[wgpu::TextureView; 2]; 3], pub hn: [[wgpu::TextureView; 2]; 3], pub ubuf_pre: wgpu::Buffer, pub lc_resolve: wgpu::ComputePipeline, pub restir: wgpu::ComputePipeline, pub restir_spec: wgpu::ComputePipeline, pub resv: wgpu::Buffer,
+pub struct Pipes { pub vis: wgpu::Buffer, pub lc_room: wgpu::ComputePipeline, pub lc_fill: wgpu::ComputePipeline, pub lc_seed: wgpu::ComputePipeline, pub resv_t: [wgpu::Buffer; 2], pub taa: wgpu::ComputePipeline, pub taa_bgl: wgpu::BindGroupLayout, pub taa_h: [wgpu::TextureView; 2], pub temporal: wgpu::ComputePipeline, pub tmp_bgl: wgpu::BindGroupLayout, pub hist: [[wgpu::TextureView; 2]; 3], pub hn: [[wgpu::TextureView; 2]; 3], pub ubuf_pre: wgpu::Buffer, pub lc_resolve: wgpu::ComputePipeline, pub restir: wgpu::ComputePipeline, pub restir_spec: wgpu::ComputePipeline, pub resv: wgpu::Buffer,
     pub fine: wgpu::TextureView, pub glint: wgpu::TextureView, pub lamp: [wgpu::TextureView; 2], pub trace_fine: wgpu::ComputePipeline,
     pub trace: wgpu::ComputePipeline, pub gather_q: wgpu::ComputePipeline, pub trace_spec: wgpu::ComputePipeline, pub denoise: wgpu::ComputePipeline, pub compose: wgpu::ComputePipeline,
     pub trace_bgl: wgpu::BindGroupLayout, pub denoise_bgl: wgpu::BindGroupLayout, pub compose_bgl: wgpu::BindGroupLayout,
@@ -211,7 +211,7 @@ pub struct Pipes { pub lc_room: wgpu::ComputePipeline, pub lc_fill: wgpu::Comput
 
 #[repr(C)] #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct Win { pub c: [f32; 4], pub u: [f32; 4], pub v: [f32; 4], pub n: [f32; 4] }
-pub struct SceneData { pub lc_guide: wgpu::Buffer, pub pane_st: std::sync::Mutex<Option<(Vec3, Vec3)>>, pub taa_st: std::sync::Mutex<Option<(Mat4, Vec3, usize)>>, pub hist_st: std::sync::Mutex<Option<(Mat4, Vec3, usize, (u32, u32))>>, pub lc_eye: std::sync::Mutex<Vec3>, pub lc_cells: wgpu::Buffer, pub lc_acc: wgpu::Buffer, pub lc_out: wgpu::Buffer, pub lc_n: u32, pub wins: wgpu::Buffer, pub nwins: u32, pub nodes: wgpu::Buffer, pub tris: wgpu::Buffer, pub mats: wgpu::Buffer, pub lights: wgpu::Buffer, pub sky: wgpu::Buffer, pub nlights: u32, pub sky_wh: (u32, u32), pub sun: Vec3, pub sun_e: Vec3, pub skyp: SkyParams }
+pub struct SceneData { pub m_idx: wgpu::Buffer, pub m_acc: wgpu::Buffer, pub m_out: wgpu::Buffer, pub lc_guide: wgpu::Buffer, pub pane_st: std::sync::Mutex<Option<(Vec3, Vec3)>>, pub taa_st: std::sync::Mutex<Option<(Mat4, Vec3, usize)>>, pub hist_st: std::sync::Mutex<Option<(Mat4, Vec3, usize, (u32, u32))>>, pub lc_eye: std::sync::Mutex<Vec3>, pub lc_cells: wgpu::Buffer, pub lc_acc: wgpu::Buffer, pub lc_out: wgpu::Buffer, pub lc_n: u32, pub wins: wgpu::Buffer, pub nwins: u32, pub nodes: wgpu::Buffer, pub tris: wgpu::Buffer, pub mats: wgpu::Buffer, pub lights: wgpu::Buffer, pub sky: wgpu::Buffer, pub nlights: u32, pub sky_wh: (u32, u32), pub sun: Vec3, pub sun_e: Vec3, pub skyp: SkyParams }
 
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -225,9 +225,9 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let tex = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let dep = |b| E { binding: b, visibility: c, ty: T::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None };
     let out = |b| E { binding: b, visibility: c, ty: T::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: FMT, view_dimension: wgpu::TextureViewDimension::D2 }, count: None };
-    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[E { binding: 26, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, tex(22), uni(23), sto(24), E { binding: 25, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16), tex(17), E { binding: 18, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 19, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 20, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 21, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
+    let trace_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[E { binding: 28, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 29, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 30, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 27, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 26, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, tex(22), uni(23), sto(24), E { binding: 25, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, uni(0), sto(1), sto(2), sto(3), sto(4), sto(5), dep(6), tex(7), tex(8), out(9), out(10), sto(11), tex(12), tex(13), out(14), out(15), tex(16), tex(17), E { binding: 18, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 19, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 20, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }, E { binding: 21, visibility: c, ty: T::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
     let denoise_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(1), dep(2), tex(3), tex(4), tex(5), out(6), out(7), tex(13)] });
-    let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10), tex(11), tex(12)] });
+    let compose_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), sto(1), dep(2), tex(3), tex(4), tex(5), tex(6), tex(7), tex(8), out(9), tex(10), tex(11), tex(12), sto(13)] });
     let pipe = |bgl: &wgpu::BindGroupLayout, src: &str, ep: &str| {
         let sm = module(src);
         let l = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(bgl)], immediate_size: 0 });
@@ -241,7 +241,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let resv = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (w as u64 * h as u64 * 96).max(96), usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
     let tmp_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(8), dep(2), tex(3), tex(4), tex(5), out(6), tex(9), tex(10), out(11), tex(12)] });
     let temporal = pipe(&tmp_bgl, include_str!("rt_post.wgsl"), "temporal");
-    let taa_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(8), dep(2), tex(4), tex(5), out(6)] });
+    let taa_bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uni(0), uni(8), dep(2), tex(4), tex(5), out(6), tex(14)] });
     let taa = pipe(&taa_bgl, include_str!("rt_post.wgsl"), "taa");
     let (trace, denoise, compose) = (pipe(&trace_bgl, include_str!("rt.wgsl"), "trace"), pipe(&denoise_bgl, include_str!("rt_post.wgsl"), "denoise"), pipe(&compose_bgl, include_str!("rt_comp.wgsl"), "compose"));
     let ubuf = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<Params>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -250,18 +250,21 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
     let mk_at = |w: u32, h: u32| dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: FMT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST, view_formats: &[] }).create_view(&Default::default());
     let mk = || mk_at(w, h);
-    Pipes { lc_room: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_fill_room"), lc_fill: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_fill_view"), lc_seed_spec: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_seed_spec"), lc_seed: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_seed"), resv_t: [0, 1].map(|_| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: 96, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false })), taa, taa_bgl, taa_h: [mk(), mk()], temporal, tmp_bgl, hist: [[mk(), mk()], [mk(), mk()], [mk(), mk()]], hn: [[mk(), mk()], [mk(), mk()], [mk(), mk()]], ubuf_pre, lc_resolve, restir, restir_spec, resv, lamp: [mk(), mk()], glint: mk(), fine: mk_at(w * ss, h * ss), trace_fine, trace, gather_q: pipe(&trace_bgl, include_str!("rt.wgsl"), "gather_q"), trace_spec, denoise, compose, trace_bgl, denoise_bgl, compose_bgl, ubuf, step_ubufs, irr: [mk(), mk()], spec: [mk(), mk()] }
+    // (what the trace found of the sun and the nearest lamps at each traced pixel: the sun's visibility, then six lamps' as index and share. Compose and the highlights read them)
+    let vis = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (w as u64 * h as u64 * 16).max(16), usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    Pipes { vis, lc_room: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_fill_room"), lc_fill: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_fill_view"), lc_seed: pipe(&trace_bgl, include_str!("rt.wgsl"), "lc_seed"), resv_t: [0, 1].map(|_| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: 96, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false })), taa, taa_bgl, taa_h: [mk(), mk()], temporal, tmp_bgl, hist: [[mk(), mk()], [mk(), mk()], [mk(), mk()]], hn: [[mk(), mk()], [mk(), mk()], [mk(), mk()]], ubuf_pre, lc_resolve, restir, restir_spec, resv, lamp: [mk(), mk()], glint: mk(), fine: mk_at(w * ss, h * ss), trace_fine, trace, gather_q: pipe(&trace_bgl, include_str!("rt.wgsl"), "gather_q"), trace_spec, denoise, compose, trace_bgl, denoise_bgl, compose_bgl, ubuf, step_ubufs, irr: [mk(), mk()], spec: [mk(), mk()] }
 }
 
 /// triangles with their draw's index
 const LC_SLOTS: usize = 1 << 18; // must match LC_MASK in rt.wgsl
+const M_MAPS: u64 = 16384; // must match M_MAPS in rt.wgsl
 pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, verbose: bool) -> SceneData {
     use obvhs::triangle::Triangle;
     let t0 = web_time::Instant::now();
     let tris_o: Vec<Triangle> = tris_in.iter().map(|(t, _)| Triangle { v0: t[0].into(), v1: t[1].into(), v2: t[2].into() }).collect();
     let mut core = std::time::Duration::ZERO;
     // (the fast build: rays cost the same on these houses, measured on 16 views, and it takes 40% less time)
-    let mut params = if std::env::var_os("RT_BVH_MEDIUM").is_some() { obvhs::BvhBuildParams::medium_build() } else { obvhs::BvhBuildParams::fast_build() };
+    let mut params = obvhs::BvhBuildParams::fast_build();
     params.max_prims_per_leaf = 4;
     crate::memlog("bvh start");
     let bvh = obvhs::bvh2::builder::build_bvh2_from_tris(&tris_o, params, &mut core);
@@ -294,7 +297,9 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let lc_mk = |u| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: lc_size, usage: u, mapped_at_creation: false });
     let lc_rw = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let lc_cells = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: if lc_n > 0 { LC_SLOTS as u64 * 4 } else { 16 }, usage: lc_rw, mapped_at_creation: false });
-    SceneData { lc_guide: dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: if lc_n > 0 { LC_SLOTS as u64 * 64 } else { 64 }, usage: lc_rw, mapped_at_creation: false }), pane_st: std::sync::Mutex::new(None), taa_st: std::sync::Mutex::new(None), hist_st: std::sync::Mutex::new(None), lc_eye: std::sync::Mutex::new(Vec3::splat(f32::MAX)), lc_cells, lc_acc: lc_mk(lc_rw), lc_out: lc_mk(lc_rw), lc_n, wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
+    // (the reflection cache's direction maps: a map index for each slot, and the maps, given out as reflections ask for them)
+    let m_mk = |sz: u64| dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: if lc_n > 0 { sz } else { 16 }, usage: lc_rw, mapped_at_creation: false });
+    SceneData { m_idx: m_mk((LC_SLOTS as u64 + 1) * 4), m_acc: m_mk(M_MAPS * 1024), m_out: m_mk(M_MAPS * 85 * 16), lc_guide: dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: if lc_n > 0 { LC_SLOTS as u64 * 64 } else { 64 }, usage: lc_rw, mapped_at_creation: false }), pane_st: std::sync::Mutex::new(None), taa_st: std::sync::Mutex::new(None), hist_st: std::sync::Mutex::new(None), lc_eye: std::sync::Mutex::new(Vec3::splat(f32::MAX)), lc_cells, lc_acc: lc_mk(lc_rw), lc_out: lc_mk(lc_rw), lc_n, wins: buf(bytemuck::cast_slice(if wins.is_empty() { &w0 } else { wins })), nwins: wins.len() as u32, nodes: buf(bytemuck::cast_slice(&nodes)), tris: buf(bytemuck::cast_slice(&tris)), mats: buf(bytemuck::cast_slice(mats)), lights: buf(bytemuck::cast_slice(&ld2)), sky: buf(bytemuck::cast_slice(&table)), nlights: ld.len() as u32, sky_wh: (w, h), sun, sun_e, skyp: sp }
 }
 
 pub struct Gb<'a> { pub mirror_lit: &'a wgpu::TextureView, pub depth: &'a wgpu::TextureView, pub nrm: &'a wgpu::TextureView, pub alb: &'a wgpu::TextureView, pub mat: &'a wgpu::TextureView, pub lit: &'a wgpu::TextureView, pub hdr: &'a wgpu::TextureView }
@@ -338,12 +343,12 @@ thread_local! { pub static WEB_DN: std::cell::RefCell<WebDn> = std::cell::RefCel
 pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncoder, p: &Pipes, sd: &SceneData, gb: &Gb, res: (u32, u32), ss: u32, qu: Quality, vp: Mat4, eye: Vec3, frame: u32, scales: [f32; 3], cutaway: bool) {
     let mut qu = qu; if ss > 1 { if let Some(n) = std::env::var("RT_SPP").ok().and_then(|v| v.parse().ok()) { qu.spp = n; } }
     // (fast mode's one path a pixel shares with its neighbours; full mode's two showed no gain from it)
-    let use_restir = (ss > 1 || qu.video) && (qu.spp == 1 || std::env::var_os("RT_RESTIR").is_some()) && std::env::var_os("RT_NO_RESTIR").is_none();
+    let use_restir = (ss > 1 || qu.video) && qu.spp == 1;
     let use_lc = (ss > 1 || qu.video) && sd.lc_n > 0;
-    let use_rs_spec = (ss > 1 || qu.video) && std::env::var_os("RT_NO_RESTIR_SPEC").is_none();
+    let use_rs_spec = ss > 1 || qu.video;
     // (a video after its first frame gathers for what comes into view at a quarter of its pixels, one in each 2x2, and the rest take theirs by ReSTIR: games' practice, and the gather is most of a frame)
-    let qgather = qu.video && qu.hist && use_restir && sd.hist_st.lock().unwrap().is_some() && std::env::var_os("VID_FULLG").is_none();
-    let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0 + if use_restir { 2.0 } else { 0.0 } + if use_rs_spec { 4.0 } else { 0.0 } + if use_lc { 8.0 } else { 0.0 } + if qu.video { 32.0 } else { 0.0 } + if qu.video && qu.hist { 64.0 } else { 0.0 } + if qgather { 1024.0 } else { 0.0 } + if std::env::var_os("VID_NOGUIDE").is_some() { 256.0 } else { 0.0 }).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
+    let qgather = qu.video && qu.hist && use_restir && sd.hist_st.lock().unwrap().is_some();
+    let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0 + if use_restir { 2.0 } else { 0.0 } + if use_rs_spec { 4.0 } else { 0.0 } + if use_lc { 8.0 } else { 0.0 } + if qu.video { 32.0 } else { 0.0 } + if qu.video && qu.hist { 64.0 } else { 0.0 } + if qgather { 1024.0 } else { 0.0 } + if qu.hist { 2048.0 } else { 0.0 }).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
         dims: [res.0, res.1, ss, qu.spp], misc: [qu.bounces, frame, sd.nlights, sd.sky_wh.0], misc2: [sd.sky_wh.1, qu.spec_spp, sd.nwins, match std::env::var("RT_SHOW").as_deref() { Ok("albedo") => 2, Ok("sun") => 5, Ok("normal") => 6, Ok("flags") => 7, Ok("noglint") => 8, Ok("sheer") => 9, Ok("light") => 3, Ok("spec") => 4, _ => cutaway as u32 }], scale: [scales[0], sd.skyp.strength * scales[1], scales[2], sd.skyp.sun_size * 0.5] };
     q.write_buffer(&p.ubuf, 0, bytemuck::bytes_of(&pr));
     use wgpu::{BindGroupEntry as B, BindingResource as R};
@@ -364,7 +369,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     let pv_u = { let mut u = [0f32; 20]; let (v0, e0) = hist_prev.map_or((vp, eye), |x| (x.0, x.1)); u[..16].copy_from_slice(&v0.to_cols_array()); u[16..19].copy_from_slice(&e0.to_array()); wgpu::util::DeviceExt::create_buffer_init(dev, &wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&u), usage: wgpu::BufferUsages::UNIFORM }) };
     let bg_u = std::cell::Cell::new(&p.ubuf);
     let trace_bg = |irr_out: &wgpu::TextureView, spec_out: &wgpu::TextureView, irr_in: &wgpu::TextureView, lamp_out: &wgpu::TextureView, lamp_in: &wgpu::TextureView| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.trace_bgl, entries: &[
-        B { binding: 26, resource: sd.lc_guide.as_entire_binding() }, B { binding: 22, resource: R::TextureView(&p.hn[0][hist_prev.map_or(0, |x| x.2)]) }, B { binding: 23, resource: pv_u.as_entire_binding() }, B { binding: 24, resource: p.resv_t[1 - hist_prev.map_or(1, |x| 1 - x.2)].as_entire_binding() }, B { binding: 25, resource: p.resv_t[hist_prev.map_or(1, |x| 1 - x.2)].as_entire_binding() }, B { binding: 18, resource: p.resv.as_entire_binding() }, B { binding: 19, resource: sd.lc_cells.as_entire_binding() }, B { binding: 20, resource: sd.lc_acc.as_entire_binding() }, B { binding: 21, resource: sd.lc_out.as_entire_binding() }, B { binding: 0, resource: bg_u.get().as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
+        B { binding: 27, resource: p.vis.as_entire_binding() }, B { binding: 28, resource: sd.m_idx.as_entire_binding() }, B { binding: 29, resource: sd.m_acc.as_entire_binding() }, B { binding: 30, resource: sd.m_out.as_entire_binding() }, B { binding: 26, resource: sd.lc_guide.as_entire_binding() }, B { binding: 22, resource: R::TextureView(&p.hn[0][hist_prev.map_or(0, |x| x.2)]) }, B { binding: 23, resource: pv_u.as_entire_binding() }, B { binding: 24, resource: p.resv_t[1 - hist_prev.map_or(1, |x| 1 - x.2)].as_entire_binding() }, B { binding: 25, resource: p.resv_t[hist_prev.map_or(1, |x| 1 - x.2)].as_entire_binding() }, B { binding: 18, resource: p.resv.as_entire_binding() }, B { binding: 19, resource: sd.lc_cells.as_entire_binding() }, B { binding: 20, resource: sd.lc_acc.as_entire_binding() }, B { binding: 21, resource: sd.lc_out.as_entire_binding() }, B { binding: 0, resource: bg_u.get().as_entire_binding() }, B { binding: 1, resource: sd.nodes.as_entire_binding() }, B { binding: 2, resource: sd.tris.as_entire_binding() },
         B { binding: 3, resource: sd.mats.as_entire_binding() }, B { binding: 4, resource: sd.lights.as_entire_binding() }, B { binding: 5, resource: sd.sky.as_entire_binding() },
         B { binding: 6, resource: R::TextureView(gb.depth) }, B { binding: 7, resource: R::TextureView(gb.nrm) }, B { binding: 8, resource: R::TextureView(gb.alb) },
         B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }, B { binding: 13, resource: R::TextureView(gb.mirror_lit) }, B { binding: 14, resource: R::TextureView(&p.glint) }, B { binding: 15, resource: R::TextureView(lamp_out) }, B { binding: 16, resource: R::TextureView(lamp_in) }, B { binding: 17, resource: R::TextureView(gb.mat) }] });
@@ -385,7 +390,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     };
     // (the rays of a pass all run at once and can't see each other's light: a sparse pass first, so the full trace of a new view's first frame reads the cache too)
     let new_view = use_lc && { let mut le = sd.lc_eye.lock().unwrap(); let n = *le != eye && !(qu.video && le.x != f32::MAX); *le = eye; n };
-    if new_view && std::env::var_os("RT_NO_LC_FILL").is_none() {
+    if new_view {
         let mut pre = pr; pre.cam[3] += 16.0; q.write_buffer(&p.ubuf_pre, 0, bytemuck::bytes_of(&pre));
         bg_u.set(&p.ubuf_pre);
         let tg = trace_bg(&p.irr[0], &p.spec[0], &p.spec[1], &p.lamp[0], &p.lamp[1]);
@@ -404,8 +409,8 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     // what this trace's paths left in the cache, for the reflections next and later frames
     if use_lc {
         let tg = trace_bg(&p.irr[1], &p.spec[1], &p.irr[0], &p.lamp[1], &p.lamp[0]);
-        if qu.video && qu.hist && hist_prev.is_some() && std::env::var_os("VID_NOFILL").is_none() { // (over budget: what is there will do)
-            let n = std::env::var("VID_FILL").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(16384);
+        if qu.video && qu.hist && hist_prev.is_some() {
+            let n = 16384u32;
             let g = ((n as f32).sqrt() as u32).div_ceil(8);
             { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_fill); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(g, g, 1); }
             lap(enc, "cache fill");
@@ -451,7 +456,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     };
     #[cfg(target_arch = "wasm32")]
     if capture_stop { return; }
-    if qu.hist && qu.video && std::env::var_os("VID_NOIRRH").is_none() { accum(enc, 2, &p.lamp[0], true); accum(enc, 0, &p.irr[cur], true); lap(enc, "temporal"); }
+    if qu.hist && qu.video { accum(enc, 2, &p.lamp[0], true); accum(enc, 0, &p.irr[cur], true); lap(enc, "temporal"); }
     if learned {
         #[cfg(not(target_arch = "wasm32"))]
         learned_filter(dev, q, enc, p.irr[cur].texture(), gb.nrm.texture(), res, ss, 4);
@@ -459,7 +464,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         for i in 0..if std::env::var_os("RT_NOFILTER").is_some() && ss > 1 { 0 } else { qu.denoise as usize } {
             filter(enc, cur, 1 - cur, i); cur = 1 - cur;
             // (a video keeps the first round as its history, as SVGF does: what few rays began is cleaned as it is kept, and its noise does not stay on a wall. Light from the first frame the filter leaves as it is)
-            if i == 0 && qu.video && qu.hist && hist_prev.is_some() && std::env::var_os("VID_NOKEEPF").is_none() { enc.copy_texture_to_texture(p.irr[cur].texture().as_image_copy(), p.hist[0][hist_i].texture().as_image_copy(), wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 }); }
+            if i == 0 && qu.video && qu.hist && hist_prev.is_some() { enc.copy_texture_to_texture(p.irr[cur].texture().as_image_copy(), p.hist[0][hist_i].texture().as_image_copy(), wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 }); }
         }
     }
     lap(enc, "denoise");
@@ -468,11 +473,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         let tg = trace_bg(&p.irr[1 - cur], &p.spec[1 - cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]);
         { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_seed); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
         // (the cache's coarse cells, all round the room, while this first frame has its time: what a turn will reveal is then lit already)
-        if std::env::var_os("VID_NOROOM").is_none() {
-            let n = std::env::var("VID_ROOM").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(262144);
-            let g = ((n as f32).sqrt() as u32).div_ceil(8);
-            let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_room); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(g, g, 1);
-        }
+        { let g = (262144f32.sqrt() as u32).div_ceil(8); let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_room); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(g, g, 1); }
         { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_resolve); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(LC_SLOTS as u32 / 64, 1, 1); }
         lap(enc, "seed cache");
     }
@@ -484,18 +485,15 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         enc.copy_texture_to_texture(p.spec[1 - cur].texture().as_image_copy(), p.spec[cur].texture().as_image_copy(), wgpu::Extent3d { width: res.0, height: res.1, depth_or_array_layers: 1 });
         lap(enc, "restir_spec");
     }
-    if qu.hist && qu.video && std::env::var_os("VID_NOSPECH").is_none() { accum(enc, 1, &p.spec[cur], true); lap(enc, "temporal spec"); }
+    if qu.hist && qu.video { accum(enc, 1, &p.spec[cur], true); lap(enc, "temporal spec"); }
     // (rounds on rough reflections, in the step's w: three keep a metal's smudges; with one ray a pixel that leaves blotches, so five)
     let mut spec_base = if qu.spec_spp > 1 || (qu.video && hist_prev.is_some()) { 6 } else { 12 }; // (a video has its frames in place of more rays)
-    if use_rs_spec { if let Some(b) = std::env::var("RT_RS_ROUNDS").ok().and_then(|v| v.parse::<usize>().ok()) { spec_base = match b { 0 => 18, 1 => 24, 3 => 6, _ => 12 }; } }
     #[cfg(not(target_arch = "wasm32"))]
-    if learned && std::env::var_os("RT_SPECDN").is_some() { learned_filter(dev, q, enc, p.spec[cur].texture(), gb.nrm.texture(), res, ss, 4); spec_base = 18; }
     for i in 0..5usize { filter(enc, cur, 1 - cur, spec_base + i); cur = 1 - cur; }
     lap(enc, "spec filter");
     if qu.hist && !qu.video { accum(enc, 1, &p.spec[cur], false); }
     if qu.hist && !qu.video && use_lc {
         let tg = trace_bg(&p.irr[1 - cur], &p.spec[1 - cur], &p.spec[cur], &p.lamp[1], &p.lamp[0]);
-        { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_seed_spec); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
         { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_resolve); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(LC_SLOTS as u32 / 64, 1, 1); }
     }
     if qu.hist { *sd.hist_st.lock().unwrap() = Some((vp, eye, hist_i, res)); }
@@ -504,7 +502,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.compose_bgl, entries: &[
         B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 1, resource: sd.sky.as_entire_binding() }, B { binding: 2, resource: R::TextureView(gb.depth) }, B { binding: 3, resource: R::TextureView(gb.nrm) },
         B { binding: 4, resource: R::TextureView(gb.alb) }, B { binding: 5, resource: R::TextureView(gb.mat) }, B { binding: 6, resource: R::TextureView(&p.irr[cur]) }, B { binding: 7, resource: R::TextureView(&p.spec[cur]) },
-        B { binding: 8, resource: R::TextureView(gb.hdr) }, B { binding: 9, resource: R::TextureView(gb.lit) }, B { binding: 10, resource: R::TextureView(&p.fine) }, B { binding: 11, resource: R::TextureView(&p.glint) }, B { binding: 12, resource: R::TextureView(&p.lamp[1]) }] });
+        B { binding: 8, resource: R::TextureView(gb.hdr) }, B { binding: 9, resource: R::TextureView(gb.lit) }, B { binding: 10, resource: R::TextureView(&p.fine) }, B { binding: 11, resource: R::TextureView(&p.glint) }, B { binding: 12, resource: R::TextureView(&p.lamp[1]) }, B { binding: 13, resource: p.vis.as_entire_binding() }] });
     let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.compose); c.set_bind_group(0, &bg, &[]); c.dispatch_workgroups((res.0 * ss).div_ceil(8), (res.1 * ss).div_ceil(8), 1);
     drop(c);
     lap(enc, "compose");

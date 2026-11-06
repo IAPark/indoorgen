@@ -24,6 +24,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(10) var c_fine: texture_2d<f32>;
 @group(0) @binding(11) var c_glint: texture_2d<f32>;
 @group(0) @binding(12) var c_lamp: texture_2d<f32>;
+@group(0) @binding(13) var<storage, read> vis_sh: array<vec4<u32>>; // (x: the sun's visibility at each traced pixel)
 fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
   // (GGX with Smith height-correlated visibility, integrated numerically and fitted: A is F0's share, B the rest. Karis's fit runs 10-20% low on rough metal, by amounts that change with roughness)
   let r = clamp(rough, 0.03, 1.0); let n = sqrt(clamp(nv, 0.02, 1.0));
@@ -77,7 +78,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let lw = i32(p.dims.x); let lh = i32(p.dims.y);
   let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
   let b = vec2<i32>(floor(f));
-  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var gl_ = vec3<f32>(0.0); var dl_ = vec3<f32>(0.0); var tw = 0.0; var ao_ = 0.0;
+  var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var gl_ = vec3<f32>(0.0); var dl_ = vec3<f32>(0.0); var tw = 0.0; var ao_ = 0.0; var vh = 0.0; var vmax = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
     let gq = q * ss + vec2<i32>(ss / 2);
@@ -88,6 +89,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let bw = (1.0 - abs(f.x - f32(b.x + i))) * (1.0 - abs(f.y - f32(b.y + j)));
     let wt = bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02) + 1e-4 * bw;
     let c = textureLoad(c_irr, q, 0);
+    let vq = bitcast<f32>(vis_sh[u32(q.y * lw + q.x)].x); vh += vq * wt; vmax = max(vmax, vq);
     let lq_ = textureLoad(c_lamp, q, 0); dl_ += lq_.rgb * wt; ao_ += lq_.a * wt; gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
   e /= max(tw, 1e-5); s /= max(tw, 1e-5); e *= mix(1.0, clamp(ao_ / max(tw, 1e-5), 0.0, 1.0), AO_STRENGTH); gl_ /= max(tw, 1e-5);
@@ -98,36 +100,11 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     gl_hi = max(gl_hi, textureLoad(c_glint, clamp(b + o_, vec2<i32>(0), vec2<i32>(lw - 1, lh - 1)), 0).rgb);
   }
   gl_ = min(gl_, gl_hi * 1.5); dl_ /= max(tw, 1e-5);
-  // the sun at this very point, and the light of a surface no traced pixel landed on
+  // the sun, as the traced pixels on this surface found it, spread over the finer ones as the lamps are; and the light of a surface no traced pixel landed on
   let fine = textureLoad(c_fine, px, 0);
-  var v = fine.a;
-  // (a shadow's soft edge, from few rays: smoothed along this surface, only where the sun's visibility changes nearby)
-  var v_lo = v; var v_hi = v;
-  for (var k = 0; k < 4; k++) {
-    let o = array<vec2<i32>, 4>(vec2<i32>(2, 0), vec2<i32>(-2, 0), vec2<i32>(0, 2), vec2<i32>(0, -2))[k];
-    let t = textureLoad(c_fine, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a;
-    v_lo = min(v_lo, t); v_hi = max(v_hi, t);
-  }
-  // (a sliver no traced pixel landed on, lit by the sun alone among what is around it: a ray slipping past a wall's edge, a broken bright line along a join. Its sun is what its neighbours have)
-  if (fine.r >= 0.0 && v > v_lo) {
-    v = v_lo; for (var k = 0; k < 4; k++) {
-      let o = array<vec2<i32>, 4>(vec2<i32>(ss, 0), vec2<i32>(-ss, 0), vec2<i32>(0, ss), vec2<i32>(0, -ss))[k];
-      v = max(v, textureLoad(c_fine, clamp(px + o, vec2<i32>(0), vec2<i32>(w - 1, h - 1)), 0).a);
-    }
-    v = min(v, fine.a);
-  }
-  if (v_hi > v_lo) {
-    var vs = 0.0; var vc = 0.0;
-    for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
-      let q = px + vec2<i32>(i, j);
-      if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
-      let dq = textureLoad(c_depth, q, 0);
-      if (dq >= 1.0 || abs(dot(n, world_of(q, dq, dims, p.inv_vp) - pos)) > 0.01) { continue; }
-      let wq = f32(3 - abs(i)) * f32(3 - abs(j));
-      vs += textureLoad(c_fine, q, 0).a * wq; vc += wq;
-    } }
-    if (vc > 0.0) { v = vs / vc; }
-  }
+  var v = vh / max(tw, 1e-5);
+  // (a sliver no traced pixel landed on traces its own sun, but no more than its neighbours have: a ray slipping past a wall's edge drew a broken bright line along a join)
+  if (fine.r >= 0.0) { v = min(fine.a, vmax); }
   // (the filtered light has no strong lamps in it: the nearest lamps' direct light, with its shadows, comes on top. A surface traced on its own has them already)
   let e_room = select(e, min(fine.rgb, (e + dl_) * 1.2), fine.r >= 0.0);
   if (fine.r >= 0.0) { e = e_room; } else { e += dl_; }
