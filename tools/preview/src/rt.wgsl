@@ -481,7 +481,7 @@ fn lamp_vis(o: vec3<f32>, c: vec3<f32>) -> f32 {
     let t = vec3<f32>(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5) * 2.0 * LAMP_R;
     let v = c + t - o; let d = length(v);
     let seen = select(1.0, 0.0, occluded(o, v / d, d - 0.02));
-    if ((u32(p.cam.w) & 32u) != 0u) { return seen; } // (a video: one a frame, its frames average them)
+    if ((u32(p.cam.w) & 64u) != 0u) { return seen; } // (a video: one a frame, its frames average them. A mirror's picture keeps no history, and takes a still's rays)
     acc += seen;
     if (k == 0) { first = seen; }
     if (k == 1 && seen == first) { return seen; }
@@ -709,7 +709,8 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
     return;
   }
   // (a video: settled, or an edge the cell can answer, takes no rays for its soft light. Every pixel still traces its nearest lamps as a still does: a hard shadow kept in history wears away, resampled every frame, and these rays have next to no noise)
-  let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
+  // (not a mirror's picture: read from the cells, its lamps came out ~15% too bright, and their shadows on the walls it shows a blur. A glass pane's faint reflection keeps them: there it can't be seen, and they are cheaper)
+  let lcv_v = (u32(p.cam.w) & 32u) != 0u && (u32(p.cam.w) & 4096u) == 0u && lc_on();
   var vid_read = false; var vcr = vec4<f32>(0.0); var lamp_keep = false;
   if (lcv_v) {
     let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
@@ -717,7 +718,6 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
     vcr = lcv_read(pos, n);
     vid_read = settled || (vcr.w >= 0.7 && ((u32(p.cam.w) & 64u) == 0u || hist_around(pos, w, h)));
   }
-  let no_apart = (u32(p.cam.w) & 32u) != 0u && (u32(p.cam.w) & 64u) == 0u;
   // the lamps that matter here, apart from the filtered light, which would wash out their shadows. Each comes in gradually with its share of the light: a fixed number of lamps per pixel let a lamp drop out all at once, and cut its shadow off in a straight line across a wall
   // (close up, with only the lamp's own size as a limit: a ceiling beside a lamp is really that bright, and a floor on the distance left it dull)
   var ltotal = 0.0; var li = 0u;
@@ -731,8 +731,8 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
     let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
     let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
     let f_ = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
-    lamp_share[li] = select(f_, 0.0, no_apart);
-    if (f_ > 0.0 && !no_apart && !lamp_keep) {
+    lamp_share[li] = f_;
+    if (f_ > 0.0 && !lamp_keep) {
       let lv = lamp_vis(o, lights[li].pos.xyz);
       dl_ += f_ * lights[li].col.xyz * c_ * p.scale.x * lv;
       if (ne < 6u) { ent[ne] = (li << 8u) | u32(round(lv * 255.0)); ne++; } // (for its highlight: the same shadow)

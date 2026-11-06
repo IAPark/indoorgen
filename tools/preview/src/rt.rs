@@ -7,14 +7,14 @@ use wgpu::util::DeviceExt;
 
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Quality { pub spp: u32, pub bounces: u32, pub spec_spp: u32, pub denoise: u32, pub ss: u32, pub video: bool, pub hist: bool }
+pub struct Quality { pub spp: u32, pub bounces: u32, pub spec_spp: u32, pub denoise: u32, pub ss: u32, pub video: bool, pub hist: bool, /** a mirror's picture: none of the camera cells (see rt.wgsl lcv_v) */ pub no_cells: bool }
 impl Quality {
     pub fn parse(s: &str) -> Quality {
         match s {
-            "fast" => Quality { spp: 1, bounces: 2, spec_spp: 2, denoise: 5, ss: 2, video: false, hist: false },
+            "fast" => Quality { spp: 1, bounces: 2, spec_spp: 2, denoise: 5, ss: 2, video: false, hist: false, no_cells: false },
             // (frames of a moving camera, at 62 ms each: no learned filter, no finer pixels, and the cache reaches further)
-            "video" => Quality { spp: 1, bounces: 4, spec_spp: 1, denoise: 5, ss: 2, video: true, hist: true },
-            "full" => Quality { spp: 2, bounces: 4, spec_spp: 3, denoise: 5, ss: 3, video: false, hist: false },
+            "video" => Quality { spp: 1, bounces: 4, spec_spp: 1, denoise: 5, ss: 2, video: true, hist: true, no_cells: false },
+            "full" => Quality { spp: 2, bounces: 4, spec_spp: 3, denoise: 5, ss: 3, video: false, hist: false, no_cells: false },
             _ => panic!("--rt fast|full"),
         }
     }
@@ -348,7 +348,7 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     let use_rs_spec = ss > 1 || qu.video;
     // (a video after its first frame gathers for what comes into view at a quarter of its pixels, one in each 2x2, and the rest take theirs by ReSTIR: games' practice, and the gather is most of a frame)
     let qgather = qu.video && qu.hist && use_restir && sd.hist_st.lock().unwrap().is_some();
-    let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0 + if use_restir { 2.0 } else { 0.0 } + if use_rs_spec { 4.0 } else { 0.0 } + if use_lc { 8.0 } else { 0.0 } + if qu.video { 32.0 } else { 0.0 } + if qu.video && qu.hist { 64.0 } else { 0.0 } + if qgather { 1024.0 } else { 0.0 } + if qu.hist { 2048.0 } else { 0.0 }).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
+    let pr = Params { inv_vp: vp.inverse().to_cols_array_2d(), cam: eye.extend(1.0 + if use_restir { 2.0 } else { 0.0 } + if use_rs_spec { 4.0 } else { 0.0 } + if use_lc { 8.0 } else { 0.0 } + if qu.video { 32.0 } else { 0.0 } + if qu.video && qu.hist { 64.0 } else { 0.0 } + if qgather { 1024.0 } else { 0.0 } + if qu.hist { 2048.0 } else { 0.0 } + if qu.no_cells { 4096.0 } else { 0.0 }).into(), sun_dir: sd.sun.extend(sd.skyp.sun_size * 0.5).into(), sun_col: (sd.sun_e * sd.skyp.strength * scales[2]).extend(0.0).into(),
         dims: [res.0, res.1, ss, qu.spp], misc: [qu.bounces, frame, sd.nlights, sd.sky_wh.0], misc2: [sd.sky_wh.1, qu.spec_spp, sd.nwins, match std::env::var("RT_SHOW").as_deref() { Ok("albedo") => 2, Ok("sun") => 5, Ok("normal") => 6, Ok("flags") => 7, Ok("noglint") => 8, Ok("sheer") => 9, Ok("light") => 3, Ok("soft") => 10, Ok("unc") => 12, Ok("lamps") => 11, Ok("spec") => 4, _ => cutaway as u32 }], scale: [scales[0], sd.skyp.strength * scales[1], scales[2], sd.skyp.sun_size * 0.5] };
     q.write_buffer(&p.ubuf, 0, bytemuck::bytes_of(&pr));
     use wgpu::{BindGroupEntry as B, BindingResource as R};
