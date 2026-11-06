@@ -192,22 +192,7 @@ const EASE_AROUND = 0.5;
   } }
   if (sum < 0.2) { mom_put(px, m_new); textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
   acc /= sum; aa /= sum; mm /= sum; nn /= sum; let noisy_hist = nz / sum > 0.5;
-  // (a reflection moves as what it shows does, behind the surface: as far back as the rays went. A rough one is a wide blur, and stays nearer the surface)
-  if (refl) {
-    let k = 1.0 - smoothstep(0.1, 0.5, cur4.a);
-    let vu = prev_uv(pos + normalize(pos - p.cam.xyz) * max(textureLoad(t_hit, px, 0).a, 0.0) * k);
-    if (vu.z > 0.0 && all(vu.xy >= vec2<f32>(0.0)) && all(vu.xy < vec2<f32>(1.0))) {
-      let f2 = vu.xy * hdf - 0.5 - sub_off(); let b2 = floor(f2); let t2 = f2 - b2; var a2 = vec3<f32>(0.0); var w2_ = 0.0;
-      // (only where that lands on this same surface: a white door frame's history bled onto the wall beside it, in a halo)
-      for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
-        let q = clamp(vec2<i32>(b2) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
-        let hv = textureLoad(t_n, q, 0); if (abs(hv.g - expect) > 0.02 + 0.005 * expect || abs(hv.b - n0.x) + abs(hv.a - n0.y) > 0.3) { continue; }
-        let wq = select(1.0 - t2.x, t2.x, i == 1) * select(1.0 - t2.y, t2.y, j == 1);
-        a2 += textureLoad(i_spec, q, 0).rgb * wq; w2_ += wq;
-      } }
-      if (w2_ > 0.5) { acc = a2 / w2_; }
-    }
-  }
+  // (a reflection's history from the surface point, as the light's: following it to where the reflected thing lay -- as far behind the surface as its rays went -- jumped across the picture on a glossy door near the lens, and drew rays out from the middle. Blender's soft door showed nothing of the sort)
   // (the longer a surface has been seen the less each frame counts, down to a floor: new ones clean up at once. A clean value takes over from a noisy history at once)
   var al = max(1.0 / (nn + 1.0), 0.05);
   if (clean) { al = select(1.0 / (nn + 1.0), 1.0, noisy_hist); }
