@@ -218,6 +218,8 @@ pub struct SceneData { pub m_idx: wgpu::Buffer, pub m_acc: wgpu::Buffer, pub m_o
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::oidn::prewarm(w, h);
     // (no bounds checks in the traversal: every index comes from the BVH built here, and they were much of the cost of a ray)
     let module = |src: &str| unsafe { dev.create_shader_module_trusted(wgpu::ShaderModuleDescriptor { label: Some("rt"), source: wgpu::ShaderSource::Wgsl(src.into()) }, wgpu::ShaderRuntimeChecks::unchecked()) };
     use wgpu::{BindGroupLayoutEntry as E, BindingType as T, ShaderStages as S};

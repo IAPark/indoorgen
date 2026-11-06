@@ -90,7 +90,7 @@ private final class Net {
     o = g.select(predicate: g.lessThanOrEqualTo(o, k(Double(PU.x0)), name: nil), trueTensor: ilo, falseTensor: g.select(predicate: g.lessThanOrEqualTo(o, k(Double(PU.x1)), name: nil), trueTensor: imid, falseTensor: ihi, name: nil), name: nil)
     o = g.division(o, sc, name: nil)
     let sh: [NSNumber] = [1, H as NSNumber, W as NSNumber, 3]
-    let ex = g.compile(with: gdev, feeds: [col: MPSGraphShapedType(shape: sh, dataType: .float32), nrm: MPSGraphShapedType(shape: sh, dataType: .float32), sc: MPSGraphShapedType(shape: [1], dataType: .float32)], targetTensors: [o], targetOperations: nil, compilationDescriptor: nil)
+    let ex = g.compile(with: gdev, feeds: [col: MPSGraphShapedType(shape: sh, dataType: .float32), nrm: MPSGraphShapedType(shape: sh, dataType: .float32), sc: MPSGraphShapedType(shape: [1], dataType: .float32)], targetTensors: [o], targetOperations: nil, compilationDescriptor: { let cd = MPSGraphCompilationDescriptor(); cd.optimizationLevel = .level0; return cd }()) // (the default level spent 170-420 ms of a first run specialising kernels; level 0 ~120 ms, later runs as fast)
     built = (W, H, ex)
   }
   func run(_ cp: UnsafePointer<Float>, _ np: UnsafePointer<Float>, _ W: Int, _ H: Int, _ op: UnsafeMutablePointer<Float>) -> Bool {
@@ -116,7 +116,16 @@ private final class Net {
 }
 
 private var net: Net?
-@_cdecl("mpsdn_init") public func mpsdn_init(_ path: UnsafePointer<CChar>) -> Int32 { net = Net(path: String(cString: path)); return net == nil ? 0 : 1 }
+private let lock = NSLock()
+@_cdecl("mpsdn_init") public func mpsdn_init(_ path: UnsafePointer<CChar>) -> Int32 { lock.lock(); defer { lock.unlock() }; if net == nil { net = Net(path: String(cString: path)) }; return net == nil ? 0 : 1 }
+/// a first run, on a thread of its own, while the scene loads: the first frame then finds the kernels ready
+@_cdecl("mpsdn_warm") public func mpsdn_warm(_ w: Int32, _ h: Int32) {
+  Thread.detachNewThread {
+    let n = Int(w) * Int(h) * 3; let z = [Float](repeating: 0.1, count: n); var o = [Float](repeating: 0, count: n)
+    _ = mpsdn_run(z, z, w, h, &o)
+  }
+}
 @_cdecl("mpsdn_run") public func mpsdn_run(_ c: UnsafePointer<Float>, _ n: UnsafePointer<Float>, _ w: Int32, _ h: Int32, _ o: UnsafeMutablePointer<Float>) -> Int32 {
+  lock.lock(); defer { lock.unlock() }
   guard let net else { return 0 }; return net.run(c, n, Int(w), Int(h), o) ? 1 : 0
 }
