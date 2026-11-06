@@ -82,7 +82,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
     }
   }
   // the material graph, where the material has one (ig_shade)
-  var pbr = false; var surf_color = albedo.rgb; var surf_rough = 0.5; var surf_metal = 0.0; var surf_coat = 0.0; var surf_height = 0.0;
+  var pbr = false; var surf_color = albedo.rgb; var surf_rough = 0.5; var surf_metal = 0.0; var surf_coat = 0.0; var surf_height = 0.0; var surf_spec = 0.5; // (Blender's Specular IOR Level: 0.5 is a plain dielectric's 4%, 1.0 twice that, as a glazed ceramic has)
   /*SURF*/
   // (path traced, a material with no graph: its own roughness and metal, or a steel fridge came out as white paint)
   if (!pbr && g.params2.w > 0.5) { surf_rough = m.p[47].x; surf_metal = m.p[47].y; }
@@ -160,7 +160,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
   out.alb = vec4<f32>(albedo.rgb, select(max(surf_rough, 0.002), 0.0, m.flags.w < -0.5));
   // (a: 1 + which part, for --bake, where plain draws pass 0; there it holds how sheer the cloth is, up to 1)
-  out.mat = vec4<f32>(surf_metal, surf_coat, max(m.flags.w, 0.0), 1.0 + f32(v.id) + select(select(m.emissive.w, 0.0, m.emissive.w > 1.5) + select(0.0, 2.0, m.flags.y < -0.5), 0.0, v.id != 0u)); // (plus 2: its roughness comes from a map)
+  out.mat = vec4<f32>(surf_metal, surf_spec, max(m.flags.w, 0.0), 1.0 + f32(v.id) + select(select(m.emissive.w, 0.0, m.emissive.w > 1.5) + select(0.0, 2.0, m.flags.y < -0.5), 0.0, v.id != 0u)); // (plus 2: its roughness comes from a map)
   if (g.params2.w > 0.5 && m.flags.x < 1.5) { out.color = vec4<f32>(m.emissive.rgb, 1.0); }
   // (glass, over the traced picture: a little is lost in it; what lies behind is already lit)
   if (g.params2.w > 0.5 && m.flags.x > 1.5) {

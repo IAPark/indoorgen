@@ -135,7 +135,9 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let ndl = max(dot(n, sun), 0.0);
   let lit = e + p.sun_col.rgb * ndl * v / PI;
   // specular: what the reflection rays found, by the share a rough surface returns (Karis's fit), and a clear coat's own Fresnel on top
-  let f0 = mix(vec3<f32>(select(0.04, 0.02, cloth)), a.rgb, metal);
+  // (a dielectric's F0 by its specular level, as Blender's Specular IOR Level: 0.5 is 4%, a glazed ceramic's 1.0 is 8%. At 4% for all, a sink and its tiles had a quarter of Blender's reflections, and looked chalky)
+  let spec_l = select(mt.y, 0.5, mt.y <= 0.0 || mt.y > 4.0);
+  let f0 = mix(vec3<f32>(select(0.08 * spec_l, 0.02, cloth)), a.rgb, metal);
   // specular anti-aliasing: Fresnel over what the whole output pixel sees. A ledge nearly edge-on, thinner than a pixel, was at full Fresnel on its own and drew a broken bright line
   var nbar = n;
   for (var k = 0; k < 4; k++) {
@@ -150,6 +152,9 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let fr = (f0 * ab.x + vec3<f32>(ab.y)) * (vec3<f32>(1.0) + favg_ * (1.0 - ess_) / max(vec3<f32>(1.0) - favg_ * (1.0 - ess_), vec3<f32>(0.01)) / max(ess_, 0.05) * 1.0);
   let coat = textureLoad(c_nrm, px, 0).a;
   let fc = coat * (0.04 + 0.96 * pow(1.0 - nv, 5.0));
+  // (and what the layers above take from the colour beneath, as Blender's diffuse colour shows it: the specular layer's share at this angle, and the coat's. Without it a glazed sink was a third too light and its colour washed out)
+  let es_ = select(0.08 * spec_l * ab.x + ab.y, 0.0, cloth); let abc_ = dfg_ab(max(rough, 0.05), nv); let ec_ = coat * (0.04 * abc_.x + abc_.y);
+  let kd_ = (1.0 - es_) * (1.0 - ec_);
   // the sun's highlight, on the normal as this part of the picture sees it: relief finer than a pixel widens the highlight (Toksvig), where taken point by point it sparkled, and leather came out speckled
   var nb = n;
   if (v > 0.0 && ndl > 0.0 && rough < 0.7) {
@@ -193,7 +198,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   var refl = mix(select(e_room, e, metal >= 0.5 && !flat_here), s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
-  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * (1.0 - fc) * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_, vec3<f32>(0.0), cloth);
+  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * kd_ * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_, vec3<f32>(0.0), cloth);
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
   if (p.misc2.w == 9u) { textureStore(o_lit, px0, vec4<f32>(mt.w - 1.0, mt.z, a.a, 1.0)); return; }
   if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }

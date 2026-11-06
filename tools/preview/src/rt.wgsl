@@ -1260,6 +1260,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
     var turn = false;
     // (not on what is curved or thin, nor on smooth metal: a cell's blur is all you would see, and a faucet or a sink's rim went flat)
     let m_lo = 0.35; // (faded per pixel: a sharp limit drew the roughness map's contours across a sink)
+    let sl_ = textureLoad(g_mat, g, 0).y; let f0_rs = mix(vec3<f32>(0.08 * select(sl_, 0.5, sl_ <= 0.0 || sl_ > 4.0)), a.rgb, textureLoad(g_mat, g, 0).x); // (F0 by the specular level, as compose has it)
     let is_m = textureLoad(g_mat, g, 0).x >= 0.5;
     var flat_ = true;
     if (is_m) { for (var k = 0; k < 4; k++) {
@@ -1269,14 +1270,13 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
     } }
     let m_ok = !is_m || (u32(p.cam.w) & 64u) == 0u || rnd() < smoothstep(m_lo, m_lo + 0.2, rough); // (no draw unless it will be used: a still's noise stays as it was)
     if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= 0.15) {
-      let rc = m_read(pos, n, v, rough, mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x), is_m);
+      let rc = m_read(pos, n, v, rough, f0_rs, is_m);
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }
     let rays = select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
     let m_feed = m_on() && rough >= 0.15 && !is_mirror; // (what the rays find here fills its cell's map: the cache fills where reflections look)
     rs_s.m = select(0.0, f32(rays), use_rs); hit_n = max(f32(rays), 1.0); // (rays kept to itself are no samples for the neighbours to count: a rough floor beside smoother patches came out darker there)
-    let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
     var nsp = n;
     for (var k = 0; k < 4; k++) {
@@ -1337,7 +1337,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
   if (rough > 0.08 && textureLoad(g_mat, g, 0).w >= 2.9 && coat < 0.25 && p.misc2.y > 0u) {
     let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
     let abg = dfg_ab(rough, nv_g);
-    let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
+    let slg_ = textureLoad(g_mat, g, 0).y; let f0g = mix(vec3<f32>(0.08 * select(slg_, 0.5, slg_ <= 0.0 || slg_ > 4.0)), a.rgb, textureLoad(g_mat, g, 0).x);
     sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0); // (into the reflection, whether rays or the maps found it: the maps hold no lamps, and a floor lost its lamp's highlight once they covered it)
   }
   textureStore(out_glint, px, vec4<f32>(gl_, hit_d / hit_n)); // (a: how far the rays went, for a video's history)

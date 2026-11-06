@@ -105,7 +105,7 @@ pub fn emit(graph: &Value) -> Option<Emitted> {
     let o = &graph["out"];
     let color = e.c(&o["color"])?;
     let mut code = format!("  surf_color = {color};\n");
-    for (key, var) in [("roughness", "surf_rough"), ("metallic", "surf_metal"), ("coat", "surf_coat"), ("height", "surf_height")] {
+    for (key, var) in [("roughness", "surf_rough"), ("metallic", "surf_metal"), ("coat", "surf_coat"), ("specular", "surf_spec"), ("height", "surf_height")] {
         if !o[key].is_null() { let v = e.f(&o[key])?; code += &format!("  {var} = {v};\n"); }
     }
     if e.params.len() > MAX_PARAMS { return None }
