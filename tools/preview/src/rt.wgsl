@@ -561,10 +561,10 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     spp = 3u;
     // (a quarter of the gather, in its own dense pass: here only the light that comes straight from lamps and windows. A pass that skipped pixels within its blocks would cost as much as tracing them all)
     if ((u32(p.cam.w) & 1024u) != 0u) {
-      var ed = vec3<f32>(0.0);
-      for (var s = 0u; s < spp; s++) { ed += lamp_rest(o, n, true) + portal(o, n); }
+      // (one sample of them: the frames before it settles average them, as they do its gather)
+      let ed = lamp_rest(o, n, true) + portal(o, n);
       resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
-      textureStore(out_irr, px, vec4<f32>(ed / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return;
+      textureStore(out_irr, px, vec4<f32>(ed * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return;
     }
   }
   var dep_ = vec3<f32>(0.0);
