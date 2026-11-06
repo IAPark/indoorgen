@@ -636,6 +636,9 @@ fn direct_one(o: vec3<f32>, n: vec3<f32>, sun_on: bool, rest: bool) -> vec3<f32>
   if (u < ps + pl) { return lamp_rest(o, n, rest) / pl; }
   return portal(o, n) / max(pw, 1e-6);
 }
+// (a path's bounced light is clamped as Cycles clamps indirect samples, at 10 by default, which the Blender pictures keep: at our former 40, a lamp-lit room whose paths pass close to a bulb came out a tenth brighter than Blender's, whose parts did not add up to the whole)
+const IND_CLAMP = 10.0;
+fn clamp_ind(l: vec3<f32>) -> vec3<f32> { return l * min(1.0, IND_CLAMP / max(max(max(l.x, l.y), l.z), 1e-5)); }
 // light gathered from the hemisphere over n, by paths (lit units: E / pi)
 fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   g1_esc = false;
@@ -818,7 +821,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
       let lp_ = direct_one(o, n, false, true); e += lp_; dep_ += lp_;
       if (lcv_v) { _ = guide_pick(lc_look_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n); }
       let w_used = g_wt;
-      let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
+      let lg = gather(o, n); let lc = clamp_ind(lg);
       if (lcv_v) { guide_add(lc_find_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n, normalize(g1_pos - o), lc / w_used); g_use = false; }
       dep_ += lc;
       if (m_on()) { m_sample(pos, n, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), m_want, true); }
@@ -827,9 +830,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
       if (rnd() * rs.wsum < wi) { rs.pos = g1_pos; rs.nrm = g1_nrm; rs.rad = lc; rs.lp = lm; }
       continue;
     }
-    let es = direct_one(o, n, false, true) + gather(o, n);
-    // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
-    let ec_ = es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5)); e += ec_; dep_ += ec_;
+    let ec_ = direct_one(o, n, false, true) + clamp_ind(gather(o, n)); e += ec_; dep_ += ec_;
   }
   if (lcv_v) { lcv_add(pos, n, dep_ / f32(spp)); }
   // (what is thin keeps its own paths: ReSTIR would hand it its neighbours' along the moulding, one shared error drawn as a streak. An empty reservoir, and its own mark for ReSTIR to pass it by)
@@ -866,7 +867,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   for (var s = 0u; s < spp; s++) {
     _ = guide_pick(lc_look_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n);
     let w_used = g_wt;
-    let lg = gather(o, n); let lc = lg * min(1.0, 40.0 / max(max(max(lg.x, lg.y), lg.z), 1e-5));
+    let lg = gather(o, n); let lc = clamp_ind(lg);
     guide_add(lc_find_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n, normalize(g1_pos - o), lc / w_used); g_use = false;
     dep_ += lc; if (m_on()) { m_sample(pos, n, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), m_want, true); }
     let lm = dot(lc, vec3<f32>(0.333)); let wi = lm * PI;
@@ -908,8 +909,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
     e = vec3<f32>(0.0);
     let spp = p.dims.w;
     for (var s = 0u; s < spp; s++) {
-      let es = direct_one(o, n, false, false) + gather(o, n);
-      e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
+      e += direct_one(o, n, false, false) + clamp_ind(gather(o, n));
     }
     e /= f32(spp);
   }
@@ -1381,10 +1381,10 @@ fn fill_at(dir: vec3<f32>) {
   let dl1 = direct_one(o, ng, false, false);
   lamp_shares(o, ng); let dl_rest = direct_one(o, ng, false, true);
   if (m_on()) { m_sample(q, ng, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), false, true); }
-  let l = dl1 + lg * s_ / (s_ + r_ * r_ * r_);
+  let lgc_ = clamp_ind(lg); let l = dl1 + lgc_ * s_ / (s_ + r_ * r_ * r_);
   let lc = l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5));
   // (the camera's cells take the whole gather, as trace and gather_q give them: the rescale above is the path cache's, whose cells stand for this hit and 3 more. With it here, what a pan came round to started a bounce short, darker)
-  let lv_ = dl_rest + lg; lcv_add_coarse(q, ng, lv_ * min(1.0, 40.0 / max(max(max(lv_.x, lv_.y), lv_.z), 1e-5)));
+  let lv_ = dl_rest + lgc_; lcv_add_coarse(q, ng, lv_ * min(1.0, 40.0 / max(max(max(lv_.x, lv_.y), lv_.z), 1e-5)));
   let sl = lc_find(lc_jit(q, ng), ng, t.mat);
   if (sl <= LC_MASK) { lc_add(sl, lc + p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(o, ng) / PI); }
 }
