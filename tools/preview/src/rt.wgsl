@@ -1376,12 +1376,14 @@ fn fill_at(dir: vec3<f32>) {
   _ = guide_pick(cg, ng); let w_used = g_wt;
   let lg = gather(o, ng); g_use = false;
   guide_add(cg, ng, normalize(g1_pos - o), lg / w_used);
-  let dl1 = direct_one(o, ng, false, true);
+  // (two direct lights, for two caches: the path cache's cells have every lamp, for the bounces that read them; the camera's cells the soft light alone, without the lamps a pixel traces apart. One value for both put every lamp in the camera cells, which the frame then traced again; with the shares set for both, the bounces lost the lamps, and what a pan came round to was 25% dark)
+  let dl1 = direct_one(o, ng, false, false);
+  lamp_shares(o, ng); let dl_rest = direct_one(o, ng, false, true);
   if (m_on()) { m_sample(q, ng, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), false, true); }
   let l = dl1 + lg * s_ / (s_ + r_ * r_ * r_);
   let lc = l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5));
   // (the camera's cells take the whole gather, as trace and gather_q give them: the rescale above is the path cache's, whose cells stand for this hit and 3 more. With it here, what a pan came round to started a bounce short, darker)
-  let lv_ = dl1 + lg; lcv_add_coarse(q, ng, lv_ * min(1.0, 40.0 / max(max(max(lv_.x, lv_.y), lv_.z), 1e-5)));
+  let lv_ = dl_rest + lg; lcv_add_coarse(q, ng, lv_ * min(1.0, 40.0 / max(max(max(lv_.x, lv_.y), lv_.z), 1e-5)));
   let sl = lc_find(lc_jit(q, ng), ng, t.mat);
   if (sl <= LC_MASK) { lc_add(sl, lc + p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(o, ng) / PI); }
 }
