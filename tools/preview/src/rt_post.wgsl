@@ -159,7 +159,7 @@ const EASE_AROUND = 0.5;
   let refl = tu.al.w > 0.5 && tu.al.w < 1.5; let lamp_h = tu.al.w > 1.5; // (2: a video's nearest lamps, traced anew every frame: little to average, and a long history would blur their shadows)
   let lamp_old = lamp_h && cur4.r < 0.0; if (lamp_old) { cur4 = vec4<f32>(0.0, 0.0, 0.0, cur4.a); } // (not traced this frame)
   // (a cell has all the lamps: those this pixel shows apart, traced or kept, come off what it answered)
-  if (!refl && !lamp_h && cur4.a < 0.0 && tu.al.x < 1.0) { cur4 = vec4<f32>(max(cur4.rgb - textureLoad(t_lamp, px, 0).rgb, vec3<f32>(0.0)), cur4.a); }
+  // (a cell's answer is the soft light alone, as every writer now stores it: the lamps this pixel traces apart are not taken off it)
   let cur = cur4.rgb;
   // (a clean value is what the cache answered: no noise in it to average out. A history that began as a few rays is replaced by it, and a count below zero marks a history that is still noise)
   let clean = !lamp_h && select(cur4.a <= 0.0, textureLoad(t_hit, px, 0).a < 0.0, refl);
@@ -283,6 +283,7 @@ fn taa_d(y: vec3<f32>) -> vec3<f32> {
   // (sharpened only where the surface's own colour has an edge: grout, a pattern, a book's spine. On a plain wall what the sharpening would find is the light's noise, and it came back as mottling)
   var ad = 0.0; let a0 = dot(textureLoad(t_alb, g, 0).rgb, vec3<f32>(0.333));
   for (var k = 0; k < 4; k++) { var o4 = array<vec2<i32>, 4>(vec2<i32>(1, 0), vec2<i32>(-1, 0), vec2<i32>(0, 1), vec2<i32>(0, -1)); ad = max(ad, abs(dot(textureLoad(t_alb, clamp(g + o4[k] * sc, vec2<i32>(0), vec2<i32>(w * sc - 1, h * sc - 1)), 0).rgb, vec3<f32>(0.333)) - a0) / max(a0, 0.05)); }
-  let cy = taa_c(cur); let cs = cy + (cy - nb * 0.25) * tu.prev_eye.w * smoothstep(0.03, 0.12, ad);
+  let cy = taa_c(cur); var cs = cy + (cy - nb * 0.25) * tu.prev_eye.w * smoothstep(0.03, 0.12, ad);
+  cs.x = min(cs.x, cy.x + (1.0 - cy.x) * 0.5); // (compressed luma must stay below 1: sharpened past it, a bright highlight's edge came back up to 1000 times too bright and stayed in the history)
   textureStore(o_irr, px, vec4<f32>(taa_d(mix(hy, vec3<f32>(max(cs.x, 0.0), cs.y, cs.z), al)), dist));
 }

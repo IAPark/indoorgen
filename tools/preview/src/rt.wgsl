@@ -97,7 +97,8 @@ fn lc_key_s(q: vec3<f32>, ng: vec3<f32>, part: u32, size: f32) -> u32 {
   let c = vec3<i32>(floor(q / size)); let an = abs(ng);
   var side = 2u; if (an.x >= an.y && an.x >= an.z) { side = 0u; } else if (an.y >= an.z) { side = 1u; }
   side = side * 2u + select(0u, 1u, ng[side] < 0.0);
-  var h = u32(c.x) * 73856093u ^ u32(c.y) * 19349663u ^ u32(c.z) * 83492791u ^ part * 2654435761u ^ side * 3266489917u;
+  // (and the size: a 10 cm and a 40 cm cell with the same integer place shared a slot, and a read took another room's light)
+  var h = u32(c.x) * 73856093u ^ u32(c.y) * 19349663u ^ u32(c.z) * 83492791u ^ part * 2654435761u ^ side * 3266489917u ^ u32(round(size * 1000.0)) * 2971215073u;
   h ^= h >> 15u; h *= 2246822519u; h ^= h >> 13u;
   return max(h, 1u);
 }
@@ -207,6 +208,7 @@ const LCV_DOUBT = 1.0;
 @group(0) @binding(29) var<storage, read_write> m_acc: array<array<atomic<u32>, 256>>; // (64 directions: r, g, b, samples in 16ths)
 @group(0) @binding(30) var<storage, read_write> m_out: array<array<vec4<f32>, 85>>; // (8x8, 4x4, 2x2, 1x1: the light and its samples)
 const M_LV = 0u; const M_SIZE = 0.4;
+const M_NONE = 0xffffffffu;
 const M_MAPS = 16384u; const M_PART = 16600u; const M_DC = 16601u; const M_TRUST = 24.0;
 // (the light that came from a path's first direction, as a direction map wants it: the sky itself where it left by a window, which the path leaves to the window sample; else what the path brought, without the guide's weight)
 var<private> g1_esc = false;
@@ -235,11 +237,15 @@ fn m_sample(q: vec3<f32>, ng: vec3<f32>, d: vec3<f32>, l: vec3<f32>, alloc: bool
   if (dc) { for (var k = 0u; k < 2u; k++) { let sl = lc_find_k(lc_key_s(q, ng, M_DC, select(LCV_FINE, M_SIZE, k == 1u))); if (sl <= LC_MASK) { lc_add(sl, lc); } } }
   let sl = m_slot(q, ng); if (sl > LC_MASK) { return; }
   var mi = atomicLoad(&m_idx[sl]);
+  // (the slot is claimed first, and only its winner takes a number: every thread that saw it empty took one before, and a new floor's first frame used hundreds of the maps. M_NONE: claimed, or none left)
   if (mi == 0u && alloc) {
-    let nm = atomicAdd(&m_idx[LC_MASK + 1u], 1u);
-    if (nm < M_MAPS) { let r = atomicCompareExchangeWeak(&m_idx[sl], 0u, nm + 1u); mi = select(r.old_value, nm + 1u, r.exchanged); }
+    let r = atomicCompareExchangeWeak(&m_idx[sl], 0u, M_NONE);
+    if (r.exchanged) {
+      let nm = atomicAdd(&m_idx[LC_MASK + 1u], 1u);
+      if (nm < M_MAPS) { atomicStore(&m_idx[sl], nm + 1u); mi = nm + 1u; }
+    }
   }
-  if (mi == 0u) { return; }
+  if (mi == 0u || mi > M_MAPS) { return; }
   let m = mi - 1u;
   if (m_out[m][84].w >= LC_MAX * 16.0) { return; }
   // (spread over the four nearest directions, as a bilinear read will take it back)
@@ -288,7 +294,7 @@ fn m_read(q: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0: vec3<f32>, m
     let i = f32(k & 1u); let j = f32(k >> 1u);
     var c = q; c[au] = (bu + i + 0.5) * size; c[av] = (bv + j + 0.5) * size;
     let sl = lc_look_k(lc_key_s(c, n, M_PART, size)); if (sl > LC_MASK) { continue; }
-    let mi = atomicLoad(&m_idx[sl]); if (mi == 0u) { continue; }
+    let mi = atomicLoad(&m_idx[sl]); if (mi == 0u || mi > M_MAPS) { continue; }
     let w = select(1.0 - tu_, tu_, (k & 1u) == 1u) * select(1.0 - tv_, tv_, (k >> 1u) == 1u) * min(m_out[mi - 1u][84].w / 16.0 / M_TRUST, 1.0);
     ms[k] = mi; ws[k] = w; sum += w;
   }
@@ -333,7 +339,7 @@ fn lc_on() -> bool { return (u32(p.cam.w) & 8u) != 0u; }
 const LC_MIN = 8.0; const LC_FIX = 1024.0;
 @compute @workgroup_size(64) fn lc_resolve(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = id.x; if (i > LC_MASK) { return; }
-  let mi = atomicLoad(&m_idx[i]); if (mi > 0u) { m_resolve(mi - 1u); }
+  let mi = atomicLoad(&m_idx[i]); if (mi > 0u && mi <= M_MAPS) { m_resolve(mi - 1u); }
   let n = atomicLoad(&lc_acc[i][3]); if (n == 0u) { return; }
   lc_out[i] = vec4<f32>(f32(atomicLoad(&lc_acc[i][0])), f32(atomicLoad(&lc_acc[i][1])), f32(atomicLoad(&lc_acc[i][2])), f32(n)) / vec4<f32>(vec3<f32>(LC_FIX * f32(n)), 1.0);
 }
@@ -452,6 +458,20 @@ fn occluded(o: vec3<f32>, d: vec3<f32>, tmax: f32) -> bool {
 fn lamp(o: vec3<f32>, n: vec3<f32>) -> vec3<f32> { return lamp_rest(o, n, false); }
 // each lamp's share of the direct light traced apart at this pixel: the rest of it goes with the filtered light
 var<private> lamp_share: array<f32, 64>;
+// each lamp's share that a pixel traces apart, as trace's loop gives it (for passes that don't run that loop)
+fn lamp_shares(o: vec3<f32>, n: vec3<f32>) {
+  var ltotal = 0.0; var li = 0u;
+  loop { if (li >= min(p.misc.z, 64u)) { break; }
+    let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
+    ltotal += dot(lights[li].col.xyz, vec3<f32>(0.333)) * max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
+    li++; }
+  li = 0u;
+  loop { if (li >= min(p.misc.z, 64u)) { break; }
+    let v = lights[li].pos.xyz - o; let r2 = max(dot(v, v), LAMP_R * LAMP_R);
+    let c_ = max(dot(n, v * inverseSqrt(r2)), 0.0) / r2;
+    lamp_share[li] = clamp((dot(lights[li].col.xyz, vec3<f32>(0.333)) * c_ / max(ltotal, 1e-6) - 0.04) / 0.08, 0.0, 1.0);
+    li++; }
+}
 // one lamp, chosen by what it gives here; with `rest`, only what is left after each lamp's share
 fn lamp_rest(o: vec3<f32>, n: vec3<f32>, rest: bool) -> vec3<f32> {
   let nl = p.misc.z; if (nl == 0u) { return vec3<f32>(0.0); }
@@ -874,7 +894,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   seed = seed * 747796405u + 2891336453u; seed = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u; seed = (seed >> 22u) ^ seed;
   let o = start_at(pos, n);
   var vis = 0.0;
-  let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
+  let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5 - sub_off(); // (a traced pixel's sample lies past its block's middle)
   let b = vec2<i32>(floor(f));
   var tw = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
@@ -1255,7 +1275,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
     let rays = select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, turn);
     let use_rs = (u32(p.cam.w) & 4u) != 0u && rough > 0.15 && !is_mirror;
     let m_feed = m_on() && rough >= 0.15 && !is_mirror; // (what the rays find here fills its cell's map: the cache fills where reflections look)
-    rs_s.m = f32(rays); hit_n = max(f32(rays), 1.0);
+    rs_s.m = select(0.0, f32(rays), use_rs); hit_n = max(f32(rays), 1.0); // (rays kept to itself are no samples for the neighbours to count: a rough floor beside smoother patches came out darker there)
     let f0_rs = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
     // (relief finer than the traced pixel widens the reflection, Kaplanyan's way: from how far the normals around it spread)
     var nsp = n;
@@ -1318,7 +1338,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
     let vl_ = normalize(p.cam.xyz - pos); let nv_g = max(dot(n, vl_), 1e-3);
     let abg = dfg_ab(rough, nv_g);
     let f0g = mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x);
-    if (hit_d >= 0.0) { sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); } gl_ = vec3<f32>(0.0); // (the cache has it already)
+    sp += min(gl_ / max(f0g * abg.x + vec3<f32>(abg.y), vec3<f32>(0.005)), vec3<f32>(20.0)); gl_ = vec3<f32>(0.0); // (into the reflection, whether rays or the maps found it: the maps hold no lamps, and a floor lost its lamp's highlight once they covered it)
   }
   textureStore(out_glint, px, vec4<f32>(gl_, hit_d / hit_n)); // (a: how far the rays went, for a video's history)
   if ((u32(p.cam.w) & 4u) != 0u) { resv[u32(w * h) + u32(px.y * w + px.x)] = rs_s; }
@@ -1360,7 +1380,8 @@ fn fill_at(dir: vec3<f32>) {
   if (m_on()) { m_sample(q, ng, normalize(g1_pos - o), g1_l(lg, w_used, normalize(g1_pos - o)), false, true); }
   let l = dl1 + lg * s_ / (s_ + r_ * r_ * r_);
   let lc = l * min(1.0, 40.0 / max(max(max(l.x, l.y), l.z), 1e-5));
-  lcv_add_coarse(q, ng, lc);
+  // (the camera's cells take the whole gather, as trace and gather_q give them: the rescale above is the path cache's, whose cells stand for this hit and 3 more. With it here, what a pan came round to started a bounce short, darker)
+  let lv_ = dl1 + lg; lcv_add_coarse(q, ng, lv_ * min(1.0, 40.0 / max(max(max(lv_.x, lv_.y), lv_.z), 1e-5)));
   let sl = lc_find(lc_jit(q, ng), ng, t.mat);
   if (sl <= LC_MASK) { lc_add(sl, lc + p.sun_col.rgb * max(dot(ng, p.sun_dir.xyz), 0.0) * sun_vis(o, ng) / PI); }
 }

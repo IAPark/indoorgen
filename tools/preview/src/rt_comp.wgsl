@@ -79,7 +79,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let a = textureLoad(c_alb, px, 0); let mt = textureLoad(c_mat, px, 0);
   // the filtered light, from the traced pixels around this one that lie on the same surface
   let lw = i32(p.dims.x); let lh = i32(p.dims.y);
-  let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5;
+  // (where each traced pixel's sample really lies: past its block's middle by sub_off, as the history reads it. Spread from the middle, all the light sat half a pixel up and left and bled across its own edges)
+  let f = (vec2<f32>(px) + 0.5) / f32(ss) - 0.5 - ((floor(f32(ss) * 0.5) + 0.5) / f32(ss) - 0.5);
   let b = vec2<i32>(floor(f));
   var e = vec3<f32>(0.0); var s = vec3<f32>(0.0); var gl_ = vec3<f32>(0.0); var dl_ = vec3<f32>(0.0); var tw = 0.0; var ao_ = 0.0; var vh = 0.0; var vmax = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
