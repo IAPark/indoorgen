@@ -26,9 +26,30 @@ fn get() -> Option<&'static Oidn> {
         Some(Oidn { lib, dev })
     }).as_ref()
 }
-pub fn available() -> bool { get().is_some() }
+/// the same network on the GPU through MPSGraph (mpsdn/mpsdn.swift), with OIDN's published weights: for a GPU OIDN's own Metal device turns down
+struct Mps { _lib: Library, run: unsafe extern "C" fn(*const f32, *const f32, i32, i32, *mut f32) -> i32 }
+static M: OnceLock<Option<Mps>> = OnceLock::new();
+fn mps(quality: i32) -> Option<&'static Mps> {
+    M.get_or_init(|| {
+        if std::env::var("RT_DN").as_deref() != Ok("mps") { return None; }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let lib = unsafe { Library::new(std::env::var("MPSDN_LIB").unwrap_or(format!("{home}/work/ext/oidn/libmpsdn.dylib"))).ok()? };
+        let wf = std::env::var("MPSDN_W").unwrap_or(format!("{home}/work/ext/oidn/w/rt_hdr_calb_cnrm{}.tza", if quality <= 4 { "_small" } else { "" }));
+        let wc = std::ffi::CString::new(wf).ok()?;
+        unsafe {
+            if lib.get::<unsafe extern "C" fn(*const c_char) -> i32>(b"mpsdn_init\0").ok()?(wc.as_ptr()) == 0 { eprintln!("mpsdn: no GPU or weights"); return None; }
+            let run = *lib.get::<unsafe extern "C" fn(*const f32, *const f32, i32, i32, *mut f32) -> i32>(b"mpsdn_run\0").ok()?;
+            Some(Mps { _lib: lib, run })
+        }
+    }).as_ref()
+}
+pub fn available() -> bool { mps(4).is_some() || get().is_some() }
 /// `color`, `normal`: RGB f32, w x h. Quality: 4 fast, 5 balanced, 6 high. Returns the filtered picture
 pub fn denoise(color: &[f32], normal: &[f32], w: usize, h: usize, quality: i32) -> Option<Vec<f32>> {
+    if let Some(m) = mps(quality) {
+        let mut out = vec![0f32; w * h * 3];
+        if unsafe { (m.run)(color.as_ptr(), normal.as_ptr(), w as i32, h as i32, out.as_mut_ptr()) } != 0 { return Some(out); }
+    }
     let o = get()?;
     let albedo = vec![0.5f32; w * h * 3]; // (flat: this is light, with no surface colours in it. The network wants an albedo before it takes normals)
     let mut out = vec![0f32; w * h * 3];
