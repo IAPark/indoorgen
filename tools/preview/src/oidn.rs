@@ -13,8 +13,14 @@ fn get() -> Option<&'static Oidn> {
         let paths = [std::env::var("OIDN_LIB").unwrap_or_default(), "/opt/homebrew/lib/libOpenImageDenoise.dylib".into(), "/usr/local/lib/libOpenImageDenoise.so".into(), bpy];
         let lib = paths.iter().filter(|p| !p.is_empty()).find_map(|p| unsafe { Library::new(p).ok() })?;
         let dev = unsafe {
-            let d = lib.get::<unsafe extern "C" fn(c_int) -> P>(b"oidnNewDevice\0").ok()?(1); // (the CPU: the Metal one needs a real GPU)
-            lib.get::<unsafe extern "C" fn(P)>(b"oidnCommitDevice\0").ok()?(d);
+            let new = lib.get::<unsafe extern "C" fn(c_int) -> P>(b"oidnNewDevice\0").ok()?;
+            let commit = lib.get::<unsafe extern "C" fn(P)>(b"oidnCommitDevice\0").ok()?;
+            // (1 the CPU; 5 Metal, which wants a real Apple GPU: a virtual machine's is turned down, and the CPU does it)
+            let mut d = new(std::env::var("OIDN_DEV").ok().and_then(|v| v.parse().ok()).unwrap_or(1));
+            if d.is_null() { d = new(1); }
+            commit(d);
+            let err = lib.get::<unsafe extern "C" fn(P, *mut *const c_char) -> c_int>(b"oidnGetDeviceError\0").ok()?;
+            if err(d, std::ptr::null_mut()) != 0 { d = new(1); commit(d); }
             d as usize
         };
         Some(Oidn { lib, dev })

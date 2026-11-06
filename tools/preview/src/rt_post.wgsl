@@ -132,7 +132,7 @@ const DN_A = 1.0;
 }
 
 // ---- a video's light and reflections, built up over its frames: before the filter, which then has less to do the longer a surface has been seen
-struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32> }; // al: 1 on the first frame; the history's size; 1 for reflections
+struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32>, rf_vp: mat4x4<f32>, rf: vec4<f32>, rf2: vec4<f32> }; // rf: the last refresh's eye, and how much of it a frame takes; rf2: its size, and 3 on a refresh (it keeps its light, nothing else), 2 on a frame that eases toward it // al: 1 on the first frame; the history's size; 1 for reflections
 @group(0) @binding(8) var<uniform> tu: TU;
 @group(0) @binding(9) var t_lamp: texture_2d<f32>;
 @group(0) @binding(10) var t_n: texture_2d<f32>;
@@ -141,6 +141,8 @@ struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32> }; // al: 1
 // ---- how sure each pixel's soft light is: of its raw values (before the filter) the mean brightness, the mean square and how many there were. The spread over the square root of the count, against the mean, is its uncertainty. A cell's answer and the first frame count as many samples
 @group(0) @binding(15) var t_mom: texture_2d<f32>;
 @group(0) @binding(16) var o_mom: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(20) var t_rt: texture_2d<f32>;
+@group(0) @binding(21) var o_rt: texture_storage_2d<rgba16float, write>;
 const MOM_CLEAN = 16.0;
 fn mom_put(px: vec2<i32>, m: vec4<f32>) { if (tu.al.w < 0.5) { textureStore(o_mom, px, m); } }
 fn prev_uv(q: vec3<f32>) -> vec3<f32> {
@@ -151,7 +153,6 @@ const FROM_FIRST = 200.0;
 // (a traced pixel's own surface sample lies this far past its centre: a quarter pixel at 2x2. The history stands there, so reading it allows for it)
 fn sub_off() -> f32 { let ss = f32(p.dims.z); return (floor(ss * 0.5) + 0.5) / ss - 0.5; }
 const LAMP_BLEND = 0.34;
-const REFRESH_AL = 0.5;
 const EASE_AROUND = 0.5;
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
@@ -166,9 +167,11 @@ const EASE_AROUND = 0.5;
   let clean = !lamp_h && select(cur4.a <= 0.0, textureLoad(t_hit, px, 0).a < 0.0, refl);
   let g = px * ss + vec2<i32>(ss / 2);
   let d = textureLoad(d_depth, g, 0);
-  if (d >= 1.0) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(0.0)); return; }
+  let rmode = i32(tu.rf2.z + 0.5);
+  if (d >= 1.0) { if (rmode == 3) { textureStore(o_rt, px, vec4<f32>(0.0, 0.0, 0.0, -1.0)); return; } textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(0.0)); return; }
   let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
   let dist = length(pos - p.cam.xyz);
+  if (rmode == 3) { textureStore(o_rt, px, vec4<f32>(cur4.rgb, dist)); return; } // (a refresh's light, kept apart: the history is the ordinary frame's to write)
   let n0 = normalize(textureLoad(d_nrm, g, 0).xyz + vec3<f32>(1e-5));
   let sgn = select(-1.0, 1.0, clean);
   let lraw = dot(cur, vec3<f32>(0.333)); let m_new = vec4<f32>(lraw, lraw * lraw, select(1.0, MOM_CLEAN, clean || tu.al.x >= 1.0), 0.0);
@@ -213,14 +216,31 @@ const EASE_AROUND = 0.5;
     if (an > 0.0) { acc = mix(acc, av / an, EASE_AROUND); }
   }
   if (lamp_h) { al = select(max(al, LAMP_BLEND), 0.0, lamp_old); }
-  // (a refresh: a still's clean light, every pixel traced and the learned filter's, goes in part way -- held light had gone soft as a pan went on, the misty look. Not all at once: the frame would jump)
-  let refresh_ = tu.al.x > 0.25 && tu.al.x < 0.75;
-  if (refresh_) { al = REFRESH_AL; }
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer. Not on a clean value)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
   let cap = lh * 8.0 + 0.1;
-  let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean || lamp_h || refresh_);
-  textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), select(cur4.a, mix(aa, cur4.a, al), lamp_h)));
+  let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean || lamp_h);
+  var outc = mix(acc, cur_c, al);
+  // (and part way on toward the last refresh, where it saw this same surface: its light comes in over the frames after it, not at once)
+  if (rmode == 2 && !lamp_h) {
+    let c = tu.rf_vp * vec4<f32>(pos, 1.0);
+    let ru = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+    let rd = vec2<i32>(i32(tu.rf2.x), i32(tu.rf2.y));
+    if (c.w > 0.0 && all(ru >= vec2<f32>(0.0)) && all(ru < vec2<f32>(1.0))) {
+      let rex = length(pos - tu.rf.xyz);
+      let fr = ru * vec2<f32>(rd) - 0.5 - sub_off(); let br = floor(fr); let tr = fr - br;
+      var ra = vec3<f32>(0.0); var rs = 0.0;
+      for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
+        let q = clamp(vec2<i32>(br) + vec2<i32>(i, j), vec2<i32>(0), rd - vec2<i32>(1));
+        let tv = textureLoad(t_rt, q, 0);
+        if (abs(tv.a - rex) > 0.02 + 0.005 * rex) { continue; }
+        let wq = select(1.0 - tr.x, tr.x, i == 1) * select(1.0 - tr.y, tr.y, j == 1);
+        ra += tv.rgb * wq; rs += wq;
+      } }
+      if (rs > 0.5) { outc = mix(outc, ra / rs, tu.rf.w); }
+    }
+  }
+  textureStore(o_irr, px, vec4<f32>(outc, select(cur4.a, mix(aa, cur4.a, al), lamp_h)));
   // (a new raw value is one more sample; a clean one that takes over starts the count high; a held one adds nothing)
   if (clean && al >= 0.999) { mom_put(px, m_new); }
   else if (!clean && cur4.a >= 0.0) { let n_ = min(mm.z + 1.0, 64.0); let am = 1.0 / n_; let lc_ = dot(cur_c, vec3<f32>(0.333)); mom_put(px, vec4<f32>(mix(mm.x, lc_, am), mix(mm.y, lc_ * lc_, am), n_, 0.0)); }
