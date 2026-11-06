@@ -33,6 +33,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(10) var out_spec: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(14) var out_glint: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(15) var out_lamp: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(32) var out_sun: texture_storage_2d<rgba16float, write>; // (the sun's visibility at each traced pixel: a video keeps a history of it, as of the lamps)
 @group(0) @binding(16) var lamp_done: texture_2d<f32>;
 @group(0) @binding(17) var g_mat: texture_2d<f32>;
 struct W { c: vec4<f32>, u: vec4<f32>, v: vec4<f32>, n: vec4<f32> };
@@ -492,6 +493,44 @@ fn sun_vis(o: vec3<f32>, n: vec3<f32>) -> f32 {
   if (dot(n, s) <= 0.0) { return 0.0; }
   return select(1.0, 0.0, occluded(o, cone(s, p.scale.w), 1000.0));
 }
+// how much of the sun's disc a point sees: spread evenly over the disc (a Fibonacci spiral, turned by a random angle per pixel) rather than at random. Eight first, round the rim (sun_rim_k); on a soft edge, where they disagree, 32. Two random rays agreed by chance across a wide penumbra, and its pixels came out wholly lit or wholly dark: a band of salt and pepper along a sunlit patch's edge
+// the first look: 8 rays round the disc's rim. A penumbra's lit (or shaded) part starts as a crescent at the rim: 4 rays inside the disc all missed a thin one, and a soft frame shadow 0-20 % lit came out as specks of 0 among 0.15
+fn sun_rim_k(k: u32, rot: f32) -> vec3<f32> {
+  let r = p.scale.w * 0.96; let a = f32(k) * (PI / 4.0) + rot;
+  return normalize(basis(p.sun_dir.xyz) * vec3<f32>(r * cos(a), r * sin(a), 1.0));
+}
+fn sun_dir_k(k: u32, nk: u32, rot: f32) -> vec3<f32> {
+  let r = p.scale.w * sqrt((f32(k) + 0.5) / f32(nk)); let a = f32(k) * 2.39996 + rot;
+  return normalize(basis(p.sun_dir.xyz) * vec3<f32>(r * cos(a), r * sin(a), 1.0));
+}
+fn sun_soft(o: vec3<f32>, n: vec3<f32>) -> f32 {
+  if (dot(n, p.sun_dir.xyz) <= 0.0) { return 0.0; }
+  let rot = rnd() * 2.0 * PI; var hit = 0u;
+  for (var k = 0u; k < 8u; k++) { if (!occluded(o, sun_rim_k(k, rot), 1000.0)) { hit++; } }
+  if (hit == 0u || hit == 8u) { return f32(hit) / 8.0; }
+  hit = 0u;
+  for (var k = 0u; k < 32u; k++) { if (!occluded(o, sun_dir_k(k, 32u, rot), 1000.0)) { hit++; } }
+  return f32(hit) / 32.0;
+}
+// (and over the whole traced pixel, its finer surfaces each a point: from its middle alone, the fine shadow of a window's frame was caught at one spot of its pattern per pixel, and came out as specks where Blender, taking the whole pixel, has a smooth half-shadow)
+fn sun_area(px: vec2<i32>, ss: i32, dims: vec2<f32>) -> f32 {
+  let rot = rnd() * 2.0 * PI; var pts: array<vec3<f32>, 4>; var nrs: array<vec3<f32>, 4>; var np = 0u;
+  for (var k = 0; k < 4; k++) {
+    let gq = px * ss + vec2<i32>(k % ss, (k / ss) % ss) + vec2<i32>(select(0, ss / 2, ss == 1));
+    let dq = textureLoad(g_depth, gq, 0); if (dq >= 1.0) { continue; }
+    var nq = textureLoad(g_nrm, gq, 0).xyz; let pq = world_of(gq, dq, dims, p.inv_vp);
+    if (dot(nq, nq) < 0.25) { nq = -normalize(pq - p.cam.xyz); }
+    nq = normalize(nq); if (dot(nq, p.sun_dir.xyz) <= 0.0) { continue; }
+    pts[np] = start_at(pq, nq); nrs[np] = nq; np++;
+  }
+  if (np == 0u) { return 0.0; }
+  var hit = 0u;
+  for (var k = 0u; k < 8u; k++) { if (!occluded(pts[k % np], sun_rim_k(k, rot), 1000.0)) { hit++; } }
+  if (hit == 0u || hit == 8u) { return f32(hit) / 8.0; }
+  hit = 0u;
+  for (var k = 0u; k < 32u; k++) { if (!occluded(pts[k % np], sun_dir_k(k, 32u, rot), 1000.0)) { hit++; } }
+  return f32(hit) / 32.0;
+}
 const LAMP_R = 0.025; // m: their radii in the house sidecars, 2-3 cm
 // where a ray from a visible point starts: mostly back toward the camera, the one way known to be free. Along the normal alone, a point where a curtain's side or a casing meets a wall started behind the wall, and saw the sun outside
 fn start_at(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
@@ -655,7 +694,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
-  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); } return; }
+  if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(0.0)); } return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
@@ -702,9 +741,9 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   // the sun, with the lamps at this traced pixel: two rays, and more only where they differ, on a shadow's soft edge. Compose spreads it over the finer pixels by surface, as it does the lamps
   var sv = 0.0;
   if (dot(n, p.sun_dir.xyz) > 0.0) {
-    sv = sun_vis(o, n); let v2 = sun_vis(o, n);
-    if (v2 != sv) { var acc = sv + v2; for (var k = 0; k < 6; k++) { acc += sun_vis(o, n); } sv = acc / 8.0; }
+    sv = sun_area(px, ss, dims);
   }
+  textureStore(out_sun, px, vec4<f32>(sv, 0.0, 0.0, 1.0));
   vis_sh[u32(px.y * w + px.x)] = vec4<u32>(bitcast<u32>(sv), ent[0] | (ent[1] << 16u), ent[2] | (ent[3] << 16u), ent[4] | (ent[5] << 16u));
   // a sheer curtain, a lampshade: part of what lies behind comes through along the view, blurred, tinted by the cloth. (Directional, as in Blender: a lamp off to one side behind a shade does not make it glow)
   var thru_e = vec3<f32>(0.0); // (with the filtered light: from so few rays it is noise)
@@ -844,12 +883,8 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   } }
   var e = vec3<f32>(-1.0, 0.0, 0.0);
   if (tw < 0.02) {
-    // (the sun here too, since no traced pixel has it: two rays; only where they differ, on a shadow's soft edge, more)
-    vis = sun_vis(o, n);
-    if (dot(n, p.sun_dir.xyz) > 0.0) {
-      let v2 = sun_vis(o, n);
-      if (v2 != vis) { var acc = vis + v2; for (var k = 0; k < 6; k++) { acc += sun_vis(o, n); } vis = acc / 8.0; }
-    }
+    // (the sun here too, since no traced pixel has it)
+    vis = sun_soft(o, n);
     e = vec3<f32>(0.0);
     let spp = p.dims.w;
     for (var s = 0u; s < spp; s++) {

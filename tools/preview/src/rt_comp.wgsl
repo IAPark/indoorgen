@@ -26,7 +26,8 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(12) var c_lamp: texture_2d<f32>;
 @group(0) @binding(13) var<storage, read> vis_sh: array<vec4<u32>>;
 @group(0) @binding(14) var c_mom: texture_2d<f32>;
-@group(0) @binding(15) var c_var: texture_2d<f32>; // (the soft light's variance after the filter) // (the soft light's raw mean, mean square and samples, for RT_SHOW=unc) // (x: the sun's visibility at each traced pixel)
+@group(0) @binding(15) var c_var: texture_2d<f32>;
+@group(0) @binding(16) var c_sun: texture_2d<f32>; // (the sun's visibility at each traced pixel, a video's kept over frames) // (the soft light's variance after the filter) // (the soft light's raw mean, mean square and samples, for RT_SHOW=unc) // (x: the sun's visibility at each traced pixel)
 fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
   // (GGX with Smith height-correlated visibility, integrated numerically and fitted: A is F0's share, B the rest. Karis's fit runs 10-20% low on rough metal, by amounts that change with roughness)
   let r = clamp(rough, 0.03, 1.0); let n = sqrt(clamp(nv, 0.02, 1.0));
@@ -91,7 +92,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let bw = (1.0 - abs(f.x - f32(b.x + i))) * (1.0 - abs(f.y - f32(b.y + j)));
     let wt = bw * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02) + 1e-4 * bw;
     let c = textureLoad(c_irr, q, 0);
-    let vq = bitcast<f32>(vis_sh[u32(q.y * lw + q.x)].x); vh += vq * wt; vmax = max(vmax, vq);
+    let vq = textureLoad(c_sun, q, 0).r; vh += vq * wt; vmax = max(vmax, vq);
     let lq_ = textureLoad(c_lamp, q, 0); dl_ += lq_.rgb * wt; ao_ += lq_.a * wt; gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
   e /= max(tw, 1e-5); let e0_ = e; s /= max(tw, 1e-5); e *= mix(1.0, clamp(ao_ / max(tw, 1e-5), 0.0, 1.0), AO_STRENGTH); gl_ /= max(tw, 1e-5);
@@ -105,6 +106,20 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // the sun, as the traced pixels on this surface found it, spread over the finer ones as the lamps are; and the light of a surface no traced pixel landed on
   let fine = textureLoad(c_fine, px, 0);
   var v = vh / max(tw, 1e-5);
+  // (on a shadow's soft edge -- the traced pixels around disagree -- the visibility over a wider 4x4 of them on this surface, as the sun's own edge is soft: its few rays a pixel would otherwise show as grain)
+  var vlo = 1.0; var vhi = 0.0;
+  for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) { let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1)); let vq = textureLoad(c_sun, q, 0).r; vlo = min(vlo, vq); vhi = max(vhi, vq); } }
+  if (vhi - vlo > 0.05) {
+    var vs = 0.0; var vw = 0.0;
+    for (var j = -1; j <= 2; j++) { for (var i = -1; i <= 2; i++) {
+      let q = clamp(b + vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1));
+      let gq = q * ss + vec2<i32>(ss / 2); let dq = textureLoad(c_depth, gq, 0); if (dq >= 1.0) { continue; }
+      let nq = textureLoad(c_nrm, gq, 0).xyz; let pq = world_of(gq, dq, dims, p.inv_vp);
+      let wq = max(0.0, 1.0 - abs(f.x - f32(q.x)) / 2.0) * max(0.0, 1.0 - abs(f.y - f32(q.y)) / 2.0) * pow(max(dot(n, normalize(nq + vec3<f32>(1e-5))), 0.0), 8.0) * exp(-abs(dot(n, pq - pos)) / 0.02);
+      vs += textureLoad(c_sun, q, 0).r * wq; vw += wq;
+    } }
+    if (vw > 1e-4) { v = vs / vw; }
+  }
   // (a sliver no traced pixel landed on traces its own sun, but no more than its neighbours have: a ray slipping past a wall's edge drew a broken bright line along a join)
   if (fine.r >= 0.0) { v = min(fine.a, vmax); }
   // (the filtered light has no strong lamps in it: the nearest lamps' direct light, with its shadows, comes on top. A surface traced on its own has them already)
