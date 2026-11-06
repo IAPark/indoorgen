@@ -36,7 +36,7 @@ fn var_at(q: vec2<i32>) -> f32 {
   return textureLoad(d_var, q, 0).r;
 }
 @group(0) @binding(7) var o_spec: texture_storage_2d<rgba16float, write>;
-const DN_A = 0.5;
+const DN_A = 1.0;
 @compute @workgroup_size(8, 8) fn denoise(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
   let px = vec2<i32>(id.xy);
@@ -151,6 +151,7 @@ const FROM_FIRST = 200.0;
 // (a traced pixel's own surface sample lies this far past its centre: a quarter pixel at 2x2. The history stands there, so reading it allows for it)
 fn sub_off() -> f32 { let ss = f32(p.dims.z); return (floor(ss * 0.5) + 0.5) / ss - 0.5; }
 const LAMP_BLEND = 0.34;
+const REFRESH_AL = 0.5;
 const EASE_AROUND = 0.5;
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
   let w = i32(p.dims.x); let h = i32(p.dims.y); let ss = i32(p.dims.z); let px = vec2<i32>(id.xy);
@@ -212,10 +213,13 @@ const EASE_AROUND = 0.5;
     if (an > 0.0) { acc = mix(acc, av / an, EASE_AROUND); }
   }
   if (lamp_h) { al = select(max(al, LAMP_BLEND), 0.0, lamp_old); }
+  // (a refresh: a still's clean light, every pixel traced and the learned filter's, goes in part way -- held light had gone soft as a pan went on, the misty look. Not all at once: the frame would jump)
+  let refresh_ = tu.al.x > 0.25 && tu.al.x < 0.75;
+  if (refresh_) { al = REFRESH_AL; }
   // (a lone bright ray is a speck for many frames once it is in the history: what history has seen says how bright a new one can be. The more frames, the surer. Not on a clean value)
   let lh = dot(acc, vec3<f32>(0.333)); let lc = dot(cur, vec3<f32>(0.333));
   let cap = lh * 8.0 + 0.1;
-  let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean || lamp_h);
+  let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean || lamp_h || refresh_);
   textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), select(cur4.a, mix(aa, cur4.a, al), lamp_h)));
   // (a new raw value is one more sample; a clean one that takes over starts the count high; a held one adds nothing)
   if (clean && al >= 0.999) { mom_put(px, m_new); }

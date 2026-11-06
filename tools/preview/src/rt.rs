@@ -374,8 +374,10 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         B { binding: 6, resource: R::TextureView(gb.depth) }, B { binding: 7, resource: R::TextureView(gb.nrm) }, B { binding: 8, resource: R::TextureView(gb.alb) },
         B { binding: 9, resource: R::TextureView(irr_out) }, B { binding: 10, resource: R::TextureView(spec_out) }, B { binding: 11, resource: sd.wins.as_entire_binding() }, B { binding: 12, resource: R::TextureView(irr_in) }, B { binding: 13, resource: R::TextureView(gb.mirror_lit) }, B { binding: 14, resource: R::TextureView(&p.glint) }, B { binding: 15, resource: R::TextureView(lamp_out) }, B { binding: 16, resource: R::TextureView(lamp_in) }, B { binding: 17, resource: R::TextureView(gb.mat) }, B { binding: 32, resource: R::TextureView(&p.sunv) }] });
     let hist_i = hist_prev.map_or(0, |x| 1 - x.2);
+    // (a video's refresh: a frame at a still's quality -- every pixel traced, the learned filter -- that goes into the history it finds, part way, rather than starting it. Its marker for the history: 0.5)
+    let refresh = qu.hist && !qu.video && hist_prev.is_some();
     let accum = |enc: &mut wgpu::CommandEncoder, kind: usize, cur_v: &wgpu::TextureView, show: bool| {
-        let mut tu = [0f32; 24]; let (pv, pe, first, pr) = hist_prev.map_or((vp, eye, 1.0, res), |x| (x.0, x.1, 0.0, x.3));
+        let mut tu = [0f32; 24]; let (pv, pe, first, pr) = hist_prev.map_or((vp, eye, 1.0, res), |x| (x.0, x.1, if refresh { 0.5 } else { 0.0 }, x.3));
         tu[..16].copy_from_slice(&pv.to_cols_array()); tu[16..19].copy_from_slice(&pe.to_array()); tu[20] = first; tu[21] = pr.0 as f32; tu[22] = pr.1 as f32; tu[23] = kind as f32;
         let ub = wgpu::util::DeviceExt::create_buffer_init(dev, &wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&tu), usage: wgpu::BufferUsages::UNIFORM });
         let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.tmp_bgl, entries: &[B { binding: 0, resource: p.ubuf.as_entire_binding() }, B { binding: 8, resource: ub.as_entire_binding() }, B { binding: 2, resource: R::TextureView(gb.depth) }, B { binding: 3, resource: R::TextureView(gb.nrm) }, B { binding: 4, resource: R::TextureView(cur_v) }, B { binding: 5, resource: R::TextureView(&p.hist[kind][1 - hist_i]) }, B { binding: 6, resource: R::TextureView(&p.hist[kind][hist_i]) }, B { binding: 9, resource: R::TextureView(&p.lamp[0]) }, B { binding: 10, resource: R::TextureView(&p.hn[kind][1 - hist_i]) }, B { binding: 11, resource: R::TextureView(&p.hn[kind][hist_i]) }, B { binding: 12, resource: R::TextureView(&p.glint) }, B { binding: 15, resource: R::TextureView(&p.mom[1 - hist_i]) }, B { binding: 16, resource: R::TextureView(&p.mom[hist_i]) }] });
@@ -468,8 +470,8 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         }
     }
     lap(enc, "denoise");
-    if qu.hist && !qu.video { accum(enc, 2, &p.lamp[0], false); accum(enc, 0, &p.irr[cur], false); lap(enc, "keep light"); }
-    if qu.hist && !qu.video && use_lc {
+    if qu.hist && !qu.video { accum(enc, 2, &p.lamp[0], refresh); accum(enc, 0, &p.irr[cur], refresh); lap(enc, "keep light"); }
+    if qu.hist && !qu.video && use_lc && !refresh {
         let tg = trace_bg(&p.irr[1 - cur], &p.spec[1 - cur], &p.irr[cur], &p.lamp[1], &p.lamp[0]);
         { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_seed); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(wx, wy, 1); }
         // (the cache's coarse cells, all round the room, while this first frame has its time: what a turn will reveal is then lit already)
@@ -491,8 +493,8 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
     #[cfg(not(target_arch = "wasm32"))]
     for i in 0..5usize { filter(enc, cur, 1 - cur, spec_base + i); cur = 1 - cur; }
     lap(enc, "spec filter");
-    if qu.hist && !qu.video { accum(enc, 1, &p.spec[cur], false); }
-    if qu.hist && !qu.video && use_lc {
+    if qu.hist && !qu.video { accum(enc, 1, &p.spec[cur], refresh); }
+    if qu.hist && !qu.video && use_lc && !refresh {
         let tg = trace_bg(&p.irr[1 - cur], &p.spec[1 - cur], &p.spec[cur], &p.lamp[1], &p.lamp[0]);
         { let mut c = enc.begin_compute_pass(&Default::default()); c.set_pipeline(&p.lc_resolve); c.set_bind_group(0, &tg, &[]); c.dispatch_workgroups(LC_SLOTS as u32 / 64, 1, 1); }
     }
