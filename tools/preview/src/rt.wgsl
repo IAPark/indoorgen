@@ -642,7 +642,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var o = o0; var n = n0; var tp = vec3<f32>(1.0); var e = vec3<f32>(0.0);
   let bounces = p.misc.x;
   var lc_sl = array<u32, 2>(LC_MASK + 1u, LC_MASK + 1u); var lc_e = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0)); var lc_t = lc_e;
-  var lc_read = false; var lc_last = vec3<f32>(0.0); var lc_r = 0.0;
+  var lc_read = false; var lc_last = vec3<f32>(0.0); var lc_r = vec3<f32>(0.0);
   // (the first of these is the first bounce: Blender's limit of 4 is 4 of them. One more ran every room's light a tenth high)
   for (var b = 0u; b < bounces; b++) {
     var d = cosine(n);
@@ -659,8 +659,9 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     e += tp * m.emissive.rgb;
     tp *= m.albedo.rgb;
     // (the last hit stands in for the bounces left out, up to the four Blender follows: each about as lit as this one, and dimmer by its colour. Stopped short, a sunlit room with few lamps lost a tenth of its light)
-    var more = 1.0;
-    if (b + 1u == bounces) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
+    // (by colour, each bounce left out dimmer by the colour of what it lands on, as the room's own colour builds up over its bounces: by the mean of the channels, an orange bathroom's bounced light came out half way to grey)
+    var more = vec3<f32>(1.0);
+    if (b + 1u == bounces) { let r_ = m.albedo.rgb; var rk = vec3<f32>(1.0); for (var k = bounces; k < 4u; k++) { rk *= r_; more += rk; } }
     if (lc_on() && b + 1u < bounces && b < 2u) {
       let sl = lc_find(lc_jit(q, ng), ng, t.mat);
       lc_sl[b] = sl;
@@ -669,7 +670,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       if (!lc_read && h.t >= LC_SIZE && b <= 1u && sl <= LC_MASK && lv_.w >= LC_MIN && (lv_.w >= LC_MAX || rnd() > 0.03125)) {
         // (a read one bounce on passes its light back to the hit before, so light builds up over frames with no limit on bounces. A cell stands for this hit and 3 more: from a hit that follows another, 2 more would be right, the same total as Blender's 4 in a room of one colour)
         var v_ = lv_.xyz;
-        if (b == 1u) { let r_ = dot(m.albedo.rgb, vec3<f32>(0.333)); let s_ = 1.0 + r_ + r_ * r_; v_ *= s_ / (s_ + r_ * r_ * r_); }
+        if (b == 1u) { let r_ = m.albedo.rgb; let s_ = 1.0 + r_ + r_ * r_; v_ *= s_ / (s_ + r_ * r_ * r_); }
         e += tp * v_; lc_sl[b] = LC_MASK + 1u; lc_read = true; break;
       }
     }
@@ -678,12 +679,12 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     let direct_here = direct_one(q, ng, true, false);
     e += tp * direct_here * more;
     o = q; n = ng;
-    if (b + 1u == bounces) { lc_last = tp * direct_here; lc_r = dot(m.albedo.rgb, vec3<f32>(0.333)); }
+    if (b + 1u == bounces) { lc_last = tp * direct_here; lc_r = m.albedo.rgb; }
     // (Russian roulette: a path that has lost most of its light mostly ends here, and the ones that go on count for those that didn't. The same light on average, for fewer rays)
     if (b >= 1u) { let q_ = clamp(max(tp.x, max(tp.y, tp.z)) * 1.5, 0.15, 1.0); if (rnd() > q_) { break; } tp /= q_; }
   }
   if (lc_on()) {
-    var est = vec3<f32>(0.0); var rk = 1.0; for (var k = bounces; k < 4u; k++) { rk *= lc_r; }
+    var est = vec3<f32>(0.0); var rk = vec3<f32>(1.0); for (var k = bounces; k < 4u; k++) { rk *= lc_r; }
     for (var k = 0u; k < 2u; k++) {
       // (hit k has k bounces fewer than the first: the next terms of the series)
       if (k > 0u) { rk *= lc_r; est += lc_last * rk; }
@@ -1371,7 +1372,7 @@ fn fill_at(dir: vec3<f32>) {
   if (lcv_at(q, ng, LCV_COARSE, LCV_PART).w >= 0.999) { return; }
   let o = q + ng * 0.001;
   // (a cell stands for this hit and 3 more bounces, and gather goes 4 from here: the same total as Blender's 4, in a room of one colour)
-  let r_ = dot(mats[t.mat].albedo.rgb, vec3<f32>(0.333)); let s_ = 1.0 + r_ + r_ * r_;
+  let r_ = mats[t.mat].albedo.rgb; let s_ = 1.0 + r_ + r_ * r_; // (by colour, as gather's tail)
   let cg = lc_find_k(lc_key_s(q, ng, LCV_PART, LCV_COARSE));
   _ = guide_pick(cg, ng); let w_used = g_wt;
   let lg = gather(o, ng); g_use = false;
