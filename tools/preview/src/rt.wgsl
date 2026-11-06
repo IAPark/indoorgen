@@ -636,6 +636,18 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   return e;
 }
 
+// ---- how much the light filter will have to average with here: the traced pixels within two that face the same way and lie on the same surface, weighted as its first round weighs them. About 1 on a flat surface; little on a moulding's curve, a rail, a frame's profile, where a pixel's few paths stay as streaks the filter cannot take out. Those take more paths
+const THIN_T = 0.75; const THIN_MARK = 0.002; const THIN_K = 4u;
+fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32, dims: vec2<f32>) -> f32 {
+  var kw = array<f32, 3>(0.375, 0.25, 0.0625); var ew = 0.0;
+  for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) {
+    let q = px + vec2<i32>(i, j); if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) { continue; }
+    let gq = q * ss + vec2<i32>(ss / 2); let dq = textureLoad(g_depth, gq, 0); if (dq >= 1.0) { continue; }
+    let nq = normalize(textureLoad(g_nrm, gq, 0).xyz + vec3<f32>(1e-5));
+    ew += kw[abs(i)] * kw[abs(j)] * pow(max(dot(n, nq), 0.0), 32.0) * exp(-abs(dot(n, world_of(gq, dq, dims, p.inv_vp) - pos)) / 0.03);
+  } }
+  return ew;
+}
 @compute @workgroup_size(8, 8) fn trace(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y);
   let px = vec2<i32>(id.xy);
@@ -720,6 +732,7 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
   var e = vec3<f32>(0.0);
   // (a video: more paths where a surface has little history, just come into view or on a thin edge. What has been seen for frames needs few)
   var spp = p.dims.w;
+  let thin = support(px, n, pos, w, h, ss, dims) < THIN_T;
   // (a video: the cache's answer, without a ray, where it has one. a 0 tells what follows that this pixel holds all its light. Elsewhere, paths, which fill the cache for next time)
   if (lcv_v) {
     if (vid_read) {
@@ -733,14 +746,16 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
       // (one sample of them: the frames before it settles average them, as they do its gather)
       let ed = direct_one(o, n, false, true);
       resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
-      textureStore(out_irr, px, vec4<f32>(ed * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return;
+      // (what is thin is marked, +2: ReSTIR gives it only its own 2x2's paths, which lie on the same strip. Its wider neighbours' would draw a streak along a moulding)
+      textureStore(out_irr, px, vec4<f32>(ed * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0) + select(0.0, 2.0, thin))); return;
     }
   }
+  if (thin && !lcv_v) { spp *= THIN_K; } // (more paths where its light becomes the history: a still, a video's first frame. Later frames give it its own few, unshared)
   var dep_ = vec3<f32>(0.0);
   let restir_ = (u32(p.cam.w) & 2u) != 0u;
   var rs = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), f32(spp), vec3<f32>(0.0), 0.0);
   for (var s = 0u; s < spp; s++) {
-    if (restir_) {
+    if (restir_ && !thin) {
       let lp_ = direct_one(o, n, false, true); e += lp_; dep_ += lp_;
       if (lcv_v) { _ = guide_pick(lc_look_k(lc_key_s(pos, n, LCV_PART, LCV_COARSE)), n); }
       let w_used = g_wt;
@@ -755,9 +770,11 @@ fn gather(o0: vec3<f32>, n0: vec3<f32>) -> vec3<f32> {
     }
     let es = direct_one(o, n, false, true) + gather(o, n);
     // (only what cannot be real: a path that finds a sunlit patch is rare, valid, and most of a room's warm fill)
-    e += es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5));
+    let ec_ = es * min(1.0, 40.0 / max(max(max(es.x, es.y), es.z), 1e-5)); e += ec_; dep_ += ec_;
   }
   if (lcv_v) { lcv_add(pos, n, dep_ / f32(spp)); }
+  // (what is thin keeps its own paths: ReSTIR would hand it its neighbours' along the moulding, one shared error drawn as a streak. An empty reservoir, and its own mark for ReSTIR to pass it by)
+  if (restir_ && thin) { resv[u32(px.y * w + px.x)] = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0); textureStore(out_irr, px, vec4<f32>(e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e, THIN_MARK)); return; }
   if (restir_) { resv[u32(px.y * w + px.x)] = rs; textureStore(out_irr, px, vec4<f32>(e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e, 1.0 - max(sheer, 0.0))); return; }
   e = e / f32(spp) * (1.0 - max(sheer, 0.0)) + thru_e;
   textureStore(out_irr, px, vec4<f32>(e, 0.0));
@@ -946,6 +963,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
   let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
   let dir_ = textureLoad(irr_done, px, 0);
+  if (dir_.a > 0.0 && dir_.a < 0.01) { textureStore(out_irr, px, dir_); return; } // (a thin surface's own paths)
   let g = px * ss + vec2<i32>(ss / 2); let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
   if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(dir_.rgb, 0.0)); return; }
@@ -958,6 +976,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
   let r0 = resv[u32(px.y * w + px.x)];
   var sel = r0; var wt = r0.wsum; var mt = r0.m;
   // (a new pixel that did not gather: its own 2x2's paths first, then the neighbours' as for any)
+  let qthin = dir_.a >= 2.0; let a_ = select(dir_.a, dir_.a - 2.0, qthin);
   let qmode = (u32(p.cam.w) & 1024u) != 0u && r0.m == 0.0 && dir_.a >= 0.0;
   for (var k = 0u; k < RS_K + 3u; k++) {
     var q: vec2<i32>;
@@ -965,6 +984,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
       if (!qmode) { continue; }
       let j = (u32(px.x & 1) + u32(px.y & 1) * 2u + 1u + k) & 3u; q = (px / 2) * 2 + vec2<i32>(i32(j & 1u), i32(j >> 1u));
     } else {
+      if (qthin) { continue; }
       let a = rnd() * 2.0 * PI; let rr = sqrt(rnd()) * RS_RADIUS;
       q = px + vec2<i32>(round(vec2<f32>(cos(a), sin(a)) * rr));
     }
@@ -1006,7 +1026,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
   }
   // (nothing to share, across an edge: the cache's answer, as an edge's pixel takes it)
   if (qmode && wt <= 0.0) { let cr_ = lcv_read(pos, n); if (cr_.w >= 0.3) { textureStore(out_irr, px, vec4<f32>(cr_.xyz, -1.0)); return; } }
-  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * max(dir_.a, 0.0), dir_.a)); // (a keeps saying whether this pixel traced: 0 is the cache's clean answer, which the history and the filter treat differently)
+  textureStore(out_irr, px, vec4<f32>(dir_.rgb + ind * max(a_, 0.0), a_)); // (a keeps saying whether this pixel traced: 0 is the cache's clean answer, which the history and the filter treat differently)
 }
 
 // GTAO, as games do it: how far the surfaces nearby rise above this point, searched in the depth picture along a few directions. For each side of a direction a share sin^2 of the cosine-weighted hemisphere is closed off. Cheap, and the darkening of corners and contacts stays sharp, where the light's filter smooths it away
