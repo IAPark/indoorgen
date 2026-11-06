@@ -92,7 +92,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
     let vq = bitcast<f32>(vis_sh[u32(q.y * lw + q.x)].x); vh += vq * wt; vmax = max(vmax, vq);
     let lq_ = textureLoad(c_lamp, q, 0); dl_ += lq_.rgb * wt; ao_ += lq_.a * wt; gl_ += textureLoad(c_glint, q, 0).rgb * wt; e += c.rgb * wt; s += textureLoad(c_spec, q, 0).rgb * wt; tw += wt;
   } }
-  e /= max(tw, 1e-5); s /= max(tw, 1e-5); e *= mix(1.0, clamp(ao_ / max(tw, 1e-5), 0.0, 1.0), AO_STRENGTH); gl_ /= max(tw, 1e-5);
+  e /= max(tw, 1e-5); let e0_ = e; s /= max(tw, 1e-5); e *= mix(1.0, clamp(ao_ / max(tw, 1e-5), 0.0, 1.0), AO_STRENGTH); gl_ /= max(tw, 1e-5);
   // (a highlight only as wide as a tiny bevel face, brighter than anything a few pixels around it, is no highlight anyone would see: it drew a row of dots around a door's panel. A rail's runs along it, and stays)
   var gl_hi = vec3<f32>(0.0);
   for (var k = 0; k < 8; k++) {
@@ -182,6 +182,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   if (p.misc2.w == 5u) { textureStore(o_lit, px0, vec4<f32>(vec3<f32>(v), 1.0)); return; }
   if (p.misc2.w == 6u) { textureStore(o_lit, px0, vec4<f32>(n * 0.5 + 0.5, 1.0)); return; }
   if (p.misc2.w == 2u) { textureStore(o_lit, px0, vec4<f32>(a.rgb, 1.0)); return; }
+  if (p.misc2.w == 10u) { textureStore(o_lit, px0, vec4<f32>(e0_, 1.0)); return; }
+  if (p.misc2.w == 11u) { textureStore(o_lit, px0, vec4<f32>(dl_, 1.0)); return; }
   if (p.misc2.w == 3u) { textureStore(o_lit, px0, vec4<f32>(lit, 1.0)); return; }
   if (p.misc2.w == 4u) { textureStore(o_lit, px0, vec4<f32>(refl + spec_sun, 1.0)); return; }
   textureStore(o_lit, px0, vec4<f32>(col, 1.0));

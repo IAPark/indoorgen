@@ -1220,9 +1220,6 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     DRAW_EYE.with(|c| c.set(None));
     // (a video: the first frame is a fast picture on finer surfaces; after it the frames build their edges up by a camera that shifts a little each time)
     let vid_later = r.rt_now && o.rt.map_or(false, |q| q.video) && s.rt.as_ref().map_or(false, |sd| sd.hist_st.lock().unwrap().is_some());
-    let new_tg = vid_later && r.tg.w != o.res.0; // (new surfaces hold no mirror pictures yet)
-    if new_tg { r.tg = targets_at(&r.gpu.dev, o, 1); }
-    let ss_now = if vid_later { 1 } else { o.ss };
     let (dev, q) = (&r.gpu.dev, &r.gpu.q);
     let aspect = o.res.0 as f32 / o.res.1 as f32;
     // clip range: 0.05-200 m for a house; outdoor scenes (terrain to a few km) push the far plane out and the near plane to 0.1 m
@@ -1238,7 +1235,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     let sr = ((s.bmax - s.bmin) * 0.5).length() * 2.0;
     let mut gl = Globals { viewproj: vp.to_cols_array_2d(), inv_viewproj: vp.inverse().to_cols_array_2d(), sun_vp: s.sun_vp.to_cols_array_2d(),
         sun_dir: sdir.extend(0.0).into(), sun_col: [3.2 * sun_i, 2.9 * sun_i, 2.5 * sun_i, 0.0], sky: [0.72 * ambient, 0.75 * ambient, 0.8 * ambient, 0.0], ground: [0.58 * ambient, 0.55 * ambient, 0.5 * ambient, 0.0],
-        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, ss_now as f32, 1.0, 0.0],
+        cam_pos: eye.extend(1.0).into(), cam_fwd: fwd.extend(0.0).into(), params: [s.lights.len().min(32) as f32, o.exposure * xp, if cam.near.is_some() { o.ao * 0.45 } else { o.ao }, 0.6], clip2: cam.clip2, clip: cam.clip, params2: [1.0 / SHADOW as f32, o.ss as f32, 1.0, 0.0],
         lpos: [[0.0; 4]; 32], lcol: [[0.0; 4]; 32] };
     for (i, l) in s.lights.iter().take(32).enumerate() { gl.lpos[i] = l.pos.extend(1.0).into(); gl.lcol[i] = l.color.extend(1.0).into(); }
     let rt_q = if r.rt_now { o.rt } else { None };
@@ -1303,7 +1300,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         if rt_q.is_none() { rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref()); }
     }
     // (a video redraws its mirrors' pictures every third frame: from one frame to the next they hardly move, and each costs a small trace)
-    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && !new_tg && s.rt.as_ref().map_or(false, |sd| {
+    let panes_q = if rt_q.map_or(false, |q| q.video) && !first_v && s.rt.as_ref().map_or(false, |sd| {
         // (a video redraws its mirrors' pictures when the camera has moved or turned since the last: a held camera needs none, and a stale one at a fast pan left a black wedge at a mirror's edge)
         let mut st = sd.pane_st.lock().unwrap();
         let held = st.map_or(false, |(e, f)| (eye - e).length() < 0.005 && f.dot(fwd) > 0.99999);
@@ -1392,7 +1389,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
         let sc = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); if q2.video { 1 } else { o.ss } }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
+        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); o.ss }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
         // the glass, forward, over the traced picture
         let mk = |v: &'_ wgpu::TextureView| v.clone();
         let (l, n, a, m) = (mk(&tg.lit), mk(&tg.nrm), mk(&tg.alb), mk(&tg.mat));
@@ -1404,7 +1401,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
-        if qu.video && std::env::var_os("VID_NOTAA").is_none() { rt::taa(dev, &mut enc, p, sd, &tg.lit, &tg.depth, &tg.alb, vp0, eye, o.res); }
+        if qu.video && std::env::var_os("VID_NOTAA").is_none() { rt::taa(dev, &mut enc, p, sd, &tg.lit, &tg.depth, &tg.alb, vp0, eye, (o.res.0 * o.ss, o.res.1 * o.ss)); }
     }
     let post_bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &r.post_bgl, entries: &[wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&r.agx) }, wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(&r.agx_smp) },
         wgpu::BindGroupEntry { binding: 0, resource: r.ubuf.as_entire_binding() },

@@ -82,8 +82,10 @@ fn rs_prev(pos: vec3<f32>, w: i32, h: i32) -> i32 {
   let c = pv.vp * vec4<f32>(pos, 1.0); if (c.w <= 0.0) { return -1; }
   let u = vec2<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
   if (any(u < vec2<f32>(0.0)) || any(u >= vec2<f32>(1.0))) { return -1; }
-  let q = vec2<i32>(u * vec2<f32>(f32(w), f32(h))); return q.y * w + q.x;
+  let q = clamp(vec2<i32>(floor(u * vec2<f32>(f32(w), f32(h)) - vec2<f32>(sub_off()))), vec2<i32>(0), vec2<i32>(w - 1, h - 1)); return q.y * w + q.x;
 }
+// (where a traced pixel's own surface sample lies, past its centre, in its pixels: it takes the one at ss/2 of its ss x ss, a quarter pixel off at 2x2. Positions come from that sample, so the history's pixels stand there too, and a read of it must allow for it, or the light creeps a quarter pixel each frame)
+fn sub_off() -> f32 { let ss = f32(p.dims.z); return (floor(ss * 0.5) + 0.5) / ss - 0.5; }
 @group(0) @binding(19) var<storage, read_write> lc_cells: array<atomic<u32>>;
 @group(0) @binding(20) var<storage, read_write> lc_acc: array<array<atomic<u32>, 4>>;
 @group(0) @binding(21) var<storage, read_write> lc_out: array<vec4<f32>>;

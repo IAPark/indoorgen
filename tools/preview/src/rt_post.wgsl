@@ -124,6 +124,8 @@ fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   return vec3<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, c.w);
 }
 const FROM_FIRST = 200.0;
+// (a traced pixel's own surface sample lies this far past its centre: a quarter pixel at 2x2. The history stands there, so reading it allows for it)
+fn sub_off() -> f32 { let ss = f32(p.dims.z); return (floor(ss * 0.5) + 0.5) / ss - 0.5; }
 const LAMP_BLEND = 0.34;
 const EASE_AROUND = 0.5;
 @compute @workgroup_size(8, 8) fn temporal(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -153,7 +155,7 @@ const EASE_AROUND = 0.5;
   if (su.z <= 0.0 || any(su.xy < vec2<f32>(0.0)) || any(su.xy >= vec2<f32>(1.0))) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
   // (from the same surface only: what the camera has just come round the corner of has no past)
   let expect = length(pos - tu.prev_eye.xyz);
-  let f = su.xy * hdf - 0.5; let b = floor(f); let t = f - b;
+  let f = su.xy * hdf - 0.5 - sub_off(); let b = floor(f); let t = f - b;
   var acc = vec3<f32>(0.0); var aa = 0.0; var sum = 0.0; var nn = 0.0; var nz = 0.0;
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
@@ -170,7 +172,7 @@ const EASE_AROUND = 0.5;
     let k = 1.0 - smoothstep(0.1, 0.5, cur4.a);
     let vu = prev_uv(pos + normalize(pos - p.cam.xyz) * max(textureLoad(t_hit, px, 0).a, 0.0) * k);
     if (vu.z > 0.0 && all(vu.xy >= vec2<f32>(0.0)) && all(vu.xy < vec2<f32>(1.0))) {
-      let f2 = vu.xy * hdf - 0.5; let b2 = floor(f2); let t2 = f2 - b2; var a2 = vec3<f32>(0.0); var w2_ = 0.0;
+      let f2 = vu.xy * hdf - 0.5 - sub_off(); let b2 = floor(f2); let t2 = f2 - b2; var a2 = vec3<f32>(0.0); var w2_ = 0.0;
       // (only where that lands on this same surface: a white door frame's history bled onto the wall beside it, in a halo)
       for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
         let q = clamp(vec2<i32>(b2) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
