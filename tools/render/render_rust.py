@@ -467,6 +467,7 @@ if not (args.top or args.showcase):
     _sky.sky_type = "SINGLE_SCATTERING" if bpy.app.version >= (5, 0, 0) else "NISHITA"
     _sky.sun_size = math.radians(_clip(0.5, 0.3, 0.25, 5))
     _sky.sun_intensity = _r.uniform(0.8, 1.0)
+    if os.environ.get("NO_SUN"): _sky.sun_disc = False  # (for comparing light by light with the preview: the sky without its sun)
     _sky.sun_elevation = math.asin(_r.uniform(math.sin(math.radians(10)), 1.0))
     _sky.sun_rotation = _r.uniform(0, 2 * math.pi)
     _sky.altitude = _clip(100, 400, 0, 2000)
@@ -1025,3 +1026,10 @@ if os.environ.get("ENGINE") == "EEVEE":  # fast material-accurate preview (no pa
     except Exception as e: print("EEVEE settings", repr(e))
 if os.environ.get("PRE_RENDER_PY"): exec(open(os.environ["PRE_RENDER_PY"]).read())  # (a diagnostic: passes, one material changed)
 t = time.time(); bpy.ops.render.render(write_still=True); print("render time", time.time() - t)
+# (RAW_EXR=path: the linear picture as well, before the view transform, as an OpenEXR and as path.f32 -- width, height, then RGBA float32 rows from the bottom -- for comparing light levels with the preview exactly)
+if os.environ.get("RAW_EXR"):
+    _ip = sc.render.image_settings; _ip.file_format = "OPEN_EXR"; _ip.color_depth = "32"; _ip.color_mode = "RGBA"
+    bpy.data.images["Render Result"].save_render(filepath=os.environ["RAW_EXR"], scene=sc)
+    _im = bpy.data.images.load(os.environ["RAW_EXR"]); import array as _ar
+    with open(os.environ["RAW_EXR"] + ".f32", "wb") as _f:
+        _ar.array("i", list(_im.size)).tofile(_f); _ar.array("f", _im.pixels[:]).tofile(_f)

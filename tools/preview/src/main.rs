@@ -1001,6 +1001,7 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         if o.rt.map_or(false, |q| q.video) {
             if let Some(x) = *VIDEO_XP.lock().unwrap() {
                 let img = render(r, s, c, o, x);
+                if let Ok(pre) = std::env::var("RT_RAWDUMP") { raw_dump(r, &pre); }
                 r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
                 if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
                 return img;
@@ -1010,22 +1011,7 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
         if o.verbose { eprintln!("  traced {:.3}s", t.elapsed().as_secs_f32()); }
         memlog("after first frame");
-        // (RT_RAWDUMP=prefix: the linear picture and its albedo and normals, to try a denoiser on)
-        if let Ok(pre) = std::env::var("RT_RAWDUMP") {
-            let (dev, q) = (&r.gpu.dev, &r.gpu.q);
-            for (nm, v) in [("lit", &r.tg.lit), ("alb", &r.tg.alb), ("nrm", &r.tg.nrm)] {
-                let (w, h) = (r.tg.w, r.tg.h); let bpr = (w * 8 + 255) / 256 * 256;
-                let b = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (bpr * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-                let mut e = dev.create_command_encoder(&Default::default());
-                e.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: v.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                    wgpu::TexelCopyBufferInfo { buffer: &b, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
-                q.submit([e.finish()]);
-                let sl = b.slice(..); sl.map_async(wgpu::MapMode::Read, |_| {}); dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-                let data = sl.get_mapped_range().unwrap(); let mut out = Vec::with_capacity((w * h * 8) as usize);
-                for y in 0..h as usize { out.extend_from_slice(&data[y * bpr as usize..y * bpr as usize + w as usize * 8]); }
-                std::fs::write(format!("{pre}_{nm}_{w}x{h}.raw"), out).unwrap();
-            }
-        }
+        if let Ok(pre) = std::env::var("RT_RAWDUMP") { raw_dump(r, &pre); }
         // (the same steps from the same start, not straight to a fixed mean: Blender stops anywhere in its band, and where it stops is most of the picture's brightness. Aiming for the middle read a real match as a 15-level difference)
         let stat = |img: &image::RgbaImage| { let mut lum: Vec<f32> = img.pixels().map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0).collect();
             lum.sort_by(|a, b| a.partial_cmp(b).unwrap()); let core = &lum[lum.len() / 20..lum.len() * 19 / 20];
@@ -1050,6 +1036,7 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         return img;
     }
     let img = render(r, s, c, o, 1.0);
+    if let Ok(pre) = std::env::var("RT_RAWDUMP") { raw_dump(r, &pre); }
     let (mut sum, mut hi, n) = (0f32, 0u32, img.pixels().len() as f32);
     for p in img.pixels() { let l = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0; sum += l; if l > 0.97 { hi += 1; } }
     let (m0, h0) = (sum / n, hi as f32 / n);
@@ -1059,6 +1046,23 @@ fn exposed(r: &mut Renderer, s: &mut Scene, c: &Cam, o: &Opts) -> image::RgbaIma
         return render(r, s, c, o, xp);
     }
     img
+}
+
+/// RT_RAWDUMP=prefix: the linear picture and its albedo and normals, to try a denoiser on or to compare light levels with Blender. Every frame overwrites it, so a video leaves its last
+fn raw_dump(r: &Renderer, pre: &str) {
+        let (dev, q) = (&r.gpu.dev, &r.gpu.q);
+        for (nm, v) in [("lit", &r.tg.lit), ("alb", &r.tg.alb), ("nrm", &r.tg.nrm)] {
+            let (w, h) = (r.tg.w, r.tg.h); let bpr = (w * 8 + 255) / 256 * 256;
+            let b = dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: (bpr * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let mut e = dev.create_command_encoder(&Default::default());
+            e.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: v.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyBufferInfo { buffer: &b, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) } }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+            q.submit([e.finish()]);
+            let sl = b.slice(..); sl.map_async(wgpu::MapMode::Read, |_| {}); dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let data = sl.get_mapped_range().unwrap(); let mut out = Vec::with_capacity((w * h * 8) as usize);
+            for y in 0..h as usize { out.extend_from_slice(&data[y * bpr as usize..y * bpr as usize + w as usize * 8]); }
+            std::fs::write(format!("{pre}_{nm}_{w}x{h}.raw"), out).unwrap();
+        }
 }
 
 fn make_main_pipe(dev: &wgpu::Device, sm: &wgpu::ShaderModule, g_bgl: &wgpu::BindGroupLayout, mat_bgl: &wgpu::BindGroupLayout, glass: bool) -> wgpu::RenderPipeline {
