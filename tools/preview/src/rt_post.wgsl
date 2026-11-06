@@ -19,6 +19,22 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(5) var i_spec: texture_2d<f32>;
 @group(0) @binding(6) var o_irr: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(13) var d_cnt: texture_2d<f32>;
+// (the soft light's variance, carried through the rounds as SVGF does: each round averages it by the squares of its weights, so what was averaged over many like neighbours ends sure, and a pixel with few stays unsure. The first round starts it from the history's moments)
+@group(0) @binding(17) var d_var: texture_2d<f32>;
+@group(0) @binding(18) var o_var: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(19) var d_mom: texture_2d<f32>;
+fn var_at(q: vec2<i32>) -> f32 {
+  if (stp.z == 0u && stp.y == 0u) {
+    let m = textureLoad(d_mom, q, 0);
+    if (m.z >= 4.0) { return max(m.y - m.x * m.x, 0.0) / m.z; }
+    // (too few samples of its own to tell their spread: the spread of its neighbours' raw light instead, as SVGF does, over its own count)
+    let dd = vec2<i32>(textureDimensions(d_mom)); var s1 = 0.0; var s2 = 0.0;
+    for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) { let x = textureLoad(d_mom, clamp(q + vec2<i32>(i, j), vec2<i32>(0), dd - vec2<i32>(1)), 0).x; s1 += x; s2 += x * x; } }
+    s1 /= 9.0; s2 /= 9.0;
+    return max(s2 - s1 * s1, 0.0) / max(m.z, 1.0);
+  }
+  return textureLoad(d_var, q, 0).r;
+}
 @group(0) @binding(7) var o_spec: texture_storage_2d<rgba16float, write>;
 const DN_A = 0.5;
 @compute @workgroup_size(8, 8) fn denoise(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -51,7 +67,7 @@ const DN_A = 0.5;
   let p0 = world_of(g, d0, dims, p.inv_vp);
   var kw = array<f32, 3>(0.375, 0.25, 0.0625);
   let stride = i32(stp.x); let it = stp.y;
-  var e = vec3<f32>(0.0); var ew = 0.0; var s = vec3<f32>(0.0); var sw = 0.0; var el = vec3<f32>(0.0); var ewl = 0.0;
+  var e = vec3<f32>(0.0); var ew = 0.0; var s = vec3<f32>(0.0); var sw = 0.0; var el = vec3<f32>(0.0); var ewl = 0.0; var ev = 0.0; var evl = 0.0;
   // (what is typical: the mean of compressed brightness, which a few bright pixels hardly move)
   var out_cap = 1e9;
   if (it == 0u && stp.z == 1u) {
@@ -81,8 +97,8 @@ const DN_A = 0.5;
     let ci = select(textureLoad(i_irr, q, 0), c, i == 0 && j == 0);
     let wg = kk * wn * wp;
     // (no test on brightness: in a room lit through a window most paths find nothing, and such a test keeps exactly the noise it should take out. No clamp either: what it cut was the sun's bounce)
-    e += ci.rgb * wg; ew += wg;
-    let wg_l = kk * pow(max(dot(n0, nq), 0.0), 4.0) * wp; el += ci.rgb * wg_l; ewl += wg_l;
+    e += ci.rgb * wg; ew += wg; let vq_ = select(0.0, var_at(q), stp.z == 0u); ev += wg * wg * vq_;
+    let wg_l = kk * pow(max(dot(n0, nq), 0.0), 4.0) * wp; el += ci.rgb * wg_l; ewl += wg_l; evl += wg_l * wg_l * vq_;
     let si = textureLoad(i_spec, q, 0);
     // (reflections on a little relief: its normals differ pixel to pixel while what they reflect does not. A looser test, or a brushed fridge stayed in grains)
     // (first round: a pixel far brighter than what is typical around it counts for less. A rare ray to a small sunlit patch would spread into a disc, and every neighbour reads it, so limiting the pixel alone is not enough. Karis's average on every pixel took the light out of all reflections)
@@ -109,6 +125,9 @@ const DN_A = 0.5;
   let rounds_ = 5.0 - DN_A * log2(max(abs(cnt_), 1.0));
   let keep = select(0.0, select(select(0.0, 1.0, f32(it) >= rounds_), 1.0, cnt_ > 100.0), (u32(p.cam.w) & 64u) != 0u); // (what is clean is left as it is: only noise needs the filter)
   textureStore(o_irr, px, vec4<f32>(mix(select(ee, av.rgb, lone), c.rgb, select(keep, 0.0, spec_only)), 0.0));
+  let vc_ = var_at(px);
+  let ve_ = select(select(select(vc_, ev / max(ew * ew, 1e-8), ew > 1e-5), evl / max(ewl * ewl, 1e-8), few), vc_, spec_only || lone || keep > 0.5);
+  textureStore(o_var, px, vec4<f32>(ve_, 0.0, 0.0, 0.0));
   textureStore(o_spec, px, vec4<f32>(mix(sv, sc.rgb, select(0.0, keep, spec_only)), sc.a));
 }
 
@@ -119,6 +138,11 @@ struct TU { prev_vp: mat4x4<f32>, prev_eye: vec4<f32>, al: vec4<f32> }; // al: 1
 @group(0) @binding(10) var t_n: texture_2d<f32>;
 @group(0) @binding(11) var o_n: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(12) var t_hit: texture_2d<f32>;
+// ---- how sure each pixel's soft light is: of its raw values (before the filter) the mean brightness, the mean square and how many there were. The spread over the square root of the count, against the mean, is its uncertainty. A cell's answer and the first frame count as many samples
+@group(0) @binding(15) var t_mom: texture_2d<f32>;
+@group(0) @binding(16) var o_mom: texture_storage_2d<rgba16float, write>;
+const MOM_CLEAN = 16.0;
+fn mom_put(px: vec2<i32>, m: vec4<f32>) { if (tu.al.w < 0.5) { textureStore(o_mom, px, m); } }
 fn prev_uv(q: vec3<f32>) -> vec3<f32> {
   let c = tu.prev_vp * vec4<f32>(q, 1.0);
   return vec3<f32>(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, c.w);
@@ -146,27 +170,28 @@ const EASE_AROUND = 0.5;
   let dist = length(pos - p.cam.xyz);
   let n0 = normalize(textureLoad(d_nrm, g, 0).xyz + vec3<f32>(1e-5));
   let sgn = select(-1.0, 1.0, clean);
+  let lraw = dot(cur, vec3<f32>(0.333)); let m_new = vec4<f32>(lraw, lraw * lraw, select(1.0, MOM_CLEAN, clean || tu.al.x >= 1.0), 0.0);
   // (the first frame is a clean picture: as good as many frames' worth. It traced its nearest lamps apart, where later frames have them all in this light)
-  if (tu.al.x >= 1.0) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(FROM_FIRST, dist, n0.x, n0.y)); return; }
+  if (tu.al.x >= 1.0) { mom_put(px, m_new); textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(FROM_FIRST, dist, n0.x, n0.y)); return; }
   // (a mirror's picture is sharp and already right)
   if (refl && cur4.a < 0.03) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(1.0, dist, n0.x, n0.y)); return; }
   let hd = vec2<i32>(i32(tu.al.y), i32(tu.al.z)); let hdf = vec2<f32>(hd);
   let su = prev_uv(pos);
-  if (su.z <= 0.0 || any(su.xy < vec2<f32>(0.0)) || any(su.xy >= vec2<f32>(1.0))) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
+  if (su.z <= 0.0 || any(su.xy < vec2<f32>(0.0)) || any(su.xy >= vec2<f32>(1.0))) { mom_put(px, m_new); textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
   // (from the same surface only: what the camera has just come round the corner of has no past)
   let expect = length(pos - tu.prev_eye.xyz);
   let f = su.xy * hdf - 0.5 - sub_off(); let b = floor(f); let t = f - b;
-  var acc = vec3<f32>(0.0); var aa = 0.0; var sum = 0.0; var nn = 0.0; var nz = 0.0;
+  var acc = vec3<f32>(0.0); var aa = 0.0; var sum = 0.0; var nn = 0.0; var nz = 0.0; var mm = vec4<f32>(0.0);
   for (var j = 0; j < 2; j++) { for (var i = 0; i < 2; i++) {
     let q = clamp(vec2<i32>(b) + vec2<i32>(i, j), vec2<i32>(0), hd - vec2<i32>(1));
     let hn = textureLoad(t_n, q, 0);
     // (and facing the same way: a door's jamb beside the wall it is set in lies at nearly the same distance, and took the wall's light)
     if (abs(hn.g - expect) > 0.02 + 0.005 * expect || (!lamp_old && abs(hn.b - n0.x) + abs(hn.a - n0.y) > 0.3)) { continue; } // (lamps not traced this frame have nothing else: a bump map's normals must not turn them away)
     let wq = select(1.0 - t.x, t.x, i == 1) * select(1.0 - t.y, t.y, j == 1);
-    let hc_ = textureLoad(i_spec, q, 0); acc += hc_.rgb * wq; aa += hc_.a * wq; nn += abs(hn.r) * wq; nz += select(0.0, wq, hn.r < 0.0); sum += wq;
+    let hc_ = textureLoad(i_spec, q, 0); acc += hc_.rgb * wq; aa += hc_.a * wq; mm += textureLoad(t_mom, q, 0) * wq; nn += abs(hn.r) * wq; nz += select(0.0, wq, hn.r < 0.0); sum += wq;
   } }
-  if (sum < 0.2) { textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
-  acc /= sum; aa /= sum; nn /= sum; let noisy_hist = nz / sum > 0.5;
+  if (sum < 0.2) { mom_put(px, m_new); textureStore(o_irr, px, cur4); textureStore(o_n, px, vec4<f32>(sgn, dist, n0.x, n0.y)); return; }
+  acc /= sum; aa /= sum; mm /= sum; nn /= sum; let noisy_hist = nz / sum > 0.5;
   // (a reflection moves as what it shows does, behind the surface: as far back as the rays went. A rough one is a wide blur, and stays nearer the surface)
   if (refl) {
     let k = 1.0 - smoothstep(0.1, 0.5, cur4.a);
@@ -207,6 +232,10 @@ const EASE_AROUND = 0.5;
   let cap = lh * 8.0 + 0.1;
   let cur_c = select(cur * min(1.0, cap / max(lc, 1e-5)), cur, clean || lamp_h);
   textureStore(o_irr, px, vec4<f32>(mix(acc, cur_c, al), select(cur4.a, mix(aa, cur4.a, al), lamp_h)));
+  // (a new raw value is one more sample; a clean one that takes over starts the count high; a held one adds nothing)
+  if (clean && al >= 0.999) { mom_put(px, m_new); }
+  else if (!clean && cur4.a >= 0.0) { let n_ = min(mm.z + 1.0, 64.0); let am = 1.0 / n_; let lc_ = dot(cur_c, vec3<f32>(0.333)); mom_put(px, vec4<f32>(mix(mm.x, lc_, am), mix(mm.y, lc_ * lc_, am), n_, 0.0)); }
+  else { mom_put(px, mm); }
   // (the history stays a noise one until clean values or enough frames have replaced it)
   let still_noisy = !clean && nn < 3.0;
   // (a count from the first frame stays above FROM_FIRST / 2: that light is clean. What came later was gathered from few rays, and keeps the filter)

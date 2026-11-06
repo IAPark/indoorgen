@@ -24,7 +24,9 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(10) var c_fine: texture_2d<f32>;
 @group(0) @binding(11) var c_glint: texture_2d<f32>;
 @group(0) @binding(12) var c_lamp: texture_2d<f32>;
-@group(0) @binding(13) var<storage, read> vis_sh: array<vec4<u32>>; // (x: the sun's visibility at each traced pixel)
+@group(0) @binding(13) var<storage, read> vis_sh: array<vec4<u32>>;
+@group(0) @binding(14) var c_mom: texture_2d<f32>;
+@group(0) @binding(15) var c_var: texture_2d<f32>; // (the soft light's variance after the filter) // (the soft light's raw mean, mean square and samples, for RT_SHOW=unc) // (x: the sun's visibility at each traced pixel)
 fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
   // (GGX with Smith height-correlated visibility, integrated numerically and fitted: A is F0's share, B the rest. Karis's fit runs 10-20% low on rough metal, by amounts that change with roughness)
   let r = clamp(rough, 0.03, 1.0); let n = sqrt(clamp(nv, 0.02, 1.0));
@@ -182,6 +184,14 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   if (p.misc2.w == 5u) { textureStore(o_lit, px0, vec4<f32>(vec3<f32>(v), 1.0)); return; }
   if (p.misc2.w == 6u) { textureStore(o_lit, px0, vec4<f32>(n * 0.5 + 0.5, 1.0)); return; }
   if (p.misc2.w == 2u) { textureStore(o_lit, px0, vec4<f32>(a.rgb, 1.0)); return; }
+  if (p.misc2.w == 12u) {
+    // (the soft light's uncertainty: blue sure, through green and yellow, to red at 25% and over; magenta where there is no count yet)
+    let qn_ = clamp(vec2<i32>(round(f)), vec2<i32>(0), vec2<i32>(lw - 1, lh - 1)); let mq = textureLoad(c_mom, qn_, 0);
+    let u = sqrt(max(textureLoad(c_var, qn_, 0).r, 0.0)) / (dot(textureLoad(c_irr, qn_, 0).rgb, vec3<f32>(0.333)) + 0.02);
+    let t_ = clamp(u / 0.25, 0.0, 1.0);
+    let col_ = select(mix(mix(vec3<f32>(0.1, 0.2, 0.9), vec3<f32>(0.2, 0.9, 0.2), clamp(t_ * 2.0, 0.0, 1.0)), vec3<f32>(1.0, 0.1, 0.0), clamp(t_ * 2.0 - 1.0, 0.0, 1.0)), vec3<f32>(1.0, 0.0, 1.0), mq.z < 0.5);
+    textureStore(o_lit, px0, vec4<f32>(col_ * 0.6, 1.0)); return;
+  }
   if (p.misc2.w == 10u) { textureStore(o_lit, px0, vec4<f32>(e0_, 1.0)); return; }
   if (p.misc2.w == 11u) { textureStore(o_lit, px0, vec4<f32>(dl_, 1.0)); return; }
   if (p.misc2.w == 3u) { textureStore(o_lit, px0, vec4<f32>(lit, 1.0)); return; }
