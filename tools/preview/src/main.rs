@@ -1327,7 +1327,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         panes.truncate(if rt_q.map_or(false, |q| q.spec_spp < 3) { 2 } else { 4 }); // (each picture costs a small trace: fast mode can afford two)
         // (one picture buffer, each writing its whole screen box: a glass pane in front of a mirror overwrote the mirror's picture with its own, a hard rectangle. Mirrors show all of theirs, so they write last)
         panes.sort_by_key(|x| is_mirror(&s.glb.mats[s.draws[x.4].mat].name));
-        for &(n, d, lo, hi, pane_d) in &panes {
+        for &(n, d, lo, hi, _) in &panes {
             // the pane's box on screen (a pane reaching behind the camera: all of it)
             let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;
             for k in 0..8 {
@@ -1382,7 +1382,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
                 if let Some(l) = &m_list { prepass::draw_list(&mut rp, s, &r.main_pipe, l); } else { draw_all(&mut rp, s, Some(&r.main_pipe), false, false, Some(&frm), None, None, None); }
             }
             let vid_m = rt_q.map_or(false, |q| q.video) && !first_v;
-            let qm = rt::Quality { spp: if vid_m { 1 } else { 3 }, bounces: 2, spec_spp: 1, denoise: if vid_m { 3 } else { 5 }, ss: 1, video: vid_m, hist: false, no_cells: is_mirror(&s.glb.mats[s.draws[pane_d].mat].name) };
+            let qm = rt::Quality { spp: if vid_m { 1 } else { 3 }, bounces: 2, spec_spp: 1, denoise: if vid_m { 3 } else { 5 }, ss: 1, video: vid_m, hist: false };
             rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, if qm.video { (o.res.0 / 2, o.res.1 / 2) } else { o.res }, if qm.video { 2 } else { 1 }, qm, vpm, eye_m, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
             let (ox, oy) = (x0 as u32, y0 as u32);
             me.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { texture: &tg.m_lit, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },

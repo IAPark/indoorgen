@@ -278,7 +278,7 @@ fn m_tap(m: u32, uv: vec2<f32>, lv: u32) -> vec4<f32> {
   return vec4<f32>(a / max(wsum, 1e-6), select(0.0, cnt / max(wsum, 1e-6) / 16.0, wsum > 1e-6));
 }
 // what a rough reflection at q shows, seen from v: four directions from its lobe, weighted as a traced ray would be, each read from the 40 cm maps around it, and scaled by how bright this spot is against its cell
-fn m_read(q: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0: vec3<f32>) -> vec4<f32> {
+fn m_read(q: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0: vec3<f32>, metal: bool) -> vec4<f32> {
   let fr = m_frame(n);
   let an = abs(n); var ax = 2u; if (an.x >= an.y && an.x >= an.z) { ax = 0u; } else if (an.y >= an.z) { ax = 1u; }
   let au = (ax + 1u) % 3u; let av = (ax + 2u) % 3u; let size = M_SIZE;
@@ -301,10 +301,10 @@ fn m_read(q: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0: vec3<f32>) -
     for (var k = 0u; k < 4u; k++) { if (ws[k] <= 0.0) { continue; } let t = m_tap(ms[k] - 1u, uv, M_LV); if (t.w > 0.0) { l += t.xyz * ws[k]; lw += ws[k]; } }
     if (lw > 0.0) { acc += l / lw * gs.w; }
   }
-  // (the spot against its cell: darker under a cabinet, nearer a wall. Only where both have filled)
+  // (the spot against its cell: darker under a cabinet, nearer a wall. Only where both have filled, and only on metal, which shows nothing else: on a glazed tile wall's faint reflection the 10 cm cells' own unevenness drew tile-sized blotches beside a doorway)
   let fd = lcv_at(q, n, LCV_FINE, M_DC); let cd = lcv_at(q, n, M_SIZE, M_DC);
   var kr = 1.0;
-  if (fd.w > 0.5 && cd.w > 0.5) { kr = clamp(dot(fd.xyz / fd.w, vec3<f32>(0.333)) / max(dot(cd.xyz / cd.w, vec3<f32>(0.333)), 1e-4), 0.25, 4.0); }
+  if (metal && fd.w > 0.5 && cd.w > 0.5) { kr = clamp(dot(fd.xyz / fd.w, vec3<f32>(0.333)) / max(dot(cd.xyz / cd.w, vec3<f32>(0.333)), 1e-4), 0.25, 4.0); }
   return vec4<f32>(acc * 0.25 * kr, min(sum, 1.0));
 }
 // ---- the light leaving a surface a ray landed on, the same for every ray that lands: what its cell holds, where it may be read (sl: its cell, or none where a cell's average would show); otherwise one sample of the sun, lamps and windows, and for the rest a path from there or e_near, a stand-in the caller has at hand
@@ -709,8 +709,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
     return;
   }
   // (a video: settled, or an edge the cell can answer, takes no rays for its soft light. Every pixel still traces its nearest lamps as a still does: a hard shadow kept in history wears away, resampled every frame, and these rays have next to no noise)
-  // (not a mirror's picture: read from the cells, its lamps came out ~15% too bright, and their shadows on the walls it shows a blur. A glass pane's faint reflection keeps them: there it can't be seen, and they are cheaper)
-  let lcv_v = (u32(p.cam.w) & 32u) != 0u && (u32(p.cam.w) & 4096u) == 0u && lc_on();
+  let lcv_v = (u32(p.cam.w) & 32u) != 0u && lc_on();
   var vid_read = false; var vcr = vec4<f32>(0.0); var lamp_keep = false;
   if (lcv_v) {
     let settled = (u32(p.cam.w) & 64u) != 0u && hist_settled(pos, n, w, h);
@@ -1250,7 +1249,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
     } }
     let m_ok = !is_m || (u32(p.cam.w) & 64u) == 0u || rnd() < smoothstep(m_lo, m_lo + 0.2, rough); // (no draw unless it will be used: a still's noise stays as it was)
     if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= 0.15) {
-      let rc = m_read(pos, n, v, rough, mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x));
+      let rc = m_read(pos, n, v, rough, mix(vec3<f32>(0.04), a.rgb, textureLoad(g_mat, g, 0).x), is_m);
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }
     let rays = select(select(select(p.misc2.y, 4u, p.misc2.y >= 3u && textureLoad(g_mat, g, 0).x >= 0.5), 0u, is_mirror), 0u, turn);
@@ -1336,7 +1335,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
   let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
-  lcv_add(pos, normalize(n), textureLoad(irr_done, px, 0).rgb + textureLoad(lamp_done, px, 0).rgb);
+  lcv_add(pos, normalize(n), textureLoad(irr_done, px, 0).rgb); // (the soft light alone, as a video's frames add it: the lamps traced apart come on top. With them in, a mirror's picture, which reads the cells and traces its lamps too, had them twice, ~15% too bright)
 }
 
 
