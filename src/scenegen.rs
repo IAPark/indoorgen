@@ -84,6 +84,37 @@ pub fn layout_only(p: &Params) -> serde_json::Value {
     LAYOUT_OUT.with(|o| o.borrow_mut().take()).unwrap_or(serde_json::Value::Null)
 }
 
+thread_local! {
+    /// the outdoors of the last build in this process: (house + settings key, its scene part, its sidecar record)
+    static OUTDOOR_MEMO: std::cell::RefCell<Option<(String, Scene, serde_json::Value)>> = const { std::cell::RefCell::new(None) };
+    /// the last layout built in this process: (layout key, solved house, plan attempt kept)
+    static SOLVE_MEMO: std::cell::RefCell<Option<(String, indoorgen::pipeline::Generated, u32)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// the settings the layout depends on: the config without what is only applied after the solve (mess, people, surface colours,
+/// lighting, doors, furniture jitter / emptying, output, cameras) and without the pinned windows (an era keeping era 0's furniture
+/// keeps its windows by keeping its layout)
+fn layout_key(cfg: &crate::config::GenConfig) -> String {
+    let mut j = serde_json::to_value(cfg).unwrap_or_default();
+    for k in ["mess", "people", "output", "cameras", "cloth"] { if let Some(o) = j.as_object_mut() { o.remove(k); } }
+    if let Some(v) = j.get_mut("variation").and_then(|v| v.as_object_mut()) {
+        for k in ["walls", "ceiling", "floor", "lighting", "doors", "record"] { v.remove(k); }
+        if let Some(f) = v.get_mut("furniture").and_then(|f| f.as_object_mut()) { f.remove("jitter"); f.remove("empty"); f.remove("rearrange"); }
+    }
+    if let Some(h) = j.get_mut("house").and_then(|h| h.as_object_mut()) { h.remove("pin_windows"); }
+    j.to_string()
+}
+
+/// take the movable furniture and everything on it out of the house: what is built in stays (windows, doors, lights, kitchen runs and
+/// appliances, bathroom fixtures, room features such as fireplaces). Returns a log line per room type
+fn empty_rooms(state: &mut indoorgen::furn::state::State) -> Vec<String> {
+    const KEEP: [&str; 16] = ["Window", "Door", "CeilingLight", "Kitchen", "Fridge", "Dishwasher", "Oven", "Stove", "Hood", "Microwave", "Toilet", "Bathtub", "Sink", "Shower", "Fireplace", "Radiator"];
+    let keys: Vec<String> = state.objs.iter().filter(|(_, o)| o.generator.as_ref().map_or(false, |g| !KEEP.iter().any(|c| g.class.contains(c)))).map(|(k, _)| k.clone()).collect();
+    let mut n = 0;
+    for k in keys { if state.objs.contains_key(&k) { n += indoorgen::furn::layout2d::remove_tree(state, &k).len().max(1); } }
+    vec![format!("{n} objects taken out")]
+}
+
 pub fn build_scene(p: &Params) -> Built {
     // caches keyed by names / versions / addresses that repeat from house to house (a second generation in one process -- the
     // wasm page -- read the first house's entries)
@@ -113,6 +144,7 @@ pub fn build_scene(p: &Params) -> Built {
     let mess = indoorgen::mess::MessCfg { level: cfg.mess.level, seed: cfg.mess.seed.unwrap_or(seed), floor_scale: cfg.mess.floor_scale, surface_scale: cfg.mess.surface_scale };
     let furn_seed = var.furniture.seed.unwrap_or(seed);
     let people_seed = cfg.people.seed.unwrap_or(seed);
+    let people_rooms = cfg.people.rooms.clone();
     let room = cfg.house.room.clone();
     let (people_n, mess_level, no_glb, qc_out, orig_prog) = (cfg.people.count, cfg.mess.level, cfg.output.no_glb, cfg.output.qc_path.clone(), !cfg.program.dense);
     // default: the dense-furnishing program + Infinigen's own solver steps 300/200/50 (realistic, lived-in rooms).
@@ -192,64 +224,96 @@ pub fn build_scene(p: &Params) -> Built {
     // the rooms the rules cover go to the unified solver (crates/ig_layout) alone; a single-room or parity run keeps the old passes
     let unified = cfg.program.realism && !orig_prog && !only_target;
     ig_core::mesh::set_house_seed(seed);
-    let mk_at = |nudges: Vec<(String, String, f64)>, plan_attempt: u32| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges, solver_rooms: if unified { indoorgen::unified::kinds() } else { vec![] }, plan_attempt };
+    ig_core::mesh::set_finish_seeds(cfg.variation.walls.seed, cfg.variation.floor.seed);
+    // house.pin_windows: the windows of another generation of this house (its X.house.json), kept exactly
+    #[cfg(not(target_arch = "wasm32"))]
+    let pin_house: Option<serde_json::Value> = cfg.house.pin_windows.as_ref().map(|p| {
+        serde_json::from_slice(&std::fs::read(p).unwrap_or_else(|e| panic!("house.pin_windows {p}: {e}"))).unwrap_or_else(|e| panic!("house.pin_windows {p}: {e}"))
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    let pinned_windows: Option<Vec<indoorgen::rooms::solidify::Cutter>> = pin_house.as_ref().map(|j| house_inputs(j).2);
+    #[cfg(target_arch = "wasm32")]
+    let (pin_house, pinned_windows): (Option<serde_json::Value>, Option<Vec<indoorgen::rooms::solidify::Cutter>>) = (None, None);
+    // (the plan the pinned house kept: its windows belong to that plan, the re-plans included)
+    let plan_attempt0 = pin_house.as_ref().and_then(|j| j["plan_attempt"].as_u64()).unwrap_or(0) as u32;
+    let mut attempt_used = plan_attempt0;
+    let mk_at = |nudges: Vec<(String, String, f64)>, plan_attempt: u32| Options { seed, furn_seed, restrict_room: room.clone(), whole_house: !only_target, steps_large: steps_l, steps_medium: steps_m, steps_small: steps_s, features: feat_cfg.clone(), passage_prob: if orig_prog { 0.0 } else { cfg.program.open_plan }, rooms: if orig_prog { crate::rooms::graph::RoomSet::Fewer } else { cfg.house.room_set() }, nudges, solver_rooms: if unified { indoorgen::unified::kinds() } else { vec![] }, plan_attempt, pinned_windows: pinned_windows.clone() };
     let mk = |nudges: Vec<(String, String, f64)>| mk_at(nudges, 0);
-    let mut g = generate(&mk(vec![]), &assets, prog);
-    // the plan layer answers the layers below (HIER=1): while hard complaints remain, the shared wall of the complaining room nearest
-    // the complaint moves (0.25 / 0.5 m either way) and the house is solved again; a move stays when it leaves fewer hard complaints
-    // (then fewer soft ones). At most 3 tries, within twice the first solve's time.
-    if ig_core::envx::var_os("HIER").is_some() && !only_target {
-        let base = t.elapsed().as_secs_f64();
-        let key = |g: &Generated| (g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
-        let mut best = key(&g);
-        let mut kept: Vec<(String, String, f64)> = vec![];
-        let mut tried: std::collections::HashSet<(String, String, i64)> = Default::default();
-        eprintln!("HIER start: {} hard / {} soft complaints", best.0, best.1);
-        for c in g.complaints.iter().filter(|c| c.hard) { eprintln!("HIER   {} {} {:?}: {}", c.room, c.kind, c.at, c.need); }
-        let mut tries = 0;
-        while best.0 > 0 && tries < 3 && t.elapsed().as_secs_f64() < 2.0 * base {
-            let Some(c) = g.complaints.iter().find(|c| c.hard).cloned() else { break };
-            // the room's shared walls (1 m or more), nearest the complaint first (the longest when it has no location)
-            let Some(rp) = g.room_polys.iter().find(|(n, _)| *n == c.room).map(|(_, p)| crate::shp::buffer(p, 0.05)) else { break };
-            let mut walls: Vec<(f64, String)> = g.room_polys.iter().filter(|(n, _)| *n != c.room).filter_map(|(n, p)| {
-                let shared = crate::shp::intersection(&rp, &crate::shp::buffer(p, 0.05));
-                let len = crate::shp::area(&shared) / 0.1;
-                if len < 1.0 { return None }
-                let d = c.at.map_or(-len, |a| crate::shp::distance(&crate::shp::point(a[0], a[1]), &shared));
-                Some((d, n.clone()))
-            }).collect();
-            walls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            let Some((nb, d)) = walls.iter().flat_map(|(_, n)| [0.25f64, -0.25, 0.5, -0.5].map(|d| (n.clone(), d))).find(|(n, d)| !tried.contains(&(c.room.clone(), n.clone(), (d * 100.0) as i64))) else { break };
-            tried.insert((c.room.clone(), nb.clone(), (d * 100.0) as i64));
-            tries += 1;
-            let mut ns = kept.clone();
-            ns.push((c.room.clone(), nb.clone(), d));
-            let ng = generate(&mk(ns.clone()), &assets, prog);
-            let k = key(&ng);
-            eprintln!("HIER try {tries}: {} grows {d:+.2} m into {nb} for {} -> {} hard / {} soft ({})", c.room, c.kind, k.0, k.1, if k < best { "kept" } else { "dropped" });
-            if k < best { g = ng; best = k; kept = ns; }
+    // the layout (plan + furniture solve + its fixes) of an earlier build in this process with the same layout settings (gen2 --batch:
+    // eras of one home that keep their furniture) is taken as it was: only what follows -- mess, people, colours, light, doors -- differs
+    let solve_key = layout_key(cfg);
+    // (the unified solver's rooms: the furniture seed, or variation.furniture.rearrange -- the same house, its rooms laid out again)
+    let uni_seed = var.furniture.rearrange.unwrap_or(furn_seed);
+    let memo = SOLVE_MEMO.with(|m| m.borrow().as_ref().filter(|(k, _, _)| *k == solve_key).map(|(_, g, a)| (g.clone(), *a)));
+    let (mut g, attempt_used, mut plan) = match memo {
+        Some((g, a)) => {
+            eprintln!("SOLVE reused from an earlier build in this process (same layout settings)");
+            let plan = unified.then(|| indoorgen::unified::solve_house(&g, uni_seed));
+            (g, a, plan)
         }
-        eprintln!("HIER done: {} hard / {} soft complaints, {} wall moves, {:.1} s (first solve {base:.1} s)", best.0, best.1, kept.len(), t.elapsed().as_secs_f64());
-    } else if ig_core::envx::var_os("LAYERDBG").is_some() {
-        eprintln!("LAYERS {} hard / {} soft complaints", g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
-    }
-    // a plan with a room that cannot work (no place for a must item, a kitchen whose appliances cannot open) is planned again: at most twice, the plan with fewest such faults wins
-    if unified { for l in indoorgen::unified::clear_windows(&mut g) { eprintln!("UNIFIED {l}"); } }
-    let mut plan = unified.then(|| indoorgen::unified::solve_house(&g, seed));
-    let mut faults = plan.as_ref().map_or(0, |p| indoorgen::unified::unfit(&g, p));
-    for attempt in 1..=2 {
-        if faults == 0 || plan.is_none() { break }
-        // (time: a third plan only for a room with a must missing)
-        if faults < 100 && t.elapsed().as_secs_f64() > 11.0 { break }
-        // (the caches are keyed by name and version, which a new house starts over)
-        crate::furn::dof::reset_caches(); crate::furn::col::reset_caches(); crate::furn::layout2d::reset_caches(); crate::furn::eval::reset_caches(); crate::furn::solver::reset_caches();
-        let mut g2 = generate(&mk_at(vec![], attempt), &assets, prog);
-        for l in indoorgen::unified::clear_windows(&mut g2) { eprintln!("UNIFIED {l}"); }
-        let p2 = indoorgen::unified::solve_house(&g2, seed);
-        let f2 = indoorgen::unified::unfit(&g2, &p2);
-        eprintln!("PLAN again {attempt}: {faults} faults, {f2} now");
-        if f2 < faults { g = g2; plan = Some(p2); faults = f2; }
-    }
+        None => {
+        let mut g = generate(&mk_at(vec![], plan_attempt0), &assets, prog);
+        // the plan layer answers the layers below (HIER=1): while hard complaints remain, the shared wall of the complaining room nearest
+        // the complaint moves (0.25 / 0.5 m either way) and the house is solved again; a move stays when it leaves fewer hard complaints
+        // (then fewer soft ones). At most 3 tries, within twice the first solve's time.
+        if ig_core::envx::var_os("HIER").is_some() && !only_target {
+            let base = t.elapsed().as_secs_f64();
+            let key = |g: &Generated| (g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
+            let mut best = key(&g);
+            let mut kept: Vec<(String, String, f64)> = vec![];
+            let mut tried: std::collections::HashSet<(String, String, i64)> = Default::default();
+            eprintln!("HIER start: {} hard / {} soft complaints", best.0, best.1);
+            for c in g.complaints.iter().filter(|c| c.hard) { eprintln!("HIER   {} {} {:?}: {}", c.room, c.kind, c.at, c.need); }
+            let mut tries = 0;
+            while best.0 > 0 && tries < 3 && t.elapsed().as_secs_f64() < 2.0 * base {
+                let Some(c) = g.complaints.iter().find(|c| c.hard).cloned() else { break };
+                // the room's shared walls (1 m or more), nearest the complaint first (the longest when it has no location)
+                let Some(rp) = g.room_polys.iter().find(|(n, _)| *n == c.room).map(|(_, p)| crate::shp::buffer(p, 0.05)) else { break };
+                let mut walls: Vec<(f64, String)> = g.room_polys.iter().filter(|(n, _)| *n != c.room).filter_map(|(n, p)| {
+                    let shared = crate::shp::intersection(&rp, &crate::shp::buffer(p, 0.05));
+                    let len = crate::shp::area(&shared) / 0.1;
+                    if len < 1.0 { return None }
+                    let d = c.at.map_or(-len, |a| crate::shp::distance(&crate::shp::point(a[0], a[1]), &shared));
+                    Some((d, n.clone()))
+                }).collect();
+                walls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let Some((nb, d)) = walls.iter().flat_map(|(_, n)| [0.25f64, -0.25, 0.5, -0.5].map(|d| (n.clone(), d))).find(|(n, d)| !tried.contains(&(c.room.clone(), n.clone(), (d * 100.0) as i64))) else { break };
+                tried.insert((c.room.clone(), nb.clone(), (d * 100.0) as i64));
+                tries += 1;
+                let mut ns = kept.clone();
+                ns.push((c.room.clone(), nb.clone(), d));
+                let ng = generate(&mk(ns.clone()), &assets, prog);
+                let k = key(&ng);
+                eprintln!("HIER try {tries}: {} grows {d:+.2} m into {nb} for {} -> {} hard / {} soft ({})", c.room, c.kind, k.0, k.1, if k < best { "kept" } else { "dropped" });
+                if k < best { g = ng; best = k; kept = ns; }
+            }
+            eprintln!("HIER done: {} hard / {} soft complaints, {} wall moves, {:.1} s (first solve {base:.1} s)", best.0, best.1, kept.len(), t.elapsed().as_secs_f64());
+        } else if ig_core::envx::var_os("LAYERDBG").is_some() {
+            eprintln!("LAYERS {} hard / {} soft complaints", g.complaints.iter().filter(|c| c.hard).count(), g.complaints.iter().filter(|c| !c.hard).count());
+        }
+        // a plan with a room that cannot work (no place for a must item, a kitchen whose appliances cannot open) is planned again: at most twice, the plan with fewest such faults wins
+        if unified { for l in indoorgen::unified::clear_windows(&mut g) { eprintln!("UNIFIED {l}"); } }
+        let mut plan = unified.then(|| indoorgen::unified::solve_house(&g, uni_seed));
+        let mut faults = plan.as_ref().map_or(0, |p| indoorgen::unified::unfit(&g, p));
+        for attempt in 1..=2 {
+            // (a house with pinned windows keeps its plan: another plan would not fit them)
+            if faults == 0 || plan.is_none() || pinned_windows.is_some() { break }
+            // (time: a third plan only for a room with a must missing)
+            if faults < 100 && t.elapsed().as_secs_f64() > 11.0 { break }
+            // (the caches are keyed by name and version, which a new house starts over)
+            crate::furn::dof::reset_caches(); crate::furn::col::reset_caches(); crate::furn::layout2d::reset_caches(); crate::furn::eval::reset_caches(); crate::furn::solver::reset_caches();
+            let mut g2 = generate(&mk_at(vec![], attempt), &assets, prog);
+            for l in indoorgen::unified::clear_windows(&mut g2) { eprintln!("UNIFIED {l}"); }
+            let p2 = indoorgen::unified::solve_house(&g2, uni_seed);
+            let f2 = indoorgen::unified::unfit(&g2, &p2);
+            eprintln!("PLAN again {attempt}: {faults} faults, {f2} now");
+            if f2 < faults { g = g2; plan = Some(p2); faults = f2; attempt_used = attempt; }
+        }
+            // (kept before the solver's rooms are placed: a re-arranged era solves them again, with its own seed)
+            SOLVE_MEMO.with(|m| *m.borrow_mut() = Some((solve_key.clone(), g.clone(), attempt_used)));
+            (g, attempt_used, plan)
+        }
+    };
     if cfg.program.realism && !orig_prog {
         if let Some(spec) = &rules {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
@@ -261,7 +325,7 @@ pub fn build_scene(p: &Params) -> Built {
         }
         for l in crate::table_setting::gather_chairs(&mut g.state) { eprintln!("CHAIRS {l}"); }
         for l in crate::table_setting::coffee_tables(&mut g.state) { eprintln!("COFFEE {l}"); }
-        if let Some(p) = plan.take() { for l in indoorgen::unified::apply(&mut g, p, seed) { eprintln!("UNIFIED {l}"); } }
+        if let Some(p) = plan.take() { for l in indoorgen::unified::apply(&mut g, p, uni_seed) { eprintln!("UNIFIED {l}"); } }
         for l in crate::table_setting::arrange(&mut g.state) { eprintln!("TABLE {l}"); }
         // (a living room's only seat, taken out to join the doors up, goes back on a wall that leaves them joined)
         let seats: Vec<(String, indoorgen::furn::state::ObjState)> = g.state.objs.iter().filter(|(k, o)| o.generator.as_ref().map_or(false, |gn| gn.class == "SofaFactory" || gn.class == "ArmChairFactory") && indoorgen::furn::layout2d::room_of(&g.state, k).map_or(false, |r| r.starts_with("living-room"))).map(|(k, o)| (k.clone(), o.clone())).collect();
@@ -298,6 +362,8 @@ pub fn build_scene(p: &Params) -> Built {
         }
         if gone > 0 { eprintln!("TRINKETS kept {kept}, removed {gone}"); }
     }
+    // variation.furniture.empty: the rooms without their furniture (moving-in day): fixtures, built-ins, windows and doors stay
+    if var.furniture.empty { for l in empty_rooms(&mut g.state) { eprintln!("EMPTY {l}"); } }
     if LAYOUT_ONLY.with(|c| c.get()) {
         LAYOUT_OUT.with(|o| *o.borrow_mut() = Some(crate::layout_dump::to_json(seed, &g)));
         return Built { scene: Scene::default(), room_polys: g.room_polys, wall_t: g.c.wall_thickness, t_scene: web_time::Instant::now(), done: false, variation: None, objects: vec![], outdoor: None, house: serde_json::Value::Null };
@@ -321,6 +387,7 @@ pub fn build_scene(p: &Params) -> Built {
     let obj = scene.material(Material::diffuse("object", [0.6, 0.35, 0.3], 0.7));
     let room_list: Vec<(String, String)> = g.shells.iter().map(|s| (s.name.clone(), indoorgen::rooms::state::room_type(&s.name).to_string())).collect();
     ig_core::mesh::set_house_seed(seed);
+    ig_core::mesh::set_finish_seeds(cfg.variation.walls.seed, cfg.variation.floor.seed);
     let mut decos = indoorgen::materials::decorate_rooms(seed, &room_list);
     // variation: wall / ceiling / floor base colours (own seeds; the procedural material specs are untouched, the renderer reads `variation.walls` etc.)
     let (wall_cols, ceil_cols, floor_cols) = (var.walls.pick_all(seed, "walls", &room_list), var.ceiling.pick_all(seed, "ceiling", &room_list), var.floor.pick_all(seed, "floor", &room_list));
@@ -1004,7 +1071,7 @@ pub fn build_scene(p: &Params) -> Built {
     eprintln!("objects: {counts:?}  scene build {:?}", t_scene.elapsed());
     let tw = web_time::Instant::now();
     // people (no-op at --people 0): placements from the solved scene, posed avatar meshes added as nodes
-    let people = indoorgen::people::place::place_ctx(&g.state, &g.room_polys, people_n, people_seed, &indoorgen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones });
+    let people = indoorgen::people::place::place_ctx(&g.state, &g.room_polys, people_n, people_seed, &indoorgen::people::place::Ctx { visuals: Some(&visuals), floor_z: g.c.wall_thickness / 2.0, wall_t: g.c.wall_thickness, keepout: &door_zones, rooms: &people_rooms });
     for (pi, pl) in people.iter().enumerate() {
         let mut a = pl.build();
         if a.parts.is_empty() && ig_core::envx::var_os("PEOPLE_PROXY").is_some() {
@@ -1031,7 +1098,9 @@ pub fn build_scene(p: &Params) -> Built {
     let dress_on = cfg.program.top_dress && !orig_prog;
     crate::dress::ACTIVE.store(dress_on, std::sync::atomic::Ordering::Relaxed);
     *indoorgen::mess::clutter::NO_SURFACE.write().unwrap() = if dress_on { crate::dress::no_clutter_classes() } else { vec![] };
-    indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &g.room_polys, &mess, &keepout);
+    // (mess.rooms: clutter only where it is wanted -- a dataset photographing one room needs none elsewhere)
+    let mess_polys: Vec<(String, indoorgen::shp::G)> = g.room_polys.iter().filter(|(n, _)| cfg.mess.rooms.is_empty() || cfg.mess.rooms.iter().any(|w| indoorgen::rooms::state::room_type(n) == w.as_str() || n.starts_with(w.as_str()))).cloned().collect();
+    indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &mess_polys, &mess, &keepout);
     let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
     fn qcin<'a>(scene: &'a Scene, g: &'a indoorgen::pipeline::Generated, door_infos: &'a [indoorgen::qc::DoorInfo], cut_keys: &'a [String]) -> indoorgen::qc::QcIn<'a> { indoorgen::qc::QcIn { scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: door_infos, wall_t: g.c.wall_thickness, cut_keys } }
     // clutter that ended up inside furniture / other clutter is removed (the placement works on convex hulls)
@@ -1125,11 +1194,25 @@ pub fn build_scene(p: &Params) -> Built {
         let _ = crate::invariants::check(&crate::invariants::Inv { scene: &scene, state: &g.state, visuals: &visuals, qc: &qi, floor_z: g.c.wall_thickness / 2.0, ceiling_z: g.c.wall_height - g.c.wall_thickness / 2.0 });
         lap("invariants");
     }
-    let house = house_record(seed, &g.room_polys, &g.cutters, &g.c);
+    let mut house = house_record(seed, &g.room_polys, &g.cutters, &g.c);
+    house["plan_attempt"] = serde_json::json!(attempt_used);
     // terrain and vegetation outside (after the invariants: the terrain is not furniture)
     let outdoor = if cfg.program.outdoor.on && !orig_prog {
-        let (rec, log) = crate::outdoor::add(&mut scene, &g.room_polys, &g.cutters, g.c.wall_height, seed, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.outdoor);
-        for l in log { eprintln!("OUTDOOR {l}"); }
+        // (the same house and windows give the same outdoors: a --batch of eras builds it once and copies it in)
+        let okey = format!("{seed}|{}|{}", serde_json::to_string(&house).unwrap_or_default(), serde_json::to_string(&cfg.program.outdoor).unwrap_or_default());
+        let memo = OUTDOOR_MEMO.with(|m| m.borrow().as_ref().filter(|(k, _, _)| *k == okey).map(|(_, s, r)| (s.clone(), r.clone())));
+        let (part, rec) = match memo {
+            Some(x) => { eprintln!("OUTDOOR reused from an earlier build in this process"); x }
+            None => {
+                let mut part = Scene::default();
+                let (rec, log) = crate::outdoor::add(&mut part, &g.room_polys, &g.cutters, g.c.wall_height, seed, g.c.wall_thickness / 2.0, g.c.wall_thickness, &cfg.program.outdoor);
+                for l in log { eprintln!("OUTDOOR {l}"); }
+                OUTDOOR_MEMO.with(|m| *m.borrow_mut() = Some((okey, part.clone(), rec.clone())));
+                (part, rec)
+            }
+        };
+        for mut n in part.nodes { n.material = scene.material(part.materials[n.material].clone()); scene.nodes.push(n); }
+        scene.lights.extend(part.lights); scene.lights_off.extend(part.lights_off);
         lap("outdoor");
         Some(rec)
     } else { None };

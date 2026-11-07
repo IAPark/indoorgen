@@ -110,11 +110,13 @@ pub struct Ctx<'a> {
     pub wall_t: f64,
     /// extra keep-out boxes (centre, half extents, yaw), e.g. the swept area of room doors; people stay clear of them
     pub keepout: &'a [([f64; 3], [f64; 3], f64)],
+    /// only these rooms take people: a room type ("living-room") or a room name prefix ("living-room_0"); empty = every room
+    pub rooms: &'a [String],
 }
 
 /// Up to `n` people for the scene (0 -> empty). Deterministic per seed. Without visuals the solver placeholders are the colliders.
 pub fn place(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usize, seed: u64) -> Vec<Placement> {
-    place_ctx(state, room_polys, n, seed, &Ctx { visuals: None, floor_z: 0.135, wall_t: 0.27, keepout: &[] })
+    place_ctx(state, room_polys, n, seed, &Ctx { visuals: None, floor_z: 0.135, wall_t: 0.27, keepout: &[], rooms: &[] })
 }
 
 fn yaw_of(f: [f64; 2]) -> f64 {
@@ -694,6 +696,9 @@ pub fn place_ctx(state: &State, room_polys: &[(String, ig_core::shp::G)], n: usi
     }
     let mut rng = Rng::seeded(ig_core::int_hash(&[&seed.to_string(), "people_place", &n.to_string()]));
     let mut slots = make_slots(&world, &mut rng);
+    if !ctx.rooms.is_empty() {
+        slots.retain(|s| { let r = &world.rooms[s.room]; ctx.rooms.iter().any(|w| r.ty == *w || r.name.starts_with(w.as_str())) });
+    }
     // testing: PEOPLE_FORCE=LieBed,SitRelaxed keeps only slots of those pose kinds
     if let Ok(f) = std::env::var("PEOPLE_FORCE") {
         let want: Vec<&str> = f.split(',').collect();

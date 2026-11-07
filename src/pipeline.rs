@@ -19,6 +19,7 @@ use crate::dhash::HashMap;
 use std::sync::Arc;
 use web_time::Instant;
 
+#[derive(Clone)]
 pub struct Generated {
     pub c: RoomConstants,
     pub shells: Vec<RoomMeshes>,
@@ -61,6 +62,9 @@ pub struct Options {
     pub solver_rooms: Vec<String>,
     /// the plan layer's retries: another floor plan of the same house when the last had rooms the solver could not furnish
     pub plan_attempt: u32,
+    /// windows taken as given (another generation of the same house, its X.house.json): the wall layer and the sill rule leave them
+    /// where they are, so furniture of another seed meets the same windows (dataset eras of one home)
+    pub pinned_windows: Option<Vec<Cutter>>,
 }
 
 /// constraint program for a scene seed (params drawn from the global numpy stream like the python)
@@ -455,7 +459,11 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
     if wall_layer && !deferred.is_empty() {
         let intents: Vec<String> = state.objs.iter().filter(|(_, o)| o.tags.contains(Tag::sem("WindowIntent"))).map(|(k, _)| k.clone()).collect();
         for k in intents { state.objs.shift_remove(&k); }
-        for (i, ct) in wall_layer_windows(&c, &mut state, &room_polys, &res.cutters, &deferred).into_iter().enumerate() {
+        let laid = match &opt.pinned_windows {
+            Some(p) => p.iter().filter(|ct| ct.kind == CutKind::Window && ct.rooms.len() == 1 && deferred.iter().any(|d| d.rooms == ct.rooms)).cloned().collect(),
+            None => wall_layer_windows(&c, &mut state, &room_polys, &res.cutters, &deferred),
+        };
+        for (i, ct) in laid.into_iter().enumerate() {
             let name = format!("window.{:03}", 500 + i);
             let h = [ct.dims[0] / 2., ct.dims[1] / 2., ct.dims[2] / 2.];
             let mut g = crate::furn::geom::cuboid_py([-h[0], -h[1], -h[2]], [h[0], h[1], h[2]], 0, 0);
@@ -492,7 +500,12 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
         // (alcove shelves the wall layer took out for a window are not built)
         features.retain(|pf| state.objs.contains_key(&pf.key));
     }
-    if raise_sills(&state, &mut res.cutters) { shells = shell::build_shells(&c, &st, &res.cutters); }
+    if let Some(p) = &opt.pinned_windows {
+        // (every window as pinned, the plan's own included: the sill rule would move them for this furniture)
+        res.cutters.retain(|ct| ct.kind != CutKind::Window);
+        res.cutters.extend(p.iter().filter(|ct| ct.kind == CutKind::Window).cloned());
+        shells = shell::build_shells(&c, &st, &res.cutters);
+    } else if raise_sills(&state, &mut res.cutters) { shells = shell::build_shells(&c, &st, &res.cutters); }
     Generated { c, shells, cutters: res.cutters, state, timings, room_polys, features, complaints }
 }
 
@@ -500,7 +513,7 @@ pub fn generate(opt: &Options, assets: &dyn Assets, program_json: &serde_json::V
 pub fn generate_rooms_only(seed: u64) -> State {
     let prog: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/home_program.json")).unwrap()).unwrap();
     let assets = TableAssets::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/asset_bbox_table.json"));
-    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer, nudges: vec![], solver_rooms: vec![], plan_attempt: 0 }, &assets, &prog).state
+    generate(&Options { seed, furn_seed: seed, restrict_room: None, whole_house: false, steps_large: 0, steps_medium: 0, steps_small: 0, features: Default::default(), passage_prob: 0.0, rooms: crate::rooms::graph::RoomSet::Fewer, nudges: vec![], solver_rooms: vec![], plan_attempt: 0, pinned_windows: None }, &assets, &prog).state
 }
 
 /// the large / medium / small greedy solve stages on `state`; `only_room` restricts the assignments to one room key, `tag` derives

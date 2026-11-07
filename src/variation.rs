@@ -209,6 +209,12 @@ pub struct Furniture {
     pub seed: Option<u64>,
     /// Small post-solve moves of the floor furniture.
     pub jitter: Jitter,
+    /// No furniture at all (an empty home, moving-in day): movable furniture and everything on it is taken out after the solve;
+    /// built-ins (kitchen runs and appliances, bathroom fixtures, lights, fireplaces), windows and doors stay.
+    pub empty: bool,
+    /// Lay the rooms of the unified solver (living, dining, bedrooms, bathrooms, ...) out again with this seed, keeping the rest of the
+    /// house: a re-arranged era of the same home. Cheap in a gen2 --batch after a build of the same house (its plan and old-pass rooms are reused).
+    pub rearrange: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

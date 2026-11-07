@@ -75,12 +75,13 @@ pub struct World {
     pub hi: V3,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Caches {
     world: HashMap<String, (u64, Arc<World>)>,
     planes: HashMap<(String, u32, u32), (u64, Arc<Vec<usize>>)>,
 }
 
+#[derive(Clone)]
 pub struct State {
     /// insertion-ordered like the python dict; Fx-hashed (name lookups are on every solver step)
     pub objs: IndexMap<String, ObjState, crate::dhash::FxBuild>,

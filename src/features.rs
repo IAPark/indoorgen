@@ -112,6 +112,7 @@ impl FeatureCfg {
 }
 
 /// A feature placed in the world.
+#[derive(Clone)]
 pub struct PlacedFeature {
     /// state / node key: `<Class>_<room>_<n>` (no '.', '#', '/')
     pub key: String,

@@ -54,12 +54,15 @@ pub struct House {
     pub room: Option<String>,
     /// Furnish only the first room of the target type (fast). Off: furnish every room of the house.
     pub only_target: bool,
+    /// Windows from another generation of this house (path to its X.house.json), kept exactly instead of laid out around this
+    /// furniture: eras of one home (other furniture seed) keep the same windows. Null: windows follow the furniture as usual.
+    pub pin_windows: Option<String>,
     /// Room program of the floor plan: "curated" (hallways, 1-3 bedrooms, optional en-suite / closet / utility room),
     /// "fewer" (Infinigen fewer_rooms: five rooms off the living room, no hallways) or "full" (Infinigen's full grammar).
     pub rooms: String,
 }
 impl Default for House {
-    fn default() -> Self { House { seed: 0, room: None, only_target: false, rooms: "curated".into() } }
+    fn default() -> Self { House { seed: 0, room: None, only_target: false, pin_windows: None, rooms: "curated".into() } }
 }
 impl House {
     pub fn room_set(&self) -> crate::rooms::graph::RoomSet {
@@ -160,9 +163,11 @@ pub struct Mess {
     /// Multiplier of the clutter count on shelves, tables and counters. 1 = as tuned.
     #[schemars(range(min = 0.0, max = 4.0))]
     pub surface_scale: f64,
+    /// Only these rooms get clutter: room types ("living-room") or room name prefixes ("living-room_0"). Empty: every room.
+    pub rooms: Vec<String>,
 }
 impl Default for Mess {
-    fn default() -> Self { Mess { level: 0.0, seed: None, floor_scale: 1.0, surface_scale: 1.0 } }
+    fn default() -> Self { Mess { level: 0.0, seed: None, floor_scale: 1.0, surface_scale: 1.0, rooms: vec![] } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -214,6 +219,8 @@ pub struct People {
     /// Up to this many posed photoreal avatars placed after the solve (needs the Rocketbox assets; native only, ignored in the browser).
     #[schemars(range(min = 0, max = 12))]
     pub count: usize,
+    /// Only these rooms take people: room types ("living-room") or room name prefixes ("living-room_0"). Empty: every room.
+    pub rooms: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

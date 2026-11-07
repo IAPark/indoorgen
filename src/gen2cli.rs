@@ -48,6 +48,24 @@ fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
 pub fn run(mut args: Vec<String>, mem: bool) -> Option<Vec<u8>> {
     load_local_env();
     use crate::config::GenConfig;
+    // --batch LIST.json: several builds in this one process, one after another: [{"args": [seed, room, out.glb, "--config", f, ...],
+    // "env": {"DSPOOL": ...}, "done": marker file}]. Builds whose layout settings match the previous one reuse its solved layout
+    // (scenegen SOLVE_MEMO): eras of one home that keep their furniture skip the plan and the solve
+    if let Some(f) = take_val(&mut args, "--batch") {
+        let list: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("--batch {f}: {e}"))).unwrap_or_else(|e| panic!("--batch {f}: {e}"));
+        for (i, e) in list.iter().enumerate() {
+            let mut a = vec![args[0].clone()];
+            a.extend(e["args"].as_array().map(|v| v.iter().map(|x| x.as_str().map(String::from).unwrap_or_else(|| x.to_string())).collect::<Vec<_>>()).unwrap_or_default());
+            let env: Vec<(String, String)> = e["env"].as_object().map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))).collect()).unwrap_or_default();
+            for (k, v) in &env { std::env::set_var(k, v); }
+            let t = std::time::Instant::now();
+            run(a, false);
+            eprintln!("BATCH {i} done in {:.1}s", t.elapsed().as_secs_f64());
+            if let Some(d) = e["done"].as_str() { let _ = std::fs::write(d, format!("{:.2}", t.elapsed().as_secs_f64())); }
+            for (k, _) in &env { std::env::remove_var(k); }
+        }
+        return None;
+    }
     if take_flag(&mut args, "--schema") {
         println!("{}", serde_json::to_string_pretty(&GenConfig::schema()).unwrap());
         return None;

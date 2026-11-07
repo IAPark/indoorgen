@@ -175,6 +175,11 @@ pub struct Trace { pub rules: Vec<String>, pub odds: Vec<(String, f64)> }
 
 /// the rules applied to one part: its spec and plain colour, unchanged if nothing matches. `house` chooses the style and what "per": "house" shares.
 pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, object_class: &str, rgb: [f32; 3]) -> (Value, [f32; 3], Trace) {
+    resolve_drawn(cfg, house, house, spec, mat, node, object_class, rgb)
+}
+
+/// `resolve` with the rules' draws from `draw` while the style stays the house's: another finish of the same house (an era repainted)
+pub fn resolve_drawn(cfg: &Config, house: u64, draw_seed: u64, spec: &Value, mat: &str, node: &str, object_class: &str, rgb: [f32; 3]) -> (Value, [f32; 3], Trace) {
     let mut trace = Trace { rules: vec![], odds: vec![] };
     let Some(cls0) = spec.get("cls").and_then(|v| v.as_str()) else { return (spec.clone(), rgb, trace) };
     if cfg.rules.is_empty() { return (spec.clone(), rgb, trace) }
@@ -189,8 +194,8 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
     // (a rule's chance: one draw per house, room or object, so the class and colour halves of a rule agree)
     let active = |r: &Rule| match &r.chance {
         None => true,
-        Some(Chance::P(p)) => unit(&[&house.to_string(), "chance", &r.why]) < *p,
-        Some(Chance::Full { p, per, key }) => unit(&[&house.to_string(), "chance", key.as_deref().unwrap_or(&r.why), &scope(per.as_deref().unwrap_or("house"))]) < *p,
+        Some(Chance::P(p)) => unit(&[&draw_seed.to_string(), "chance", &r.why]) < *p,
+        Some(Chance::Full { p, per, key }) => unit(&[&draw_seed.to_string(), "chance", key.as_deref().unwrap_or(&r.why), &scope(per.as_deref().unwrap_or("house"))]) < *p,
     };
     let mut cands: Vec<(String, f64)> = vec![(cls0.to_string(), 1.0)];
     let mut touched = false;
@@ -206,7 +211,7 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
     // (one draw per slot and object: the parts of a piece stay one material)
     let mut cls = cls0.to_string();
     if touched && total > 0.0 {
-        let mut u = unit(&[&house.to_string(), "class", slot, object]) * total;
+        let mut u = unit(&[&draw_seed.to_string(), "class", slot, object]) * total;
         for (k, w) in &cands { let w = w.max(0.0); if u < w { cls = k.clone(); break } u -= w; }
     }
     let mut out = spec.clone();
@@ -218,7 +223,7 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
             None => scope("object"),
             Some(Per::One(x)) => scope(x),
             Some(Per::Odds(m)) => {
-                let mut u = unit(&[&house.to_string(), &name(c, what), "per"]) * m.values().map(|w| w.max(0.0)).sum::<f64>();
+                let mut u = unit(&[&draw_seed.to_string(), &name(c, what), "per"]) * m.values().map(|w| w.max(0.0)).sum::<f64>();
                 for (k, w) in m { if u < w.max(0.0) { return scope(k) } u -= w.max(0.0); }
                 scope(m.keys().next_back().map_or("object", |k| k.as_str()))
             }
@@ -226,7 +231,7 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
     };
     let pick = |p: &[Swatch], parts: &[&str]| p[((unit(parts) * p.len() as f64) as usize).min(p.len() - 1)].linear().unwrap_or([0.5; 3]);
     let draw = |c: &Color, what: &str, base: [f32; 3]| -> [f32; 3] {
-        let h = house.to_string();
+        let h = draw_seed.to_string();
         // (a stray piece leaves the scheme: it takes the stray palette, or keeps the colour it had)
         if c.stray.map_or(false, |p| unit(&[&h, "stray", slot, object, what]) < p) {
             return match c.stray_palette.as_ref().filter(|p| !p.is_empty()) {
@@ -252,7 +257,7 @@ pub fn resolve(cfg: &Config, house: u64, spec: &Value, mat: &str, node: &str, ob
         if let Some(c) = &r.paint {
             let rgb = draw(c, "paint", col);
             let a = c.amount.unwrap_or([1.0, 1.0]);
-            let amount = a[0] + (a[1] - a[0]) * unit(&[&house.to_string(), slot, &per_of(c, "paint"), "amount"]);
+            let amount = a[0] + (a[1] - a[0]) * unit(&[&draw_seed.to_string(), slot, &per_of(c, "paint"), "amount"]);
             out["paint"] = serde_json::json!({"rgb": rgb, "amount": amount});
             trace.rules.push(r.why.clone());
         }

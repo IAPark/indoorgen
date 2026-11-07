@@ -576,6 +576,19 @@ pub fn set_house_seed(seed: u64) { HOUSE_SEED.store(seed, std::sync::atomic::Ord
 /// a number from the rule file, this house's style first (rules/styles.json "params"), for what is decided while a house is built
 pub fn style_param(key: &str, default: f64) -> f64 { ig_shade::rules::loaded().param(house_seed(), key, default) }
 pub fn house_seed() -> u64 { HOUSE_SEED.load(std::sync::atomic::Ordering::Relaxed) }
+static FINISH_WALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FINISH_FLOOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// seeds for the material rules' draws on room surfaces (0 = the house seed): walls and ceilings, floors. Eras of one house repaint
+/// and refloor with these while the house keeps its style
+pub fn set_finish_seeds(walls: Option<u64>, floor: Option<u64>) {
+    FINISH_WALLS.store(walls.map_or(0, |s| s.max(1)), std::sync::atomic::Ordering::Relaxed);
+    FINISH_FLOOR.store(floor.map_or(0, |s| s.max(1)), std::sync::atomic::Ordering::Relaxed);
+}
+fn finish_seed(mat: &str) -> Option<u64> {
+    let slot = ig_shade::rules::slot_of(mat);
+    let s = match slot { "wall" | "wall_alt" | "ceiling" => FINISH_WALLS.load(std::sync::atomic::Ordering::Relaxed), "floor" => FINISH_FLOOR.load(std::sync::atomic::Ordering::Relaxed), _ => 0 };
+    (s != 0).then_some(s)
+}
 
 fn node_extent(n: &Node) -> [f64; 3] {
     let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
@@ -769,7 +782,8 @@ impl Scene {
             if let Some(spec0) = &mt.spec {
                 // (the material rules, MATERIAL_RULES: what reshade starts from is kept beside the result)
                 let (ext, rgb0) = (node_extent(n), [mt.color[0], mt.color[1], mt.color[2]]);
-                let (spec, rgb, _) = ig_shade::rules::resolve(ig_shade::rules::loaded(), house_seed(), spec0, &mt.name, &n.name, &n.class, rgb0);
+                let draw = if n.class == "room" { finish_seed(&mt.name).unwrap_or(house_seed()) } else { house_seed() };
+                let (spec, rgb, _) = ig_shade::rules::resolve_drawn(ig_shade::rules::loaded(), house_seed(), draw, spec0, &mt.name, &n.name, &n.class, rgb0);
                 j["spec0"] = spec0.clone(); j["rgb0"] = json!(rgb0); j["ext"] = json!(ext); j["spec"] = spec.clone();
                 let (spec, rgb) = (&spec, rgb);
                 let g = ig_shade::for_material(spec, &mt.name, &n.name, ext, rgb);

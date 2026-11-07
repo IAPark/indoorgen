@@ -5,6 +5,7 @@ use super::state::*;
 use crate::mesh::*;
 use crate::shp::*;
 
+#[derive(Clone)]
 pub struct RoomMeshes {
     pub name: String,
     pub wall_quads: Vec<[V3; 4]>,

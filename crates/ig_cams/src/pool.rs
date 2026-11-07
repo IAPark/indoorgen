@@ -336,6 +336,16 @@ pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
         if fp < 0.12 { continue }
         targets.push((c, fp * if anc.iter().any(|a| k.contains(a)) { 4.0 } else { 1.0 }));
     }
+    // spec.aim_file: points a target video of this home sees (make_eras.py): fresh views aim at them as much as at the furniture,
+    // so photos of this era can show what the video shows. Read when the pool is made: a file not written yet means none
+    if let Some(af) = spec.get("aim_file").and_then(|v| v.as_str()) {
+        if let Some(pts) = std::fs::read_to_string(af).ok().and_then(|t| serde_json::from_str::<Vec<V3>>(&t).ok()).filter(|p| !p.is_empty()) {
+            let tw: f64 = targets.iter().map(|t| t.1).sum::<f64>().max(1.0);
+            let wgt = tw * spec.get("aim_share").and_then(|v| v.as_f64()).unwrap_or(1.0) / pts.len() as f64;
+            for p in &pts { targets.push((*p, wgt)) }
+            eprintln!("POOL aim: {} video points, weight {:.0} %", pts.len(), 100.0 * wgt * pts.len() as f64 / (tw + wgt * pts.len() as f64));
+        }
+    }
     let has_anchor = !anc.is_empty() && w.okeys.iter().any(|k| anc.iter().any(|a| k.contains(a)));
     let (wd, ht, k) = (spec["width"].as_u64().unwrap_or(960) as usize, spec["height"].as_u64().unwrap_or(720) as usize, spec["n_views"].as_u64().unwrap_or(4) as usize);
     let cams = spec.get("cameras").cloned().unwrap_or(json!({}));
@@ -351,5 +361,143 @@ pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
     let views: Vec<Value> = pool.iter().map(|v| json!({"pos": v.pos, "yaw": v.yaw, "pitch": v.pitch, "f_mm": v.f_mm, "kind": v.kind, "hit": v.hit, "relaxed": v.relaxed,
         "stats": {"med": v.st.med, "p10": v.st.p10, "miss": v.st.miss, "wall": v.st.wall, "nobj": v.st.nobj, "ncls": v.st.ncls, "objfrac": v.st.objfrac, "person": v.st.person, "anchor": v.st.anchor, "near_low": v.st.near_low, "win": v.st.win}})).collect();
     eprintln!("POOL {room}: {} views from {tries} tries in {:.2?} ({} tris), rejects {:?}", views.len(), t0.elapsed(), ntri, rej);
-    json!({"camera_seed": seed, "width": wd, "height": ht, "views": views, "rejects": rej, "relaxed_rejects": rej2, "tries": tries, "room": room, "engine": "rust"})
+    let mut out = json!({"camera_seed": seed, "width": wd, "height": ht, "views": views, "rejects": rej, "relaxed_rejects": rej2, "tries": tries, "room": room, "engine": "rust"});
+    // spec.video: the target video's candidate walks (make_eras.py)
+    if let Some(vs) = spec.get("video").filter(|v| v.is_object()) { out["video_paths"] = video_paths(&w, &pool, vs, &mut Rng::seeded(seed ^ 0x5eed_7a7)); }
+    out
+}
+
+// ------------------------------------------------------------------------------------------------ target video paths
+// (tools/dataset/make_eras.py: the walk of a target video, chosen on the CPU from the scene's BVH while gen2 builds -- the same
+// candidates and score as eras_geom.py's GPU depth check, but every frame's clearance and every pool view as a start)
+
+type Key = (V3, f64, f64);
+
+fn fwd_of(yaw: f64, pitch: f64) -> V3 { [pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin(), pitch.sin()] }
+fn wrap(a: f64) -> f64 { (a + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI) - std::f64::consts::PI }
+fn add(a: V3, b: V3) -> V3 { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] }
+fn mul(a: V3, s: f64) -> V3 { [a[0] * s, a[1] * s, a[2] * s] }
+
+/// camera moves from one pose (eras_geom.move_paths): push, pull, pan, strafe, walk-turn, orbit; `s` = +-1 picks the side
+fn move_keys(v: &View, s: f64) -> Vec<(&'static str, Vec<Key>)> {
+    let (p, y, pt) = (v.pos, v.yaw, v.pitch);
+    let f = fwd_of(y, 0.0); let r = [y.sin(), -y.cos(), 0.0];
+    let d = (v.hit[0] - p[0]).hypot(v.hit[1] - p[1]).max(0.5);
+    let rad = |x: f64| x.to_radians();
+    let mut out = vec![
+        ("push", vec![(p, y, pt), (add(p, mul(f, (0.55 * d).min(1.6))), y, pt)]),
+        ("pull", vec![(add(p, mul(f, (0.45 * d).min(1.2))), y, pt), (p, y, pt)]),
+        ("pan", vec![(p, y - s * rad(35.0), pt), (p, y + s * rad(35.0), pt)]),
+        ("strafe", vec![(add(p, mul(r, -0.7)), y, pt), (add(p, mul(r, 0.7)), y, pt)]),
+        ("walkturn", vec![(p, y, pt), (add(p, mul(f, 0.8)), y + s * rad(25.0), pt), (add(add(p, mul(f, 1.3)), mul(r, s * 0.4)), y + s * rad(55.0), pt)]),
+    ];
+    let c = [v.hit[0], v.hit[1], p[2]];
+    let a0 = (p[1] - c[1]).atan2(p[0] - c[0]);
+    let keys: Vec<Key> = [-0.45, 0.0, 0.45].iter().map(|da| {
+        let a = a0 + s * da; let q = [c[0] + d * a.cos(), c[1] + d * a.sin(), p[2]];
+        (q, (c[1] - q[1]).atan2(c[0] - q[0]), pt)
+    }).collect();
+    out.push(("orbit", keys));
+    out
+}
+
+/// Catmull-Rom through the key positions, angles eased between keys, yaw unwrapped (eras_geom.sample_keys: the builder redraws the
+/// frames from the keys, so the two must agree)
+fn sample_keys(keys: &[Key], frames: usize) -> Vec<Key> {
+    let p: Vec<V3> = keys.iter().map(|k| k.0).collect();
+    let mut ys = vec![keys[0].1];
+    for k in &keys[1..] { let l = *ys.last().unwrap(); ys.push(l + wrap(k.1 - l)); }
+    let a: Vec<(f64, f64)> = ys.iter().zip(keys).map(|(y, k)| (*y, k.2)).collect();
+    let seg = p.len() - 1;
+    let g = |j: isize| -> usize { j.clamp(0, p.len() as isize - 1) as usize };
+    (0..frames).map(|i| {
+        let u = i as f64 / (frames - 1).max(1) as f64 * seg as f64; let k = (u as usize).min(seg - 1); let t = u - k as f64;
+        let (p0, p1, p2, p3) = (p[g(k as isize - 1)], p[g(k as isize)], p[g(k as isize + 1)], p[g(k as isize + 2)]);
+        let (t2, t3) = (t * t, t * t * t);
+        let pos = [0, 1, 2].map(|j| 0.5 * (2.0 * p1[j] + (-p0[j] + p2[j]) * t + (2.0 * p0[j] - 5.0 * p1[j] + 4.0 * p2[j] - p3[j]) * t2 + (-p0[j] + 3.0 * p1[j] - 3.0 * p2[j] + p3[j]) * t3));
+        let te = t * t * (3.0 - 2.0 * t);
+        let (a0, a1) = (a[g(k as isize)], a[g(k as isize + 1)]);
+        (pos, a0.0 + (a1.0 - a0.0) * te, a0.1 + (a1.1 - a0.1) * te)
+    }).collect()
+}
+
+/// pool chains (make_eras.video_paths): views that follow each other, steps 0.4-2.6 m and under 70 degrees
+fn chain_keys(pool: &[View], n_views: usize) -> Vec<Vec<Key>> {
+    let mut out = vec![];
+    for s in 0..pool.len() {
+        let mut ch = vec![&pool[s]];
+        for v in &pool[s + 1..] {
+            if ch.len() >= n_views { break }
+            let p = ch[ch.len() - 1];
+            let d = norm(sub(p.pos, v.pos)); let dy = wrap(v.yaw - p.yaw).abs();
+            if d > 0.4 && d < 2.6 && dy < 70f64.to_radians() { ch.push(v) }
+        }
+        if ch.len() >= 2 { out.push(ch.iter().map(|v| (v.pos, v.yaw, v.pitch)).collect()) }
+    }
+    out
+}
+
+struct PathStats { near: f64, close: f64, cells: usize, pts: Vec<V3> }
+
+/// clearance at every frame (18 directions) and along every step, and per 8th frame a 24 x 14 ray probe of the frustum: the distinct
+/// 25 cm cells hit, the share of rays nearer than 1.2 m
+fn path_stats(w: &World, frames: &[Key], f_mm: f64, wd: usize, ht: usize, want_pts: bool) -> PathStats {
+    let mut near = f64::MAX;
+    for (i, fr) in frames.iter().enumerate() {
+        for d in EYE.iter() { if let Some(h) = w.cast(fr.0, unit(*d), 0.6) { near = near.min(h.dist) } }
+        if i + 1 < frames.len() {
+            let step = sub(frames[i + 1].0, fr.0); let l = norm(step);
+            if l > 1e-6 { if let Some(h) = w.cast(fr.0, unit(step), l + 0.3) { near = near.min((h.dist - l).max(0.0)) } }
+        }
+    }
+    let (nx, ny) = (24usize, 14usize);
+    let fx = f_mm / 36.0 * wd as f64;
+    let mut cells = std::collections::HashSet::new(); let (mut close_n, mut tot) = (0usize, 0usize); let mut pts = vec![];
+    for fr in frames.iter().step_by(8) {
+        let r = cam_r(fr.1, fr.2);
+        for j in 0..ny { for i in 0..nx {
+            let u = ((i as f64 + 0.5) / nx as f64 - 0.5) * wd as f64 / fx; let v = ((j as f64 + 0.5) / ny as f64 - 0.5) * ht as f64 / fx;
+            let d = unit(add(add(r[2], mul(r[0], u)), mul(r[1], v)));
+            tot += 1;
+            if let Some(h) = w.cast(fr.0, d, 15.0) {
+                // (z-depth, as the GPU check measured it)
+                if h.dist * dot(d, r[2]) < 1.2 { close_n += 1 }
+                let q = add(fr.0, mul(d, h.dist));
+                cells.insert(((q[0] / 0.25).floor() as i64, (q[1] / 0.25).floor() as i64, (q[2] / 0.25).floor() as i64));
+                if want_pts { pts.push(q) }
+            }
+        } }
+    }
+    PathStats { near, close: close_n as f64 / tot.max(1) as f64, cells: cells.len(), pts }
+}
+
+/// candidate walks from every pool view and the pool chains, scored like eras_geom.path_score (cells seen, less for near-wall
+/// frames, zero under min_depth); returns the best few with their keys (the builder samples the frames from them) and the points
+/// the best one sees (the reference photos are picked partly for them)
+fn video_paths(w: &World, pool: &[View], spec: &Value, rng: &mut Rng) -> Value {
+    let t0 = std::time::Instant::now();
+    let frames = spec["frames"].as_u64().unwrap_or(80) as usize;
+    let (wd, ht) = (spec["width"].as_u64().unwrap_or(832) as usize, spec["height"].as_u64().unwrap_or(480) as usize);
+    let min_d = spec["min_depth_m"].as_f64().unwrap_or(0.3);
+    let starts = spec["starts"].as_u64().unwrap_or(12) as usize;
+    let mut cands: Vec<(&'static str, Vec<Key>, f64)> = vec![];
+    for ch in chain_keys(pool, spec["path_views"].as_u64().unwrap_or(3) as usize).into_iter().take(4) { let f = pool.iter().find(|v| v.pos == ch[0].0).map_or(24.0, |v| v.f_mm); cands.push(("pool-chain", ch, f)) }
+    for v in pool.iter().take(starts) {
+        let s = if rng.f64() < 0.5 { -1.0 } else { 1.0 };
+        for (fam, k) in move_keys(v, s) { cands.push((fam, k, v.f_mm)) }
+    }
+    let mut scored: Vec<(f64, usize, PathStats)> = cands.iter().enumerate().map(|(i, (_, k, f))| {
+        let fr = sample_keys(k, frames);
+        let st = path_stats(w, &fr, *f, wd, ht, false);
+        let base = if st.near < min_d { 0.0 } else { st.cells as f64 * (1.0 - 0.8 * (st.close / 0.6).min(1.0)) };
+        (base * rng.uniform(0.85, 1.15), i, st)
+    }).collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let best: Vec<Value> = scored.iter().take(3).filter(|s| s.0 > 0.0).enumerate().map(|(rank, (sc, i, st))| {
+        let (fam, k, f) = &cands[*i];
+        let pts = if rank == 0 { let fr = sample_keys(k, frames); let mut p = path_stats(w, &fr, *f, wd, ht, true).pts; let step = (p.len() / 4000).max(1); p = p.into_iter().step_by(step).collect(); p } else { vec![] };
+        json!({"family": fam, "keys": k.iter().map(|q| json!([q.0, q.1, q.2])).collect::<Vec<_>>(), "f_mm": f, "score": sc, "near_m": st.near, "close_share": st.close, "cells": st.cells, "points": pts})
+    }).collect();
+    eprintln!("VIDEO paths: {} candidates in {:.2?}, best {:?}", cands.len(), t0.elapsed(), best.first().map(|b| (b["family"].clone(), b["score"].clone())));
+    json!(best)
 }
