@@ -1010,6 +1010,7 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
   textureStore(out_spec, px, vec4<f32>(min(cur_.rgb + ind, vec3<f32>(20.0)), rough));
 }
 const RS_SPEC_RADIUS = 10.0;
+const M_OPEN = 0.9;
 
 // ReSTIR GI's spatial step: a few neighbours on the same surface offer the bounce they kept, weighed by what it would give here. One shadow ray for the winner
 const RS_K = 5u; const RS_RADIUS = 24.0;
@@ -1270,7 +1271,9 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
       let nq = textureLoad(g_nrm, gq, 0).xyz; if (dot(nq, nq) < 0.25 || dot(normalize(nq), n) < 0.985) { flat_ = false; }
     } }
     let m_ok = !is_m || (u32(p.cam.w) & 64u) == 0u || rnd() < smoothstep(m_lo, m_lo + 0.2, rough); // (no draw unless it will be used: a still's noise stays as it was)
-    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && rough >= 0.15) {
+    // (and not where something stands close: a cell is 10-40 cm, and one beside a mirror's frame averaged what the frame hid from part of it, a dark smudge on the tiles the whole cell wide)
+    let open_ = textureLoad(lamp_done, px, 0).a >= M_OPEN;
+    if ((u32(p.cam.w) & 64u) != 0u && !is_mirror && flat_ && m_ok && open_ && rough >= 0.15) {
       let rc = m_read(pos, n, v, rough, f0_rs, is_m);
       if (rc.w >= 0.7) { sp = rc.xyz; turn = true; hit_d = -1.0; }
     }
