@@ -287,9 +287,9 @@ const POST_S = 0.35;
   let base = vec2<i32>(i32(fp.x), i32(fp.y)) * ss;
   var acc = vec3<f32>(0.0);
   if (g.params2.w > 0.5) {
-    // (path traced: a filter wider than the pixel, as Blender's is: a box left thin rails and sun edges in steps)
+    // (path traced: over the samples around the pixel too, as Blender's filter reaches past it: a box left thin rails and sun edges in steps)
     let top = vec2<i32>(dims) - vec2<i32>(1);
-    let c = f32(ss - 1) * 0.5; let r = f32(ss) * 1.0; var tw = 0.0;
+    let c = f32(ss - 1) * 0.5; var tw = 0.0;
     for (var i = -ss / 2; i < ss + ss / 2; i++) { for (var j = -ss / 2; j < ss + ss / 2; j++) {
       let dx_ = (f32(i) - c) / f32(ss); let dy_ = (f32(j) - c) / f32(ss); let wx = exp(-dx_ * dx_ / (2.0 * POST_S * POST_S)); let wy = exp(-dy_ * dy_ / (2.0 * POST_S * POST_S));
       let wq = wx * wy;
