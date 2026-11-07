@@ -546,7 +546,8 @@ fn sky_open(o: vec3<f32>, n: vec3<f32>) -> f32 {
 }
 fn outdoor_sky(n: vec3<f32>, o: vec3<f32>) -> vec3<f32> {
   let b = basis(n); var e = vec3<f32>(0.0);
-  for (var k = 0u; k < 6u; k++) { let a = f32(k) * 1.0472; let d = normalize(b * vec3<f32>(0.6 * cos(a), 0.6 * sin(a), 0.8)); e += sky_at(select(d, vec3<f32>(d.x, d.y, abs(d.z)), d.z < 0.0)); }
+  // (below the horizon the ground, not the sky: a leaf's underside, seen from indoors looking out, was lit by a whole bright sky turned upside down. The ground there as about 0.15 of the sky over it)
+  for (var k = 0u; k < 6u; k++) { let a = f32(k) * 1.0472; let d = normalize(b * vec3<f32>(0.6 * cos(a), 0.6 * sin(a), 0.8)); e += select(sky_at(d), 0.15 * sky_at(normalize(vec3<f32>(d.x, d.y, 0.3))), d.z < 0.0); }
   return e / 6.0 * PI * mix(0.08, 1.0, sky_open(o, n));
 }
 fn od_vis(o: vec3<f32>) -> f32 {
