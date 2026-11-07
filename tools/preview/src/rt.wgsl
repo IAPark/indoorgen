@@ -547,8 +547,10 @@ fn sky_open(o: vec3<f32>, n: vec3<f32>) -> f32 {
 fn outdoor_sky(n: vec3<f32>, o: vec3<f32>) -> vec3<f32> {
   let b = basis(n); var e = vec3<f32>(0.0);
   // (below the horizon the ground, not the sky: a leaf's underside, seen from indoors looking out, was lit by a whole bright sky turned upside down. The ground there as about 0.15 of the sky over it)
-  for (var k = 0u; k < 6u; k++) { let a = f32(k) * 1.0472; let d = normalize(b * vec3<f32>(0.6 * cos(a), 0.6 * sin(a), 0.8)); e += select(sky_at(d), 0.15 * sky_at(normalize(vec3<f32>(d.x, d.y, 0.3))), d.z < 0.0); }
-  return e / 6.0 * PI * mix(0.08, 1.0, sky_open(o, n));
+  // (cosine-weighted over the whole hemisphere, down to the horizon and round the sun: a ring of six at 37 degrees from the normal missed the bright sky low and by the sun, and a sunlit lawn's tree shadows came out 10x darker than the lit grass where Blender's are 2.5x)
+  let NS = 16u;
+  for (var k = 0u; k < NS; k++) { let u = (f32(k) + 0.5) / f32(NS); let a = f32(k) * 2.39996; let r = sqrt(u); let d = normalize(b * vec3<f32>(r * cos(a), r * sin(a), sqrt(1.0 - u))); e += select(sky_at(d), 0.15 * sky_at(normalize(vec3<f32>(d.x, d.y, 0.3))), d.z < 0.0); }
+  return e / f32(NS) * mix(0.08, 1.0, sky_open(o, n)); // (as the traced light is kept: the sky's radiance averaged, irradiance over pi. Times pi it lit the outdoors 3x over: leaves 3.6x Blender's against the wall)
 }
 fn od_vis(o: vec3<f32>) -> f32 {
   if (od.on.x < 0.5) { return 1.0; }
@@ -774,9 +776,8 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   if (d < 1.0 && is_outdoor(g)) {
     let po = world_of(g, d, dims, p.inv_vp); let no = normalize(textureLoad(g_nrm, g, 0).xyz + vec3<f32>(1e-5));
     // (a leaf as Blender's leaf_look has it: two thirds a plain surface, a third translucent -- lit through from behind by the sky and the sun there)
-    let leaf = textureLoad(g_nrm, g, 0).a < -1.5; let fr_ = select(1.0, 0.65, leaf);
-    var e_ = outdoor_sky(no, po) * fr_;
-    if (leaf) { e_ += 0.35 * (outdoor_sky(-no, po) + p.sun_col.rgb * max(-dot(no, p.sun_dir.xyz), 0.0) * od_vis(po) / PI); }
+    // (a leaf as Blender's: no light through it -- its transmission pass is ~0 on the trees. A third of the light from behind made a canopy's undersides, seen from a window below, glow 2x Blender's dark ones)
+    let fr_ = 1.0; let e_ = outdoor_sky(no, po);
     textureStore(out_irr, px, vec4<f32>(e_, -1.0)); textureStore(out_lamp, px, vec4<f32>(0.0));
     if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(select(0.0, od_vis(po) * fr_, dot(no, p.sun_dir.xyz) > 0.0), 0.0, 0.0, 1.0)); }
     return;

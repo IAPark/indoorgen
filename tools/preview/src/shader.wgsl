@@ -32,6 +32,10 @@ struct VIn { @location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>, @location
 struct VOut { @builtin(position) clip: vec4<f32>, @location(0) wpos: vec3<f32>, @location(1) nrm: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) @interpolate(flat) id: u32 };
 
 @vertex fn vs_shadow(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> { return g.sun_vp * vec4<f32>(pos, 1.0); }
+// the outdoors' shadow and sky maps: a leaf card casts only where the leaf is (drawn solid, a tree threw one dark block of shade over the lawn, 10x darker than the lit grass where Blender's is 2.5x)
+struct CutOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs_cut(@location(0) pos: vec3<f32>, @location(2) uv: vec2<f32>) -> CutOut { var o: CutOut; o.clip = g.sun_vp * vec4<f32>(pos, 1.0); o.uv = uv; return o; }
+@fragment fn fs_cut(v: CutOut) { if (m.color.a * textureSampleLevel(base_tex, base_smp, v.uv, 0.0).a < 0.5) { discard; } }
 
 @vertex fn vs_main(v: VIn, @builtin(instance_index) ii: u32) -> VOut {
   var o: VOut;

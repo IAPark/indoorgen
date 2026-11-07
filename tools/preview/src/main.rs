@@ -1012,7 +1012,7 @@ fn resolve_cams(s: &Scene, o: &Opts) -> Vec<Cam> {
 struct Targets { m: [wgpu::TextureView; 4], m_depth: wgpu::TextureView, m_lit: wgpu::Texture, m_acc: wgpu::Texture, m_lit_v: wgpu::TextureView, m_acc_v: wgpu::TextureView, alb: wgpu::TextureView, mat: wgpu::TextureView, lit: wgpu::TextureView, hdr: wgpu::TextureView, nrm: wgpu::TextureView, depth: wgpu::TextureView, depth_tex: wgpu::Texture, dbuf: wgpu::Buffer, dbpr: u32, out: wgpu::Texture, readback: wgpu::Buffer, w: u32, h: u32, bpr: u32 }
 struct Renderer { zp: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>, agx: wgpu::TextureView, agx_smp: wgpu::Sampler, rt: Option<rt::Pipes>, last_gl: Option<Globals>, rt_now: bool,
     gpu: Gpu, ubuf: wgpu::Buffer, g_bgl: wgpu::BindGroupLayout, mat_bgl: wgpu::BindGroupLayout, post_bgl: wgpu::BindGroupLayout,
-    shadow_pipe: wgpu::RenderPipeline, main_pipe: wgpu::RenderPipeline, glass_pipe: wgpu::RenderPipeline, post_pipe: wgpu::RenderPipeline,
+    shadow_pipe: wgpu::RenderPipeline, cut_pipe: wgpu::RenderPipeline, main_pipe: wgpu::RenderPipeline, glass_pipe: wgpu::RenderPipeline, post_pipe: wgpu::RenderPipeline,
     cmp_smp: wgpu::Sampler, white: wgpu::TextureView, smp: wgpu::Sampler, tg: Targets, last_depth: Option<Vec<f32>>,
 }
 fn vbuf_layouts() -> [wgpu::VertexBufferLayout<'static>; 3] {
@@ -1167,6 +1167,9 @@ async fn init_with(inst: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, o
     let shadow_pipe = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl(&[&sh_bgl])),
         vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_shadow"), compilation_options: Default::default(), buffers: &[Some(vl[0].clone())] },
         primitive: prim, depth_stencil: Some(ds(true, true)), multisample: Default::default(), fragment: None, multiview_mask: None, cache: None });
+    let cut_pipe = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl(&[&sh_bgl, &mat_bgl])),
+        vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_cut"), compilation_options: Default::default(), buffers: &[Some(vl[0].clone()), None, Some(vl[2].clone())] },
+        primitive: prim, depth_stencil: Some(ds(true, true)), multisample: Default::default(), fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some("fs_cut"), compilation_options: Default::default(), targets: &[] }), multiview_mask: None, cache: None });
     let main_pipe = make_main_pipe(&dev, &sm, &g_bgl, &mat_bgl, false); let glass_pipe = make_main_pipe(&dev, &sm, &g_bgl, &mat_bgl, true);
     let post_pipe = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pl(&[&post_bgl])),
         vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
@@ -1190,7 +1193,7 @@ async fn init_with(inst: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, o
     let lut: Vec<u16> = raw.chunks_exact(6).flat_map(|c| { let f = |i: usize| half(u16::from_le_bytes([c[i], c[i + 1]]) as f32 / 65535.0); [f(0), f(2), f(4), half(1.0)] }).collect();
     let agx = dev.create_texture_with_data(&q, &wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 33, height: 33, depth_or_array_layers: 33 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D3, format: wgpu::TextureFormat::Rgba16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] }, wgpu::wgt::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&lut)).create_view(&Default::default());
     let agx_smp = dev.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
-    Renderer { zp: None, agx, agx_smp, rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
+    Renderer { zp: None, agx, agx_smp, rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, cut_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
 }
 
 /// the views through the window panes in sight, from the eye: an outdoor part outside all of them is hidden by the walls (None: no outdoors)
@@ -1956,9 +1959,12 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
             {
                 let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
-                rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
+                rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]); let mut was_cut = false;
                 for (i, d) in s.draws.iter().enumerate() {
                     if !s.outdoor[i] || s.weather[i] || d.glass || s.glb.nodes[d.node].name.starts_with("exterior_main") { continue }
+                    let cut = d.mask && d.uv.is_some();
+                    if cut != was_cut { was_cut = cut; rp.set_pipeline(if cut { &r.cut_pipe } else { &r.shadow_pipe }); rp.set_bind_group(0, &bg, &[]); }
+                    if cut { let n = d.uv.unwrap(); rp.set_bind_group(1, &s.mat_bgs[d.mat_bg], &[]); rp.set_vertex_buffer(2, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 8)); }
                     rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
                     let isz = if d.u16 { 2 } else { 4 };
                     rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
@@ -1995,9 +2001,12 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
             for k in 0..5 {
                 let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &views[k], depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
-                rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bgs[k], &[]);
+                rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bgs[k], &[]); let mut was_cut = false;
                 for (i, d) in s.draws.iter().enumerate() {
                     if !s.outdoor[i] || s.weather[i] || d.glass { continue }
+                    let cut = d.mask && d.uv.is_some();
+                    if cut != was_cut { was_cut = cut; rp.set_pipeline(if cut { &r.cut_pipe } else { &r.shadow_pipe }); rp.set_bind_group(0, &bgs[k], &[]); }
+                    if cut { let n = d.uv.unwrap(); rp.set_bind_group(1, &s.mat_bgs[d.mat_bg], &[]); rp.set_vertex_buffer(2, s.bufs[n.0].slice(n.1..n.1 + d.vcount as u64 * 8)); }
                     rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
                     let isz = if d.u16 { 2 } else { 4 };
                     rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
