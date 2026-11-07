@@ -524,10 +524,30 @@ fn od_cover(o: vec3<f32>) -> f32 {
   for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) { v += textureSampleCompareLevel(od_tex, od_smp, uv + vec2<f32>(f32(i), f32(j)) * od.on.y * 10.0, c.z - od.on.z * 8.0); } }
   return v / 25.0;
 }
+// (how much of the sky an outdoor point sees: the outdoors' depth from straight up and from four sides at 45 degrees, once a scene. A leaf inside a crown has leaves above it and round it: open air from one direction, the sun's, left it as bright as a lone leaf)
+struct SKY { vp: array<mat4x4<f32>, 5>, dir: array<vec4<f32>, 5>, on: vec4<f32> }; // on: x 1 when drawn, y a texel, z the depth bias
+@group(0) @binding(36) var sky_tex: texture_depth_2d_array;
+@group(0) @binding(37) var<uniform> sky: SKY;
+fn sky_open(o: vec3<f32>, n: vec3<f32>) -> f32 {
+  if (sky.on.x < 0.5) { return mix(0.3, 1.0, od_cover(o)); }
+  var v = 0.0; var ws = 0.0;
+  for (var k = 0; k < 5; k++) {
+    let wk = max(dot(n, sky.dir[k].xyz), 0.0) + 0.25;
+    let c = sky.vp[k] * vec4<f32>(o, 1.0); let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+    var vk = 1.0;
+    if (all(uv > vec2<f32>(0.0)) && all(uv < vec2<f32>(1.0)) && c.z > 0.0 && c.z < 1.0) {
+      vk = 0.0;
+      for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) { vk += textureSampleCompareLevel(sky_tex, od_smp, uv + vec2<f32>(f32(i), f32(j)) * sky.on.y * 2.0, k, c.z - sky.on.z); } }
+      vk /= 9.0;
+    }
+    v += vk * wk; ws += wk;
+  }
+  return v / ws;
+}
 fn outdoor_sky(n: vec3<f32>, o: vec3<f32>) -> vec3<f32> {
   let b = basis(n); var e = vec3<f32>(0.0);
   for (var k = 0u; k < 6u; k++) { let a = f32(k) * 1.0472; let d = normalize(b * vec3<f32>(0.6 * cos(a), 0.6 * sin(a), 0.8)); e += sky_at(select(d, vec3<f32>(d.x, d.y, abs(d.z)), d.z < 0.0)); }
-  return e / 6.0 * PI * mix(0.3, 1.0, od_cover(o));
+  return e / 6.0 * PI * mix(0.08, 1.0, sky_open(o, n));
 }
 fn od_vis(o: vec3<f32>) -> f32 {
   if (od.on.x < 0.5) { return 1.0; }
@@ -752,8 +772,12 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   let d = textureLoad(g_depth, g, 0);
   if (d < 1.0 && is_outdoor(g)) {
     let po = world_of(g, d, dims, p.inv_vp); let no = normalize(textureLoad(g_nrm, g, 0).xyz + vec3<f32>(1e-5));
-    textureStore(out_irr, px, vec4<f32>(outdoor_sky(no, po), -1.0)); textureStore(out_lamp, px, vec4<f32>(0.0));
-    if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(select(0.0, od_vis(po), dot(no, p.sun_dir.xyz) > 0.0), 0.0, 0.0, 1.0)); }
+    // (a leaf as Blender's leaf_look has it: two thirds a plain surface, a third translucent -- lit through from behind by the sky and the sun there)
+    let leaf = textureLoad(g_nrm, g, 0).a < -1.5; let fr_ = select(1.0, 0.65, leaf);
+    var e_ = outdoor_sky(no, po) * fr_;
+    if (leaf) { e_ += 0.35 * (outdoor_sky(-no, po) + p.sun_col.rgb * max(-dot(no, p.sun_dir.xyz), 0.0) * od_vis(po) / PI); }
+    textureStore(out_irr, px, vec4<f32>(e_, -1.0)); textureStore(out_lamp, px, vec4<f32>(0.0));
+    if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(select(0.0, od_vis(po) * fr_, dot(no, p.sun_dir.xyz) > 0.0), 0.0, 0.0, 1.0)); }
     return;
   }
   if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(0.0)); } return; }

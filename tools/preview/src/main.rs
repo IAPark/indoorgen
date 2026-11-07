@@ -275,12 +275,26 @@ fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> w
     let levels = 32 - w.max(h).leading_zeros();
     let tex = dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: levels, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8UnormSrgb, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+    // (a cut-out -- a leaf card -- shrinks by its alpha: the colour of its see-through texels, white or anything, was averaged into the leaf at every smaller level, and distant crowns came out pale and bluish. Its see-through texels take the leaf's colour round them too, for the filtering at its edges)
+    let cutout = img.pixels().any(|p| p[3] < 250);
+    let shrink = |im: &image::RgbaImage, nw: u32, nh: u32| -> image::RgbaImage {
+        if !cutout { return image::imageops::resize(im, nw, nh, image::imageops::FilterType::Triangle) }
+        let pm = image::ImageBuffer::from_fn(im.width(), im.height(), |x, y| { let p = im.get_pixel(x, y).0; let a = p[3] as f32 / 255.0; image::Rgba([p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, p[3] as f32]) });
+        let r: image::ImageBuffer<image::Rgba<f32>, Vec<f32>> = image::imageops::resize(&pm, nw, nh, image::imageops::FilterType::Triangle);
+        image::ImageBuffer::from_fn(nw, nh, |x, y| { let p = r.get_pixel(x, y).0; let a = (p[3] / 255.0).max(1e-4); image::Rgba([(p[0] / a).clamp(0.0, 255.0) as u8, (p[1] / a).clamp(0.0, 255.0) as u8, (p[2] / a).clamp(0.0, 255.0) as u8, p[3].clamp(0.0, 255.0) as u8]) })
+    };
     let mut cur = img;
+    if cutout {
+        // (the see-through texels' colour from the leaf round them: the alpha-weighted colour of a level 8x smaller)
+        let (cw, ch) = cur.dimensions(); let sm = shrink(&cur, (cw / 8).max(1), (ch / 8).max(1));
+        let up = image::imageops::resize(&sm, cw, ch, image::imageops::FilterType::Triangle);
+        for (x, y, p) in cur.enumerate_pixels_mut() { if p[3] < 128 { let u = up.get_pixel(x, y).0; p[0] = u[0]; p[1] = u[1]; p[2] = u[2]; } }
+    }
     for l in 0..levels {
         let (cw, ch) = cur.dimensions();
         q.write_texture(wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: l, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, &cur,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(cw * 4), rows_per_image: Some(ch) }, wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 });
-        if cw > 1 || ch > 1 { cur = image::imageops::resize(&cur, (cw / 2).max(1), (ch / 2).max(1), image::imageops::FilterType::Triangle); }
+        if cw > 1 || ch > 1 { cur = shrink(&cur, (cw / 2).max(1), (ch / 2).max(1)); }
     }
     tex.create_view(&wgpu::TextureViewDescriptor::default())
 }
@@ -385,7 +399,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let dark_glass = opts.rt.is_none() && glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], if lname.contains(".floor") { 2.0 } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["transmission"].as_f64()).unwrap_or(0.0) as f32 }], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else if sn.and_then(|x| x["graph"].as_u64()).map_or(false, |i| side["graphs"][i as usize]["out"]["roughness"].is_object()) { -1.0 } else { 0.0 }, if dark_glass { 0.85 } else if opts.rt.is_none() && m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48], ex: [if n.name.starts_with("outdoor_") || n.name.starts_with("exterior_") { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0] };
+                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], if lname.contains(".floor") { 2.0 } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["transmission"].as_f64()).unwrap_or(0.0) as f32 }], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else if sn.and_then(|x| x["graph"].as_u64()).map_or(false, |i| side["graphs"][i as usize]["out"]["roughness"].is_object()) { -1.0 } else { 0.0 }, if dark_glass { 0.85 } else if opts.rt.is_none() && m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48], ex: [if n.name.starts_with("outdoor_") || n.name.starts_with("exterior_") { 1.0 } else { 0.0 }, if m.name.starts_with("rtree_leaf") { 1.0 } else { 0.0 }, 0.0, 0.0] };
                 let fam = if shown { None } else { micro_family(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) };
                 if graph.is_none() { u.p[47] = if shown { [0.45, 0.0, 0.0, 0.0] } else { [m.rough, m.metal, 0.0, 0.0] }; }
                 if let Some(e) = graph {
@@ -1553,6 +1567,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
             color_attachments: &[att(&l), att(&n), att(&a), att(&m)],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None }) });
         rp.set_bind_group(0, &g_bg, &[]);
+        DRAW_EYE.with(|c| c.set(Some(eye)));
         rp.set_pipeline(&r.glass_pipe); draw_all(&mut rp, s, None, true, false, Some(&fr), eye_leaf, cam.near.map(|_| { let n = Vec3::new(cam.clip[0], cam.clip[1], cam.clip[2]); (n, (cam.clip[3] - eye.dot(n)).max(0.0)) }), cam.only.as_ref());
     }
     if let (Some(qu), Some(p), Some(sd)) = (rt_q, r.rt.as_ref(), s.rt.as_ref()) {
@@ -1946,6 +1961,44 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
             r.gpu.q.write_buffer(&sd_.od_buf, 0, bytemuck::cast_slice(&u));
             let sd = s.rt.as_mut().unwrap(); sd.od_view = view;
             if o.verbose { eprintln!("  outdoor shadow map over {:.0} m", 2.0 * rad); }
+        }
+        // and the outdoors' depth from straight up and from four sides at 45 degrees: how much of the sky an outdoor point sees (rt.wgsl sky_open). The house's own shell counts here: it hides the sky from the ground beside it
+        {
+            const SKN: u32 = 1024; let reach = 400.0;
+            let c = (lo + hi) * 0.5; let rad = (hi - lo).truncate().length() * 0.5 + 30.0;
+            let h = std::f32::consts::FRAC_1_SQRT_2;
+            let dirs = [Vec3::Z, Vec3::new(h, 0.0, h), Vec3::new(-h, 0.0, h), Vec3::new(0.0, h, h), Vec3::new(0.0, -h, h)];
+            let dev = &r.gpu.dev;
+            let tex = dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: SKN, height: SKN, depth_or_array_layers: 5 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+            let mut u = vec![0f32; 5 * 16 + 5 * 4 + 4];
+            let bgl = r.shadow_pipe.get_bind_group_layout(0);
+            let mut enc = dev.create_command_encoder(&Default::default());
+            let mut ubs = vec![];
+            for (k, dk) in dirs.iter().enumerate() {
+                let up = if dk.z > 0.99 { Vec3::Y } else { Vec3::Z };
+                let vp = orthographic_rh(-rad, rad, -rad, rad, 0.0, 2.0 * reach) * look_at_rh(c + *dk * reach, c, up);
+                u[k * 16..k * 16 + 16].copy_from_slice(&vp.to_cols_array()); u[80 + k * 4..80 + k * 4 + 3].copy_from_slice(&dk.to_array());
+                let mut g: Globals = bytemuck::Zeroable::zeroed(); g.sun_vp = vp.to_cols_array_2d();
+                ubs.push(dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&g), usage: wgpu::BufferUsages::UNIFORM }));
+            }
+            let views: Vec<wgpu::TextureView> = (0..5).map(|k| tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_array_layer: k, array_layer_count: Some(1), ..Default::default() })).collect();
+            let bgs: Vec<wgpu::BindGroup> = ubs.iter().map(|ub| dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] })).collect();
+            for k in 0..5 {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &views[k], depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+                rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bgs[k], &[]);
+                for (i, d) in s.draws.iter().enumerate() {
+                    if !s.outdoor[i] || s.weather[i] || d.glass { continue }
+                    rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
+                    let isz = if d.u16 { 2 } else { 4 };
+                    rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
+                    rp.draw_indexed(0..d.icount, 0, 0..1);
+                }
+            }
+            r.gpu.q.submit([enc.finish()]);
+            u[100] = 1.0; u[101] = 1.0 / SKN as f32; u[102] = 0.3 / (2.0 * reach);
+            let sd_ = s.rt.as_ref().unwrap(); r.gpu.q.write_buffer(&sd_.sky_buf, 0, bytemuck::cast_slice(&u));
+            let sd = s.rt.as_mut().unwrap(); sd.sky_view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
         }
     }
     memlog("after bvh");
