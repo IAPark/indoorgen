@@ -33,6 +33,24 @@ coordinate search -- from the chosen setting each main knob (eras, videos per ho
 was changed one at a time on the same homes, and no single change did better within its limit. A local optimum on this VM, not an
 exhaustive search.
 
+Full grid under "every home inside 60 s" (eras {3, 4} x videos {2, 3 (4 eras only)} x frames {48, 64, 80}; 5 photos per era, full
+photos, 60 s deadline; the same 6 homes for every configuration, each run cold; all 54 runs passed the quality gate):
+
+| eras / videos / frames | examples per hour | mean / max s | homes over 60 s | refs per example |
+|---|---|---|---|---|
+| 3 / 2 / 48 | 121.7 | 49 / 55 | 0 | 7.0 |
+| **3 / 2 / 64 (per_home_60s)** | 118.0 | 51 / 55 | 0 | 7.0 |
+| 4 / 3 / 48 | 133.6 | 58 / 65 | 3 | 9.0 |
+| 4 / 2 / 48 | 106.2 | 56 / 69 | 2 | 11.8 |
+| 3 / 2 / 80 | 99.9 | 54 / 64 | 1 | 6.8 |
+| 4 / 3 / 64 | 88.0 | 61 / 76 | 3 | 8.9 |
+| 4 / 3 / 80 | 77.7 | 54 / 66 | 2 | 9.0 |
+| 4 / 2 / 64 | 73.0 | 58 / 75 | 3 | 9.9 |
+| 4 / 2 / 80 | 64.6 | 56 / 77 | 2 | 12.0 |
+
+Only the 3-era, 48- and 64-frame configurations keep every home inside 60 s; they tie on examples per hour (within run noise), and
+64 frames carry a third more video (about 7550 against 5840 training frames an hour), so per_home_60s is the best in this grid.
+
 **Current default (target: at least 60 examples per hour, a home may take longer than 60 s):** 4 eras, two 120-frame (5 s) target
 videos, `budget_s` 120. Same 6 homes: 87 examples per hour run alone (mean 82 s, max 101 s a home), 11.8 references per example,
 82 % of each video shown in the references; six homes in one pipelined run: 12 examples in 407 s (106 per hour). For more volume:
