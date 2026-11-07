@@ -1599,7 +1599,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     }
     enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.out, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
         wgpu::TexelCopyBufferInfo { buffer: &tg.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.bpr), rows_per_image: Some(o.res.1) } }, wgpu::Extent3d { width: o.res.0, height: o.res.1, depth_or_array_layers: 1 });
-    if rt_q.is_none() {
+    if rt_q.is_none() || o.depth {
         enc.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo { texture: &tg.depth_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::DepthOnly },
             wgpu::TexelCopyBufferInfo { buffer: &tg.dbuf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(tg.dbpr), rows_per_image: Some(tg.h) } }, wgpu::Extent3d { width: tg.w, height: tg.h, depth_or_array_layers: 1 });
     }
@@ -1607,7 +1607,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
 }
 fn render_finish(r: &mut Renderer, cam: &Cam, s: &Scene, o: &Opts) -> image::RgbaImage {
     let (tg, dev) = (&r.tg, &r.gpu.dev);
-    if !r.rt_now || o.rt.is_none() {
+    if !r.rt_now || o.rt.is_none() || o.depth {
         let ds = tg.dbuf.slice(..); ds.map_async(wgpu::MapMode::Read, |_| {});
         dev.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let data = ds.get_mapped_range().unwrap();
@@ -1728,7 +1728,8 @@ fn build_grid(s: &mut Scene, o: &Opts) {
         let mt = &s.glb.mats[d.mat];
         colors.push(Vec3::new(mt.color[0], mt.color[1], mt.color[2]));
         skip.push(d.glass);
-        if d.glass { continue }
+        // (outdoor meshes stay out: the house is the grid, and their simplified index lists live on the GPU only)
+        if d.glass || s.outdoor[i] { continue }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
@@ -2206,7 +2207,7 @@ fn main() {
             if let Some((base, alt)) = nm.split_once('~') {
                 let key = format!("{}_{}", s.name, base);
                 if let Some(fr) = frames.iter_mut().find(|(k, _)| *k == key) {
-                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || alt == "s" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; chosen.insert(key.clone(), i); best_detail.insert(key, detail); if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, base)), o.res, r.last_depth.as_ref().unwrap()); } }
+                    if alt == "h" { eprintln!("OVERHEAD {key}"); } if alt == "h" || alt == "s" || detail > best_detail.get(&key).copied().unwrap_or(0.0) + 0.03 { fr.1 = img; chosen.insert(key.clone(), i); best_detail.insert(key, detail); }
                 }
                 if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2}"); }
                 continue;
@@ -2214,14 +2215,17 @@ fn main() {
             if std::env::var_os("PREVIEW_CAMS").is_some() { eprintln!("DETAIL {nm} {detail:.2} raw {raw:.2} near {near:.2} close {close:.2} slab {:.2} cover {:.2}", c.slab, c.cover); }
             if nm.ends_with("_B") && detail < 0.75 { continue }
             best_detail.insert(format!("{}_{}", s.name, nm), detail);
-            if o.depth { write_npy(&o.out.join(format!("{}_{}.depth.npy", s.name, nm)), o.res, r.last_depth.as_ref().unwrap()); }
             chosen.insert(format!("{}_{}", s.name, nm), i);
             frames.push((format!("{}_{}", s.name, nm), img));
         }
         {
             s.flat = false;
             if o.rt.is_some() { r.rt_now = true; }
-            for fr in frames.iter_mut() { if let Some(&i) = chosen.get(&fr.0) { fr.1 = exposed(&mut r, &mut s, &cams[i], &o); } }
+            for fr in frames.iter_mut() { if let Some(&i) = chosen.get(&fr.0) {
+                fr.1 = exposed(&mut r, &mut s, &cams[i], &o);
+                // (depth from this, the real render: a search picture is the coarse voxel view)
+                if o.depth { write_npy(&o.out.join(format!("{}.depth.npy", fr.0)), o.res, r.last_depth.as_ref().unwrap()); }
+            } }
         }
         // (PREVIEW_SAVE_CAMS=dir: the views chosen, for --cam next time: the search is most of a render's time. Not a cutaway's: it needs its clipping too)
         if let Some(d) = std::env::var_os("PREVIEW_SAVE_CAMS") {
