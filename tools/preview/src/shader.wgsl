@@ -279,6 +279,8 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
   return aces(c);
 }
 
+// (the output pixel's filter, a Gaussian this many pixels wide either way: Blender's Blackman-Harris 1.5 is about as narrow. A tent 2.5 px across had our edges at half Blender's fine detail -- grout, contact shadows, outlines -- the rest of the soft look)
+const POST_S = 0.35;
 @fragment fn fs_post(@builtin(position) fp: vec4<f32>) -> @location(0) vec4<f32> {
   let dims = vec2<f32>(textureDimensions(depth_tex));
   let ss = i32(g.params2.y);
@@ -289,7 +291,7 @@ fn shade_px(px: vec2<i32>, dims: vec2<f32>) -> vec3<f32> {
     let top = vec2<i32>(dims) - vec2<i32>(1);
     let c = f32(ss - 1) * 0.5; let r = f32(ss) * 1.0; var tw = 0.0;
     for (var i = -ss / 2; i < ss + ss / 2; i++) { for (var j = -ss / 2; j < ss + ss / 2; j++) {
-      let wx = 1.0 - abs(f32(i) - c) / (r + 0.5); let wy = 1.0 - abs(f32(j) - c) / (r + 0.5);
+      let dx_ = (f32(i) - c) / f32(ss); let dy_ = (f32(j) - c) / f32(ss); let wx = exp(-dx_ * dx_ / (2.0 * POST_S * POST_S)); let wy = exp(-dy_ * dy_ / (2.0 * POST_S * POST_S));
       let wq = wx * wy;
       acc += wq * shade_px(clamp(base + vec2<i32>(i, j), vec2<i32>(0), top), dims); tw += wq;
     } }
