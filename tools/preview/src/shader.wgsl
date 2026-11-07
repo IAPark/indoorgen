@@ -61,6 +61,54 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   return s / 9.0;
 }
 
+// the lawn's blades, as Blender's (render_rust.py add_grass: hair 13 cm long, ~144 strands per m2, 5 mm wide at the root to a point;
+// dark roots to green tips, a random hue each, 18 % dry and tan): one strand per 8.3 cm cell, fixed to the ground so they stay put
+// as the camera moves. The ray walks back through the cells it crosses in the 13 cm layer, the nearest strand it passes is what it
+// sees -- seen low, a strand stands as a streak, root dark, tip bright -- or else the ground. Their mean is the ground's own colour,
+// which matches Blender's lawn on average; where a pixel is wider than a strand, faded toward that mean
+fn gh(p: vec2<i32>, k: u32) -> f32 { var x = u32(p.x) * 73856093u ^ u32(p.y) * 19349663u ^ k * 83492791u; x = (x ^ (x >> 16u)) * 0x45d9f3bu; x = (x ^ (x >> 16u)) * 0x45d9f3bu; x = x ^ (x >> 16u); return f32(x) / 4294967296.0; }
+fn gnoise(q: vec2<f32>, k: u32) -> f32 {
+  let i = vec2<i32>(floor(q)); let f = fract(q); let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(gh(i, k), gh(i + vec2<i32>(1, 0), k), u.x), mix(gh(i + vec2<i32>(0, 1), k), gh(i + vec2<i32>(1, 1), k), u.x), u.y);
+}
+fn grass_blades(wp: vec3<f32>, n: vec3<f32>, vd: vec3<f32>, a: vec3<f32>) -> vec3<f32> {
+  let C = 0.083; let H = 0.13; let R0 = 0.005; let G0 = 0.6; let DRY = 0.12; let MEAN = 0.62; // (MEAN: the walk's average shade, found by sampling it -- near the same seen low or from above)
+  let dr = vec3<f32>(4.5, 2.16, 2.9); // (a dry blade against the lawn's mean: Blender's (0.3, 0.27, 0.1) over (0.067, 0.125, 0.034))
+  let cg = (vec3<f32>(1.0) - DRY * dr) / (1.0 - DRY);
+  let hl = length(vd.xy);
+  // (a pixel wider than a strand sees a share of many: toward the mean, by the pixel's width across them)
+  let wpx = max(min(length(dpdx(wp)), length(dpdy(wp))), 1e-5);
+  let k = clamp(4.0 * R0 / wpx, 0.0, 1.0);
+  var shade = G0; var tint = vec3<f32>(1.0);
+  if (hl > 1e-3 && k > 0.02) {
+    let u = vd.xy / hl; let sl = max(vd.z / hl, 0.05); let L = H / sl;
+    var q = wp.xy + u * L; var t = L;
+    for (var it = 0; it < 24; it++) {
+      let c = vec2<i32>(floor(q / C));
+      let ctr = (vec2<f32>(c) + vec2<f32>(gh(c, 6u), gh(c, 7u))) * C;
+      let hb = H * (0.55 + 0.45 * gh(c, 8u));
+      let rel = ctr - wp.xy; let tc = dot(rel, u); let d = abs(rel.x * u.y - rel.y * u.x); let z = tc * sl;
+      // (as wide as a pixel at least, its coverage then by how much of the pixel it fills: a 5 mm strand at 1 cm a pixel flickered on and off)
+      let rz = R0 * (1.0 - z / hb);
+      if (tc >= 0.0 && tc <= L && z < hb && d < max(rz, 0.5 * wpx)) {
+        let cov = clamp(rz / max(0.5 * wpx, 1e-5), 0.0, 1.0);
+        let r3 = gh(c, 3u) * 2.0 - 1.0;
+        shade = mix(G0, 0.25 + 1.05 * z / hb, cov);
+        tint = mix(vec3<f32>(1.0), select(cg * vec3<f32>(1.0 + 0.25 * r3, 1.0, 1.0 - 0.3 * r3), dr, gh(c, 1u) < DRY), cov);
+        break;
+      }
+      // the next cell back along the ray
+      let tx = select(1e9, (select(f32(c.x) * C, f32(c.x + 1) * C, -u.x > 0.0) - q.x) / -u.x, abs(u.x) > 1e-6);
+      let ty = select(1e9, (select(f32(c.y) * C, f32(c.y + 1) * C, -u.y > 0.0) - q.y) / -u.y, abs(u.y) > 1e-6);
+      let st = min(tx, ty) + 1e-4; q -= u * st; t -= st;
+      if (t < 0.0) { break; }
+    }
+  }
+  let blade = tint * shade / MEAN;
+  // clumps and dry patches, half a metre and two metres across
+  let cl = 0.8 + 0.4 * gnoise(wp.xy / 0.5, 4u); let dp = smoothstep(0.62, 0.85, gnoise(wp.xy / 2.0, 5u));
+  return a * mix(vec3<f32>(1.0), blade, k) * cl * mix(vec3<f32>(1.0), vec3<f32>(1.35, 1.1, 1.1), dp);
+}
 @fragment fn fs_main(v: VOut, @builtin(front_facing) ff: bool) -> FOut {
   if (dot(g.clip.xyz, g.clip.xyz) > 0.5 && dot(g.clip.xyz, v.wpos) < g.clip.w) { discard; }
   if (dot(g.clip2.xyz, g.clip2.xyz) > 0.5 && dot(g.clip2.xyz, v.wpos) < g.clip2.w) { discard; }
@@ -160,7 +208,8 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   var a = 1.0;
   if (m.flags.x > 1.5) { a = select(0.18, m.flags.z, m.flags.z > 0.0); }
   out.color = vec4<f32>(col, a);
-  out.nrm = vec4<f32>(n, select(surf_coat, select(-1.0, -2.0, m.ex.y > 0.5), m.ex.x > 0.5)); // (-2: a leaf, partly translucent)
+  if (m.ex.z > 0.5 && g.params2.w > 0.5) { albedo = vec4<f32>(grass_blades(v.wpos, n, normalize(g.cam_pos.xyz - v.wpos), albedo.rgb), albedo.a); }
+  out.nrm = vec4<f32>(n, select(surf_coat, select(select(-1.0, -3.0, m.ex.z > 0.5), -2.0, m.ex.y > 0.5), m.ex.x > 0.5)); // (-2: a leaf; -3: the lawn, shaded as grass blades in rt_comp.wgsl)
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
   out.alb = vec4<f32>(albedo.rgb, select(max(surf_rough, 0.002), 0.0, m.flags.w < -0.5));
   // (a: 1 + which part, for --bake, where plain draws pass 0; there it holds how sheer the cloth is, up to 1)

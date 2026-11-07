@@ -67,6 +67,7 @@ fn wx_sky_a(rd: vec3<f32>, s: vec3<f32>, amb: vec3<f32>) -> vec3<f32> {
 }
 fn wx_sky(rd: vec3<f32>, s: vec3<f32>) -> vec3<f32> { return wx_sky_a(rd, s, wx_amb()); }
 const WX_CLOUD = 0.12;
+const GRASS_UP = 0.3; const GRASS_IR = 1.0; const GRASS_GLOSS = 0.045;
 @compute @workgroup_size(8, 8) fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x) * ss; let h = i32(p.dims.y) * ss;
   let px0 = vec2<i32>(id.xy);
@@ -149,7 +150,9 @@ const WX_CLOUD = 0.12;
   let rough = select(a.a, max(a.a, 0.85), cloth);
   let vdir = normalize(p.cam.xyz - pos);
   let sun = p.sun_dir.xyz;
-  let ndl = max(dot(n, sun), 0.0);
+  // the lawn as Blender's grass: upright blades catch a low sun as a flat ground does not (two-sided, any way round: 2/pi of the sun's level light), and pass it blade to blade
+  let grass = textureLoad(c_nrm, px, 0).a < -2.5;
+  let ndl = select(max(dot(n, sun), 0.0), select(0.0, (GRASS_UP * (2.0 / PI) * sqrt(max(1.0 - sun.z * sun.z, 0.0)) + (1.0 - GRASS_UP) * sun.z) * GRASS_IR, sun.z > 0.0), grass);
   let lit = e + p.sun_col.rgb * ndl * v / PI;
   // specular: what the reflection rays found, by the share a rough surface returns (Karis's fit), and a clear coat's own Fresnel on top
   // (a dielectric's F0 by its specular level, as Blender's Specular IOR Level: 0.5 is 4%, a glazed ceramic's 1.0 is 8%. At 4% for all, a sink and its tiles had a quarter of Blender's reflections, and looked chalky)
@@ -216,6 +219,8 @@ const WX_CLOUD = 0.12;
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
   var col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * kd_ * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_, vec3<f32>(0.0), cloth);
+  // (and the blades' sheen: Blender's glossy light on its lawn is 0.045 of the light falling on it, in sun and in shade alike -- a third of a sunlit lawn's light, whitish)
+  if (grass) { col += GRASS_GLOSS * lit; }
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
   if (p.misc2.w == 9u) { textureStore(o_lit, px0, vec4<f32>(mt.w - 1.0, mt.z, a.a, 1.0)); return; }
   if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }
