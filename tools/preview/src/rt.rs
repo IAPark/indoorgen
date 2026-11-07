@@ -387,7 +387,8 @@ pub fn encode(dev: &wgpu::Device, q: &wgpu::Queue, enc: &mut wgpu::CommandEncode
         let mut tu = [0f32; 48]; let (pv, pe, first, pr) = hist_prev.map_or((vp, eye, 1.0, res), |x| (x.0, x.1, 0.0, x.3));
         tu[..16].copy_from_slice(&pv.to_cols_array()); tu[16..19].copy_from_slice(&pe.to_array()); tu[20] = first; tu[21] = pr.0 as f32; tu[22] = pr.1 as f32; tu[23] = kind as f32;
         // (the last refresh's soft light, kept: the frames after it ease toward it a little each, so a refresh comes in over many frames rather than at one. 3 marks the refresh's own pass, which only keeps it; 2 a frame that reads it)
-        let rk = kind == 0 && hist_prev.is_some(); // (the soft light only: a reflection depends on where the camera is, and a still's own was as noisy as one frame's on a jamb seen edge-on. Held 20 frames and eased toward, its noise stayed as fixed blotches) let rmode = if !rk { 0.0 } else if refresh { 3.0 } else if rtgt_prev.is_some() { 2.0 } else { 0.0 };
+        // (the soft light only: a reflection depends on where the camera is, and a still's own was as noisy as one frame's on a jamb seen edge-on. Held 20 frames and eased toward, its noise stayed as fixed blotches)
+        let rk = kind == 0 && hist_prev.is_some(); let rmode = if !rk { 0.0 } else if refresh { 3.0 } else if rtgt_prev.is_some() { 2.0 } else { 0.0 };
         let (rv, re, rr) = rtgt_prev.unwrap_or((vp, eye, res));
         tu[24..40].copy_from_slice(&rv.to_cols_array()); tu[40..43].copy_from_slice(&re.to_array()); tu[43] = rf_w; tu[44] = rr.0 as f32; tu[45] = rr.1 as f32; tu[46] = rmode;
         let ub = wgpu::util::DeviceExt::create_buffer_init(dev, &wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&tu), usage: wgpu::BufferUsages::UNIFORM });
