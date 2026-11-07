@@ -508,10 +508,40 @@ fn lamp_vis(o: vec3<f32>, c: vec3<f32>) -> f32 {
   }
   return acc / 8.0;
 }
+// ---- the outdoors' shadow: gen2's outdoor stage is drawn, not traced (rays lost among leaves doubled a video's time), so what it hides of the sun comes from its depth seen from the sun, once a scene. 3x3 samples: a leaf's edge is soft
+struct OD { vp: mat4x4<f32>, on: vec4<f32> }; // on: x 1 when there is a map, y one texel in the map's units, z the depth bias
+@group(0) @binding(33) var od_tex: texture_depth_2d;
+@group(0) @binding(34) var od_smp: sampler_comparison;
+@group(0) @binding(35) var<uniform> od: OD;
+// (an outdoor pixel: the shader marks it in the normal's w. The traced passes take it as sky, and the trace pass gives it the outdoors' own light: sun by the map, sky dimmed where the map has canopy overhead)
+fn is_outdoor(g: vec2<i32>) -> bool { return textureLoad(g_nrm, g, 0).a < -0.5; }
+fn gdepth(g: vec2<i32>) -> f32 { return select(textureLoad(g_depth, g, 0), 1.0, is_outdoor(g)); }
+fn od_cover(o: vec3<f32>) -> f32 {
+  if (od.on.x < 0.5) { return 1.0; }
+  let c = od.vp * vec4<f32>(o, 1.0); let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+  if (any(uv <= vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) { return 1.0; }
+  var v = 0.0;
+  for (var j = -3; j <= 3; j++) { for (var i = -3; i <= 3; i++) { v += textureSampleCompareLevel(od_tex, od_smp, uv + vec2<f32>(f32(i), f32(j)) * od.on.y * 8.0, c.z - od.on.z * 8.0); } }
+  return v / 49.0;
+}
+fn outdoor_sky(n: vec3<f32>, o: vec3<f32>) -> vec3<f32> {
+  let b = basis(n); var e = vec3<f32>(0.0);
+  for (var k = 0u; k < 6u; k++) { let a = f32(k) * 1.0472; let d = normalize(b * vec3<f32>(0.6 * cos(a), 0.6 * sin(a), 0.8)); e += sky_at(select(d, vec3<f32>(d.x, d.y, abs(d.z)), d.z < 0.0)); }
+  return e / 6.0 * PI * mix(0.3, 1.0, od_cover(o));
+}
+fn od_vis(o: vec3<f32>) -> f32 {
+  if (od.on.x < 0.5) { return 1.0; }
+  let c = od.vp * vec4<f32>(o, 1.0);
+  let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+  if (any(uv <= vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || c.z <= 0.0 || c.z >= 1.0) { return 1.0; }
+  var v = 0.0;
+  for (var j = -1; j <= 1; j++) { for (var i = -1; i <= 1; i++) { v += textureSampleCompareLevel(od_tex, od_smp, uv + vec2<f32>(f32(i), f32(j)) * od.on.y, c.z - od.on.z); } }
+  return v / 9.0;
+}
 fn sun_vis(o: vec3<f32>, n: vec3<f32>) -> f32 {
   let s = p.sun_dir.xyz;
   if (dot(n, s) <= 0.0) { return 0.0; }
-  return select(1.0, 0.0, occluded(o, cone(s, p.scale.w), 1000.0));
+  return select(1.0, 0.0, occluded(o, cone(s, p.scale.w), 1000.0)) * od_vis(o);
 }
 // how much of the sun's disc a point sees: spread evenly over the disc (a Fibonacci spiral, turned by a random angle per pixel) rather than at random. Eight first, round the rim (sun_rim_k); on a soft edge, where they disagree, 32. Two random rays agreed by chance across a wide penumbra, and its pixels came out wholly lit or wholly dark: a band of salt and pepper along a sunlit patch's edge
 // the first look: 8 rays round the disc's rim. A penumbra's lit (or shaded) part starts as a crescent at the rim: 4 rays inside the disc all missed a thin one, and a soft frame shadow 0-20 % lit came out as specks of 0 among 0.15
@@ -523,7 +553,7 @@ fn sun_dir_k(k: u32, nk: u32, rot: f32) -> vec3<f32> {
   let r = p.scale.w * sqrt((f32(k) + 0.5) / f32(nk)); let a = f32(k) * 2.39996 + rot;
   return normalize(basis(p.sun_dir.xyz) * vec3<f32>(r * cos(a), r * sin(a), 1.0));
 }
-fn sun_soft(o: vec3<f32>, n: vec3<f32>) -> f32 {
+fn sun_soft_house(o: vec3<f32>, n: vec3<f32>) -> f32 {
   if (dot(n, p.sun_dir.xyz) <= 0.0) { return 0.0; }
   let rot = rnd() * 2.0 * PI; var hit = 0u;
   for (var k = 0u; k < 8u; k++) { if (!occluded(o, sun_rim_k(k, rot), 1000.0)) { hit++; } }
@@ -532,6 +562,7 @@ fn sun_soft(o: vec3<f32>, n: vec3<f32>) -> f32 {
   for (var k = 0u; k < 32u; k++) { if (!occluded(o, sun_dir_k(k, 32u, rot), 1000.0)) { hit++; } }
   return f32(hit) / 32.0;
 }
+fn sun_soft(o: vec3<f32>, n: vec3<f32>) -> f32 { return sun_soft_house(o, n) * od_vis(o); }
 // (and over the whole traced pixel, its finer surfaces each a point: from its middle alone, the fine shadow of a window's frame was caught at one spot of its pattern per pixel, and came out as specks where Blender, taking the whole pixel, has a smooth half-shadow)
 fn sun_area(px: vec2<i32>, ss: i32, dims: vec2<f32>) -> f32 {
   let rot = rnd() * 2.0 * PI; var pts: array<vec3<f32>, 4>; var nrs: array<vec3<f32>, 4>; var np = 0u;
@@ -544,12 +575,13 @@ fn sun_area(px: vec2<i32>, ss: i32, dims: vec2<f32>) -> f32 {
     pts[np] = start_at(pq, nq); nrs[np] = nq; np++;
   }
   if (np == 0u) { return 0.0; }
+  var ov = 0.0; for (var k = 0u; k < np; k++) { ov += od_vis(pts[k]); } ov /= f32(np);
   var hit = 0u;
   for (var k = 0u; k < 8u; k++) { if (!occluded(pts[k % np], sun_rim_k(k, rot), 1000.0)) { hit++; } }
-  if (hit == 0u || hit == 8u) { return f32(hit) / 8.0; }
+  if (hit == 0u || hit == 8u) { return f32(hit) / 8.0 * ov; }
   hit = 0u;
   for (var k = 0u; k < 32u; k++) { if (!occluded(pts[k % np], sun_dir_k(k, 32u, rot), 1000.0)) { hit++; } }
-  return f32(hit) / 32.0;
+  return f32(hit) / 32.0 * ov;
 }
 const LAMP_R = 0.025; // m: their radii in the house sidecars, 2-3 cm
 // where a ray from a visible point starts: mostly back toward the camera, the one way known to be free. Along the normal alone, a point where a curtain's side or a casing meets a wall started behind the wall, and saw the sun outside
@@ -718,6 +750,12 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
   let d = textureLoad(g_depth, g, 0);
+  if (d < 1.0 && is_outdoor(g)) {
+    let po = world_of(g, d, dims, p.inv_vp); let no = normalize(textureLoad(g_nrm, g, 0).xyz + vec3<f32>(1e-5));
+    textureStore(out_irr, px, vec4<f32>(outdoor_sky(no, po), -1.0)); textureStore(out_lamp, px, vec4<f32>(0.0));
+    if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(select(0.0, od_vis(po), dot(no, p.sun_dir.xyz) > 0.0), 0.0, 0.0, 1.0)); }
+    return;
+  }
   if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(0.0)); } return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
@@ -854,7 +892,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   if (px.x < 0) { return; }
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
-  let d = textureLoad(g_depth, g, 0);
+  let d = gdepth(g);
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
   if (dot(n, n) < 0.25) { n = -normalize(pos - p.cam.xyz); }
@@ -948,7 +986,7 @@ fn dfg_of(rough: f32, nv: f32, f0: vec3<f32>) -> vec3<f32> {
   let r0 = resv[off + u32(px.y * w + px.x)];
   if (r0.m <= 0.0 || cur_.a <= 0.15) { textureStore(out_spec, px, cur_); return; }
   let g = px * ss + vec2<i32>(ss / 2); let dims = vec2<f32>(f32(w * ss), f32(h * ss));
-  let d = textureLoad(g_depth, g, 0);
+  let d = gdepth(g);
   if (d >= 1.0) { textureStore(out_spec, px, cur_); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
@@ -1021,7 +1059,7 @@ const RS_K = 5u; const RS_RADIUS = 24.0;
   let dir_ = textureLoad(irr_done, px, 0);
   if (dir_.a > 0.0 && dir_.a < 0.01) { textureStore(out_irr, px, dir_); return; } // (a thin surface's own paths)
   let g = px * ss + vec2<i32>(ss / 2); let dims = vec2<f32>(f32(w * ss), f32(h * ss));
-  let d = textureLoad(g_depth, g, 0);
+  let d = gdepth(g);
   if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(dir_.rgb, 0.0)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
@@ -1163,7 +1201,7 @@ fn lamp_glint(pos: vec3<f32>, n: vec3<f32>, o: vec3<f32>, g: vec2<i32>, rough: f
   let a0 = sqrt(max(rough * rough * rough * rough + (1.0 - nbl) / nbl, 0.000004));
   let vdir = normalize(p.cam.xyz - pos); let nv = max(dot(ns, vdir), 0.001);
   // the lamps that show most here, each with its shadow ray and its own Fresnel, at this very angle: the averaged share used for a whole room's light is far too little at a glancing one. Any roughness: on a rough dark surface this broad highlight is most of what it shows
-  let mt_ = textureLoad(g_mat, g, 0).x; let alb_ = textureLoad(g_alb, g, 0).rgb; let coat_ = textureLoad(g_nrm, g, 0).a;
+  let mt_ = textureLoad(g_mat, g, 0).x; let alb_ = textureLoad(g_alb, g, 0).rgb; let coat_ = max(textureLoad(g_nrm, g, 0).a, 0.0);
   let f0_ = mix(vec3<f32>(0.04), alb_, mt_);
   var cs = array<vec3<f32>, 7>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
   var ls = array<vec3<f32>, 7>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
@@ -1237,7 +1275,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
   if (px.x >= w || px.y >= h) { return; }
   let g = px * ss + vec2<i32>(ss / 2);
   let dims = vec2<f32>(f32(w * ss), f32(h * ss));
-  let d = textureLoad(g_depth, g, 0);
+  let d = gdepth(g);
   if (d >= 1.0) { textureStore(out_spec, px, vec4<f32>(0.0)); textureStore(out_glint, px, vec4<f32>(0.0)); textureStore(out_lamp, px, vec4<f32>(0.0)); return; }
   let pos = world_of(g, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;
@@ -1251,7 +1289,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
   let rough = a.a;
   var hit_d = 0.0; var hit_n = 1.0;
   var sp = vec3<f32>(0.0); var rs_s = R(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0);
-  let coat = textureLoad(g_nrm, g, 0).a;
+  let coat = max(textureLoad(g_nrm, g, 0).a, 0.0); // (below 0: the outdoors' mark)
   if (p.misc2.y > 0u) {
     let v = normalize(pos - p.cam.xyz);
     let r0 = reflect(v, n);
@@ -1354,7 +1392,7 @@ fn ggx_dir(v: vec3<f32>, n: vec3<f32>, al_: f32, rough: f32, f0_: vec3<f32>, u_:
   let ss = i32(p.dims.z); let w = i32(p.dims.x); let h = i32(p.dims.y); let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
   let g = px * ss + vec2<i32>(ss / 2);
-  let d = textureLoad(g_depth, g, 0);
+  let d = gdepth(g);
   if (d >= 1.0) { return; }
   let pos = world_of(g, d, vec2<f32>(f32(w * ss), f32(h * ss)), p.inv_vp);
   var n = textureLoad(g_nrm, g, 0).xyz;

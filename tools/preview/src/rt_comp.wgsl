@@ -150,7 +150,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   // (what bounces more than once off a rough surface's relief, Fdez-Aguera's way: one bounce alone keeps half the light at high roughness, and rough metal came out far too dark. Cycles counts it)
   let ess_ = clamp(ab.x + ab.y, 0.0, 1.0); let favg_ = f0 + (vec3<f32>(1.0) - f0) / 21.0;
   let fr = (f0 * ab.x + vec3<f32>(ab.y)) * (vec3<f32>(1.0) + favg_ * (1.0 - ess_) / max(vec3<f32>(1.0) - favg_ * (1.0 - ess_), vec3<f32>(0.01)) / max(ess_, 0.05) * 1.0);
-  let coat = textureLoad(c_nrm, px, 0).a;
+  let coat = max(textureLoad(c_nrm, px, 0).a, 0.0); // (below 0: the outdoors' mark)
   let fc = coat * (0.04 + 0.96 * pow(1.0 - nv, 5.0));
   // (and what the layers above take from the colour beneath, as Blender's diffuse colour shows it: the specular layer's share at this angle, and the coat's. Without it a glazed sink was a third too light and its colour washed out)
   let es_ = select(0.08 * spec_l * ab.x + ab.y, 0.0, cloth); let abc_ = dfg_ab(max(rough, 0.05), nv); let ec_ = coat * (0.04 * abc_.x + abc_.y);

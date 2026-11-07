@@ -71,7 +71,7 @@ fn is_cloth(name: &str) -> bool {
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 4]; 4], p: [[f32; 4]; 48] }
+struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 4]; 4], p: [[f32; 4]; 48], ex: [f32; 4] }
 
 #[derive(Clone)]
 struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String, [[f32; 4]; 2])>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the room's floor in view, walls considered */ cover: f32, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
@@ -129,6 +129,10 @@ fn parse_args() -> Opts {
 struct Draw { pane: bool, mask: bool, mat: usize, node: usize, pos: (usize, u64, u64), nrm: Option<(usize, u64, u64)>, uv: Option<(usize, u64, u64)>, idx: (usize, u64, u64), u16: bool, icount: u32, vcount: u32, mat_bg: usize, pipe: Option<usize>, glass: bool, shadow: bool, bmin: Vec3, bmax: Vec3 }
 struct Light { pos: Vec3, color: Vec3 }
 struct Scene {
+    /// (the outdoors, gen2's outdoor stage; its weather layers; the window panes it is seen through)
+    outdoor: Vec<bool>, weather: Vec<bool>, portals: Vec<[Vec3; 4]>,
+    /// (the house's walls, floors and ceilings, on the CPU: whether a pane in the frustum is really in sight)
+    shell: Option<(obvhs::bvh2::Bvh2, Vec<obvhs::triangle::Triangle>)>,
     /// (azimuth deg, elevation deg, sun intensity, ambient) from the sidecar `variation.lighting` (--sidecar-lighting)
     lit: Option<(f32, f32, f32, f32)>,
     name: String, bufs: Vec<wgpu::Buffer>, zeros: wgpu::Buffer, draws: Vec<Draw>, mat_bgs: Vec<wgpu::BindGroup>, pipes: Vec<wgpu::RenderPipeline>, /** draw plain colours: views are scored on these (texture would count as detail) */ flat: bool, lights: Vec<Light>,
@@ -298,6 +302,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             glb.nodes.push(n);
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    bake_instances(&mut glb, opts.verbose);
     let side: Value = glb::read_file(&path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
     if opts.verbose { eprintln!("  glb parse {:.2}s ({} nodes, {} chunks)", t.elapsed().as_secs_f32(), glb.nodes.len(), glb.chunks.len()); }
     let mut bufs: Vec<wgpu::Buffer> = glb.chunks.iter().map(|c| gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: c,
@@ -379,7 +385,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let dark_glass = opts.rt.is_none() && glass && ["glass:", "front:", "blackglass:", "superblackglass:"].iter().any(|q| m.name.starts_with(q));
             let key = (p.mat, tex.clone(), flags, if graph.is_some() { ni } else { usize::MAX });
             let bi = *bg_key.entry(key).or_insert_with(|| {
-                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], if lname.contains(".floor") { 2.0 } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["transmission"].as_f64()).unwrap_or(0.0) as f32 }], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else if sn.and_then(|x| x["graph"].as_u64()).map_or(false, |i| side["graphs"][i as usize]["out"]["roughness"].is_object()) { -1.0 } else { 0.0 }, if dark_glass { 0.85 } else if opts.rt.is_none() && m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48] };
+                let mut u = MatU { color: if dark_glass { [0.02, 0.02, 0.025, 1.0] } else if shown { [1.0, 1.0, 1.0, 1.0] } else { m.color }, emissive: [m.emissive[0], m.emissive[1], m.emissive[2], if lname.contains(".floor") { 2.0 } else { sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["out"]["transmission"].as_f64()).unwrap_or(0.0) as f32 }], flags: [flags as f32, if std::env::var_os("PREVIEW_NOBUMP").is_some() { 1.0 } else if sn.and_then(|x| x["graph"].as_u64()).map_or(false, |i| side["graphs"][i as usize]["out"]["roughness"].is_object()) { -1.0 } else { 0.0 }, if dark_glass { 0.85 } else if opts.rt.is_none() && m.name.starts_with("table_top") { 0.45 } else { 0.0 }, if is_cloth(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) { 0.25 } else if is_mirror(&m.name) && !glass { -1.0 } else if real_glass { -2.0 } else { 0.0 }], obj: Mat4::IDENTITY.to_cols_array_2d(), p: [[0.0; 4]; 48], ex: [if n.name.starts_with("outdoor_") || n.name.starts_with("exterior_") { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0] };
                 let fam = if shown { None } else { micro_family(sn.and_then(|x| x["graph"].as_u64()).and_then(|i| side["graphs"][i as usize]["name"].as_str()).unwrap_or(&m.name)) };
                 if graph.is_none() { u.p[47] = if shown { [0.45, 0.0, 0.0, 0.0] } else { [m.rough, m.metal, 0.0, 0.0] }; }
                 if let Some(e) = graph {
@@ -444,7 +450,44 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     let sh = gpu.dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: shs, height: shs, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1,
         dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] });
     if opts.verbose { eprintln!("  scene on GPU {:.2}s ({} draws, {} lights, bbox {:?}..{:?})", t.elapsed().as_secs_f32(), draws.len(), lights.len(), bmin, bmax); }
-    Scene { lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, pipes, flat: false, lights, bmin, bmax, side, glb,
+    let outdoor: Vec<bool> = draws.iter().map(|d| { let nm = &glb.nodes[d.node].name; nm.starts_with("outdoor_") || nm.starts_with("exterior_") }).collect();
+    let weather: Vec<bool> = draws.iter().map(|d| { let nm = &glb.nodes[d.node].name; nm.starts_with("outdoor_rain") || nm.starts_with("outdoor_sky_clouds") }).collect();
+    // (each pane as a rectangle from its bounds: thin across one level axis, as windows and glass doors stand in walls)
+    let portals: Vec<[Vec3; 4]> = draws.iter().filter(|d| { let nm = glb.nodes[d.node].name.to_lowercase(); d.glass && (nm.starts_with("window") || nm.starts_with("door")) }).map(|d| {
+        let (lo, hi) = (d.bmin, d.bmax); let c = (lo + hi) * 0.5;
+        if hi.x - lo.x < hi.y - lo.y { [Vec3::new(c.x, lo.y, lo.z), Vec3::new(c.x, hi.y, lo.z), Vec3::new(c.x, hi.y, hi.z), Vec3::new(c.x, lo.y, hi.z)] }
+        else { [Vec3::new(lo.x, c.y, lo.z), Vec3::new(hi.x, c.y, lo.z), Vec3::new(hi.x, c.y, hi.z), Vec3::new(lo.x, c.y, hi.z)] }
+    }).collect();
+    // (the outdoors' big meshes -- far ground, canopy, whole trees -- at a quarter of their triangles for this preview: they show only through the windows, and drawing them in full every frame a window was in sight cost a video most of a second)
+    #[cfg(not(target_arch = "wasm32"))]
+    for (i, d) in draws.iter_mut().enumerate() {
+        if !outdoor[i] || weather[i] || d.icount < 24000 { continue }
+        let pb = &glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
+        let ib = &glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
+        let idx: Vec<u32> = (0..d.icount as usize).map(|k| if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as u32 } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) }).collect();
+        let Ok(ad) = meshopt::VertexDataAdapter::new(pb, 12, 0) else { continue };
+        let out = meshopt::simplify(&idx, &ad, (idx.len() / 4 / 3) * 3, 0.01, meshopt::SimplifyOptions::empty(), None);
+        if out.is_empty() || out.len() >= idx.len() { continue }
+        let bytes: Vec<u8> = out.iter().flat_map(|v| v.to_le_bytes()).collect();
+        bufs.push(gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes, usage: wgpu::BufferUsages::INDEX }));
+        d.idx = (bufs.len() - 1, 0, bytes.len() as u64); d.u16 = false; d.icount = out.len() as u32;
+    }
+    let shell = if outdoor.iter().any(|&o| o) {
+        let mut tri = vec![];
+        for (i, d) in draws.iter().enumerate() {
+            let nm = glb.nodes[d.node].name.to_lowercase();
+            if outdoor[i] || !(nm.contains(".wall") || nm.contains(".floor") || nm.contains(".ceiling")) { continue }
+            let pb = &glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
+            let ib = &glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
+            let p = |k: usize| -> glam::Vec3A { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); glam::Vec3A::new(f(0), f(1), f(2)) };
+            let ix = |k: usize| -> usize { if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as usize } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) as usize } };
+            for t in 0..d.icount as usize / 3 { tri.push(obvhs::triangle::Triangle { v0: p(ix(t * 3)), v1: p(ix(t * 3 + 1)), v2: p(ix(t * 3 + 2)) }); }
+        }
+        let mut core = std::time::Duration::ZERO;
+        let bvh = obvhs::bvh2::builder::build_bvh2_from_tris(&tri, obvhs::BvhBuildParams::fast_build(), &mut core);
+        Some((bvh, tri))
+    } else { None };
+    Scene { outdoor, weather, portals, shell, lit, name: path.file_stem().unwrap().to_string_lossy().to_string(), bufs, zeros, draws, mat_bgs, pipes, flat: false, lights, bmin, bmax, side, glb,
         sun_vp: sp * sv, shadow_view: sh.create_view(&wgpu::TextureViewDescriptor::default()), shadow_done: false, rt: None, grid: None }
 }
 
@@ -1135,6 +1178,98 @@ async fn init_with(inst: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, o
     Renderer { zp: None, agx, agx_smp, rt: None, last_gl: None, rt_now: false, gpu: Gpu { dev, q }, ubuf, g_bgl, mat_bgl, post_bgl, shadow_pipe, main_pipe, glass_pipe, post_pipe, cmp_smp, white, smp, tg, last_depth: None }
 }
 
+/// the views through the window panes in sight, from the eye: an outdoor part outside all of them is hidden by the walls (None: no outdoors)
+fn portal_views(s: &Scene, f: &[Vec4; 6], e: Vec3, sight: bool) -> Option<Vec<[Vec4; 6]>> {
+    if !s.outdoor.iter().any(|&o| o) { return None }
+    Some(s.portals.iter().filter_map(|c| {
+        let (lo, hi) = (c[0].min(c[2]), c[0].max(c[2]));
+        if !visible(f, lo - Vec3::splat(0.01), hi + Vec3::splat(0.01)) { return None }
+        // (and in sight: one in another room, behind its walls, let the whole outdoors through every frame)
+        // (not from a mirror's eye: it stands behind the wall the mirror hangs on)
+        if let (true, Some((bvh, tri))) = (sight, &s.shell) {
+            let seen = (0..9).any(|k| {
+                let (u, v) = (0.1 + 0.4 * (k % 3) as f32, 0.1 + 0.4 * (k / 3) as f32);
+                let q = c[0] + (c[1] - c[0]) * u + (c[3] - c[0]) * v; let dv = q - e; let l = dv.length();
+                if l < 1e-3 { return true }
+                let ray = obvhs::ray::Ray::new(e.into(), (dv / l).into(), 0.0, l - 0.03);
+                let mut hit = obvhs::ray::RayHit::none();
+                !bvh.ray_traverse(ray, &mut hit, |r, id| tri[bvh.primitive_indices[id] as usize].intersect(r))
+            });
+            if !seen { return None }
+        }
+        let ctr = (c[0] + c[2]) * 0.5;
+        let mut pl = [Vec4::ZERO; 6];
+        for k in 0..4 { let (a, b) = (c[k] - e, c[(k + 1) % 4] - e); let mut n = a.cross(b).normalize_or_zero(); if n.dot(ctr - e) < 0.0 { n = -n; } pl[k] = n.extend(-n.dot(e)); }
+        let mut np = (c[1] - c[0]).cross(c[3] - c[0]).normalize_or_zero(); if np.dot(ctr - e) < 0.0 { np = -np; }
+        pl[4] = np.extend(-np.dot(ctr) + 0.05); pl[5] = f[5];
+        Some(pl)
+    }).collect())
+}
+/// an outdoor part to leave out of a view: the weather (the traced sky stands for it) when traced, or outside every pane's view
+fn outdoor_hidden(s: &Scene, i: usize, pv: &Option<Vec<[Vec4; 6]>>) -> bool {
+    if !s.outdoor[i] { return false }
+    if s.weather[i] && s.rt.is_some() { return true }
+    let d = &s.draws[i]; pv.as_ref().map_or(false, |pv| !pv.iter().any(|p| visible(p, d.bmin, d.bmax)))
+}
+/// the outdoors' instanced trees, into the scene as plain meshes: those within 25 m at a third of their triangles, out to 200 m at a twelfth (a row 100 m off showed in Blender's window), one mesh per tree kind and distance (the far canopy stands for the rest). The previewer has no per-draw transforms, and drew none of them: Blender showed a row of trees where this showed bare lawn
+#[cfg(not(target_arch = "wasm32"))]
+fn bake_instances(glb: &mut glb::Glb, verbose: bool) {
+    if glb.inst.is_empty() { return }
+    let t = Instant::now();
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for n in &glb.nodes { if n.name.starts_with("outdoor_") || n.name.starts_with("exterior_") { continue } for p in &n.prims { lo = lo.min(Vec2::new(p.bmin[0], p.bmin[1])); hi = hi.max(Vec2::new(p.bmax[0], p.bmax[1])); } }
+    if lo.x > hi.x { return }
+    let c = (lo + hi) * 0.5; let half = (hi - lo).length() * 0.5;
+    // (bakes: (source part's place, level) -> positions, normals, uvs, indices, material, has normals, has uvs)
+    let mut bakes: std::collections::BTreeMap<(usize, u64, u32), (Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>, usize, bool, bool)> = Default::default();
+    let mut simp: std::collections::HashMap<(usize, u64, u32), (Vec<u32>, Vec<u32>)> = Default::default();
+    let inst = std::mem::take(&mut glb.inst);
+    let (mut n_in, mut n_tri) = (0usize, 0usize);
+    for (_, prims, x) in &inst {
+        let m = Mat4::from_cols_array(x);
+        let d = (m.w_axis.truncate().truncate() - c).length() - half;
+        let ev = |k: &str, v: f32| std::env::var(k).ok().and_then(|x| x.parse().ok()).unwrap_or(v);
+        let lvl = if d < ev("OD_NEAR", 25.0) { 0u32 } else if d < ev("OD_FAR", 200.0) { 1 } else { continue };
+        n_in += 1;
+        for p in prims {
+            let ch = &glb.chunks;
+            let key = (p.pos.chunk, p.pos.off, lvl);
+            let (vmap, idx) = simp.entry(key).or_insert_with(|| {
+                let pb = &ch[p.pos.chunk][p.pos.off as usize..(p.pos.off + p.pos.len) as usize];
+                let ib = &ch[p.idx.chunk][p.idx.off as usize..(p.idx.off + p.idx.len) as usize];
+                let ix: Vec<u32> = (0..p.icount as usize).map(|k| if p.idx_u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as u32 } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) }).collect();
+                let target = ((ix.len() as f32 / 3.0 / if lvl == 0 { std::env::var("OD_DIV0").ok().and_then(|x| x.parse().ok()).unwrap_or(3.0) } else { std::env::var("OD_DIV1").ok().and_then(|x| x.parse().ok()).unwrap_or(12.0) }) as usize).max(4) * 3;
+                let out = match meshopt::VertexDataAdapter::new(&pb[..p.vcount as usize * 12], 12, 0) { Ok(ad) => meshopt::simplify_sloppy(&ix, &ad, target, 0.05, None), Err(_) => ix.clone() };
+                let out = if out.is_empty() { ix } else { out };
+                // (only the vertices left in use, renumbered)
+                let mut vm: Vec<u32> = vec![]; let mut remap = std::collections::HashMap::new();
+                let idx: Vec<u32> = out.iter().map(|&v| *remap.entry(v).or_insert_with(|| { vm.push(v); vm.len() as u32 - 1 })).collect();
+                (vm, idx)
+            });
+            let b = bakes.entry(key).or_insert_with(|| (vec![], vec![], vec![], vec![], p.mat, p.nrm.is_some(), p.uv.is_some()));
+            let base = (b.0.len() / 3) as u32;
+            let rd = |v: &glb::View, k: usize, w: usize| -> &[u8] { &ch[v.chunk][v.off as usize + k * w * 4..v.off as usize + (k + 1) * w * 4] };
+            let f = |s: &[u8], i: usize| f32::from_le_bytes(s[i * 4..i * 4 + 4].try_into().unwrap());
+            for &v in vmap.iter() {
+                let v = v as usize; let q = rd(&p.pos, v, 3); let w = m.transform_point3(Vec3::new(f(q, 0), f(q, 1), f(q, 2))); b.0.extend_from_slice(&w.to_array());
+                if let Some(nv) = &p.nrm { let q = rd(nv, v, 3); let w = m.transform_vector3(Vec3::new(f(q, 0), f(q, 1), f(q, 2))).normalize_or_zero(); b.1.extend_from_slice(&w.to_array()); }
+                if let Some(uv) = &p.uv { let q = rd(uv, v, 2); b.2.extend_from_slice(&[f(q, 0), f(q, 1)]); }
+            }
+            b.3.extend(idx.iter().map(|&i| i + base)); n_tri += idx.len() / 3;
+        }
+    }
+    for (k, ((_, _, lvl), (pos, nrm, uv, idx, mat, hn, hu))) in bakes.into_iter().enumerate() {
+        if idx.is_empty() { continue }
+        let mut buf: Vec<u8> = vec![]; let mut put = |d: &[u8]| -> (u64, u64) { let o = buf.len() as u64; buf.extend_from_slice(d); while buf.len() % 16 != 0 { buf.push(0); } (o, d.len() as u64) };
+        let (po, pl) = put(bytemuck::cast_slice(&pos)); let (no, nl) = put(bytemuck::cast_slice(&nrm)); let (uo, ul) = put(bytemuck::cast_slice(&uv)); let (io, il) = put(bytemuck::cast_slice(&idx));
+        let ci = glb.chunks.len(); glb.chunks.push(buf);
+        let (mut bmin, mut bmax) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for v in pos.chunks(3) { for a in 0..3 { bmin[a] = bmin[a].min(v[a]); bmax[a] = bmax[a].max(v[a]); } }
+        let vw = |o: u64, l: u64| glb::View { chunk: ci, off: o, len: l };
+        glb.nodes.push(glb::Node { name: format!("outdoor_rtree_bake#{k}_{lvl}"), prims: vec![glb::Prim { pos: vw(po, pl), nrm: hn.then(|| vw(no, nl)), uv: hu.then(|| vw(uo, ul)), idx: vw(io, il), idx_u16: false, icount: idx.len() as u32, vcount: (pos.len() / 3) as u32, mat, bmin, bmax }] });
+    }
+    if verbose { eprintln!("  baked {n_in} of {} tree instances, {n_tri} triangles, {:.2}s", inst.len(), t.elapsed().as_secs_f32()); }
+}
 fn frustum(vp: Mat4) -> [Vec4; 6] {
     let r = [vp.row(0), vp.row(1), vp.row(2), vp.row(3)];
     [r[3] + r[0], r[3] - r[0], r[3] + r[1], r[3] - r[1], r[2], r[3] - r[2]]
@@ -1175,13 +1310,17 @@ fn draw_all<'a>(rp: &mut wgpu::RenderPass<'a>, s: &'a Scene, base: Option<&'a wg
         let dist: Vec<f32> = s.draws.iter().map(|d| (e.clamp(d.bmin, d.bmax) - e).length_squared()).collect();
         order.sort_by(|&a, &b| dist[a].partial_cmp(&dist[b]).unwrap());
     }
-    for d in order.iter().map(|&i| &s.draws[i]) {
+    // (read once, not once a part)
+    let hide_ = std::env::var("PREVIEW_HIDE").ok(); let noshell_ = std::env::var_os("PREVIEW_NOSHELL").is_some();
+    let pv = match (fr, DRAW_EYE.with(|c| c.get()), shadow) { (Some(f), Some(e), false) => portal_views(s, f, e, true), _ => None };
+    for (i, d) in order.iter().map(|&i| (i, &s.draws[i])) {
         if shadow { if !d.shadow { continue; } } else if d.glass != glass { continue; }
+        if !shadow && outdoor_hidden(s, i, &pv) { continue; }
         if leaf_in_the_way(s, d, eye, cut) { continue; }
         // (PREVIEW_HIDE=a,b: parts not drawn, to see which one a fault is in)
-        if let Ok(h) = std::env::var("PREVIEW_HIDE") { let nm = &s.glb.nodes[d.node].name; if h.split(',').any(|x| x == nm) { continue; } }
+        if let Some(h) = &hide_ { let nm = &s.glb.nodes[d.node].name; if h.split(',').any(|x| x == nm) { continue; } }
         // (PREVIEW_NOSHELL=1: no walls, ceilings, openings: nothing stands between an asset close-up and its asset)
-        if std::env::var_os("PREVIEW_NOSHELL").is_some() {
+        if noshell_ {
             let low = s.glb.nodes[d.node].name.to_lowercase();
             if low.contains(".wall") || low.contains("ceiling") || low.starts_with("door") || (low.starts_with("window") && !low.starts_with("windowseat")) || low.contains("curtain") || low.contains("skirting") || low.starts_with("outdoor") || low.starts_with("exterior") || low.contains(".glass") || low.contains(".rod") { continue; }
         }
@@ -1287,7 +1426,8 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
     {
         let sky = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
         // (a video: depth first, so the surface shader runs only for what shows, and in order of material)
-        let quick: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&fr, d.bmin, d.bmax) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
+        let pv_q = portal_views(s, &fr, eye, true);
+        let quick: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&fr, d.bmin, d.bmax) && !outdoor_hidden(s, i as usize, &pv_q) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
         if let (Some(l), Some(zp)) = (&quick, &r.zp) {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None, color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &tg.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
@@ -1330,7 +1470,9 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         panes.truncate(if rt_q.map_or(false, |q| q.spec_spp < 3) { 2 } else { 4 }); // (each picture costs a small trace: fast mode can afford two)
         // (one picture buffer, each writing its whole screen box: a glass pane in front of a mirror overwrote the mirror's picture with its own, a hard rectangle. Mirrors show all of theirs, so they write last)
         panes.sort_by_key(|x| is_mirror(&s.glb.mats[s.draws[x.4].mat].name));
-        for &(n, d, lo, hi, _) in &panes {
+        for &(n, d, lo, hi, pdi) in &panes {
+            // (a window's glass shows the room faintly, not what lies past the other windows: no outdoors in its picture. A mirror's has it)
+            let real_m = is_mirror(&s.glb.mats[s.draws[pdi].mat].name);
             // the pane's box on screen (a pane reaching behind the camera: all of it)
             let (mut a, mut b) = (Vec2::splat(1.0), Vec2::splat(-1.0)); let mut behind = false;
             for k in 0..8 {
@@ -1356,7 +1498,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
             // (culled by the mirror's own box on screen, not the whole mirrored view: what falls outside the box is cut anyway, and drawing it cost each mirror as much as the main view)
             let crop = { let (rw, rh) = (o.res.0 as f32, o.res.1 as f32); let (ax, bx) = (x0 / rw * 2.0 - 1.0, x1 / rw * 2.0 - 1.0); let (ay, by) = (1.0 - y1 / rh * 2.0, 1.0 - y0 / rh * 2.0);
                 let (sx, sy) = (((bx - ax) * 0.5).max(1e-3), ((by - ay) * 0.5).max(1e-3)); Mat4::from_cols(Vec4::new(1.0 / sx, 0.0, 0.0, 0.0), Vec4::new(0.0, 1.0 / sy, 0.0, 0.0), Vec4::Z, Vec4::new(-(ax + bx) * 0.5 / sx, -(ay + by) * 0.5 / sy, 0.0, 1.0)) };
-            let m_list: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let frm = frustum(crop * vpm); let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&frm, d.bmin, d.bmax) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
+            let m_list: Option<Vec<u32>> = if rt_q.map_or(false, |q| q.video) { let frm = frustum(crop * vpm); let pv_m = portal_views(s, &frm, eye_m, false); let mut l: Vec<u32> = (0..s.draws.len() as u32).filter(|&i| { let d = &s.draws[i as usize]; !d.glass && visible(&frm, d.bmin, d.bmax) && (!s.outdoor[i as usize] || real_m) && !outdoor_hidden(s, i as usize, &pv_m) }).collect(); l.sort_by_key(|&i| s.draws[i as usize].pipe.map_or(0, |k| k + 1)); Some(l) } else { None };
             if let (Some(l), Some(zp)) = (&m_list, &r.zp) {
                 // (what lies behind the mirror is cut in the fragment shader: the prepass runs one for all)
                 let mut rp = me.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None, color_attachments: &[],
@@ -1488,7 +1630,8 @@ fn panes_in_sight(r: &Renderer, s: &Scene, panes: Vec<Pane>, gl: Globals, vp: Ma
             rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
             rp.draw_indexed(0..d.icount, 0, 0..1);
         };
-        for (i, d) in s.draws.iter().enumerate() { if !d.glass && !panes.iter().any(|p| p.4 == i) { one(&mut rp, d); } }
+        // (not the outdoors: it hides no pane inside)
+        for (i, d) in s.draws.iter().enumerate() { if !d.glass && !s.outdoor[i] && !panes.iter().any(|p| p.4 == i) { one(&mut rp, d); } }
         for (k, p) in panes.iter().enumerate() { rp.begin_occlusion_query(k as u32); one(&mut rp, &s.draws[p.4]); rp.end_occlusion_query(); }
     }
     enc.resolve_query_set(&qs, 0..n, &res, 0);
@@ -1508,6 +1651,7 @@ fn mirror_panes(s: &Scene, eye: Vec3) -> Vec<Pane> {
         let mut ext = [d.bmax.x - d.bmin.x, d.bmax.y - d.bmin.y, d.bmax.z - d.bmin.z]; ext.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let pane_big = d.pane && ext[2] > 0.3;
         if !pane_big && (d.glass || !is_mirror(&s.glb.mats[d.mat].name)) { continue; }
+        if s.outdoor[di] { continue; } // (a neighbour's windows are not this room's mirrors)
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
@@ -1734,6 +1878,8 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
         // (fittings let shadow rays through, as `visible_shadow = False` in Blender, but bounced light and reflections still land on them: a lampshade darkens the wall behind it, and a rim reflects the lit ceiling. A bake's rays know no difference: there they are left out)
         if d.glass { continue }
         if passes(d) { mats[i].albedo[3] = 0.0; }
+        // (the outdoors, gen2's outdoor stage, is drawn but not traced: rays that went on among trees and walls outside doubled a video's time. A ray that leaves through a window meets the sky, as it did)
+        if s.outdoor[i] { continue }
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let p = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
@@ -1765,6 +1911,43 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if o.verbose { eprintln!("  {} windows", wins.len()); }
     memlog("before bvh");
     s.rt = Some(rt::build_scene(&r.gpu.dev, tris, &mats, &lights, &wins, o.seed, o.verbose));
+    // the outdoors' shadow, seen from the sun once: what it hides of the sun inside and out, without tracing it (see rt.wgsl od_vis). Over the house and 30 m round it; not the house's own shell, which the traced walls stand for (its siding has no holes cut for the windows), nor the weather
+    if s.outdoor.iter().any(|&x| x) {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for (i, d) in s.draws.iter().enumerate() { if !s.outdoor[i] { lo = lo.min(d.bmin); hi = hi.max(d.bmax); } }
+        let sd_ = s.rt.as_ref().unwrap(); let sun = sd_.sun.normalize_or_zero();
+        if sun.z > 0.02 {
+            const ODN: u32 = 2048;
+            let c = (lo + hi) * 0.5; let rad = (hi - lo).truncate().length() * 0.5 + 30.0; let reach = 400.0;
+            let up = if sun.z.abs() > 0.99 { Vec3::Y } else { Vec3::Z };
+            let vp = orthographic_rh(-rad, rad, -rad, rad, 0.0, 2.0 * reach) * look_at_rh(c + sun * reach, c, up);
+            let dev = &r.gpu.dev;
+            let tex = dev.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: ODN, height: ODN, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+            let view = tex.create_view(&Default::default());
+            let mut g: Globals = bytemuck::Zeroable::zeroed(); g.sun_vp = vp.to_cols_array_2d();
+            let ub = dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::bytes_of(&g), usage: wgpu::BufferUsages::UNIFORM });
+            let bgl = r.shadow_pipe.get_bind_group_layout(0);
+            let bg = dev.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ub.as_entire_binding() }] });
+            let mut enc = dev.create_command_encoder(&Default::default());
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[], timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }) });
+                rp.set_pipeline(&r.shadow_pipe); rp.set_bind_group(0, &bg, &[]);
+                for (i, d) in s.draws.iter().enumerate() {
+                    if !s.outdoor[i] || s.weather[i] || d.glass || s.glb.nodes[d.node].name.starts_with("exterior_main") { continue }
+                    rp.set_vertex_buffer(0, s.bufs[d.pos.0].slice(d.pos.1..d.pos.1 + d.vcount as u64 * 12));
+                    let isz = if d.u16 { 2 } else { 4 };
+                    rp.set_index_buffer(s.bufs[d.idx.0].slice(d.idx.1..d.idx.1 + d.icount as u64 * isz), if d.u16 { wgpu::IndexFormat::Uint16 } else { wgpu::IndexFormat::Uint32 });
+                    rp.draw_indexed(0..d.icount, 0, 0..1);
+                }
+            }
+            r.gpu.q.submit([enc.finish()]);
+            let mut u = [0f32; 20]; u[..16].copy_from_slice(&vp.to_cols_array()); u[16] = 1.0; u[17] = 1.0 / ODN as f32; u[18] = 0.15 / (2.0 * reach);
+            r.gpu.q.write_buffer(&sd_.od_buf, 0, bytemuck::cast_slice(&u));
+            let sd = s.rt.as_mut().unwrap(); sd.od_view = view;
+            if o.verbose { eprintln!("  outdoor shadow map over {:.0} m", 2.0 * rad); }
+        }
+    }
     memlog("after bvh");
     if o.verbose { eprintln!("  rt scene ready {:.2}s", t.elapsed().as_secs_f32()); }
 }
@@ -1799,15 +1982,19 @@ async fn probe_albedos(r: &mut Renderer, s: &Scene, _o: &Opts) -> Vec<rt::MatD> 
     let mut enc = dev.create_command_encoder(&Default::default());
     let mut groups = vec![];
     let n = s.draws.len().min((cols * rows) as usize);
-    for d in &s.draws[..n] {
+    for (di_, d) in s.draws[..n].iter().enumerate() {
         // along the direction its surface mostly faces, the picture filled with it. By the box's thinnest side a house's walls, one mesh as wide as the house, were seen from above: their top edges, two pixels of grout. Every ray then took the wall as black, and reflections and bounced light off it were missing
         let e = d.bmax - d.bmin; let c = (d.bmin + d.bmax) * 0.5;
+        let mut facing = Vec3::Z;
+        // (not the outdoors, which is drawn but not traced: its big meshes are simplified for drawing, with no copy here to read)
+        if !s.outdoor[di_] {
+        facing = Vec3::ZERO;
         let pb = &s.glb.chunks[d.pos.0][d.pos.1 as usize..(d.pos.1 + d.pos.2) as usize];
         let ib = &s.glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let vert = |k: usize| -> Vec3 { let f = |c: usize| f32::from_le_bytes(pb[(k * 3 + c) * 4..(k * 3 + c) * 4 + 4].try_into().unwrap()); Vec3::new(f(0), f(1), f(2)) };
         let ix = |k: usize| -> usize { if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as usize } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) as usize } };
-        let mut facing = Vec3::ZERO;
         for t in 0..d.icount as usize / 3 { let (p0, p1, p2) = (vert(ix(t * 3)), vert(ix(t * 3 + 1)), vert(ix(t * 3 + 2))); facing += (p1 - p0).cross(p2 - p0).abs(); }
+        }
         let (axis, up, hw, hh) = if facing.z >= facing.x && facing.z >= facing.y { (Vec3::Z, Vec3::Y, e.x, e.y) } else if facing.x >= facing.y { (Vec3::X, Vec3::Z, e.y, e.z) } else { (Vec3::Y, Vec3::Z, e.x, e.z) };
         let rad = e.length() * 0.5 + 0.01;
         let (hw, hh) = (hw * 0.5 + 0.001, hh * 0.5 + 0.001);

@@ -18,7 +18,7 @@ struct G {
   lpos: array<vec4<f32>, 32>,
   lcol: array<vec4<f32>, 32>,
 };
-struct M { color: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32>, obj: mat4x4<f32>, p: array<vec4<f32>, 48> }; // flags.x: 1 = alpha mask (hair), 2 = glass; obj: world -> object frame; p: the material graph's numbers
+struct M { color: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32>, obj: mat4x4<f32>, p: array<vec4<f32>, 48>, ex: vec4<f32> }; // ex.x: 1 for the outdoors (gen2's outdoor stage), marked in the normal's w // flags.x: 1 = alpha mask (hair), 2 = glass; obj: world -> object frame; p: the material graph's numbers
 
 @group(0) @binding(0) var<uniform> g: G;
 @group(0) @binding(1) var shadow_tex: texture_depth_2d;
@@ -156,7 +156,7 @@ fn shadow_at(p: vec3<f32>, n: vec3<f32>) -> f32 {
   var a = 1.0;
   if (m.flags.x > 1.5) { a = select(0.18, m.flags.z, m.flags.z > 0.0); }
   out.color = vec4<f32>(col, a);
-  out.nrm = vec4<f32>(n, surf_coat);
+  out.nrm = vec4<f32>(n, select(surf_coat, -1.0, m.ex.x > 0.5));
   // (path traced: the G-buffer; what a surface gives off is all it draws itself. Glass stays forward, over the traced picture)
   out.alb = vec4<f32>(albedo.rgb, select(max(surf_rough, 0.002), 0.0, m.flags.w < -0.5));
   // (a: 1 + which part, for --bake, where plain draws pass 0; there it holds how sheer the cloth is, up to 1)

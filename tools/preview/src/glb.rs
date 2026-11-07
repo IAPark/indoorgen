@@ -16,7 +16,8 @@ pub struct Prim {
 pub struct Node { pub name: String, pub prims: Vec<Prim> }
 /// `tex`: embedded base-colour image (PNG bytes) when the material has a baseColorTexture; `mask`: alphaMode MASK
 pub struct Mat { pub name: String, pub color: [f32; 4], pub emissive: [f32; 3], pub tex: Option<std::sync::Arc<Vec<u8>>>, pub mask: bool, pub metal: f32, pub rough: f32 }
-pub struct Glb { pub nodes: Vec<Node>, pub mats: Vec<Mat>, pub chunks: Vec<Vec<u8>> }
+/// inst: the instanced nodes -- a matrix on a shared mesh, the outdoor trees -- as (name, the mesh's parts, column-major matrix): main.rs bakes the near ones into the scene
+pub struct Glb { pub nodes: Vec<Node>, pub mats: Vec<Mat>, pub chunks: Vec<Vec<u8>>, pub inst: Vec<(String, Vec<Prim>, [f32; 16])> }
 
 fn f3(v: &Value) -> [f32; 3] {
     let a = v.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect::<Vec<_>>()).unwrap_or(vec![0.0; 3]);
@@ -78,10 +79,8 @@ pub fn load(path: &Path) -> Glb {
             metal: m["pbrMetallicRoughness"]["metallicFactor"].as_f64().unwrap_or(1.0) as f32, rough: m["pbrMetallicRoughness"]["roughnessFactor"].as_f64().unwrap_or(1.0) as f32 }
     }).collect()).unwrap_or_default();
     let meshes = j["meshes"].as_array().unwrap();
+    let mut inst = vec![];
     let nodes = j["nodes"].as_array().unwrap().iter().filter_map(|n| {
-        // (instanced nodes -- a matrix on a shared mesh, the outdoor trees -- are not drawn here: this previewer has no per-draw
-        // transforms; tools/bevy_preview draws them)
-        if n.get("matrix").is_some() { return None }
         let mi = n["mesh"].as_u64()? as usize;
         let prims = meshes[mi]["primitives"].as_array().unwrap().iter().filter_map(|p| {
             let at = &p["attributes"];
@@ -96,7 +95,9 @@ pub fn load(path: &Path) -> Glb {
                 bmin: f3(&acc[pa]["min"]), bmax: f3(&acc[pa]["max"]),
             })
         }).collect();
+        // (instanced nodes are not drawn as they are: this previewer has no per-draw transforms. They are kept for baking)
+        if let Some(m) = n["matrix"].as_array() { let mut x = [0f32; 16]; for (k, v) in m.iter().enumerate().take(16) { x[k] = v.as_f64().unwrap_or(0.0) as f32; } inst.push((n["name"].as_str().unwrap_or("").to_string(), prims, x)); return None }
         Some(Node { name: n["name"].as_str().unwrap_or("").to_string(), prims })
     }).collect();
-    Glb { nodes, mats, chunks }
+    Glb { nodes, mats, chunks, inst }
 }
