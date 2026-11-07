@@ -1293,7 +1293,9 @@ fn wx_k(s: &Scene) -> (f32, f32, f32, f32) {
     let w = &s.side["outdoor"]["weather"];
     if !w.is_object() || std::env::var_os("NO_WEATHER").is_some() { return (1.0, 1.0, 0.0, 0.0) }
     let f = |k: &str, d: f64| w[k].as_f64().unwrap_or(d) as f32;
-    (f("sun_strength", 1.0), f("sky_ambient", 1.0), f("cloud_cover", 0.0), 0.00016 * f("haze", 1.0))
+    // (the sun as Blender's: its sky model ignores sun_intensity, so only the disc's removal below 0.2 takes -- render_rust.py apply_weather. Scaled by 0.84 on a partly cloudy day, the room came out 0.9x Blender's and its sunlit floor 0.7x; now 1.04x and 0.82x)
+    let sun = if f("sun_strength", 1.0) < 0.2 { f("sun_strength", 1.0) } else { 1.0 };
+    (sun, f("sky_ambient", 1.0), f("cloud_cover", 0.0), 0.00016 * f("haze", 1.0))
 }
 fn frustum(vp: Mat4) -> [Vec4; 6] {
     let r = [vp.row(0), vp.row(1), vp.row(2), vp.row(3)];

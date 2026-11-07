@@ -54,12 +54,18 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
 }
 // ---- the weather, as render_rust.py apply_weather and add_haze have it: a cloud layer seen overhead in place of the sky (it casts no shadow: the light is the sky's, scaled), and a haze over the ground, a flattened dome 2.4 km across and 450 m high
 fn wx_amb() -> vec3<f32> { return (sky_at(normalize(vec3<f32>(0.05, 0.03, 1.0))) + sky_at(normalize(vec3<f32>(1.0, 0.0, 0.3))) + sky_at(normalize(vec3<f32>(-1.0, 0.0, 0.3))) + sky_at(normalize(vec3<f32>(0.0, 1.0, 0.3))) + sky_at(normalize(vec3<f32>(0.0, -1.0, 0.3)))) / 5.0; }
-fn wx_haze(c: vec3<f32>, dist: f32) -> vec3<f32> { let t = exp(-wx.y * dist); return c * t + wx_amb() * vec3<f32>(0.92, 0.95, 1.0) * (1.0 - t); }
-fn wx_sky(rd: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
-  let cloud = vec3<f32>(dot(wx_amb(), vec3<f32>(0.333))) * WX_CLOUD;
+// the haze as Blender's volume (render_rust.py add_haze: albedo (0.92, 0.95, 1.0), anisotropy 0.5): it scatters the sky's light and the sun's toward the eye. Without the sun's share an upward sky came out 1.2-2x darker and bluer than Blender's on a sunny day
+fn wx_hg(c: f32) -> f32 { let g = 0.5; return (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
+fn wx_air(rd: vec3<f32>, amb: vec3<f32>) -> vec3<f32> { return (amb + p.sun_col.rgb * wx_hg(dot(rd, p.sun_dir.xyz))) * vec3<f32>(0.92, 0.95, 1.0); }
+fn wx_haze_a(c: vec3<f32>, rd: vec3<f32>, dist: f32, amb: vec3<f32>) -> vec3<f32> { let t = exp(-wx.y * dist); return c * t + wx_air(rd, amb) * (1.0 - t); }
+fn wx_haze(c: vec3<f32>, rd: vec3<f32>, dist: f32) -> vec3<f32> { return wx_haze_a(c, rd, dist, wx_amb()); }
+// the sky through the cloud layer (gen2's disc 1.4 km up, down to the horizon; unlit from below: dark) and the haze dome (450 m tall, 2.4 km round)
+fn wx_sky_a(rd: vec3<f32>, s: vec3<f32>, amb: vec3<f32>) -> vec3<f32> {
+  let cloud = vec3<f32>(dot(amb, vec3<f32>(0.333))) * WX_CLOUD;
   let c = mix(s, cloud, wx.x * smoothstep(-0.02, 0.15, rd.z));
-  return wx_haze(c, 450.0 / max(rd.z, 450.0 / 2400.0));
+  return wx_haze_a(c, rd, 450.0 / max(rd.z, 450.0 / 2400.0), amb);
 }
+fn wx_sky(rd: vec3<f32>, s: vec3<f32>) -> vec3<f32> { return wx_sky_a(rd, s, wx_amb()); }
 const WX_CLOUD = 0.12;
 @compute @workgroup_size(8, 8) fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x) * ss; let h = i32(p.dims.y) * ss;
@@ -229,6 +235,6 @@ const WX_CLOUD = 0.12;
   if (p.misc2.w == 3u) { textureStore(o_lit, px0, vec4<f32>(lit, 1.0)); return; }
   if (p.misc2.w == 4u) { textureStore(o_lit, px0, vec4<f32>(refl + spec_sun, 1.0)); return; }
   // (the haze over what lies outdoors, by its distance)
-  if (wx.z > 0.5 && textureLoad(c_nrm, px, 0).a < -0.5) { col = wx_haze(col, length(pos - p.cam.xyz)); }
+  if (wx.z > 0.5 && textureLoad(c_nrm, px, 0).a < -0.5) { col = wx_haze(col, normalize(pos - p.cam.xyz), length(pos - p.cam.xyz)); }
   textureStore(o_lit, px0, vec4<f32>(col, 1.0));
 }

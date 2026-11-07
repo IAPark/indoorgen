@@ -528,6 +528,22 @@ fn od_cover(o: vec3<f32>) -> f32 {
 struct SKY { vp: array<mat4x4<f32>, 5>, dir: array<vec4<f32>, 5>, on: vec4<f32> }; // on: x 1 when drawn, y a texel, z the depth bias
 @group(0) @binding(36) var sky_tex: texture_depth_2d_array;
 @group(0) @binding(37) var<uniform> sky: SKY;
+@group(0) @binding(38) var<uniform> wx: vec4<f32>; // the weather: x cloud cover, y haze per m, z on
+fn wx_amb() -> vec3<f32> { return (sky_at(normalize(vec3<f32>(0.05, 0.03, 1.0))) + sky_at(normalize(vec3<f32>(1.0, 0.0, 0.3))) + sky_at(normalize(vec3<f32>(-1.0, 0.0, 0.3))) + sky_at(normalize(vec3<f32>(0.0, 1.0, 0.3))) + sky_at(normalize(vec3<f32>(0.0, -1.0, 0.3)))) / 5.0; }
+// the haze as Blender's volume (render_rust.py add_haze: albedo (0.92, 0.95, 1.0), anisotropy 0.5): it scatters the sky's light and the sun's toward the eye. Without the sun's share an upward sky came out 1.2-2x darker and bluer than Blender's on a sunny day
+fn wx_hg(c: f32) -> f32 { let g = 0.5; return (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
+fn wx_air(rd: vec3<f32>, amb: vec3<f32>) -> vec3<f32> { return (amb + p.sun_col.rgb * wx_hg(dot(rd, p.sun_dir.xyz))) * vec3<f32>(0.92, 0.95, 1.0); }
+fn wx_haze_a(c: vec3<f32>, rd: vec3<f32>, dist: f32, amb: vec3<f32>) -> vec3<f32> { let t = exp(-wx.y * dist); return c * t + wx_air(rd, amb) * (1.0 - t); }
+fn wx_haze(c: vec3<f32>, rd: vec3<f32>, dist: f32) -> vec3<f32> { return wx_haze_a(c, rd, dist, wx_amb()); }
+// the sky through the cloud layer (gen2's disc 1.4 km up, down to the horizon; unlit from below: dark) and the haze dome (450 m tall, 2.4 km round)
+fn wx_sky_a(rd: vec3<f32>, s: vec3<f32>, amb: vec3<f32>) -> vec3<f32> {
+  let cloud = vec3<f32>(dot(amb, vec3<f32>(0.333))) * WX_CLOUD;
+  let c = mix(s, cloud, wx.x * smoothstep(-0.02, 0.15, rd.z));
+  return wx_haze_a(c, rd, 450.0 / max(rd.z, 450.0 / 2400.0), amb);
+}
+fn wx_sky(rd: vec3<f32>, s: vec3<f32>) -> vec3<f32> { return wx_sky_a(rd, s, wx_amb()); }
+const WX_CLOUD = 0.12;
+const OD_BOUNCE: f32 = 0.45;
 fn sky_open(o: vec3<f32>, n: vec3<f32>) -> f32 {
   if (sky.on.x < 0.5) { return mix(0.3, 1.0, od_cover(o)); }
   var v = 0.0; var ws = 0.0;
@@ -549,7 +565,8 @@ fn outdoor_sky(n: vec3<f32>, o: vec3<f32>) -> vec3<f32> {
   // (below the horizon the ground, not the sky: a leaf's underside, seen from indoors looking out, was lit by a whole bright sky turned upside down. The ground there as about 0.15 of the sky over it)
   // (cosine-weighted over the whole hemisphere, down to the horizon and round the sun: a ring of six at 37 degrees from the normal missed the bright sky low and by the sun, and a sunlit lawn's tree shadows came out 10x darker than the lit grass where Blender's are 2.5x)
   let NS = 16u;
-  for (var k = 0u; k < NS; k++) { let u = (f32(k) + 0.5) / f32(NS); let a = f32(k) * 2.39996; let r = sqrt(u); let d = normalize(b * vec3<f32>(r * cos(a), r * sin(a), sqrt(1.0 - u))); e += select(sky_at(d), 0.15 * sky_at(normalize(vec3<f32>(d.x, d.y, 0.3))), d.z < 0.0); }
+  let amb = select(vec3<f32>(0.0), wx_amb(), wx.z > 0.5); // (the outdoors lit by the sky as it is drawn: through the clouds and the haze)
+  for (var k = 0u; k < NS; k++) { let u = (f32(k) + 0.5) / f32(NS); let a = f32(k) * 2.39996; let r = sqrt(u); let d = normalize(b * vec3<f32>(r * cos(a), r * sin(a), sqrt(1.0 - u))); e += select(select(sky_at(d), wx_sky_a(d, sky_at(d), amb), wx.z > 0.5), 0.15 * sky_at(normalize(vec3<f32>(d.x, d.y, 0.3))), d.z < 0.0); }
   return e / f32(NS) * mix(0.08, 1.0, sky_open(o, n)); // (as the traced light is kept: the sky's radiance averaged, irradiance over pi. Times pi it lit the outdoors 3x over: leaves 3.6x Blender's against the wall)
 }
 fn od_vis(o: vec3<f32>) -> f32 {
@@ -777,7 +794,8 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
     let po = world_of(g, d, dims, p.inv_vp); let no = normalize(textureLoad(g_nrm, g, 0).xyz + vec3<f32>(1e-5));
     // (a leaf as Blender's leaf_look has it: two thirds a plain surface, a third translucent -- lit through from behind by the sky and the sun there)
     // (a leaf as Blender's: no light through it -- its transmission pass is ~0 on the trees. A third of the light from behind made a canopy's undersides, seen from a window below, glow 2x Blender's dark ones)
-    let fr_ = 1.0; let e_ = outdoor_sky(no, po);
+    // and the light bounced off everything around -- sunlit ground, walls, other trees, grass blade to blade -- as a share of the sun on open flat ground (the sky's share left out: under rain the trees came out a third over Blender's against the walls with it). Blender's passes: a third of a sunlit lawn's light and two thirds of a shaded one's is indirect
+    let fr_ = 1.0; let e_ = outdoor_sky(no, po) + OD_BOUNCE * p.sun_col.rgb * max(p.sun_dir.z, 0.0) / PI;
     textureStore(out_irr, px, vec4<f32>(e_, -1.0)); textureStore(out_lamp, px, vec4<f32>(0.0));
     if ((u32(p.cam.w) & 16u) == 0u) { vis_sh[u32(px.y * w + px.x)] = vec4<u32>(0u, 0xffffffffu, 0xffffffffu, 0xffffffffu); textureStore(out_sun, px, vec4<f32>(select(0.0, od_vis(po) * fr_, dot(no, p.sun_dir.xyz) > 0.0), 0.0, 0.0, 1.0)); }
     return;
