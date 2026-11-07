@@ -279,9 +279,10 @@ fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> w
     let cutout = img.pixels().any(|p| p[3] < 250);
     let shrink = |im: &image::RgbaImage, nw: u32, nh: u32| -> image::RgbaImage {
         if !cutout { return image::imageops::resize(im, nw, nh, image::imageops::FilterType::Triangle) }
-        let pm = image::ImageBuffer::from_fn(im.width(), im.height(), |x, y| { let p = im.get_pixel(x, y).0; let a = p[3] as f32 / 255.0; image::Rgba([p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, p[3] as f32]) });
+        // (in 0..1: the image crate's float resize clamps to it)
+        let pm = image::ImageBuffer::from_fn(im.width(), im.height(), |x, y| { let p = im.get_pixel(x, y).0; let a = p[3] as f32 / 255.0; image::Rgba([p[0] as f32 / 255.0 * a, p[1] as f32 / 255.0 * a, p[2] as f32 / 255.0 * a, a]) });
         let r: image::ImageBuffer<image::Rgba<f32>, Vec<f32>> = image::imageops::resize(&pm, nw, nh, image::imageops::FilterType::Triangle);
-        image::ImageBuffer::from_fn(nw, nh, |x, y| { let p = r.get_pixel(x, y).0; let a = (p[3] / 255.0).max(1e-4); image::Rgba([(p[0] / a).clamp(0.0, 255.0) as u8, (p[1] / a).clamp(0.0, 255.0) as u8, (p[2] / a).clamp(0.0, 255.0) as u8, p[3].clamp(0.0, 255.0) as u8]) })
+        image::ImageBuffer::from_fn(nw, nh, |x, y| { let p = r.get_pixel(x, y).0; let a = p[3].max(1e-4); image::Rgba([(p[0] / a * 255.0).clamp(0.0, 255.0) as u8, (p[1] / a * 255.0).clamp(0.0, 255.0) as u8, (p[2] / a * 255.0).clamp(0.0, 255.0) as u8, (p[3] * 255.0).clamp(0.0, 255.0) as u8]) })
     };
     let mut cur = img;
     if cutout {
@@ -1284,6 +1285,13 @@ fn bake_instances(glb: &mut glb::Glb, verbose: bool) {
     }
     if verbose { eprintln!("  baked {n_in} of {} tree instances, {n_tri} triangles, {:.2}s", inst.len(), t.elapsed().as_secs_f32()); }
 }
+/// the outdoors' weather (the sidecar's outdoor.weather, as render_rust.py apply_weather has it): (sun factor, sky factor, cloud cover, haze density per m)
+fn wx_k(s: &Scene) -> (f32, f32, f32, f32) {
+    let w = &s.side["outdoor"]["weather"];
+    if !w.is_object() || std::env::var_os("NO_WEATHER").is_some() { return (1.0, 1.0, 0.0, 0.0) }
+    let f = |k: &str, d: f64| w[k].as_f64().unwrap_or(d) as f32;
+    (f("sun_strength", 1.0), f("sky_ambient", 1.0), f("cloud_cover", 0.0), 0.00016 * f("haze", 1.0))
+}
 fn frustum(vp: Mat4) -> [Vec4; 6] {
     let r = [vp.row(0), vp.row(1), vp.row(2), vp.row(3)];
     [r[3] + r[0], r[3] - r[0], r[3] + r[1], r[3] - r[1], r[2], r[3] - r[2]]
@@ -1542,7 +1550,7 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
             }
             let vid_m = rt_q.map_or(false, |q| q.video) && !first_v;
             let qm = rt::Quality { spp: if vid_m { 1 } else { 3 }, bounces: 2, spec_spp: 1, denoise: if vid_m { 3 } else { 5 }, ss: 1, video: vid_m, hist: false };
-            rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, if qm.video { (o.res.0 / 2, o.res.1 / 2) } else { o.res }, if qm.video { 2 } else { 1 }, qm, vpm, eye_m, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], false);
+            rt::encode(dev, q, &mut me, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.m_depth, nrm: &tg.m[1], alb: &tg.m[2], mat: &tg.m[3], lit: &tg.m_lit_v, hdr: &tg.m[0] }, if qm.video { (o.res.0 / 2, o.res.1 / 2) } else { o.res }, if qm.video { 2 } else { 1 }, qm, vpm, eye_m, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0) * wx_k(s).1, sc("RT_SUN", 1.0) * wx_k(s).0], false);
             let (ox, oy) = (x0 as u32, y0 as u32);
             me.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { texture: &tg.m_lit, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: &tg.m_acc, mip_level: 0, origin: wgpu::Origin3d { x: ox, y: oy, z: 0 }, aspect: wgpu::TextureAspect::All },
@@ -1555,10 +1563,10 @@ fn render_submit(r: &mut Renderer, s: &mut Scene, cam: &Cam, o: &Opts, xp: f32) 
         // (a refresh: the light at a still's quality, kept apart for the frames to ease toward. The frame itself is an ordinary one: shown, the still's other ways -- its reflections, its edges -- stood out for that frame)
         if refresh_v {
             rt::RF_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
-            rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, o.ss, rt::Quality { hist: true, ..rt::Quality::parse("fast") }, vp, eye, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
+            rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, o.ss, rt::Quality { hist: true, ..rt::Quality::parse("fast") }, vp, eye, rt::this_frame(), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0) * wx_k(s).1, sc("RT_SUN", 1.0) * wx_k(s).0], cam.near.is_some() || cam.only.is_some());
             rt::RF_ONLY.store(false, std::sync::atomic::Ordering::Relaxed);
         }
-        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); o.ss }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0), sc("RT_SUN", 1.0)], cam.near.is_some() || cam.only.is_some());
+        rt::encode(dev, q, &mut enc, p, sd, &rt::Gb { mirror_lit: &tg.m_acc_v, depth: &tg.depth, nrm: &tg.nrm, alb: &tg.alb, mat: &tg.mat, lit: &tg.lit, hdr: &tg.hdr }, { let q2 = rt::frame_quality(qu, first_v); rt::trace_size(o, q2).0 }, { let q2 = rt::frame_quality(qu, first_v); o.ss }, rt::frame_quality(qu, first_v), vp, eye, rt::next_frame(qu.video), [sc("RT_LAMP", 1.0), sc("RT_SKY", 1.0) * wx_k(s).1, sc("RT_SUN", 1.0) * wx_k(s).0], cam.near.is_some() || cam.only.is_some());
         // the glass, forward, over the traced picture
         let mk = |v: &'_ wgpu::TextureView| v.clone();
         let (l, n, a, m) = (mk(&tg.lit), mk(&tg.nrm), mk(&tg.alb), mk(&tg.mat));
@@ -1926,6 +1934,7 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     if o.verbose { eprintln!("  {} windows", wins.len()); }
     memlog("before bvh");
     s.rt = Some(rt::build_scene(&r.gpu.dev, tris, &mats, &lights, &wins, o.seed, o.verbose));
+    { let k = wx_k(s); let u = [k.2, k.3, if (k.2 > 0.0 || k.3 > 0.0) { 1.0 } else { 0.0 }, 0.0f32]; r.gpu.q.write_buffer(&s.rt.as_ref().unwrap().wx_buf, 0, bytemuck::cast_slice(&u)); }
     // the outdoors' shadow, seen from the sun once: what it hides of the sun inside and out, without tracing it (see rt.wgsl od_vis). Over the house and 30 m round it; not the house's own shell, which the traced walls stand for (its siding has no holes cut for the windows), nor the weather
     if s.outdoor.iter().any(|&x| x) {
         let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));

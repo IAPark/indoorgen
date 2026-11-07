@@ -27,6 +27,7 @@ fn sky_uv(d: vec3<f32>, sw: u32, sh: u32) -> vec2<f32> {
 @group(0) @binding(13) var<storage, read> vis_sh: array<vec4<u32>>;
 @group(0) @binding(14) var c_mom: texture_2d<f32>;
 @group(0) @binding(15) var c_var: texture_2d<f32>;
+@group(0) @binding(17) var<uniform> wx: vec4<f32>; // the weather: x cloud cover, y haze per m, z on
 @group(0) @binding(16) var c_sun: texture_2d<f32>; // (the sun's visibility at each traced pixel, a video's kept over frames) // (the soft light's variance after the filter) // (the soft light's raw mean, mean square and samples, for RT_SHOW=unc) // (x: the sun's visibility at each traced pixel)
 fn dfg_ab(rough: f32, nv: f32) -> vec2<f32> {
   // (GGX with Smith height-correlated visibility, integrated numerically and fitted: A is F0's share, B the rest. Karis's fit runs 10-20% low on rough metal, by amounts that change with roughness)
@@ -51,6 +52,15 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   let b = mix(sky_t[y1 * sw + xa].rgb, sky_t[y1 * sw + xb].rgb, fx);
   return mix(a, b, fy) * p.scale.y * fade;
 }
+// ---- the weather, as render_rust.py apply_weather and add_haze have it: a cloud layer seen overhead in place of the sky (it casts no shadow: the light is the sky's, scaled), and a haze over the ground, a flattened dome 2.4 km across and 450 m high
+fn wx_amb() -> vec3<f32> { return (sky_at(normalize(vec3<f32>(0.05, 0.03, 1.0))) + sky_at(normalize(vec3<f32>(1.0, 0.0, 0.3))) + sky_at(normalize(vec3<f32>(-1.0, 0.0, 0.3))) + sky_at(normalize(vec3<f32>(0.0, 1.0, 0.3))) + sky_at(normalize(vec3<f32>(0.0, -1.0, 0.3)))) / 5.0; }
+fn wx_haze(c: vec3<f32>, dist: f32) -> vec3<f32> { let t = exp(-wx.y * dist); return c * t + wx_amb() * vec3<f32>(0.92, 0.95, 1.0) * (1.0 - t); }
+fn wx_sky(rd: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
+  let cloud = vec3<f32>(dot(wx_amb(), vec3<f32>(0.333))) * WX_CLOUD;
+  let c = mix(s, cloud, wx.x * smoothstep(-0.02, 0.15, rd.z));
+  return wx_haze(c, 450.0 / max(rd.z, 450.0 / 2400.0));
+}
+const WX_CLOUD = 0.12;
 @compute @workgroup_size(8, 8) fn compose(@builtin(global_invocation_id) id: vec3<u32>) {
   let ss = i32(p.dims.z); let w = i32(p.dims.x) * ss; let h = i32(p.dims.y) * ss;
   let px0 = vec2<i32>(id.xy);
@@ -69,7 +79,8 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   if (d >= 1.0) {
     let rd = normalize(world_of(px0, 0.9999, dims, p.inv_vp) - p.cam.xyz);
     // (a cutaway stands in no world: plain behind it)
-    let bg = select(sky_at(rd), vec3<f32>(0.25), p.misc2.w == 1u);
+    var bg = select(sky_at(rd), vec3<f32>(0.25), p.misc2.w == 1u);
+    if (wx.z > 0.5 && p.misc2.w != 1u) { bg = wx_sky(rd, bg); }
     textureStore(o_lit, px0, vec4<f32>(bg, 1.0));
     return;
   }
@@ -198,7 +209,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   var refl = mix(select(e_room, e, metal >= 0.5 && !flat_here), s, traced) * (fr + vec3<f32>(fc));
   // cloth's sheen: fine fibres send back a share of the light uncoloured, more at grazing angles, taking it from the colour underneath
   let sheen = mt.z * (0.2 + 0.6 * pow(1.0 - nv, 4.0));
-  let col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * kd_ * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_, vec3<f32>(0.0), cloth);
+  var col = textureLoad(c_emis, px, 0).rgb + a.rgb * (1.0 - metal) * lit * kd_ * (1.0 - sheen) + lit * sheen + refl + spec_sun + select(gl_, vec3<f32>(0.0), cloth);
   // (RT_SHOW: one ingredient of the picture alone, to find which is wrong)
   if (p.misc2.w == 9u) { textureStore(o_lit, px0, vec4<f32>(mt.w - 1.0, mt.z, a.a, 1.0)); return; }
   if (p.misc2.w == 7u) { textureStore(o_lit, px0, vec4<f32>(select(0.0, 3.0, fine.r >= 0.0), min(tw, 1.0) * 0.5, select(0.0, 3.0, any(px != px0)), 1.0)); return; }
@@ -217,5 +228,7 @@ fn sky_at(d: vec3<f32>) -> vec3<f32> {
   if (p.misc2.w == 11u) { textureStore(o_lit, px0, vec4<f32>(dl_, 1.0)); return; }
   if (p.misc2.w == 3u) { textureStore(o_lit, px0, vec4<f32>(lit, 1.0)); return; }
   if (p.misc2.w == 4u) { textureStore(o_lit, px0, vec4<f32>(refl + spec_sun, 1.0)); return; }
+  // (the haze over what lies outdoors, by its distance)
+  if (wx.z > 0.5 && textureLoad(c_nrm, px, 0).a < -0.5) { col = wx_haze(col, length(pos - p.cam.xyz)); }
   textureStore(o_lit, px0, vec4<f32>(col, 1.0));
 }
