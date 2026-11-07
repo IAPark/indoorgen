@@ -72,7 +72,7 @@ fn gnoise(q: vec2<f32>, k: u32) -> f32 {
   return mix(mix(gh(i, k), gh(i + vec2<i32>(1, 0), k), u.x), mix(gh(i + vec2<i32>(0, 1), k), gh(i + vec2<i32>(1, 1), k), u.x), u.y);
 }
 fn grass_blades(wp: vec3<f32>, n: vec3<f32>, vd: vec3<f32>, a: vec3<f32>) -> vec3<f32> {
-  let C = 0.083; let H = 0.13; let R0 = 0.005; let G0 = 0.6; let DRY = 0.12; let MEAN = 0.62; // (MEAN: the walk's average shade, found by sampling it -- near the same seen low or from above)
+  let C = 0.083; let H = 0.13; let R0 = 0.005; let G0 = 0.6; let DRY = 0.18; let MEAN = 0.62; // (MEAN: the walk's average shade, found by sampling it -- near the same seen low or from above)
   let dr = vec3<f32>(4.5, 2.16, 2.9); // (a dry blade against the lawn's mean: Blender's (0.3, 0.27, 0.1) over (0.067, 0.125, 0.034))
   let cg = (vec3<f32>(1.0) - DRY * dr) / (1.0 - DRY);
   let hl = length(vd.xy);
