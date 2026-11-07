@@ -168,3 +168,67 @@ def duplicate(a, b):
     da, Ka, ca, Wa, Ha = a; db, Kb, cb, Wb, Hb = b
     pw, _, _ = unproject(da, Ka, ca, stride=8)
     return overlap(pw, Kb, np.linalg.inv(cb), Wb, Hb, depth=db)
+
+
+# ------------------------------------------------------------------------------------------------ Gaussian-splat readiness
+def splat_cells(depths, Ks, c2ws, cell=0.15, stride=1, room_poly=None, pad=0.15):
+    """surface cells (15 cm) seen by a set of views -> {cell hash: (frames seeing it, half-angle spread of the viewing directions,
+    degrees)}. A splat (or any multi-view reconstruction) needs each surface from several places at clearly different angles"""
+    keys_all, dirs_all, frame_all = [], [], []
+    for fi, (d, K, C) in enumerate(zip(depths, Ks, c2ws)):
+        C = np.asarray(C, float)
+        pw, _, _ = unproject(np.where(d > FAR, 0.0, d), K, C, stride)
+        if room_poly is not None and len(pw):
+            # (the photographed room only: other rooms through a door and the garden through a window are seen from a few places at most)
+            from matplotlib.path import Path
+            inside = Path(np.asarray(room_poly)).contains_points(pw[:, :2], radius=pad) | Path(np.asarray(room_poly)).contains_points(pw[:, :2], radius=-pad)
+            pw = pw[inside]
+        if not len(pw): continue
+        dv = pw - C[:3, 3]; dv /= np.linalg.norm(dv, axis=1, keepdims=True) + 1e-9
+        k = np.floor(pw / cell).astype(np.int64)
+        h = (k[:, 0] * 73856093) ^ (k[:, 1] * 19349663) ^ (k[:, 2] * 83492791)
+        # (one direction per cell and frame)
+        u, inv = np.unique(h, return_inverse=True)
+        md = np.zeros((len(u), 3)); np.add.at(md, inv, dv); md /= np.linalg.norm(md, axis=1, keepdims=True) + 1e-9
+        keys_all.append(u); dirs_all.append(md); frame_all.append(np.full(len(u), fi))
+    if not keys_all: return {}
+    h = np.concatenate(keys_all); dv = np.concatenate(dirs_all)
+    order = np.argsort(h, kind="stable"); h, dv = h[order], dv[order]
+    starts = np.r_[0, np.nonzero(np.diff(h))[0] + 1]; counts = np.diff(np.r_[starts, len(h)])
+    mean = np.add.reduceat(dv, starts, axis=0); mean /= np.linalg.norm(mean, axis=1, keepdims=True) + 1e-9
+    ang = np.degrees(np.arccos(np.clip(np.sum(dv * np.repeat(mean, counts, axis=0), axis=1), -1, 1)))
+    spread = np.maximum.reduceat(ang, starts)
+    return dict(zip(h[starts].tolist(), zip(counts.tolist(), spread.tolist())))
+
+
+def splat_readiness(path_cells, ref_cells, min_views=3, min_spread_deg=15.0):
+    """share of the reference surfaces (what the room's camera pool can see) that a walk covers well enough to splat: seen from
+    `min_views` frames at least `min_spread_deg` apart (half-spread to the mean direction >= half of it)"""
+    ref = set(ref_cells) | set(path_cells)
+    good = sum(1 for k, (n, s) in path_cells.items() if n >= min_views and s >= min_spread_deg / 2)
+    seen = len(set(path_cells) & ref)
+    return dict(readiness=round(good / max(1, len(ref)), 3), seen=round(seen / max(1, len(ref)), 3), cells=len(ref))
+
+
+def survey_keys(pool, room_poly, rng, step_m=1.0, heights=(1.55, 1.1), sway_deg=20.0, inner=0.0, lead_deg=0.0):
+    """a loop around the room through the pool's valid positions (sorted by angle about the room's centre), looking inward with a
+    swaying offset, one lap per height: forward motion everywhere, no turning in place"""
+    poly = np.asarray(room_poly, float); c = poly.mean(0)
+    pts = sorted(pool, key=lambda v: math.atan2(v["pos"][1] - c[1], v["pos"][0] - c[0]))
+    keys, last = [], None
+    for v in pts:
+        p = np.array(v["pos"], float)
+        if last is not None and np.linalg.norm(p[:2] - last[:2]) < step_m: continue
+        keys.append(p); last = p
+    if len(keys) < 3: return []
+    out = []
+    for li, hgt in enumerate(heights):
+        for i, p in enumerate(keys):
+            q = p.copy(); q[2] = hgt
+            # (inner > 0: the later laps run that share of the way towards the centre -- other viewpoints of the same walls)
+            if li and inner: q[:2] = q[:2] + inner * (c - q[:2])
+            # (lead_deg: look ahead of the centre along the walking direction, so a surface stays in view over a long stretch of motion)
+            to_c = math.atan2(c[1] - q[1], c[0] - q[0]) + math.radians(lead_deg) + math.radians(sway_deg) * (1 if i % 2 else -1)
+            out.append((q, to_c, math.radians(-8 if li % 2 == 0 else 2)))
+    out.append(out[0])
+    return out

@@ -61,6 +61,9 @@ PRESETS = {
     "rich": {"eras": 4, "budget_s": 120, "target": {"count": 2, "frames": 120}},
     # volume at 60+ an hour: 4 eras, three 64-frame videos: ~147 an hour
     "volume": {"eras": 4, "budget_s": 120, "target": {"count": 3, "frames": 64}},
+    # splat-grade target video: a 10 s survey walk around the room (240 frames, ~1.5 m/s) that a Gaussian splat can be trained on
+    # (held-out views ~25 dB against ~18 dB for a pan of the same length); one target era, the other eras its references
+    "splat": {"eras": 4, "budget_s": 180, "target": {"count": 1, "frames": 240, "path_engine": "survey", "min_readiness": 0.7}},
 }
 
 
@@ -356,6 +359,46 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
     return views, dropped, dt, kept
 
 
+def choose_survey(a, cfg, home, tdir, glb, pool, log, room_poly):
+    """the splat-grade walk: survey loops through the pool's positions (eras_geom.survey_keys) in a few variants, each checked as plain
+    raster depth at 1/4 size on every 3rd frame -- nothing nearer than min_depth_m -- and scored for splat readiness against the
+    surfaces the camera pool sees (15 cm cells inside the room, 3+ views, 15 deg+ apart). -> (path, focal mm, info, points)"""
+    tc = cfg["target"]; F = int(tc["frames"]); W, H = cfg["width"] // 4, cfg["height"] // 4; f_mm = 20.0
+    stem = os.path.splitext(os.path.basename(glb))[0]; t0 = time.time(); rng = random.Random(crc(home["seed"], "survey"))
+    variants = [dict(step_m=0.7, sway_deg=35, heights=(1.45,)), dict(step_m=0.7, sway_deg=20, heights=(1.5,)), dict(step_m=1.0, sway_deg=35, heights=(1.4,))]
+    cands = []
+    for vi, var in enumerate(variants):
+        keys = G.survey_keys(pool, room_poly, rng, **var)
+        if keys: cands.append((var, G.sample_keys(keys, F)))
+    if not cands: raise RuntimeError("no survey loop (camera pool of %d views)" % len(pool))
+    cams = [("r%03d" % i, c2w_cv(v["pos"], v["yaw"], v["pitch"]), v["f_mm"]) for i, v in enumerate(pool)]
+    cams += [("s%d_%04d" % (ci, i), c2w_cv(p, y, pi), f_mm) for ci, (_, path) in enumerate(cands) for i, (p, y, pi) in enumerate(path) if i % 3 == 0]
+    chk = os.path.join(tdir, "_chk"); shutil.rmtree(chk, ignore_errors=True)
+    rc, _ = render_views(a.preview, glb, cams, (W, H), None, chk, log, extra=("--ss", "1"))
+    if rc: raise RuntimeError("survey check render failed, see %s" % log)
+    load = lambda n: np.load(os.path.join(chk, "%s_%s.depth.npy" % (stem, n)))
+    rn = [c for c in cams if c[0][0] == "r"]
+    ref = G.splat_cells([load(n) for n, _, _ in rn], [G.K_of(f, W, H) for _, _, f in rn], [np.array(c) for _, c, _ in rn], room_poly=room_poly)
+    best = None; tried = []
+    for ci, (var, path) in enumerate(cands):
+        sc = [c for c in cams if c[0].startswith("s%d_" % ci)]
+        ds = [load(n) for n, _, _ in sc]
+        near = min((float(np.percentile(d[d > 0], 2)) if (d > 0).any() else 0.0) for d in ds)
+        cells = G.splat_cells(ds, [G.K_of(f_mm, W, H)] * len(ds), [np.array(c) for _, c, _ in sc], room_poly=room_poly)
+        r = G.splat_readiness(cells, ref)
+        L = sum(math.dist(path[i + 1][0], path[i][0]) for i in range(len(path) - 1))
+        tried.append(dict(variant={k: list(v) if isinstance(v, tuple) else v for k, v in var.items()}, near_m=round(near, 2), length_m=round(L, 1), **r))
+        if near >= tc["min_depth_m"] and (best is None or r["readiness"] > best[0]["readiness"]):
+            pts = np.concatenate([G.unproject(np.where(d > G.FAR, 0, d), G.K_of(f_mm, W, H), np.array(c), stride=4)[0] for d, (_, c, _) in zip(ds[::4], sc[::4])])
+            best = (r, path, pts, L)
+    shutil.rmtree(chk, ignore_errors=True)
+    if best is None: raise RuntimeError("no safe survey loop (tried %s)" % tried)
+    r, path, pts, L = best
+    info = dict(family="survey", engine="survey", readiness=r["readiness"], seen=r["seen"], length_m=round(L, 1), speed_mps=round(L / (F / float(tc["fps"])), 2),
+                near_m=min(t["near_m"] for t in tried if t["readiness"] == r["readiness"]), close_share=0.0, cells=r["cells"], tried=tried, choose_s=round(time.time() - t0, 1))
+    return path, f_mm, info, pts
+
+
 def choose_path(a, cfg, home, tdir, glb, pool, log, cpu_paths=None):
     """the target walk: candidates (pool chains and camera moves from the best pool views: push, pull, pan, strafe, orbit, walk-turn)
     rendered as plain raster depth at 1/8 size, every 8th frame, all in one preview call; the safest widest-seeing one wins (score:
@@ -609,6 +652,10 @@ def main():
             if hi + 1 < len(plans): start_job(hi + 1, 0)
             return
         shutil.copy(os.path.join(hd, "_gen", "era_%d.house.json" % L), os.path.join(hd, "shell.house.json"))
+        # (the photographed room's outline: the survey walk and its splat score keep to it)
+        _rn = json.load(open(pl_)).get("room") or room_slug(h["room"])
+        _rm = next((r for r in json.load(open(os.path.join(hd, "shell.house.json")))["rooms"] if r[0] == _rn or r[0].startswith(_rn)), None)
+        room_poly = [[float(c) for c in p_.split()] for p_ in __import__("re").findall(r"\(\(([^()]*)\)", _rm[1])[0].split(",")] if _rm else None
         fill(hi)
         refs_by_era = {}; shell_dropped = []; chosen = {}; videos = {}; queued = []; queued_at = {}; skipped_targets = []; late_eras = []; killed = set()
         import queue
@@ -642,7 +689,9 @@ def main():
             n = int(cfg["target_photos"]) if k in tgts else int(cfg["photos_per_era"])
             if k in tgts:
                 # (the walk first: the photos of every era are then picked partly for what the walks show)
-                try: chosen[k] = choose_path(a, cfg, h, tdir(k), glb, pool, log, pj.get("video_paths"))
+                try:
+                    if cfg["target"].get("path_engine") == "survey": chosen[k] = choose_survey(a, cfg, h, tdir(k), glb, pool, log, room_poly)
+                    else: chosen[k] = choose_path(a, cfg, h, tdir(k), glb, pool, log, pj.get("video_paths"))
                 except RuntimeError as ex:
                     # (no safe walk in this era: it stays a reference era)
                     print("  era %d: no video (%s)" % (k, ex), flush=True); skipped_targets.append(dict(era=k, reason=str(ex)))
@@ -698,6 +747,8 @@ def main():
                 for ph, o in zip(man_eras[kk]["photos"] if kk in man_eras else [], ov): ph.setdefault("video_overlap", {})["era_%d" % k] = o
             pinfo = chosen[k][2]
             if pinfo["close_share"] > q["max_close"]: fails.append("era %d video close to walls in %.0f %% of its frames" % (k, 100 * pinfo["close_share"]))
+            if "readiness" in pinfo and pinfo["readiness"] < float(cfg["target"].get("min_readiness", 0)):
+                fails.append("era %d walk splat readiness %.0f %% (under %.0f %%)" % (k, 100 * pinfo["readiness"], 100 * float(cfg["target"]["min_readiness"])))
             if labels["share"]["seen"] < q["min_seen"]: fails.append("era %d: references show %.0f %% of its video" % (k, 100 * labels["share"]["seen"]))
             targets.append(dict(era=k, dir=os.path.relpath(tdir(k), hd), masks=dict(labels, against="photos of the other eras"), video_path=pinfo, **v))
         for k, rec in man_eras.items():

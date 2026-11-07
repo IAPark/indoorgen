@@ -26,6 +26,15 @@ factor changes from one era to the next:
 `target/frames|video.mp4|...`, `sheet.png`; `OUT/index.jsonl` over homes, `OUT/skipped.jsonl` for houses without the target room.
 Cameras are OpenCV (x right, y down, z forward), `c2w`/`w2c` in metres (world z up), `K` in pixels and `K_normalized`.
 
+## Splat-grade target video (preset `splat`)
+`"preset": "splat"`: one target era per home whose video is a 10 s survey walk (240 frames) around the room through the camera pool's
+positions, looking inward with a sway, so a Gaussian splat can be trained on it. The walk is picked among a few variants by a splat
+readiness score (eras_geom.splat_cells / splat_readiness: 15 cm surface cells inside the room seen from 3+ frames at 15 deg+ apart,
+against what the camera pool sees); homes under `target.min_readiness` (0.7) fail the gate. Checked with Brush (Gaussian splatting,
+5000 steps) on living room 9100, 12 held-out photos from other positions: survey 120 frames 25.4 dB, survey 360 frames 23.2 dB, the
+old pan walk 120 frames 18.5 dB (same 4 views); the pan falls to 11-13 dB on views it never faced. Three homes: readiness 0.80-0.93,
+57-100 s a home, 1 example each.
+
 ## Strategy (chosen by benchmark, tools/dataset/eras_bench.py)
 Presets (`"preset": NAME` in the config): `per_home_60s` (every home inside 60 s: 3 eras, 2 x 64 frames, 60 s deadline),
 `rich` (= the defaults: 4 eras, 2 x 120 frames, 120 s deadline), `volume` (4 eras, 3 x 64 frames). How they were chosen: a
