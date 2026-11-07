@@ -521,8 +521,8 @@ fn od_cover(o: vec3<f32>) -> f32 {
   let c = od.vp * vec4<f32>(o, 1.0); let uv = vec2<f32>(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
   if (any(uv <= vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) { return 1.0; }
   var v = 0.0;
-  for (var j = -3; j <= 3; j++) { for (var i = -3; i <= 3; i++) { v += textureSampleCompareLevel(od_tex, od_smp, uv + vec2<f32>(f32(i), f32(j)) * od.on.y * 8.0, c.z - od.on.z * 8.0); } }
-  return v / 49.0;
+  for (var j = -2; j <= 2; j++) { for (var i = -2; i <= 2; i++) { v += textureSampleCompareLevel(od_tex, od_smp, uv + vec2<f32>(f32(i), f32(j)) * od.on.y * 10.0, c.z - od.on.z * 8.0); } }
+  return v / 25.0;
 }
 fn outdoor_sky(n: vec3<f32>, o: vec3<f32>) -> vec3<f32> {
   let b = basis(n); var e = vec3<f32>(0.0);
@@ -923,7 +923,7 @@ fn support(px: vec2<i32>, n: vec3<f32>, pos: vec3<f32>, w: i32, h: i32, ss: i32,
   let px = vec2<i32>(id.xy);
   if (px.x >= w || px.y >= h) { return; }
   let dims = vec2<f32>(f32(w), f32(h));
-  let d = textureLoad(g_depth, px, 0);
+  let d = gdepth(px); // (the outdoors as sky: its light is the trace pass's, by the map)
   if (d >= 1.0) { textureStore(out_irr, px, vec4<f32>(-1.0, 0.0, 0.0, 0.0)); return; }
   let pos = world_of(px, d, dims, p.inv_vp);
   var n = textureLoad(g_nrm, px, 0).xyz;

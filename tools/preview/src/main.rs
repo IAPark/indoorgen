@@ -1211,7 +1211,7 @@ fn outdoor_hidden(s: &Scene, i: usize, pv: &Option<Vec<[Vec4; 6]>>) -> bool {
     if s.weather[i] && s.rt.is_some() { return true }
     let d = &s.draws[i]; pv.as_ref().map_or(false, |pv| !pv.iter().any(|p| visible(p, d.bmin, d.bmax)))
 }
-/// the outdoors' instanced trees, into the scene as plain meshes: those within 25 m at a third of their triangles, out to 200 m at a twelfth (a row 100 m off showed in Blender's window), one mesh per tree kind and distance (the far canopy stands for the rest). The previewer has no per-draw transforms, and drew none of them: Blender showed a row of trees where this showed bare lawn
+/// the outdoors' instanced trees, into the scene as plain meshes: those within 25 m at a quarter of their triangles, out to 200 m at a 24th (a row 100 m off showed in Blender's window), one mesh per tree kind and distance (the far canopy stands for the rest). The previewer has no per-draw transforms, and drew none of them: Blender showed a row of trees where this showed bare lawn
 #[cfg(not(target_arch = "wasm32"))]
 fn bake_instances(glb: &mut glb::Glb, verbose: bool) {
     if glb.inst.is_empty() { return }
@@ -1238,7 +1238,7 @@ fn bake_instances(glb: &mut glb::Glb, verbose: bool) {
                 let pb = &ch[p.pos.chunk][p.pos.off as usize..(p.pos.off + p.pos.len) as usize];
                 let ib = &ch[p.idx.chunk][p.idx.off as usize..(p.idx.off + p.idx.len) as usize];
                 let ix: Vec<u32> = (0..p.icount as usize).map(|k| if p.idx_u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as u32 } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) }).collect();
-                let target = ((ix.len() as f32 / 3.0 / if lvl == 0 { std::env::var("OD_DIV0").ok().and_then(|x| x.parse().ok()).unwrap_or(3.0) } else { std::env::var("OD_DIV1").ok().and_then(|x| x.parse().ok()).unwrap_or(12.0) }) as usize).max(4) * 3;
+                let target = ((ix.len() as f32 / 3.0 / if lvl == 0 { std::env::var("OD_DIV0").ok().and_then(|x| x.parse().ok()).unwrap_or(4.0) } else { std::env::var("OD_DIV1").ok().and_then(|x| x.parse().ok()).unwrap_or(24.0) }) as usize).max(4) * 3;
                 let out = match meshopt::VertexDataAdapter::new(&pb[..p.vcount as usize * 12], 12, 0) { Ok(ad) => meshopt::simplify_sloppy(&ix, &ad, target, 0.05, None), Err(_) => ix.clone() };
                 let out = if out.is_empty() { ix } else { out };
                 // (only the vertices left in use, renumbered)
