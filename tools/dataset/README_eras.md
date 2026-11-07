@@ -27,6 +27,19 @@ factor changes from one era to the next:
 Cameras are OpenCV (x right, y down, z forward), `c2w`/`w2c` in metres (world z up), `K` in pixels and `K_normalized`.
 
 ## Strategy (chosen by benchmark, tools/dataset/eras_bench.py)
+Presets (`"preset": NAME` in the config): `per_home_60s` (every home inside 60 s: 3 eras, 2 x 64 frames, 60 s deadline),
+`rich` (= the defaults: 4 eras, 2 x 120 frames, 120 s deadline), `volume` (4 eras, 3 x 64 frames). How they were chosen: a
+coordinate search -- from the chosen setting each main knob (eras, videos per home, frames, photos per era, photo quality, deadline)
+was changed one at a time on the same homes, and no single change did better within its limit. A local optimum on this VM, not an
+exhaustive search.
+
+**Current default (target: at least 60 examples per hour, a home may take longer than 60 s):** 4 eras, two 120-frame (5 s) target
+videos, `budget_s` 120. Same 6 homes: 87 examples per hour run alone (mean 82 s, max 101 s a home), 11.8 references per example,
+82 % of each video shown in the references; six homes in one pipelined run: 12 examples in 407 s (106 per hour). For more volume:
+4 eras, `target.count` 3, 64 frames (147 per hour, 8.8 references). The 60-s-per-home strategy below is `eras` 3, `target.frames` 64,
+`budget_s` 60. Each era writes `selection.json`: every candidate pose, its estimated overlap with each walk, the overlap and spread
+picks, what was rendered and dropped.
+
 Defaults: 3 eras; **two target eras planned**, 64-frame videos; the second video is rendered only if the home still fits `budget_s`
 (60), else that era stays a reference era; reference eras still being built ~9 s before the budget are left out; 5 photos per era
 (2 per target era), one spare, a second render pass only for an era left short; full photo quality; video walk chosen on the CPU by

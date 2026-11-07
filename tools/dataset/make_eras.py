@@ -19,12 +19,12 @@ BL2CV = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
 
 DEFAULTS = {
     "width": 832, "height": 480,             # target video size (Hy-Nomas 480p: multiples of 32); photos keep this pixel area
-    "eras": 3,                               # eras per home (era 0 sets the shell); each more era adds ~8-20 s
+    "eras": 4,                               # eras per home (era 0 sets the shell); each more era adds ~8-20 s
     "photo_quality": "full",                 # preview --rt full (closer to Blender; benchmark: -3 % examples per hour against fast)
     "photos_per_era": 5,
     "photo_spares": 1,                       # extra views rendered per era for the ones the checks drop (each costs a render)                     # photos of every era but the target's
     "target_photos": 2,                      # photos of the target era itself (0: the model sees the target era only in the video)
-    "target": {"era": "random", "count": 2, "path_engine": "cpu", "frames": 64, "fps": 24, "path_views": 3, "min_depth_m": 0.3, "depth": False},  # depth: per-frame depth maps (+~15 % video time)
+    "target": {"era": "random", "count": 2, "path_engine": "cpu", "frames": 120, "fps": 24, "path_views": 3, "min_depth_m": 0.3, "depth": False},  # depth: per-frame depth maps (+~15 % video time)
     # chance that a factor changes from one era to the next (0 = never: every era as era 0; 1 = every era)
     "levels": {"furniture": 0.5, "mess": 0.5, "people": 0.6, "repaint": 0.4, "refloor": 0.1, "lighting": 0.8, "doors": 0.5, "intrinsics": 0.5},
     # a furniture change is one of these kinds (relative weights): move pieces about; re-arrange (the solver's rooms -- living, dining,
@@ -42,7 +42,7 @@ DEFAULTS = {
     # quality gate per home (manifest "qc"; a failing home goes to OUT/_rejected): photos per era at least, video seen share at least,
     # video frames close to walls at most, duplicate photo overlap
     "qc": {"min_photos": 3, "min_seen": 0.08, "max_close": 0.45, "duplicate_overlap": 0.7},
-    "budget_s": 60,                          # seconds per home: a second target video is rendered only while the home still fits
+    "budget_s": 120,                         # seconds per home: a second target video is rendered only while the home still fits
     "parallel_gen": "auto",                  # gen2 processes at once; auto: from RAM (a whole house peaks near 3 GB) and cores
     "keep_glb": False,
     "homes": [{"seed": 7, "room": "LivingRoom"}],   # or {"count": N, "seed": S, "rooms": [...]}
@@ -51,6 +51,17 @@ DEFAULTS = {
 
 # what an empty era keeps (src/scenegen.rs empty_rooms)
 KEEP_BUILTIN = ["Window", "Door", "CeilingLight", "Kitchen", "Fridge", "Dishwasher", "Oven", "Stove", "Hood", "Microwave", "Toilet", "Bathtub", "Sink", "Shower", "Fireplace", "Radiator"]
+
+
+# named strategies (eras_bench.py results in README_eras.md); a config's "preset" is applied before its own fields
+PRESETS = {
+    # the most examples per hour with every home inside 60 s (3 eras, two 64-frame videos, 60 s deadline): ~120 an hour, max 56 s a home
+    "per_home_60s": {"eras": 3, "budget_s": 60, "target": {"count": 2, "frames": 64}},
+    # richer examples at 60+ an hour (the default): 4 eras, two 120-frame (5 s) videos, 120 s deadline: ~87 an hour alone, ~106 pipelined
+    "rich": {"eras": 4, "budget_s": 120, "target": {"count": 2, "frames": 120}},
+    # volume at 60+ an hour: 4 eras, three 64-frame videos: ~147 an hour
+    "volume": {"eras": 4, "budget_s": 120, "target": {"count": 3, "frames": 64}},
+}
 
 
 def crc(*a): return zlib.crc32("/".join(map(str, a)).encode()) & 0x7FFFFFFF
@@ -272,7 +283,7 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
     # principal point: render with a margin and cut an off-centre window
     ox = int(round(kit["principal_offset"][0] * W)); oy = int(round(kit["principal_offset"][1] * H))
     mx, my = abs(ox), abs(oy); Wr, Hr = W + 2 * mx, H + 2 * my
-    ro = cfg["ref_overlap"]; est = {}
+    ro = cfg["ref_overlap"]; est = {}; est_per = []; hi = []
     # vpts: one point set per target video; the overlap picks take turns between them, so each video gets photos that look at it
     sets = [p for p in (vpts or []) if p is not None and len(p)]
     if sets and n:
@@ -283,7 +294,7 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
                 K = G.K_of(v["f_mm"], W, H); w2c = np.linalg.inv(np.array(c2w_cv(v["pos"], v["yaw"], v["pitch"])))
                 e[i] = G.overlap(p, K, w2c, W, H)
             per.append(e)
-        est = {i: max(e[i] for e in per) for i in range(len(pool))}
+        est = {i: max(e[i] for e in per) for i in range(len(pool))}; est_per = per
         n_hi = int(round(ro["share"] * n)); hi = []
         order_ = [sorted(e, key=lambda i: -e[i]) for e in per]; pos_ = [0] * len(per); t_ = 0; stuck = 0
         while len(hi) < n_hi and stuck < len(per):
@@ -330,10 +341,18 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
             if why: dropped.append(dict(pool_index=pool.index(cand[i]), reason=why)); continue
             k = len(views); im.save(os.path.join(era_dir, "photos", "%03d.png" % k)); np.save(os.path.join(era_dir, "depth", "%03d.npy" % k), d.astype(np.float32))
             pi = pool.index(cand[i])
-            rec.update(file="photos/%03d.png" % k, depth="depth/%03d.npy" % k, kind=cand[i].get("kind"), pool_index=pi, render_pass=pass_)
+            rec.update(file="photos/%03d.png" % k, depth="depth/%03d.npy" % k, kind=cand[i].get("kind"), pool_index=pi, render_pass=pass_,
+                       picked_by="video overlap" if pi in hi else ("second pass" if pass_ else "spread"))
             if est: rec["video_overlap_est"] = round(est.get(pi, 0.0), 3)
             views.append(rec); kept.append((d, K, C, W, H))
     shutil.rmtree(tmp, ignore_errors=True)
+    # (the whole choice, for inspection: every pool view, its estimated overlap with each walk, what was rendered and what came of it)
+    rendered = sorted({d["pool_index"] for d in dropped} | {v["pool_index"] for v in views})
+    json.dump(dict(pool=[dict(pos=v["pos"], yaw=v["yaw"], pitch=v["pitch"], f_mm=v["f_mm"], kind=v.get("kind"),
+                              est=[round(e.get(i, 0.0), 3) for e in est_per]) for i, v in enumerate(pool)],
+                   overlap_picks=hi, rendered=rendered, kept=[v["pool_index"] for v in views], dropped=dropped,
+                   rule=dict(share=ro["share"], min=ro["min"], n=n, spares=int(cfg["photo_spares"]))),
+              open(os.path.join(era_dir, "selection.json"), "w"))
     return views, dropped, dt, kept
 
 
@@ -462,7 +481,9 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("config"); ap.add_argument("out")
     ap.add_argument("--only"); ap.add_argument("--resume", action="store_true"); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    cfg = deep_merge(DEFAULTS, json.load(open(a.config)))
+    user = json.load(open(a.config))
+    if user.get("preset") and user["preset"] not in PRESETS: sys.exit("unknown preset %r (known: %s)" % (user["preset"], ", ".join(PRESETS)))
+    cfg = deep_merge(deep_merge(DEFAULTS, PRESETS.get(user.get("preset"), {})), user)
     out = os.path.abspath(a.out); os.makedirs(out, exist_ok=True)
     a.gen2, a.preview = find_gen2(cfg), find_preview(cfg); a.photo_quality = cfg["photo_quality"]
     if cfg["parallel_gen"] == "auto":
