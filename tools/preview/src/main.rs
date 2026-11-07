@@ -1939,7 +1939,12 @@ async fn ensure_rt_async(r: &mut Renderer, s: &mut Scene, o: &Opts) {
     }
     if o.verbose { eprintln!("  {} windows", wins.len()); }
     memlog("before bvh");
-    s.rt = Some(rt::build_scene(&r.gpu.dev, tris, &mats, &lights, &wins, o.seed, o.verbose));
+    // --sidecar-lighting: the sky of the sidecar's variation.lighting (tools/dataset/dscap.py apply_lighting: rotation pi - atan2(x, y) of sun_dir)
+    let sky_var = if o.sidecar_lighting { s.side["variation"]["lighting"]["sun_dir"].as_array().map(|d| {
+        let l = &s.side["variation"]["lighting"]; let f = |i: usize| d[i].as_f64().unwrap_or(0.0);
+        [(std::f64::consts::PI - f(0).atan2(f(1))) as f32, f(2).clamp(-1.0, 1.0).asin() as f32, l["sun_strength"].as_f64().unwrap_or(1.0) as f32, l["sky_strength"].as_f64().unwrap_or(0.2) as f32]
+    }) } else { None };
+    s.rt = Some(rt::build_scene(&r.gpu.dev, tris, &mats, &lights, &wins, o.seed, sky_var, o.verbose));
     { let k = wx_k(s); let u = [k.2, k.3, if (k.2 > 0.0 || k.3 > 0.0) { 1.0 } else { 0.0 }, 0.0f32]; r.gpu.q.write_buffer(&s.rt.as_ref().unwrap().wx_buf, 0, bytemuck::cast_slice(&u)); }
     // the outdoors' shadow, seen from the sun once: what it hides of the sun inside and out, without tracing it (see rt.wgsl od_vis). Over the house and 30 m round it; not the house's own shell, which the traced walls stand for (its siding has no holes cut for the windows), nor the weather
     if s.outdoor.iter().any(|&x| x) {
@@ -2173,7 +2178,8 @@ fn main() {
         let has_graphs = !s.pipes.is_empty();
         s.flat = has_graphs;
         // (an explicit view, path traced: no choosing, so no plain-colour pass first)
-        let direct_rt = o.rt.is_some() && !o.cams.is_empty() && o.cams.iter().all(|c| matches!(c, CamSpec::Json(_) | CamSpec::At(..)));
+        // (explicit cameras, traced or not: no search -- it scores views to pick among alternates, and these have none)
+        let direct_rt = !o.cams.is_empty() && o.cams.iter().all(|c| matches!(c, CamSpec::Json(_) | CamSpec::At(..)));
         if direct_rt { s.flat = false; }
         r.rt_now = false;
         let mut chosen: HashMap<String, usize> = HashMap::new();

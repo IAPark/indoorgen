@@ -265,7 +265,7 @@ pub fn pipes(dev: &wgpu::Device, w: u32, h: u32, ss: u32) -> Pipes {
 /// triangles with their draw's index
 const LC_SLOTS: usize = 1 << 18; // must match LC_MASK in rt.wgsl
 const M_MAPS: u64 = 16384; // must match M_MAPS in rt.wgsl
-pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, verbose: bool) -> SceneData {
+pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[MatD], lights: &[(Vec3, Vec3)], wins: &[Win], seed: u64, sky_var: Option<[f32; 4]>, verbose: bool) -> SceneData {
     use obvhs::triangle::Triangle;
     let t0 = web_time::Instant::now();
     let tris_o: Vec<Triangle> = tris_in.iter().map(|(t, _)| Triangle { v0: t[0].into(), v1: t[1].into(), v2: t[2].into() }).collect();
@@ -286,7 +286,9 @@ pub fn build_scene(dev: &wgpu::Device, tris_in: Vec<([Vec3; 3], u32)>, mats: &[M
     let (nprims, nnodes) = (tris.len(), nodes.len());
     drop(bvh); drop(tris_in);
     if verbose { eprintln!("  rt bvh: {nprims} tris, {nnodes} nodes, {:.2}s", t0.elapsed().as_secs_f32()); }
-    let sp = sky_params(seed);
+    let mut sp = sky_params(seed);
+    // (the scene's own sky, gen2's variation.lighting as Blender's dataset capture applies it: sun rotation and elevation, sun intensity, world strength)
+    if let Some([rot, el, si, st]) = sky_var { sp.rotation = rot; sp.elevation = el; sp.sun_intensity = si; sp.strength = st; }
     let (w, h) = (128u32, 64u32);
     crate::memlog("tris made");
     let (table, sun, sun_e) = sky_table(&sp, w as usize, h as usize);
