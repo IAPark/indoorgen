@@ -20,6 +20,7 @@ BL2CV = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
 DEFAULTS = {
     "width": 832, "height": 480,             # target video size (Hy-Nomas 480p: multiples of 32); photos keep this pixel area
     "eras": 4,                               # eras per home (era 0 sets the shell); each more era adds ~8-20 s
+    "preview_serve": True,                   # one preview process keeps the scenes loaded between an era's depth checks and photos (same pictures, ~2-3 s less an era)
     "photo_quality": "full",                 # preview --rt full (closer to Blender; benchmark: -3 % examples per hour against fast)
     "photos_per_era": 5,
     "photo_spares": 1,                       # extra views rendered per era for the ones the checks drop (each costs a render)                     # photos of every era but the target's
@@ -285,13 +286,57 @@ def run(cmd, log, env=None):
     return p.returncode, time.time() - t
 
 
+class PreviewServer:
+    """one `preview --serve` process for the stills and depth checks of a whole run: it keeps the last scenes loaded, so an era's candidate
+    depth, its photos and the target era's depth load each scene once (about a second a load, all of it on the GPU's queue). The target
+    videos keep their own processes (--rt video is not served). A server that dies is started again for the next job."""
+    def __init__(self, exe):
+        self.exe = exe; self.p = None; self.lock = threading.Lock()
+
+    def job(self, argv, log):
+        t = time.time()
+        with self.lock, open(log, "a") as f:
+            f.write("$ [serve] " + " ".join(map(str, argv)) + "\n"); f.flush()
+            for attempt in range(2):
+                if self.p is None or self.p.poll() is not None:
+                    self.p = subprocess.Popen([self.exe, "--serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=f, text=True, bufsize=1)
+                try:
+                    self.p.stdin.write(json.dumps([str(x) for x in argv]) + "\n"); self.p.stdin.flush()
+                    while True:
+                        line = self.p.stdout.readline()
+                        if not line: raise BrokenPipeError("preview server exited")
+                        if line.startswith("DONE"): return 0, time.time() - t
+                        if line.startswith("ERR"): f.write(line); return 1, time.time() - t
+                        f.write(line)
+                except (BrokenPipeError, OSError) as ex:
+                    f.write("preview server: %s\n" % ex); self.p = None
+            return 1, time.time() - t
+
+    def close(self):
+        if self.p and self.p.poll() is None:
+            try: self.p.stdin.close(); self.p.wait(timeout=10)
+            except Exception: self.p.kill()
+
+
+PHOTO_QUALITY = None
+PH = {}  # (per era dir: seconds of each step of photos_for_era, for the log)
+SERVER = None  # (main() starts it when config "preview_serve" is on)
+
+
 def render_views(preview, glb, cams, res, quality, out_dir, log, extra=(), depth=True):
-    """cams: [(name, c2w, f_mm)] -> pngs + depth npys in out_dir (named <stem>_<name>.png / .depth.npy)"""
+    """cams: [(name, c2w, f_mm)] -> pngs + depth npys in out_dir (named <stem>_<name>.png / .depth.npy). Through the preview server
+    when there is one (not the video): a plain raster call there writes only its depth (all its callers read) and loads its scene as
+    the photos will, so they share it."""
     cd = os.path.join(out_dir, "_cams"); os.makedirs(cd, exist_ok=True)
     args = []
     for name, c2w, f in cams:
         p = os.path.join(cd, name + ".json"); cam_json(p, c2w, f); args += ["--cam", p]
-    cmd = [preview, glb] + args + ["--res", "%dx%d" % res] + (["--depth"] if depth else []) + ["--sidecar-lighting"] + (["--rt", quality] if quality else ["--ss", "2"]) + list(extra) + ["-o", out_dir]
+    tail = ["--res", "%dx%d" % res] + (["--depth"] if depth else []) + ["--sidecar-lighting"]
+    if SERVER is not None and quality != "video":
+        if quality: tail += ["--rt", quality] + list(extra)
+        else: tail += (["--rt", PHOTO_QUALITY] if PHOTO_QUALITY else []) + ["--ss", "2"] + list(extra) + ["--depth-only"]
+        return SERVER.job([glb] + args + tail + ["-o", out_dir], log)
+    cmd = [preview, glb] + args + tail + (["--rt", quality] if quality else ["--ss", "2"]) + list(extra) + ["-o", out_dir]
     return run(cmd, log)
 
 
@@ -329,17 +374,24 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None, tglb=
         w4, h4 = max(8, W // 4), max(8, H // 4); stem_ = os.path.splitext(os.path.basename(glb))[0]
         cc = [("c%03d" % i, c2w_cv(v["pos"], v["yaw"], v["pitch"]), v["f_mm"]) for i, v in enumerate(pool)]
         chk = os.path.join(era_dir, "_sel"); shutil.rmtree(chk, ignore_errors=True)
-        render_views(a.preview, glb, cc, (w4, h4), None, chk, log, extra=("--ss", "1"))
+        ph = PH.setdefault(era_dir, {}); _t = time.time()
+        has_t = bool(tglb and tglb != glb and os.path.exists(tglb))
+        chk2 = os.path.join(era_dir, "_sel_t")
+        if has_t:
+            # (the target era's depth first: the preview server keeps the last two scenes, and the target's is the one every era wants)
+            shutil.rmtree(chk2, ignore_errors=True)
+            render_views(a.preview, tglb, cc, (w4, h4), None, chk2, log, extra=("--ss", "1")); ph["tcand_render"] = time.time() - _t; _t = time.time()
+        render_views(a.preview, glb, cc, (w4, h4), None, chk, log, extra=("--ss", "1")); ph["cand_render"] = time.time() - _t; _t = time.time()
         ds = [np.load(os.path.join(chk, "%s_%s.depth.npy" % (stem_, nm))) for nm, _, _ in cc]
         maps = [G.view_cells(d, G.K_of(f, w4, h4), np.array(c), room_poly) for d, (_, c, f) in zip(ds, cc)]
+        ph["view_cells"] = time.time() - _t; _t = time.time()
         changed = set()
-        if tglb and tglb != glb and os.path.exists(tglb):
-            chk2 = os.path.join(era_dir, "_sel_t"); shutil.rmtree(chk2, ignore_errors=True)
-            render_views(a.preview, tglb, cc, (w4, h4), None, chk2, log, extra=("--ss", "1"))
+        if has_t:
             st2 = os.path.splitext(os.path.basename(tglb))[0]
             for d, (nm, c, f) in zip(ds, cc):
                 changed |= G.changed_cells(d, np.load(os.path.join(chk2, "%s_%s.depth.npy" % (st2, nm))), G.K_of(f, w4, h4), np.array(c), room_poly)
             shutil.rmtree(chk2, ignore_errors=True)
+            ph["changed_cells"] = time.time() - _t; _t = time.time()
         shutil.rmtree(chk, ignore_errors=True)
         vcells = set()
         for p in sets: vcells |= set(G.cell_hash(p[G._in_room(p, room_poly)]).tolist())
@@ -358,6 +410,7 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None, tglb=
                 if si and (not ri or len(order_i) % 2 == 1): order_i.append(si.pop(0)); gains.append(gs_.pop(0))
                 else: order_i.append(ri.pop(0)); gains.append(gr.pop(0))
             cand = [pool[i] for i in order_i]; hi = list(order_i); sel["gains"] = dict(zip(order_i, gains))
+            ph["greedy"] = time.time() - _t
     if greedy and sel: pass
     elif sets and n:
         per = []
@@ -603,6 +656,10 @@ def main():
     cfg = deep_merge(deep_merge(DEFAULTS, PRESETS.get(user.get("preset"), {})), user)
     out = os.path.abspath(a.out); os.makedirs(out, exist_ok=True)
     a.gen2, a.preview = find_gen2(cfg), find_preview(cfg); a.photo_quality = cfg["photo_quality"]
+    global SERVER, PHOTO_QUALITY
+    PHOTO_QUALITY = a.photo_quality
+    if cfg.get("preview_serve", True):
+        SERVER = PreviewServer(a.preview); __import__("atexit").register(SERVER.close)
     if cfg["parallel_gen"] == "auto":
         try: ram = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout) / 1e9
         except Exception: ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
@@ -756,6 +813,7 @@ def main():
                     if (hi, gi) in jobs: jobs[(hi, gi)][0].kill(); killed.add(gi)
                     continue
                 if not ok: print("  era %d gen2 FAILED, see the batch logs in %s" % (k, os.path.join(hd, "_gen"))); continue
+            t_k0 = time.time() - t_home
             _, ed, glb = paths(hi, k); side = json.load(open(glb[:-4] + ".json"))
             hj = json.load(open(glb[:-4] + ".house.json")); sj = json.load(open(os.path.join(hd, "shell.house.json")))
             same_shell = hj["rooms"] == sj["rooms"] and sorted(map(json.dumps, hj["cutters"])) == sorted(map(json.dumps, sj["cutters"]))
@@ -808,7 +866,10 @@ def main():
                        finishes=fin, lighting={x: var.get("lighting", {}).get(x) for x in ("time_of_day_h", "sun_dir", "sun_strength", "sky_strength", "is_night", "lamps_on", "lamps_total")},
                        variation_furniture=var.get("furniture"), empty_leftovers=left)
             man_eras[k] = rec; done.add(k)
-            print("  era %d: %d photos (%s) gen %.1fs render %.1fs%s%s" % (k, len(views), ", ".join(eras[k]["changed"]) or "base", timing["gen"].get(k, 0), t_ph,
+            # (when the main thread had the era's build, and when it was done with it: the home's critical path)
+            timing.setdefault("timeline", {})[k] = [round(t_k0, 1), round(time.time() - t_home, 1)]
+            if PH.get(ed): timing.setdefault("photo_steps", {})[k] = {x: round(v, 2) for x, v in PH[ed].items()}
+            print("  era %d: %d photos (%s) gen %.1fs render %.1fs [%.0f-%.0f s]%s%s" % (k, len(views), ", ".join(eras[k]["changed"]) or "base", timing["gen"].get(k, 0), t_ph, t_k0, time.time() - t_home,
                   "  + video (background, %s path)" % chosen[k][2]["family"] if k in tgts else "", "  dropped %s" % [d["reason"].split(" ")[0] for d in dropped] if dropped else ""), flush=True)
             if not cfg["keep_glb"] and k not in tgts:
                 for x in (glb, glb[:-4] + ".json"): os.path.exists(x) and os.remove(x)

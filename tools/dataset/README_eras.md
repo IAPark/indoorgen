@@ -35,7 +35,22 @@ adds family-snapshot poses (in front of a person, within 50 deg of the way they 
 writes selection.json; each target `ref_coverage`. Same 6 homes: old chooser video 78.3 % seen / 49.3 % from 2 directions / room 81.2 %
 / changes 80.4 %; greedy without snapshots 78.1 / 58.0 / 76.5 / 74.4; greedy with snapshots (default) 79.3 / 55.4 / 82.0 / 80.5.
 `micro_eras.count` (default 0): after each era that many more with the same furniture, walls and floor and other mess and people
-(`lighting: true` varies the light too), `micro_eras.photos` photos each. Two per era on living room 9105: 12 eras, 47 photos, 172 s.
+(`lighting: true` varies the light too), `micro_eras.photos` photos each. Measured 2026-11-08 (same 6 homes, one process, VM slower
+that day than for the tables below: `rich` alone took 97.8 s a home): `rich` 12 examples in 601 s (72 per hour, 13.8 photos a home);
+`rich` + `micro_eras.count` 1 + `budget_s` 150, 12 examples in 810 s (53 per hour, 25.8 photos a home). With `budget_s` 120 the
+budget drops the second video in half the homes (45 per hour run alone). Two per era on living room 9105: 12 eras, 38 photos, 155 s.
+
+### Where an era's time goes (and what is kept between eras)
+
+The photo stills and depth checks go through one `preview --serve` process (`preview_serve`, default on): it keeps the last two
+scenes loaded (the target era's is the one every era wants, so its depth is rendered first in each era), material pipelines,
+simplified outdoor meshes and textures by content -- the same pictures as one process per call (depth identical; stills within the
+path tracer's run-to-run noise). A gen2 batch keeps, besides the solve and the outdoors, the furnished layout (the solver's rooms
+placed: `FURNISHED reused`) and each object's visual (`VISUALS n of m reused`), and the camera pool's ray casts use a BVH per node
+kept between eras (`POOL world`): the built glb and pool are byte-identical to building each era from scratch (`ERA_MEMO=0` turns the
+first two off). Per reused era alone: about 4-5 s of gen2 (was 6-8 s). In a running home the GPU is the limit (photos, depth checks
+and the videos share it, and gen2 runs about 3x slower beside them); `timing.timeline` and `timing.photo_steps` in the manifest show
+each era's turn on the main thread and its render steps. A/B on the 6 homes, interleaved: 97.8 s a home against 104.8 s before.
 
 ## Splat-grade target video (preset `splat`)
 `"preset": "splat"`: one target era per home whose video is a 10 s survey walk (240 frames) around the room through the camera pool's

@@ -223,12 +223,14 @@ pub fn apply(people: &[Placement], scene: &mut Scene, floor_z: f64) {
                 }
             }
         }
+        let t = std::time::Instant::now();
         match pl.cover {
             Cover::Under => under_cover(pi, pl, scene, floor_z),
             Cover::On => on_cover(pi, pl, scene),
             Cover::Throw => throw_blanket(pi, pl, scene, floor_z),
             Cover::None => {}
         }
+        if std::env::var_os("LAPS").is_some() { eprintln!("COVER person{pi} {:?} {:?} {:.2}s", pl.kind, pl.cover, t.elapsed().as_secs_f64()); }
     }
 }
 

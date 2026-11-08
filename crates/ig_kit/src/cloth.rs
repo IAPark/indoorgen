@@ -133,8 +133,9 @@ impl Collider {
         }
         let ext = sub(hi, lo);
         let ax = if ext[0] >= ext[1] && ext[0] >= ext[2] { 0 } else if ext[1] >= ext[2] { 1 } else { 2 };
-        self.order[s..e].sort_unstable_by(|&a, &b| cent[a as usize][ax].partial_cmp(&cent[b as usize][ax]).unwrap());
+        // (the median split only: a partition around it, linear, where a full sort of every node's range was most of a blanket's time)
         let m = (s + e) / 2;
+        self.order[s..e].select_nth_unstable_by(m - s, |&a, &b| cent[a as usize][ax].partial_cmp(&cent[b as usize][ax]).unwrap());
         self.nodes[id].count = 0;
         self.build(s, m, cent);
         let r = self.build(m, e, cent);

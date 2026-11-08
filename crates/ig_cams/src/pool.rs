@@ -38,26 +38,152 @@ fn okey(name: &str) -> String {
     match k.rfind('.') { Some(i) if k[i + 1..].chars().all(|c| c.is_ascii_digit()) && i + 1 < k.len() => k[..i].to_string(), _ => k.to_string() }
 }
 
+/// one node's triangles for ray casts (a BVH of its own)
+struct Part { tm: Option<TriMesh>, ntri: usize, tri_n: Vec<V3>, lo: V3, hi: V3 }
+/// the scene for ray casts as a two-level BVH: a part per node, kept between the pools of one process by the node's name and mesh (the
+/// eras of a batch share most of their house), and a tree over the parts' boxes built for each pool. A cast takes the nearest hit
 struct World {
-    tm: TriMesh,
-    ntri: usize,
-    tri_obj: Vec<u32>,
+    parts: Vec<std::sync::Arc<Part>>,
+    /// first triangle of each part in the world's numbering
+    toff: Vec<usize>,
     kind: Vec<u8>,
     okeys: Vec<String>,
-    tri_n: Vec<V3>,
+    /// the tree over the parts: (box lo, box hi, first, count, right child); count > 0 is a leaf of order[first..first + count]
+    tree: Vec<(V3, V3, u32, u32, u32)>,
+    order: Vec<u32>,
+}
+
+thread_local! {
+    /// the last pool's parts by (node name, mesh hash)
+    static PARTS: std::cell::RefCell<HashMap<(String, u64), std::sync::Arc<Part>>> = std::cell::RefCell::new(HashMap::new());
+}
+
+fn node_hash(n: &ig_core::mesh::Node) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    n.mesh.pos.len().hash(&mut h);
+    for p in &n.mesh.pos { for v in p { v.to_bits().hash(&mut h) } }
+    for f in &n.mesh.faces { f.hash(&mut h) }
+    h.finish()
+}
+
+fn build_part(n: &ig_core::mesh::Node) -> Part {
+    let (mut pts, mut idx, mut tri_n) = (vec![], vec![], vec![]);
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for t in n.mesh.triangles() {
+        let (a, b, c) = (n.mesh.pos[t[0] as usize], n.mesh.pos[t[1] as usize], n.mesh.pos[t[2] as usize]);
+        let nn = cross(sub(b, a), sub(c, a));
+        if norm(nn) < 1e-14 { continue }
+        let base = pts.len() as u32;
+        for p in [a, b, c] { pts.push(Point3::new(p[0], p[1], p[2])); for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); } }
+        idx.push([base, base + 1, base + 2]); tri_n.push(unit(nn));
+    }
+    let ntri = idx.len();
+    Part { tm: if ntri > 0 { Some(TriMesh::new(pts, idx).expect("pool: node triangle mesh")) } else { None }, ntri, tri_n, lo, hi }
+}
+
+impl World {
+    fn of(scene: &Scene) -> World {
+        let nodes: Vec<&ig_core::mesh::Node> = scene.nodes.iter().filter(|n| !n.mesh.is_empty()).collect();
+        let old = PARTS.with(|m| std::mem::take(&mut *m.borrow_mut()));
+        let mut now: HashMap<(String, u64), std::sync::Arc<Part>> = HashMap::new();
+        let (mut parts, mut toff, mut kind, mut okeys) = (vec![], vec![], vec![], vec![]);
+        let (mut t, mut kept, mut kept_t) = (0usize, 0usize, 0usize);
+        for n in &nodes {
+            let key = (n.name.clone(), node_hash(n));
+            let p = match old.get(&key).or_else(|| now.get(&key)) { Some(p) => { kept += 1; kept_t += p.ntri; p.clone() } None => std::sync::Arc::new(build_part(n)) };
+            now.insert(key, p.clone());
+            toff.push(t); t += p.ntri; kind.push(kind_of(&n.name)); okeys.push(okey(&n.name)); parts.push(p);
+        }
+        drop(old);
+        eprintln!("POOL world: {} triangles in {} parts, {} parts ({} triangles) from the last pool", t, parts.len(), kept, kept_t);
+        PARTS.with(|m| *m.borrow_mut() = now);
+        let mut w = World { order: (0..parts.len() as u32).filter(|&i| parts[i as usize].ntri > 0).collect(), parts, toff, kind, okeys, tree: vec![] };
+        let n = w.order.len();
+        if n > 0 { w.build(0, n); }
+        w
+    }
+    fn build(&mut self, s: usize, e: usize) -> usize {
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for &i in &self.order[s..e] { let p = &self.parts[i as usize]; for k in 0..3 { lo[k] = lo[k].min(p.lo[k]); hi[k] = hi[k].max(p.hi[k]); } }
+        let id = self.tree.len();
+        self.tree.push((lo, hi, s as u32, (e - s) as u32, 0));
+        if e - s <= 2 { return id }
+        let ext = sub(hi, lo);
+        let ax = if ext[0] >= ext[1] && ext[0] >= ext[2] { 0 } else if ext[1] >= ext[2] { 1 } else { 2 };
+        let m = (s + e) / 2;
+        let parts = &self.parts;
+        self.order[s..e].select_nth_unstable_by(m - s, |&a, &b| { let (pa, pb) = (&parts[a as usize], &parts[b as usize]); (pa.lo[ax] + pa.hi[ax]).partial_cmp(&(pb.lo[ax] + pb.hi[ax])).unwrap() });
+        self.tree[id].3 = 0;
+        self.build(s, m);
+        let r = self.build(m, e);
+        self.tree[id].4 = r as u32;
+        id
+    }
+    fn ntri(&self) -> usize { self.parts.iter().map(|p| p.ntri).sum() }
+    fn at(&self, t: usize) -> (usize, usize) {
+        // (the part holding world triangle t: the last whose first triangle is at or before it, among parts with triangles)
+        let i = self.toff.partition_point(|&o| o <= t).saturating_sub(1);
+        let mut i = i; while i > 0 && self.parts[i].ntri == 0 { i -= 1 }
+        (i, t - self.toff[i])
+    }
+}
+
+/// entry distance of a ray into a box (None: misses it, or only beyond max_t)
+fn slab(o: V3, inv: V3, lo: V3, hi: V3, max_t: f64) -> Option<f64> {
+    let (mut t0, mut t1) = (0.0f64, max_t);
+    for k in 0..3 {
+        let (mut a, mut b) = ((lo[k] - o[k]) * inv[k], (hi[k] - o[k]) * inv[k]);
+        if a > b { std::mem::swap(&mut a, &mut b) }
+        if a.is_nan() || b.is_nan() { if o[k] < lo[k] || o[k] > hi[k] { return None } continue }
+        t0 = t0.max(a); t1 = t1.min(b);
+        if t0 > t1 { return None }
+    }
+    Some(t0)
 }
 
 struct Hit { dist: f64, tri: usize, n: V3 }
 
 impl World {
     fn cast(&self, o: V3, d: V3, max_t: f64) -> Option<Hit> {
+        if self.tree.is_empty() { return None }
         let r = Ray::new(Point3::new(o[0], o[1], o[2]), Vector3::new(d[0], d[1], d[2]));
-        let h = self.tm.cast_local_ray_and_get_normal(&r, max_t, false)?;
-        let tri = match h.feature { FeatureId::Face(f) => f as usize % self.ntri, _ => 0 };
-        Some(Hit { dist: h.time_of_impact, tri, n: self.tri_n[tri] })
+        let inv = [1.0 / d[0], 1.0 / d[1], 1.0 / d[2]];
+        let mut best: Option<Hit> = None; let mut lim = max_t;
+        let mut stack: Vec<(usize, f64)> = Vec::with_capacity(32);
+        if let Some(t) = slab(o, inv, self.tree[0].0, self.tree[0].1, lim) { stack.push((0, t)) }
+        while let Some((ni, tin)) = stack.pop() {
+            if tin > lim { continue }
+            let (_, _, first, count, right) = self.tree[ni];
+            if count > 0 {
+                for &pi in &self.order[first as usize..(first + count) as usize] {
+                    let p = &self.parts[pi as usize];
+                    let Some(tm) = &p.tm else { continue };
+                    if slab(o, inv, p.lo, p.hi, lim).is_none() { continue }
+                    let Some(h) = tm.cast_local_ray_and_get_normal(&r, lim, false) else { continue };
+                    if best.as_ref().map_or(false, |b| h.time_of_impact >= b.dist) { continue }
+                    // (not a face: the world's first triangle, as one BVH over everything gave)
+                    let (tri, n) = match h.feature { FeatureId::Face(f) => { let l = f as usize % p.ntri; (self.toff[pi as usize] + l, p.tri_n[l]) } _ => { let (i, l) = self.at(0); (0, self.parts[i].tri_n.get(l).copied().unwrap_or([0.0, 0.0, 1.0])) } };
+                    lim = h.time_of_impact;
+                    best = Some(Hit { dist: h.time_of_impact, tri, n });
+                }
+                continue
+            }
+            let (a, b) = (ni + 1, right as usize);
+            let ta = slab(o, inv, self.tree[a].0, self.tree[a].1, lim);
+            let tb = slab(o, inv, self.tree[b].0, self.tree[b].1, lim);
+            // (the nearer child last on the stack: it is searched first, and its hit cuts the other short)
+            match (ta, tb) {
+                (Some(x), Some(y)) => if x <= y { stack.push((b, y)); stack.push((a, x)) } else { stack.push((a, x)); stack.push((b, y)) },
+                (Some(x), None) => stack.push((a, x)),
+                (None, Some(y)) => stack.push((b, y)),
+                _ => {}
+            }
+        }
+        best
     }
-    fn tkind(&self, t: usize) -> u8 { self.kind[self.tri_obj[t] as usize] }
-    fn tkey(&self, t: usize) -> &str { &self.okeys[self.tri_obj[t] as usize] }
+    fn tkind(&self, t: usize) -> u8 { self.kind[self.at(t).0] }
+    fn tkey(&self, t: usize) -> &str { &self.okeys[self.at(t).0] }
 }
 
 fn sub(a: V3, b: V3) -> V3 { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
@@ -331,28 +457,18 @@ fn snapshot_views(w: &World, rm: &Room, people: &[(V3, V3, Option<f64>)], wd: us
 /// camera_seed, cameras {focal_mm, eye_height_m, wall_margin_m, traj_frac, cluster_len, fresh_candidates, pool_factor}.
 pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
     let t0 = std::time::Instant::now();
-    // one BVH over every visible mesh (dscap: every render-visible Blender mesh)
-    let (mut pts, mut idx, mut tri_obj, mut tri_n) = (vec![], vec![], vec![], vec![]);
-    let (mut kind, mut okeys) = (vec![], vec![]);
+    // a BVH over every visible mesh (dscap: every render-visible Blender mesh), in parts (World::of)
     let mut floor: Vec<[V3; 3]> = vec![];
     for n in &scene.nodes {
-        if n.mesh.is_empty() { continue }
-        let oi = okeys.len() as u32;
-        kind.push(kind_of(&n.name)); okeys.push(okey(&n.name));
-        let is_floor = n.name.starts_with(room) && n.name.contains(".floor");
+        if n.mesh.is_empty() || !(n.name.starts_with(room) && n.name.contains(".floor")) { continue }
         for t in n.mesh.triangles() {
             let (a, b, c) = (n.mesh.pos[t[0] as usize], n.mesh.pos[t[1] as usize], n.mesh.pos[t[2] as usize]);
-            let nn = cross(sub(b, a), sub(c, a));
-            if norm(nn) < 1e-14 { continue }
-            let base = pts.len() as u32;
-            for p in [a, b, c] { pts.push(Point3::new(p[0], p[1], p[2])) }
-            idx.push([base, base + 1, base + 2]); tri_obj.push(oi); tri_n.push(unit(nn));
-            if is_floor { floor.push([a, b, c]) }
+            if norm(cross(sub(b, a), sub(c, a))) < 1e-14 { continue }
+            floor.push([a, b, c]);
         }
     }
-    let ntri = idx.len();
-    let tm = TriMesh::new(pts, idx).expect("pool: scene triangle mesh");
-    let w = World { tm, ntri, tri_obj, kind, okeys, tri_n };
+    let w = World::of(scene);
+    let ntri = w.ntri();
     // room floor: area-weighted sampling, outline edges (matched by position: floor meshes have per-face vertices)
     let area: Vec<f64> = floor.iter().map(|t| norm(cross(sub(t[1], t[0]), sub(t[2], t[0]))) / 2.0).collect();
     let total: f64 = area.iter().sum();
@@ -382,7 +498,7 @@ pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
     let mut keys: Vec<&String> = boxes.keys().collect();
     keys.sort();
     let mut targets = vec![];
-    for k in keys {
+    for k in keys.iter().copied() {
         if k.starts_with("person") || k.contains("Window") || k.contains("Door") { continue }
         let (lo, hi) = boxes[k];
         let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
@@ -424,10 +540,12 @@ pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
             if let Some(p) = n.pose { faces.entry(okey(&n.name)).or_insert(p[1][1].atan2(p[0][1])); }
         }
         let mut people: Vec<(V3, V3, Option<f64>)> = vec![];
-        for (k, (lo, hi)) in &boxes {
+        // (in name order: a map's order differs from run to run, and so did the snapshots)
+        for k in &keys {
+            let (lo, hi) = &boxes[*k];
             if !k.starts_with("person") { continue }
             let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-            let face = if k.contains("Lie") { None } else { faces.get(k).copied() };
+            let face = if k.contains("Lie") { None } else { faces.get(*k).copied() };
             if rlo[0] - 0.1 <= c[0] && c[0] <= rhi[0] + 0.1 && rlo[1] - 0.1 <= c[1] && c[1] <= rhi[1] + 0.1 { people.push((*lo, *hi, face)) }
         }
         people.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());

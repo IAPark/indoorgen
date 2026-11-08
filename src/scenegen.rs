@@ -89,6 +89,13 @@ thread_local! {
     static OUTDOOR_MEMO: std::cell::RefCell<Option<(String, Scene, serde_json::Value)>> = const { std::cell::RefCell::new(None) };
     /// the last layout built in this process: (layout key, solved house, plan attempt kept)
     static SOLVE_MEMO: std::cell::RefCell<Option<(String, indoorgen::pipeline::Generated, u32)>> = const { std::cell::RefCell::new(None) };
+    /// the last furnished layout in this process: (layout key + the solver rooms' seed, the house after the solver's rooms are placed
+    /// and the realism fixes ran). An era that keeps its furniture (mess, people, colours, light, doors differ) starts from it
+    static FURNISHED_MEMO: std::cell::RefCell<Option<(String, indoorgen::pipeline::Generated)>> = const { std::cell::RefCell::new(None) };
+    /// the last build's object visuals as built (before the mess edits them), by object and everything its build reads: an era that
+    /// keeps the furniture takes them instead of building them again
+    /// (each entry holds its piece, so no other piece can take its address -- the key's identity -- while it is kept)
+    static VISUAL_MEMO: std::cell::RefCell<std::collections::HashMap<String, (indoorgen::assets::Asset, Option<indoorgen::furn::state::PieceRef>)>> = std::cell::RefCell::new(Default::default());
 }
 
 /// the settings the layout depends on: the config without what is only applied after the solve (mess, people, surface colours,
@@ -114,6 +121,9 @@ fn empty_rooms(state: &mut indoorgen::furn::state::State) -> Vec<String> {
     for k in keys { if state.objs.contains_key(&k) { n += indoorgen::furn::layout2d::remove_tree(state, &k).len().max(1); } }
     vec![format!("{n} objects taken out")]
 }
+
+/// ERA_MEMO=0: no furnished-layout or visuals memo (each era of a batch builds them again; for checks and memory comparisons)
+fn era_memo() -> bool { std::env::var("ERA_MEMO").map_or(true, |v| v != "0") }
 
 pub fn build_scene(p: &Params) -> Built {
     // caches keyed by names / versions / addresses that repeat from house to house (a second generation in one process -- the
@@ -245,10 +255,12 @@ pub fn build_scene(p: &Params) -> Built {
     // (the unified solver's rooms: the furniture seed, or variation.furniture.rearrange -- the same house, its rooms laid out again)
     let uni_seed = var.furniture.rearrange.unwrap_or(furn_seed);
     let memo = SOLVE_MEMO.with(|m| m.borrow().as_ref().filter(|(k, _, _)| *k == solve_key).map(|(_, g, a)| (g.clone(), *a)));
+    let furnished_key = format!("{solve_key}|{uni_seed}|{}", cfg.program.realism && !orig_prog);
+    let furnished = if memo.is_some() { FURNISHED_MEMO.with(|m| m.borrow().as_ref().filter(|(k, _)| *k == furnished_key).map(|(_, g)| g.clone())) } else { None };
     let (mut g, attempt_used, mut plan) = match memo {
         Some((g, a)) => {
             eprintln!("SOLVE reused from an earlier build in this process (same layout settings)");
-            let plan = unified.then(|| indoorgen::unified::solve_house(&g, uni_seed));
+            let plan = (unified && furnished.is_none()).then(|| indoorgen::unified::solve_house(&g, uni_seed));
             (g, a, plan)
         }
         None => {
@@ -314,6 +326,10 @@ pub fn build_scene(p: &Params) -> Built {
             (g, attempt_used, plan)
         }
     };
+    if let Some(fg) = furnished {
+        eprintln!("FURNISHED reused from an earlier build in this process (same layout and solver-room seed)");
+        g = fg;
+    } else {
     if cfg.program.realism && !orig_prog {
         if let Some(spec) = &rules {
             let rm = crate::realism::enforce_caps(&mut g.state, spec);
@@ -333,6 +349,8 @@ pub fn build_scene(p: &Params) -> Built {
         for l in indoorgen::furn::groups::reseat_living_rooms(&mut g.state, &seats) { eprintln!("WALKWAY {l}"); }
         // (a built-in the repair took out is not built)
         g.features.retain(|pf| g.state.objs.contains_key(&pf.key));
+    }
+    if era_memo() { FURNISHED_MEMO.with(|m| *m.borrow_mut() = Some((furnished_key.clone(), g.clone()))); }
     }
     ig_core::envx::progress(&format!("solved ({:.1}s): {}", t.elapsed().as_secs_f64(), g.timings.iter().map(|(k, v)| format!("{k} {v:.1}s")).collect::<Vec<_>>().join(", ")));
     eprintln!("total {:?}  stages {:?}  cpu {:.2}", t.elapsed(), g.timings, indoorgen::assets::thread_cpu());
@@ -614,10 +632,20 @@ pub fn build_scene(p: &Params) -> Built {
     let mut visuals: std::collections::HashMap<String, indoorgen::assets::Asset> = {
         use rayon::prelude::*;
         let items: Vec<(&String, &indoorgen::furn::state::GenRef, bool)> = g.state.objs.iter().filter(|(k, _)| !g.features.iter().any(|f| &f.key == *k)).filter_map(|(k, o)| o.generator.as_ref().map(|gen| (k, gen, o.tags.contains(indoorgen::furn::tags::Tag::sem("RoundTable"))))).collect();
-        items
+        // (the key: the object, its generator record -- a piece by its identity, which its copies share -- the finish seeds and the budget)
+        let geo = serde_json::to_string(&cfg.geometry).unwrap_or_default();
+        let vkey = |k: &String, gen: &indoorgen::furn::state::GenRef, round: bool| format!("{k}|{gen:?}|{round}|{:?}|{:?}|{:?}|{geo}|{seed}", gen.piece.as_ref().map(|p| std::sync::Arc::as_ptr(&p.0) as *const () as usize), var.walls.seed, var.floor.seed);
+        let keyed: Vec<(String, &String, &indoorgen::furn::state::GenRef, bool)> = items.iter().map(|(k, gen, round)| (vkey(k, gen, *round), *k, *gen, *round)).collect();
+        let old = VISUAL_MEMO.with(|m| std::mem::take(&mut *m.borrow_mut()));
+        let built: Vec<(String, String, indoorgen::assets::Asset, Option<indoorgen::furn::state::PieceRef>)> = keyed
             .par_iter()
-            .map(|(k, gen, round)| ((*k).clone(), build_visual(k, gen, *round)))
-            .collect()
+            .map(|(vk, k, gen, round)| (vk.clone(), (*k).clone(), old.get(vk).map(|e| e.0.clone()).unwrap_or_else(|| build_visual(k, gen, *round)), gen.piece.clone()))
+            .collect();
+        let reused = built.iter().filter(|(vk, _, _, _)| old.contains_key(vk)).count();
+        if reused > 0 { eprintln!("VISUALS {reused} of {} reused from the last build in this process", built.len()); }
+        drop(old);
+        if era_memo() { VISUAL_MEMO.with(|m| *m.borrow_mut() = built.iter().map(|(vk, _, a, p)| (vk.clone(), (a.clone(), p.clone()))).collect()); }
+        built.into_iter().map(|(_, k, a, _)| (k, a)).collect()
     };
     lap("visuals built");
     // through-wall safety net: a floor piece whose built footprint reaches more than 4 cm past its room's wall face (into the wall or the
@@ -1084,8 +1112,10 @@ pub fn build_scene(p: &Params) -> Built {
             scene.add_posed(&format!("person{pi}_{:?}#{k}", pl.kind), "Person", m, mi, pl.pose.0);
         }
     }
+    lap("people placed and built");
     indoorgen::people::cover::apply(&people, &mut scene, g.c.wall_thickness / 2.0);
     if !people.is_empty() { indoorgen::people::pillows::settle(&people, &mut scene, g.c.wall_thickness / 2.0); }
+    lap("people cover + pillows");
     // the clutter pass keeps off the people (their occupied boxes, padded 4 cm)
     let mut keepout: Vec<indoorgen::mesh::Mesh> = people.iter().flat_map(|p| p.keepout(0.04)).collect();
     // ... and off the swept area of the room doors
@@ -1101,6 +1131,7 @@ pub fn build_scene(p: &Params) -> Built {
     // (mess.rooms: clutter only where it is wanted -- a dataset photographing one room needs none elsewhere)
     let mess_polys: Vec<(String, indoorgen::shp::G)> = g.room_polys.iter().filter(|(n, _)| cfg.mess.rooms.is_empty() || cfg.mess.rooms.iter().any(|w| indoorgen::rooms::state::room_type(n) == w.as_str() || n.starts_with(w.as_str()))).cloned().collect();
     indoorgen::mess::clutter::apply_keepout(&mut scene, &g.state, &visuals, &mess_polys, &mess, &keepout);
+    lap("clutter");
     let cut_keys: Vec<String> = visuals.iter().filter(|(_, a)| !a.cutters.is_empty()).map(|(k, _)| k.clone()).collect();
     fn qcin<'a>(scene: &'a Scene, g: &'a indoorgen::pipeline::Generated, door_infos: &'a [indoorgen::qc::DoorInfo], cut_keys: &'a [String]) -> indoorgen::qc::QcIn<'a> { indoorgen::qc::QcIn { scene, state: &g.state, room_polys: &g.room_polys, cutters: &g.cutters, doors: door_infos, wall_t: g.c.wall_thickness, cut_keys } }
     // clutter that ended up inside furniture / other clutter is removed (the placement works on convex hulls)

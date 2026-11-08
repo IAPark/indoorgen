@@ -76,16 +76,18 @@ struct MatU { color: [f32; 4], emissive: [f32; 4], flags: [f32; 4], obj: [[f32; 
 #[derive(Clone)]
 struct Cam { name: String, view: Mat4, fov_x: f32, ortho: Option<f32>, /** a cutaway's clipping distance: what stands before it (a wall) is not drawn */ near: Option<f32>, /** a cutaway's vertical clip plane (normal, offset) */ clip: [f32; 4], clip2: [f32; 4], /** a view from above: only this room is drawn */ only: Option<(Vec3, Vec3, String, [[f32; 4]; 2])>, /** the share of what the room holds in this view, by size */ shown: f32, /** the room's main piece is in the view */ key: bool, /** share of the room's floor in view, walls considered */ cover: f32, /** share of the frame's width taken by a large piece cut off by its edge */ slab: f32 }
 
+#[derive(Clone)]
 pub struct Opts {
     inputs: Vec<PathBuf>, out: PathBuf, cams: Vec<CamSpec>, sheet: bool, res: (u32, u32), ss: u32,
     sun: (f32, f32), exposure: f32, ao: f32, no_ceiling: bool, ncams: usize, verbose: bool, ambient: f32, sun_i: f32, light_scale: f32, cloth: Option<PathBuf>, depth: bool, sidecar_lighting: bool, rt: Option<rt::Quality>, seed: u64,
+    /** --depth-only: plain raster depth, no pictures (scene loaded as --rt says, so a --serve process shares it with that job's renders) */ depth_only: bool,
 }
 #[derive(Clone)]
 enum CamSpec { Json(PathBuf), At([f32; 6], f32), Person(usize), Top, Named(String) }
 
-fn parse_args() -> Opts {
-    let a: Vec<String> = std::env::args().skip(1).collect();
-    let mut o = Opts { inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
+fn parse_args() -> Opts { parse_argv(std::env::args().skip(1).collect()) }
+fn parse_argv(a: Vec<String>) -> Opts {
+    let mut o = Opts { depth_only: false, inputs: vec![], out: PathBuf::from("preview.png"), cams: vec![], sheet: false, res: (960, 540), ss: 2,
         sun: (215.0, 38.0), exposure: 0.5, ao: 1.0, no_ceiling: false, ncams: 3, verbose: false, ambient: 1.0, sun_i: 1.0, light_scale: 1.0, cloth: None, depth: false, rt: None, seed: 0, sidecar_lighting: false };
     let mut i = 0;
     let nf = |s: &str| -> Vec<f32> { s.split(',').map(|x| x.parse().expect("number")).collect() };
@@ -112,6 +114,7 @@ fn parse_args() -> Opts {
             "--no-ceiling" => o.no_ceiling = true,
             "--sidecar-lighting" => o.sidecar_lighting = true,
             "--cloth" => o.cloth = Some(PathBuf::from(val())),
+            "--depth-only" => { o.depth = true; o.depth_only = true }
             "--depth" => o.depth = true, // also write <scene>_<cam>.depth.npy (float32 z-depth in metres along the optical axis, 0 = no surface) next to the pngs (OUT_DIR mode)
             "--rt" => { let q = rt::Quality::parse(&val()); o.ss = q.ss; o.rt = Some(q); if q.video { prepass::ON.store(true, std::sync::atomic::Ordering::Relaxed); } }
             "--seed" => o.seed = val().parse().unwrap(),
@@ -269,6 +272,13 @@ fn painting_at(name: &str, depth: u32) -> image::RgbaImage {
 }
 /// a mirror's look without reflections: cool silver, lighter toward the top, one soft diagonal band
 fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> wgpu::TextureView {
+    let key = bytes_key(&[img.as_raw()], ((img.width() as u64) << 32) | img.height() as u64);
+    if let Some(v) = TEX.with(|m| m.borrow().get(&key).cloned()) { return v }
+    let v = load_texture_new(dev, q, img);
+    TEX.with(|m| { let mut m = m.borrow_mut(); if m.len() > 512 { m.clear() } m.insert(key, v.clone()); });
+    v
+}
+fn load_texture_new(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> wgpu::TextureView {
     let mut img = img;
     if img.width().max(img.height()) > 1024 { let s = 1024.0 / img.width().max(img.height()) as f32; img = image::imageops::resize(&img, (img.width() as f32 * s) as u32, (img.height() as f32 * s) as u32, image::imageops::FilterType::Triangle); }
     let (w, h) = img.dimensions();
@@ -302,6 +312,34 @@ fn load_texture(dev: &wgpu::Device, q: &wgpu::Queue, img: image::RgbaImage) -> w
 
 struct Gpu { dev: wgpu::Device, q: wgpu::Queue }
 
+/// a 64-bit hash of some byte slices (word at a time: these are tens of MB of mesh data)
+fn bytes_key(parts: &[&[u8]], extra: u64) -> u64 {
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ extra;
+    for p in parts {
+        h = (h ^ p.len() as u64).wrapping_mul(0x100_0000_01B3).rotate_left(29);
+        let mut it = p.chunks_exact(8);
+        for c in &mut it { h = (h ^ u64::from_le_bytes(c.try_into().unwrap())).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(31); }
+        for &b in it.remainder() { h = (h ^ b as u64).wrapping_mul(0x100_0000_01B3); }
+    }
+    h
+}
+thread_local! {
+    /// results that depend only on their input bytes, kept for the next scene of a --serve process (a home's eras share their outdoors,
+    /// its people and its pictures): simplified index lists, and textures on the GPU
+    static SIMP: std::cell::RefCell<HashMap<u64, (Vec<u32>, Vec<u32>)>> = std::cell::RefCell::new(HashMap::new());
+    static TEX: std::cell::RefCell<HashMap<u64, wgpu::TextureView>> = std::cell::RefCell::new(HashMap::new());
+}
+fn simp_memo(key: u64, f: impl FnOnce() -> (Vec<u32>, Vec<u32>)) -> (Vec<u32>, Vec<u32>) {
+    if let Some(v) = SIMP.with(|m| m.borrow().get(&key).cloned()) { return v }
+    let v = f();
+    SIMP.with(|m| { let mut m = m.borrow_mut(); if m.len() > 4096 { m.clear() } m.insert(key, v.clone()); });
+    v
+}
+
+thread_local! {
+    /// material pipelines by shader source (one device per process: a --serve process keeps them across scenes)
+    static PIPES: std::cell::RefCell<HashMap<String, wgpu::RenderPipeline>> = std::cell::RefCell::new(HashMap::new());
+}
 fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &wgpu::BindGroupLayout, white: &wgpu::TextureView, smp: &wgpu::Sampler, opts: &Opts) -> Scene {
     let t = Instant::now();
     let mut glb = glb::load(path);
@@ -321,8 +359,10 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
     bake_instances(&mut glb, opts.verbose);
     let side: Value = glb::read_file(&path.with_extension("json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
     if opts.verbose { eprintln!("  glb parse {:.2}s ({} nodes, {} chunks)", t.elapsed().as_secs_f32(), glb.nodes.len(), glb.chunks.len()); }
+    let t_b = Instant::now();
     let mut bufs: Vec<wgpu::Buffer> = glb.chunks.iter().map(|c| gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: c,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX })).collect();
+    if opts.verbose { eprintln!("  buffers {:.2}s ({:.0} MB)", t_b.elapsed().as_secs_f32(), glb.chunks.iter().map(|c| c.len()).sum::<usize>() as f64 / 1e6); }
     let maxv = glb.nodes.iter().flat_map(|n| n.prims.iter()).map(|p| p.vcount).max().unwrap_or(1) as u64;
     let zeros = gpu.dev.create_buffer(&wgpu::BufferDescriptor { label: None, size: maxv * 12, usage: wgpu::BufferUsages::VERTEX, mapped_at_creation: false });
     // sidecar specs per node name
@@ -392,8 +432,14 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
             let pipe = graph.map(|e| *pipe_of.entry(e.code.clone()).or_insert_with(|| {
                 // (path traced: Blender's bump filter draws a 2 mm joint about a pixel wide, whatever the distance: here it would all but vanish)
                 let src = prepass::shader(SRC).replace("/*LIB*/", &ig_shade::wgsl::LIB.replace("clamp(mortar / w, 0.0, 1.0)", "clamp(mortar * select(1.0, 3.5, g.params2.w > 0.5) / w, 0.0, 1.0)")).replace("/*SURF*/", &format!("pbr = true;\n  let obj = (m.obj * vec4<f32>(v.wpos, 1.0)).xyz;\n{}", e.code));
-                let sm = gpu.dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(src.into()) });
-                pipes.push(make_main_pipe(&gpu.dev, &sm, g_bgl, mat_bgl, false));
+                // (a --serve process compiles each graph's pipeline once: the eras of a home share their materials)
+                let p = PIPES.with(|c| c.borrow().get(&src).cloned()).unwrap_or_else(|| {
+                    let sm = gpu.dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(src.clone().into()) });
+                    let p = make_main_pipe(&gpu.dev, &sm, g_bgl, mat_bgl, false);
+                    PIPES.with(|c| c.borrow_mut().insert(src.clone(), p.clone()));
+                    p
+                });
+                pipes.push(p);
                 pipes.len() - 1
             }));
             // (an appliance's door: dark in Cycles, where nothing lights the inside. Here the racks behind it stood fully lit)
@@ -443,6 +489,7 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
                 mat_bg: bi, pipe, glass, shadow: !glass && !(opts.no_ceiling && is_ceil), bmin: lo, bmax: hi });
         }
     }
+    if opts.verbose { eprintln!("  draws + materials {:.2}s ({} pipelines)", t_b.elapsed().as_secs_f32(), pipes.len()); }
     let lights: Vec<Light> = side["lights"].as_array().map(|ls| ls.iter().map(|l| {
         let loc = &l["loc"]; let w = l["watt"].as_f64().unwrap_or(50.0) as f32; let tk = l["temperature"].as_f64().unwrap_or(5000.0) as f32; let c = if opts.rt.is_some() { blackbody_linear(tk) } else { blackbody(tk) };
         Light { pos: Vec3::new(loc[0].as_f64().unwrap() as f32, loc[1].as_f64().unwrap() as f32, loc[2].as_f64().unwrap() as f32), color: c * (w / (4.0 * std::f32::consts::PI * std::f32::consts::PI)) * opts.light_scale }
@@ -481,7 +528,8 @@ fn load_scene(gpu: &Gpu, path: &Path, mat_bgl: &wgpu::BindGroupLayout, g_bgl: &w
         let ib = &glb.chunks[d.idx.0][d.idx.1 as usize..(d.idx.1 + d.idx.2) as usize];
         let idx: Vec<u32> = (0..d.icount as usize).map(|k| if d.u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as u32 } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) }).collect();
         let Ok(ad) = meshopt::VertexDataAdapter::new(pb, 12, 0) else { continue };
-        let out = meshopt::simplify(&idx, &ad, (idx.len() / 4 / 3) * 3, 0.01, meshopt::SimplifyOptions::empty(), None);
+        let ib_b: Vec<u8> = idx.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let (out, _) = simp_memo(bytes_key(&[pb, &ib_b], 1), || (meshopt::simplify(&idx, &ad, (idx.len() / 4 / 3) * 3, 0.01, meshopt::SimplifyOptions::empty(), None), vec![]));
         if out.is_empty() || out.len() >= idx.len() { continue }
         let bytes: Vec<u8> = out.iter().flat_map(|v| v.to_le_bytes()).collect();
         bufs.push(gpu.dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes, usage: wgpu::BufferUsages::INDEX }));
@@ -1255,6 +1303,9 @@ fn bake_instances(glb: &mut glb::Glb, verbose: bool) {
             let (vmap, idx) = simp.entry(key).or_insert_with(|| {
                 let pb = &ch[p.pos.chunk][p.pos.off as usize..(p.pos.off + p.pos.len) as usize];
                 let ib = &ch[p.idx.chunk][p.idx.off as usize..(p.idx.off + p.idx.len) as usize];
+                let divs = format!("{:?}{:?}", std::env::var("OD_DIV0").ok(), std::env::var("OD_DIV1").ok());
+                let ck = bytes_key(&[&pb[..(p.vcount as usize * 12).min(pb.len())], ib, divs.as_bytes()], ((lvl as u64) << 40) | ((p.icount as u64) << 1) | p.idx_u16 as u64);
+                simp_memo(ck, || {
                 let ix: Vec<u32> = (0..p.icount as usize).map(|k| if p.idx_u16 { u16::from_le_bytes(ib[k * 2..k * 2 + 2].try_into().unwrap()) as u32 } else { u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()) }).collect();
                 let target = ((ix.len() as f32 / 3.0 / if lvl == 0 { std::env::var("OD_DIV0").ok().and_then(|x| x.parse().ok()).unwrap_or(4.0) } else { std::env::var("OD_DIV1").ok().and_then(|x| x.parse().ok()).unwrap_or(24.0) }) as usize).max(4) * 3;
                 let out = match meshopt::VertexDataAdapter::new(&pb[..p.vcount as usize * 12], 12, 0) { Ok(ad) => meshopt::simplify_sloppy(&ix, &ad, target, 0.05, None), Err(_) => ix.clone() };
@@ -1263,6 +1314,7 @@ fn bake_instances(glb: &mut glb::Glb, verbose: bool) {
                 let mut vm: Vec<u32> = vec![]; let mut remap = std::collections::HashMap::new();
                 let idx: Vec<u32> = out.iter().map(|&v| *remap.entry(v).or_insert_with(|| { vm.push(v); vm.len() as u32 - 1 })).collect();
                 (vm, idx)
+                })
             });
             let b = bakes.entry(key).or_insert_with(|| (vec![], vec![], vec![], vec![], p.mat, p.nrm.is_some(), p.uv.is_some()));
             let base = (b.0.len() / 3) as u32;
@@ -2164,13 +2216,73 @@ fn main() { console_error_panic_hook::set_once(); }
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let t0 = Instant::now();
+    if std::env::args().nth(1).as_deref() == Some("--serve") { return serve(); }
     let o = parse_args();
     let mut r = init(&o);
     if o.verbose { eprintln!("gpu init {:.2}s", t0.elapsed().as_secs_f32()); }
+    let mut cache = Cache::default();
+    if let Err(e) = run_job(&mut r, &o, &mut cache) { eprintln!("{e}"); std::process::exit(2); }
+    if o.verbose { eprintln!("total {:.2}s", t0.elapsed().as_secs_f32()); }
+}
+
+/// What a `--serve` process keeps between jobs: loaded scenes (by path, modification time and load flavour) and render targets and
+/// trace buffers by size. Outside --serve it holds nothing.
+#[derive(Default)]
+struct Cache { serve: bool, scenes: Vec<(PathBuf, std::time::SystemTime, bool, Option<PathBuf>, Scene)>, sized: Vec<((u32, u32, u32), Targets, Option<rt::Pipes>)>, cur: Option<(u32, u32, u32)> }
+const KEEP_SCENES: usize = 2;
+const KEEP_SIZES: usize = 3;
+
+/// `preview --serve`: one job per stdin line (a JSON array of the usual arguments; video jobs excluded), answered on stdout by the job's
+/// output paths and then `DONE <seconds>` or `ERR <message>`. Scenes stay loaded between jobs: a dataset era's candidate depth, its
+/// photos and the target era's depth load their scenes once instead of once a job (about a second each).
+fn serve() {
+    use std::io::BufRead;
+    let mut r: Option<Renderer> = None; let mut cache = Cache { serve: true, ..Default::default() };
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() { continue }
+        let t = Instant::now();
+        let argv: Vec<String> = match serde_json::from_str(&line) { Ok(v) => v, Err(e) => { println!("ERR bad job: {e}"); continue } };
+        let o = parse_argv(argv);
+        if o.rt.map_or(false, |q| q.video) { println!("ERR --rt video is not served (its passes keep state of their own)"); continue }
+        let r = r.get_or_insert_with(|| { let r = init(&o); cache.cur = Some((o.res.0, o.res.1, o.ss)); r });
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(r, &o, &mut cache)));
+        match res {
+            Ok(Ok(())) => println!("DONE {:.3}", t.elapsed().as_secs_f64()),
+            Ok(Err(e)) => println!("ERR {e}"),
+            Err(_) => { println!("ERR panic"); use std::io::Write; std::io::stdout().flush().ok(); std::process::exit(3) }
+        }
+        use std::io::Write; std::io::stdout().flush().ok();
+    }
+}
+
+/// targets and trace buffers for this job's size: the ones from an earlier job of that size, else new
+fn size_for(r: &mut Renderer, o: &Opts, cache: &mut Cache) {
+    let key = (o.res.0, o.res.1, o.ss);
+    if cache.cur == Some(key) { return }
+    if !cache.serve { r.tg = make_targets(&r.gpu.dev, o); r.rt = None; cache.cur = Some(key); return }
+    let (tg, rtp) = match cache.sized.iter().position(|e| e.0 == key) { Some(i) => { let e = cache.sized.remove(i); (e.1, e.2) } None => (make_targets(&r.gpu.dev, o), None) };
+    let old_tg = std::mem::replace(&mut r.tg, tg); let old_rt = std::mem::replace(&mut r.rt, rtp);
+    if let Some(k) = cache.cur { cache.sized.push((k, old_tg, old_rt)); }
+    while cache.sized.len() > KEEP_SIZES { cache.sized.remove(0); }
+    cache.cur = Some(key);
+}
+
+fn run_job(r_: &mut Renderer, o: &Opts, cache: &mut Cache) -> Result<(), String> {
+    let mut r = r_;
+    let o = o.clone();
+    if cache.cur.is_none() { cache.cur = Some((o.res.0, o.res.1, o.ss)); }
+    size_for(r, &o, cache);
     let mut frames: Vec<(String, image::RgbaImage)> = vec![];
     for path in &o.inputs {
         let t = Instant::now();
-        let mut s = load_scene(&r.gpu, path, &r.mat_bgl, &r.g_bgl, &r.white, &r.smp, &o);
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).map_err(|e| format!("{}: {e}", path.display()))?;
+        let flavour = o.rt.is_some();
+        let hit = cache.scenes.iter().position(|e| e.0 == *path && e.1 == mtime && e.2 == flavour && e.3 == o.cloth);
+        let mut s = match hit { Some(i) => cache.scenes.remove(i).4, None => load_scene(&r.gpu, path, &r.mat_bgl, &r.g_bgl, &r.white, &r.smp, &o) };
+        // (a plain raster job on a scene a traced job left its trace data on: put that aside, as a fresh load has none -- the weather layers, for one, are drawn only untraced)
+        let traced = o.rt.is_some() && !o.depth_only;
+        let rt_aside = if traced { None } else { s.rt.take() };
         let cams = resolve_cams(&s, &o);
         if o.verbose { eprintln!("scene {} ready {:.2}s, {} cams", s.name, t.elapsed().as_secs_f32(), cams.len()); }
         let mut best_detail: HashMap<String, f32> = HashMap::new();
@@ -2226,7 +2338,7 @@ fn main() {
         }
         {
             s.flat = false;
-            if o.rt.is_some() { r.rt_now = true; }
+            if o.rt.is_some() && !o.depth_only { r.rt_now = true; }
             for fr in frames.iter_mut() { if let Some(&i) = chosen.get(&fr.0) {
                 fr.1 = exposed(&mut r, &mut s, &cams[i], &o);
                 // (depth from this, the real render: a search picture is the coarse voxel view)
@@ -2246,8 +2358,14 @@ fn main() {
             }
         }
         r.gpu.dev.poll(wgpu::PollType::wait_indefinitely()).ok();
+        if rt_aside.is_some() { s.rt = rt_aside; }
+        if cache.serve {
+            cache.scenes.push((path.clone(), mtime, flavour, o.cloth.clone(), s));
+            while cache.scenes.len() > KEEP_SCENES { cache.scenes.remove(0); }
+        }
     }
-    if frames.is_empty() { eprintln!("no frames"); std::process::exit(2); }
+    if o.depth_only { return Ok(()); }
+    if frames.is_empty() { return Err("no frames".into()); }
     let is_png = o.out.extension().map_or(false, |e| e == "png");
     if o.sheet || (is_png && frames.len() > 1) {
         let n = frames.len(); let cols = (n as f32).sqrt().ceil() as u32; let rows = (n as u32 + cols - 1) / cols;
@@ -2263,5 +2381,5 @@ fn main() {
         std::fs::create_dir_all(&o.out).ok();
         for (nm, im) in &frames { let p = o.out.join(format!("{nm}.png")); save_png(im, &p); println!("{}", p.display()); }
     }
-    if o.verbose { eprintln!("total {:.2}s", t0.elapsed().as_secs_f32()); }
+    Ok(())
 }
