@@ -232,3 +232,87 @@ def survey_keys(pool, room_poly, rng, step_m=1.0, heights=(1.55, 1.1), sway_deg=
             out.append((q, to_c, math.radians(-8 if li % 2 == 0 else 2)))
     out.append(out[0])
     return out
+
+
+# ------------------------------------------------------------------------------------------------ reference photo choice by content
+def cell_hash(pw, cell=0.15):
+    k = np.floor(pw / cell).astype(np.int64)
+    return (k[:, 0] * 73856093) ^ (k[:, 1] * 19349663) ^ (k[:, 2] * 83492791)
+
+
+def _in_room(pw, room_poly, pad=0.15):
+    if room_poly is None or not len(pw): return np.ones(len(pw), bool)
+    from matplotlib.path import Path
+    P = Path(np.asarray(room_poly))
+    return P.contains_points(pw[:, :2], radius=pad) | P.contains_points(pw[:, :2], radius=-pad)
+
+
+def view_cells(depth, K, c2w, room_poly=None, cell=0.15):
+    """{cell hash: unit viewing direction} of the room surfaces one view shows"""
+    C = np.asarray(c2w, float)
+    pw, _, _ = unproject(np.where(depth > FAR, 0.0, depth), K, C)
+    pw = pw[_in_room(pw, room_poly)]
+    if not len(pw): return {}
+    dv = pw - C[:3, 3]; dv /= np.linalg.norm(dv, axis=1, keepdims=True) + 1e-9
+    h = cell_hash(pw, cell); u, inv = np.unique(h, return_inverse=True)
+    md = np.zeros((len(u), 3)); np.add.at(md, inv, dv); md /= np.linalg.norm(md, axis=1, keepdims=True) + 1e-9
+    return dict(zip(u.tolist(), md))
+
+
+def changed_cells(depth_a, depth_b, K, c2w, room_poly=None, cell=0.15, tol_abs=0.08, tol_rel=0.05):
+    """cells where one camera sees different surfaces in two eras (same pose, depth a vs depth b): something moved, came or went.
+    Both eras' surface points there count (the object and what it hid)"""
+    a = np.where(depth_a > FAR, 0.0, depth_a); b = np.where(depth_b > FAR, 0.0, depth_b)
+    diff = (a > 0) & (b > 0) & (np.abs(a - b) > tol_abs + tol_rel * np.minimum(a, b))
+    out = set()
+    for d in (a, b):
+        dd = np.where(diff, d, 0.0)
+        pw, _, _ = unproject(dd, K, np.asarray(c2w, float))
+        pw = pw[_in_room(pw, room_poly)]
+        if len(pw): out.update(cell_hash(pw, cell).tolist())
+    return out
+
+
+def greedy_refs(cands, n, video_cells, changed, weights=(1.0, 0.5, 1.0), min_angle_deg=15.0):
+    """pick n of the candidates' cell maps {hash: dir} one at a time by what each adds: target-video cells not yet seen from 2 directions
+    15 deg+ apart (w_video), room cells not yet seen (w_room), changed cells not yet seen (w_change); each term over its total. Returns
+    the order picked and each pick's gains"""
+    if not cands or n <= 0: return [], []
+    wv, wr, wc = weights; cos_t = math.cos(math.radians(min_angle_deg))
+    seen_dirs = {}; room_seen = set(); ch_seen = set(); picked, gains = [], []
+    nv, nr, nc = max(1, len(video_cells)), max(1, len(set().union(*[c.keys() for c in cands]))), max(1, len(changed))
+    for _ in range(min(n, len(cands))):
+        best, bg, bt = None, -1.0, None
+        for i, c in enumerate(cands):
+            if i in picked: continue
+            gv = 0
+            for h, d in c.items():
+                if h not in video_cells: continue
+                ds = seen_dirs.get(h)
+                if ds is None: gv += 1
+                elif len(ds) == 1 and float(ds[0] @ d) < cos_t: gv += 1
+            gr = sum(1 for h in c if h not in room_seen)
+            gc = sum(1 for h in c if h in changed and h not in ch_seen)
+            g = wv * gv / nv + wr * gr / nr + wc * gc / nc
+            if g > bg: best, bg, bt = i, g, (gv, gr, gc)
+        if best is None: break
+        picked.append(best); gains.append(dict(total=round(bg, 4), video=bt[0], room=bt[1], changed=bt[2]))
+        for h, d in cands[best].items():
+            room_seen.add(h)
+            if h in changed: ch_seen.add(h)
+            if h in video_cells:
+                ds = seen_dirs.setdefault(h, [])
+                if len(ds) < 2 and all(float(x @ d) < cos_t for x in ds): ds.append(d)
+    return picked, gains
+
+
+def ref_coverage(ref_maps, video_cells, changed, room_cells, min_angle_deg=15.0):
+    """how well a set of reference views covers the target: video cells seen at all and from 2 directions 15 deg+ apart, room cells,
+    changed cells (shares)"""
+    cos_t = math.cos(math.radians(min_angle_deg)); dirs = {}
+    for m in ref_maps:
+        for h, d in m.items(): dirs.setdefault(h, []).append(d)
+    def multi(ds): return any(float(ds[i] @ ds[j]) < cos_t for i in range(len(ds)) for j in range(i + 1, len(ds)))
+    v = [h for h in video_cells if h in dirs]
+    return dict(video_seen=round(len(v) / max(1, len(video_cells)), 3), video_multi=round(sum(1 for h in v if multi(dirs[h])) / max(1, len(video_cells)), 3),
+                room=round(len(set(dirs) & room_cells) / max(1, len(room_cells)), 3), changed=round(len(set(dirs) & changed) / max(1, len(changed)), 3) if changed else None)

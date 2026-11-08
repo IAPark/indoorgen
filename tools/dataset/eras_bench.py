@@ -22,7 +22,8 @@ def row_of(run_dir, name, home, wall):
                targets=len(t), frames=sum(len(x["frames"]) for x in t), photos=sum(len(e["photos"]) for e in m["eras"]),
                refs_per_target=[refs(x["era"]) for x in t], seen=[x["masks"]["share"]["seen"] for x in t], never=[x["masks"]["share"]["never"] for x in t],
                changed=[x["masks"]["share"]["changed"] for x in t], cells=[x["video_path"]["cells"] for x in t], paths=[x["video_path"]["family"] for x in t],
-               dropped=m["qc"]["dropped_photos"], changes=[c for e in m["eras"] for c in e["changed"]])
+               dropped=m["qc"]["dropped_photos"], changes=[c for e in m["eras"] for c in e["changed"]],
+               coverage=[x.get("ref_coverage") for x in t])
     return out
 
 

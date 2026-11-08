@@ -26,6 +26,17 @@ factor changes from one era to the next:
 `target/frames|video.mp4|...`, `sheet.png`; `OUT/index.jsonl` over homes, `OUT/skipped.jsonl` for houses without the target room.
 Cameras are OpenCV (x right, y down, z forward), `c2w`/`w2c` in metres (world z up), `K` in pixels and `K_normalized`.
 
+## Reference photo choice (`ref_select`, `snapshots`, `micro_eras`)
+`ref_select: "greedy"` (default): every candidate pose is rendered as plain raster depth at 1/4 size and turned into the room surfaces
+it shows (15 cm cells); the same poses in the target era's scene give what changed; each next photo is the one adding the most unseen
+target-video surfaces (seen from 2 directions 15 deg+ apart), room surfaces and changes (`ref_weights`). `snapshots`: gen2's camera pool
+adds family-snapshot poses (in front of a person, within 50 deg of the way they face, 1.2-2.2 m, standing or sitting eye height,
+24-35 mm, people 12-60 % of the frame); `snapshots.photos` (0.4) of an era's photos are reserved for them when it has people. Each era
+writes selection.json; each target `ref_coverage`. Same 6 homes: old chooser video 78.3 % seen / 49.3 % from 2 directions / room 81.2 %
+/ changes 80.4 %; greedy without snapshots 78.1 / 58.0 / 76.5 / 74.4; greedy with snapshots (default) 79.3 / 55.4 / 82.0 / 80.5.
+`micro_eras.count` (default 0): after each era that many more with the same furniture, walls and floor and other mess and people
+(`lighting: true` varies the light too), `micro_eras.photos` photos each. Two per era on living room 9105: 12 eras, 47 photos, 172 s.
+
 ## Splat-grade target video (preset `splat`)
 `"preset": "splat"`: one target era per home whose video is a 10 s survey walk (240 frames) around the room through the camera pool's
 positions, looking inward with a sway, so a Gaussian splat can be trained on it. The walk is picked among a few variants by a splat

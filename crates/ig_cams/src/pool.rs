@@ -108,6 +108,11 @@ const EYE: [V3; 18] = [[1., 0., 0.], [-1., 0., 0.], [0., 1., 0.], [0., -1., 0.],
     [0.7, 0., 0.7], [-0.7, 0., 0.7], [0., 0.7, 0.7], [0., -0.7, 0.7], [0.7, 0., -0.7], [-0.7, 0., -0.7], [0., 0.7, -0.7], [0., -0.7, -0.7]];
 
 fn view_stats(w: &World, rm: &Room, has_anchor: bool, pos: V3, yaw: f64, pitch: f64, f: f64, wd: usize, ht: usize, strict: bool) -> Result<Stats, &'static str> {
+    view_stats_mode(w, rm, has_anchor, pos, yaw, pitch, f, wd, ht, strict, false)
+}
+
+/// `snap`: a family snapshot -- people may fill the frame and stand close, the room is background (no anchor, fewer objects needed)
+fn view_stats_mode(w: &World, rm: &Room, has_anchor: bool, pos: V3, yaw: f64, pitch: f64, f: f64, wd: usize, ht: usize, strict: bool, snap: bool) -> Result<Stats, &'static str> {
     for d in EYE {
         if let Some(h) = w.cast(pos, unit(d), 0.3) {
             if h.dist < 0.22 || (w.tkind(h.tri) == 0 && dot(h.n, d) > 0.0) { return Err(if w.tkind(h.tri) == 0 { "eye-in-object" } else { "eye-near-wall" }) }
@@ -159,6 +164,18 @@ fn view_stats(w: &World, rm: &Room, has_anchor: bool, pos: V3, yaw: f64, pitch: 
     let ncls = objs.iter().map(|k| { let s = k.trim_start_matches(|c: char| c.is_ascii_digit()); let s = s.strip_prefix('_').unwrap_or(s); s.split('.').next().unwrap_or("").to_string() }).collect::<std::collections::BTreeSet<_>>().len();
     let st = Stats { med: q(0.5), p10: q(0.1), miss: miss as f64 / n, wall: wall as f64 / n, nobj: objs.len(), ncls, objfrac: nobjpix as f64 / n, person: person as f64 / n, anchor: anchor as f64 / n, near_low: near_low as f64 / n_low.max(1) as f64, win: win as f64 / n };
     let maxper = per.values().cloned().max().unwrap_or(0) as f64 / n;
+    if snap {
+        // (the photo is of the people: the room only has to be there behind them)
+        if st.p10 < 0.3 { return Err("too-close") }
+        if st.miss > 0.2 { return Err("sees-void") }
+        if st.wall > 0.6 { return Err("mostly-wall") }
+        if pend > 0 { return Err("pendant-at-eye") }
+        if st.person < 0.12 { return Err("person-small") }
+        if st.person > 0.6 { return Err("person-fills-frame") }
+        if pnear < 1.0 { return Err("person-too-close") }
+        if maxper > 0.45 { return Err("one-object-fills-frame") }
+        return Ok(st)
+    }
     if st.p10 < 0.35 { return Err("too-close") }
     if strict && st.near_low > 0.3 { return Err("foreground-blocked") }
     if strict && near_obj.values().cloned().max().unwrap_or(0) as f64 / n > 0.16 { return Err("near-object-fills-frame") }
@@ -272,6 +289,44 @@ fn make_pool(w: &World, rm: &Room, targets: &[(V3, f64)], has_anchor: bool, cfg:
     (pool, tries)
 }
 
+/// family-snapshot poses: aimed at a person (or the middle of two near each other) in the room, from 1.2-2.8 m, at standing or
+/// sitting eye height, phone-like lens; the person must be the first thing the ray to them meets
+fn snapshot_views(w: &World, rm: &Room, people: &[(V3, V3, Option<f64>)], wd: usize, ht: usize, n: usize, rng: &mut Rng, rejects: &mut HashMap<String, usize>) -> (Vec<View>, usize) {
+    let mut out: Vec<View> = vec![]; let mut tries = 0;
+    if people.is_empty() || n == 0 { return (out, 0) }
+    while out.len() < n && tries < n * 300 {
+        tries += 1;
+        let (lo, hi, face) = people[(rng.f64() * people.len() as f64) as usize % people.len()];
+        let mut t = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2] - 0.22];
+        // (two people within 1.6 m: frame them together half the time)
+        if people.len() > 1 && rng.f64() < 0.5 {
+            let (lo2, hi2, _) = people[(rng.f64() * people.len() as f64) as usize % people.len()];
+            let t2 = [(lo2[0] + hi2[0]) / 2.0, (lo2[1] + hi2[1]) / 2.0, hi2[2] - 0.22];
+            if (t2[0] - t[0]).hypot(t2[1] - t[1]) < 1.6 { t = [(t[0] + t2[0]) / 2.0, (t[1] + t2[1]) / 2.0, (t[2] + t2[2]) / 2.0] }
+        }
+        // (in front of the person, as a family photo is taken: within 50 degrees of the way they face; anywhere for someone lying down)
+        let az = match face { Some(f) => f + rng.uniform(-50.0, 50.0).to_radians(), None => rng.uniform(0.0, std::f64::consts::TAU) };
+        let d = rng.uniform(1.2, 2.2);
+        let eye = if rng.f64() < 0.7 { rng.uniform(1.25, 1.65) } else { rng.uniform(0.9, 1.1) };
+        let pos = [t[0] + d * az.cos(), t[1] + d * az.sin(), rm.floor_z + eye];
+        if rm.edge_dist([pos[0], pos[1]]) < 0.3 { *rejects.entry("snap-wall-margin".into()).or_default() += 1; continue }
+        let dv = sub(t, pos); let dist = norm(dv);
+        match w.cast(pos, unit(dv), dist + 0.3) {
+            Some(h) if w.tkey(h.tri).starts_with("person") => {}
+            _ => { *rejects.entry("snap-person-hidden".into()).or_default() += 1; continue }
+        }
+        let yaw = dv[1].atan2(dv[0]) + rng.normal(0.0, 4.0).to_radians();
+        let pitch = (dv[2].atan2(dv[0].hypot(dv[1]))).clamp((-25.0f64).to_radians(), 15.0f64.to_radians());
+        let f = rng.uniform(24.0, 35.0);
+        let fpx = f / 36.0 * wd as f64;
+        match view_stats_mode(w, rm, false, pos, yaw, pitch, fpx, wd, ht, false, true) {
+            Ok(st) => out.push(View { pos, yaw, pitch, f_mm: f, kind: "snapshot", hit: t, st, relaxed: false }),
+            Err(e) => { *rejects.entry(format!("snap-{e}")).or_default() += 1; }
+        }
+    }
+    (out, tries)
+}
+
 /// Build the pool for `room` (e.g. "living-room_0/0") and return the cameras_pool.json value. `spec`: width, height, n_views,
 /// camera_seed, cameras {focal_mm, eye_height_m, wall_margin_m, traj_frac, cluster_len, fresh_candidates, pool_factor}.
 pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
@@ -358,12 +413,35 @@ pub fn make(scene: &Scene, room: &str, spec: &Value) -> Value {
         let (more, t2) = make_pool(&w, &rm, &targets, has_anchor, &cams, wd, ht, pf * k - pool.len(), &mut Rng::seeded(seed + 7919), false, &mut rej2);
         pool.extend(more); tries += t2;
     }
+    // cameras.snapshot_share: that share of the pool again as family snapshots of the people in the room (make_eras reserves a share of
+    // each era's photos for them)
+    let share = cams.get("snapshot_share").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    if share > 0.0 {
+        // (each person's facing from the placement pose: local +y turned by its yaw -- ig_people yaw_of; lying people face no camera)
+        let mut faces: HashMap<String, f64> = HashMap::new();
+        for n in &scene.nodes {
+            if !n.name.starts_with("person") { continue }
+            if let Some(p) = n.pose { faces.entry(okey(&n.name)).or_insert(p[1][1].atan2(p[0][1])); }
+        }
+        let mut people: Vec<(V3, V3, Option<f64>)> = vec![];
+        for (k, (lo, hi)) in &boxes {
+            if !k.starts_with("person") { continue }
+            let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+            let face = if k.contains("Lie") { None } else { faces.get(k).copied() };
+            if rlo[0] - 0.1 <= c[0] && c[0] <= rhi[0] + 0.1 && rlo[1] - 0.1 <= c[1] && c[1] <= rhi[1] + 0.1 { people.push((*lo, *hi, face)) }
+        }
+        people.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let ns = ((share * pool.len() as f64).ceil() as usize).max(if people.is_empty() { 0 } else { 2 });
+        let (snaps, t3) = snapshot_views(&w, &rm, &people, wd, ht, ns, &mut Rng::seeded(seed ^ 0x5a17), &mut rej);
+        eprintln!("POOL snapshots: {} of {} wanted from {} people in {} tries", snaps.len(), ns, people.len(), t3);
+        pool.extend(snaps);
+    }
     let views: Vec<Value> = pool.iter().map(|v| json!({"pos": v.pos, "yaw": v.yaw, "pitch": v.pitch, "f_mm": v.f_mm, "kind": v.kind, "hit": v.hit, "relaxed": v.relaxed,
         "stats": {"med": v.st.med, "p10": v.st.p10, "miss": v.st.miss, "wall": v.st.wall, "nobj": v.st.nobj, "ncls": v.st.ncls, "objfrac": v.st.objfrac, "person": v.st.person, "anchor": v.st.anchor, "near_low": v.st.near_low, "win": v.st.win}})).collect();
     eprintln!("POOL {room}: {} views from {tries} tries in {:.2?} ({} tris), rejects {:?}", views.len(), t0.elapsed(), ntri, rej);
     let mut out = json!({"camera_seed": seed, "width": wd, "height": ht, "views": views, "rejects": rej, "relaxed_rejects": rej2, "tries": tries, "room": room, "engine": "rust"});
     // spec.video: the target video's candidate walks (make_eras.py)
-    if let Some(vs) = spec.get("video").filter(|v| v.is_object()) { out["video_paths"] = video_paths(&w, &pool, vs, &mut Rng::seeded(seed ^ 0x5eed_7a7)); }
+    if let Some(vs) = spec.get("video").filter(|v| v.is_object()) { out["video_paths"] = { let room_views: Vec<View> = pool.iter().filter(|v| v.kind != "snapshot").cloned().collect(); video_paths(&w, &room_views, vs, &mut Rng::seeded(seed ^ 0x5eed_7a7)) }; }
     out
 }
 

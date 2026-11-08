@@ -43,6 +43,15 @@ DEFAULTS = {
     # video frames close to walls at most, duplicate photo overlap
     "qc": {"min_photos": 3, "min_seen": 0.08, "max_close": 0.45, "duplicate_overlap": 0.7},
     "budget_s": 120,                         # seconds per home: a second target video is rendered only while the home still fits
+    # how reference photos are chosen: "greedy" by what each adds (video surfaces from 2 directions, room surfaces, what changed against
+    # the target era; weights below) or "legacy" (overlap estimate + spread by pose)
+    "ref_select": "greedy", "ref_weights": [1.0, 0.5, 1.0],
+    # family-snapshot candidates (camera search aimed at the people in the room, closer, sitting or standing, phone lens): `pool` is their
+    # share of the camera pool, `photos` the share of an era's photos reserved for them when the era has people
+    "snapshots": {"pool": 0.5, "photos": 0.4},
+    # micro-eras after each era: same furniture, walls and floor, other mess and people (lighting too with "lighting": true);
+    # cheap -- the batch reuses the solved house -- and more photos of each look of the home
+    "micro_eras": {"count": 0, "photos": 3, "lighting": False},
     "parallel_gen": "auto",                  # gen2 processes at once; auto: from RAM (a whole house peaks near 3 GB) and cores
     "keep_glb": False,
     "homes": [{"seed": 7, "room": "LivingRoom"}],   # or {"count": N, "seed": S, "rooms": [...]}
@@ -155,7 +164,30 @@ def plan_eras(home, cfg):
     if t == "random": tgts = r.sample(range(n), c)
     elif t == "last": tgts = list(range(n - 1, n - 1 - c, -1))
     else: tgts = [int(t)]
+    # micro-eras: after each era, `micro_eras.count` more with the same furniture, walls and floor -- only the mess and the people
+    # change (and the light with micro_eras.lighting): other days in the same years. Own random stream, so the eras above stay as they are
+    mc = cfg.get("micro_eras") or {}; m = int(mc.get("count", 0))
+    if m > 0:
+        rm = random.Random(crc(hs, "micro")); out = []; remap = {}
+        for e in eras:
+            remap[e["era"]] = len(out); e = dict(e, era=len(out), major=e["era"]); out.append(e)
+            for j in range(m):
+                st2 = copy.deepcopy(e["state"]); ch = []; key = (e["major"], j)
+                if not st2["furniture"].get("empty"):
+                    st2["mess"] = dict(level=round(rm.uniform(0, cfg["mess"]["max_level"]), 3), seed=crc(hs, key, "micro-mess")); ch.append("mess")
+                st2["people"] = dict(count=rm.randint(1, cfg["people"]["max"]) if rm.random() < max(0.5, lv["people"]) else 0, seed=crc(hs, key, "micro-people"))
+                if st2["people"]["count"]: ch.append("people")
+                if mc.get("lighting"): st2["lighting"] = crc(hs, key, "micro-light"); ch.append("lighting")
+                out.append(dict(era=len(out), state=st2, changed=ch, major=e["major"], micro=j + 1))
+        eras = out; tgts = [remap[k] for k in tgts]
     return eras, tgts
+
+
+def photos_n(cfg, e, is_target):
+    """photos of an era: the target era's own, a micro-era's (micro_eras.photos), or the usual"""
+    if is_target: return int(cfg["target_photos"])
+    if e.get("micro"): return int((cfg.get("micro_eras") or {}).get("photos", cfg["photos_per_era"]))
+    return int(cfg["photos_per_era"])
 
 
 def gen_config(home, cfg, st, shell_json):
@@ -275,7 +307,7 @@ def spread(pool, n):
     return out
 
 
-def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
+def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None, tglb=None, room_poly=None):
     """n photos of this era from its own camera pool (valid for its furniture), in its own camera kit. With the target video's points
     (vpts), a share of the photos (ref_overlap.share) is picked among the pool views that look at what the video shows, the rest spread
     over the room. Rendered with one spare; a view that is blocked or repeats an earlier photo of this era is dropped (quality gate).
@@ -286,10 +318,48 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
     # principal point: render with a margin and cut an off-centre window
     ox = int(round(kit["principal_offset"][0] * W)); oy = int(round(kit["principal_offset"][1] * H))
     mx, my = abs(ox), abs(oy); Wr, Hr = W + 2 * mx, H + 2 * my
-    ro = cfg["ref_overlap"]; est = {}; est_per = []; hi = []
+    ro = cfg["ref_overlap"]; est = {}; est_per = []; hi = []; sel = None
     # vpts: one point set per target video; the overlap picks take turns between them, so each video gets photos that look at it
     sets = [p for p in (vpts or []) if p is not None and len(p)]
-    if sets and n:
+    greedy = cfg.get("ref_select") == "greedy"
+    if not greedy: pool = [v for v in pool if v.get("kind") != "snapshot"]  # (the legacy chooser knows no snapshots)
+    if (greedy or cfg.get("measure_refs")) and n and pool:
+        # (by content: every candidate as plain raster depth at 1/4 size -> the room surfaces it shows; the same poses in the target era's
+        # scene -> what changed; then each pick adds the most unseen video surfaces (2 directions), room surfaces and changes)
+        w4, h4 = max(8, W // 4), max(8, H // 4); stem_ = os.path.splitext(os.path.basename(glb))[0]
+        cc = [("c%03d" % i, c2w_cv(v["pos"], v["yaw"], v["pitch"]), v["f_mm"]) for i, v in enumerate(pool)]
+        chk = os.path.join(era_dir, "_sel"); shutil.rmtree(chk, ignore_errors=True)
+        render_views(a.preview, glb, cc, (w4, h4), None, chk, log, extra=("--ss", "1"))
+        ds = [np.load(os.path.join(chk, "%s_%s.depth.npy" % (stem_, nm))) for nm, _, _ in cc]
+        maps = [G.view_cells(d, G.K_of(f, w4, h4), np.array(c), room_poly) for d, (_, c, f) in zip(ds, cc)]
+        changed = set()
+        if tglb and tglb != glb and os.path.exists(tglb):
+            chk2 = os.path.join(era_dir, "_sel_t"); shutil.rmtree(chk2, ignore_errors=True)
+            render_views(a.preview, tglb, cc, (w4, h4), None, chk2, log, extra=("--ss", "1"))
+            st2 = os.path.splitext(os.path.basename(tglb))[0]
+            for d, (nm, c, f) in zip(ds, cc):
+                changed |= G.changed_cells(d, np.load(os.path.join(chk2, "%s_%s.depth.npy" % (st2, nm))), G.K_of(f, w4, h4), np.array(c), room_poly)
+            shutil.rmtree(chk2, ignore_errors=True)
+        shutil.rmtree(chk, ignore_errors=True)
+        vcells = set()
+        for p in sets: vcells |= set(G.cell_hash(p[G._in_room(p, room_poly)]).tolist())
+        # (a candidate blocked by one near thing shows little and is dropped anyway: leave it out of the choice)
+        sel = dict(maps={i: maps[i] for i in range(len(pool))}, changed=changed, video_cells=vcells, gains={}, room_cells=set().union(*maps) if maps else set())
+        if greedy:
+            ok = [i for i, d in enumerate(ds) if not G.blocked(d) or pool[i].get("kind") == "snapshot"] or list(range(len(pool)))
+            snaps = [i for i in ok if pool[i].get("kind") == "snapshot"]; rooms = [i for i in ok if pool[i].get("kind") != "snapshot"]
+            q = min(len(snaps), int(round(float(cfg["snapshots"]["photos"]) * n))); wts = tuple(cfg.get("ref_weights", (1.0, 0.5, 1.0)))
+            pr, gr = G.greedy_refs([maps[i] for i in rooms], n + int(cfg["photo_spares"]) - q, vcells, changed, wts)
+            ps_, gs_ = G.greedy_refs([maps[i] for i in snaps], q, vcells, changed, wts)
+            # (snapshots interleaved with the room photos: the spare at the end is a room photo)
+            ri, si = [rooms[j] for j in pr], [snaps[j] for j in ps_]
+            order_i = []; gains = []
+            while ri or si:
+                if si and (not ri or len(order_i) % 2 == 1): order_i.append(si.pop(0)); gains.append(gs_.pop(0))
+                else: order_i.append(ri.pop(0)); gains.append(gr.pop(0))
+            cand = [pool[i] for i in order_i]; hi = list(order_i); sel["gains"] = dict(zip(order_i, gains))
+    if greedy and sel: pass
+    elif sets and n:
         per = []
         for p in sets:
             e = {}
@@ -345,7 +415,8 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
             k = len(views); im.save(os.path.join(era_dir, "photos", "%03d.png" % k)); np.save(os.path.join(era_dir, "depth", "%03d.npy" % k), d.astype(np.float32))
             pi = pool.index(cand[i])
             rec.update(file="photos/%03d.png" % k, depth="depth/%03d.npy" % k, kind=cand[i].get("kind"), pool_index=pi, render_pass=pass_,
-                       picked_by="video overlap" if pi in hi else ("second pass" if pass_ else "spread"))
+                       picked_by=("snapshot" if cand[i].get("kind") == "snapshot" else ("by content" if greedy and sel else "video overlap")) if pi in hi else ("second pass" if pass_ else "spread"))
+            if sel and pi in sel["gains"]: rec["gain"] = sel["gains"][pi]
             if est: rec["video_overlap_est"] = round(est.get(pi, 0.0), 3)
             views.append(rec); kept.append((d, K, C, W, H))
     shutil.rmtree(tmp, ignore_errors=True)
@@ -356,7 +427,10 @@ def photos_for_era(a, cfg, e, home, era_dir, glb, pool, n, log, vpts=None):
                    overlap_picks=hi, rendered=rendered, kept=[v["pool_index"] for v in views], dropped=dropped,
                    rule=dict(share=ro["share"], min=ro["min"], n=n, spares=int(cfg["photo_spares"]))),
               open(os.path.join(era_dir, "selection.json"), "w"))
-    return views, dropped, dt, kept
+    if sel:
+        # (what this era's kept photos cover, for the home's comparison of choosers)
+        sel["kept_maps"] = [sel["maps"][v["pool_index"]] for v in views]
+    return views, dropped, dt, kept, sel
 
 
 def choose_survey(a, cfg, home, tdir, glb, pool, log, room_poly):
@@ -579,11 +653,12 @@ def main():
         shell = os.path.join(hd, "_gen", "era_%d.house.json" % lead(hi)) if pin else None
         g = gen_config(h, cfg, eras[k]["state"], shell); cp = os.path.join(hd, "_gen", "era_%d.cfg.json" % k); json.dump(g, open(cp, "w"), indent=1)
         # the era's own camera pool: valid views for its furniture, in its camera kit
-        n = (int(cfg["target_photos"]) if k == tgt else int(cfg["photos_per_era"])) + 1
+        n = photos_n(cfg, eras[k], k == tgt) + 1
         if k == tgt: n = max(n, 8)
         kit = eras[k]["state"]["intrinsics"]
         sp = dict(width=kit["width"], height=kit["height"], n_views=n, camera_seed=crc(h["seed"], k, "cams"),
-                  cameras=dict(focal_mm=kit["focal_mm"], eye_height_m=[1.0, 1.75], traj_frac=0.5, cluster_len=4, pool_factor=3 if k == tgt else 2),
+                  cameras=dict(focal_mm=kit["focal_mm"], eye_height_m=[1.0, 1.75], traj_frac=0.5, cluster_len=4, pool_factor=3 if k == tgt else 2,
+                               snapshot_share=float(cfg["snapshots"]["pool"])),
                   pool_path=os.path.join(hd, "_gen", "era_%d.pool.json" % k), room_slug=room_slug(h["room"]),
                   aim_file=os.path.join(hd, "_gen", "aim_points.json"), aim_share=1.0)
         if k in tgts and cfg["target"].get("path_engine") == "cpu":
@@ -657,7 +732,7 @@ def main():
         _rm = next((r for r in json.load(open(os.path.join(hd, "shell.house.json")))["rooms"] if r[0] == _rn or r[0].startswith(_rn)), None)
         room_poly = [[float(c) for c in p_.split()] for p_ in __import__("re").findall(r"\(\(([^()]*)\)", _rm[1])[0].split(",")] if _rm else None
         fill(hi)
-        refs_by_era = {}; shell_dropped = []; chosen = {}; videos = {}; queued = []; queued_at = {}; skipped_targets = []; late_eras = []; killed = set()
+        refs_by_era = {}; shell_dropped = []; chosen = {}; videos = {}; sels = {}; queued = []; queued_at = {}; skipped_targets = []; late_eras = []; killed = set()
         import queue
         vq = queue.Queue()
         def _videos():
@@ -686,12 +761,13 @@ def main():
             same_shell = hj["rooms"] == sj["rooms"] and sorted(map(json.dumps, hj["cutters"])) == sorted(map(json.dumps, sj["cutters"]))
             if not same_shell: print("  era %d: shell differs from era %d's (re-planned house?) -- era dropped" % (k, L)); shell_dropped.append(k); continue
             pj = json.load(open(os.path.join(hd, "_gen", "era_%d.pool.json" % k))); pool = pj["views"]
-            n = int(cfg["target_photos"]) if k in tgts else int(cfg["photos_per_era"])
+            room_pool = [v for v in pool if v.get("kind") != "snapshot"]  # (walks start from room views, not from snapshots)
+            n = photos_n(cfg, eras[k], k in tgts)
             if k in tgts:
                 # (the walk first: the photos of every era are then picked partly for what the walks show)
                 try:
-                    if cfg["target"].get("path_engine") == "survey": chosen[k] = choose_survey(a, cfg, h, tdir(k), glb, pool, log, room_poly)
-                    else: chosen[k] = choose_path(a, cfg, h, tdir(k), glb, pool, log, pj.get("video_paths"))
+                    if cfg["target"].get("path_engine") == "survey": chosen[k] = choose_survey(a, cfg, h, tdir(k), glb, room_pool, log, room_poly)
+                    else: chosen[k] = choose_path(a, cfg, h, tdir(k), glb, room_pool, log, pj.get("video_paths"))
                 except RuntimeError as ex:
                     # (no safe walk in this era: it stays a reference era)
                     print("  era %d: no video (%s)" % (k, ex), flush=True); skipped_targets.append(dict(era=k, reason=str(ex)))
@@ -702,7 +778,9 @@ def main():
                     tmpf = os.path.join(hd, "_gen", "aim_points.json.tmp"); json.dump(ap.round(3).tolist(), open(tmpf, "w")); os.replace(tmpf, os.path.join(hd, "_gen", "aim_points.json"))
                 timing["render"]["path_%d" % k] = chosen[k][2]["choose_s"]
             vpts = [c[3] for c in chosen.values()]
-            views, dropped, t_ph, kept = photos_for_era(a, cfg, eras[k], h, ed, glb, pool, n, log, vpts) if n else ([], [], 0.0, [])
+            tglb = paths(hi, [t for t in tgts if t in chosen][0])[2] if chosen else None
+            views, dropped, t_ph, kept, sel_ = photos_for_era(a, cfg, eras[k], h, ed, glb, pool, n, log, vpts, tglb, room_poly) if n else ([], [], 0.0, [], None)
+            sels[k] = sel_
             refs_by_era[k] = kept
             timing["render"]["era_%d" % k] = round(t_ph, 1)
             if k in tgts and k in chosen:
@@ -750,7 +828,15 @@ def main():
             if "readiness" in pinfo and pinfo["readiness"] < float(cfg["target"].get("min_readiness", 0)):
                 fails.append("era %d walk splat readiness %.0f %% (under %.0f %%)" % (k, 100 * pinfo["readiness"], 100 * float(cfg["target"]["min_readiness"])))
             if labels["share"]["seen"] < q["min_seen"]: fails.append("era %d: references show %.0f %% of its video" % (k, 100 * labels["share"]["seen"]))
-            targets.append(dict(era=k, dir=os.path.relpath(tdir(k), hd), masks=dict(labels, against="photos of the other eras"), video_path=pinfo, **v))
+            # (how well the other eras' kept photos cover this target: its video surfaces, from 2 directions, the room, what changed)
+            cov = None
+            if any(sels.get(kk) for kk in sels if kk != k):
+                vp_ = chosen[k][3]; vc = set(G.cell_hash(vp_[G._in_room(vp_, room_poly)]).tolist()) if len(vp_) else set()
+                maps_ = [m for kk, sl in sels.items() if kk != k and sl for m in sl["kept_maps"]]
+                ch_ = set().union(*[sl["changed"] for kk, sl in sels.items() if kk != k and sl])
+                rc_ = set().union(*[sl["room_cells"] for sl in sels.values() if sl])
+                cov = G.ref_coverage(maps_, vc, ch_, rc_)
+            targets.append(dict(era=k, dir=os.path.relpath(tdir(k), hd), masks=dict(labels, against="photos of the other eras"), video_path=pinfo, ref_coverage=cov, **v))
         for k, rec in man_eras.items():
             json.dump(dict(rec, convention="OpenCV cameras: x right, y down, z forward; c2w / w2c world z up, metres; depth = z-depth, 0 = none; "
                            "K in pixels of this photo, K_normalized by its width / height; video_overlap = share of each target video's surface this photo shows"),
